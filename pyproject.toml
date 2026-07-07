@@ -1,0 +1,5 @@
+[project]
+name = "watch-party-manager"
+version = "0.1.0"
+description = "A configurable, self-hosted Discord bot for managing recurring watch parties."
+requires-python = ">=3.12"
