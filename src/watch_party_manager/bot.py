@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -98,10 +99,7 @@ def build_version_text(version: str) -> str:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    configure_logging(level=logging.INFO)
     
     load_dotenv()
     token = os.getenv("DISCORD_TOKEN")
