@@ -57,7 +57,7 @@ class WatchPartyBot(commands.Bot):
             logger.error("DISCORD_TOKEN environment variable is required. Please set it in .env or your environment.")
             raise RuntimeError("DISCORD_TOKEN environment variable is required")
         try:
-            logger.info("Starting HAL...")
+            logger.info("Starting WASH...")
             await super().start(self.token)
         except discord.errors.LoginFailure:
             logger.error("Failed to login. Invalid DISCORD_TOKEN or bot token has been revoked.")
