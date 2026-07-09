@@ -17,10 +17,11 @@ logger = logging.getLogger(__name__)
 class WatchPartyBot(commands.Bot):
     """A minimal Discord bot for the initial vertical slice."""
 
-    def __init__(self, *, token: Optional[str] = None) -> None:
+    def __init__(self, *, token: Optional[str] = None, guild_id: Optional[int] = None) -> None:
         intents = discord.Intents.default()
         super().__init__(command_prefix="!", intents=intents)
         self.token = token
+        self.guild_id = guild_id
 
     async def setup_hook(self) -> None:
         @self.tree.command(name="ping")
@@ -35,9 +36,16 @@ class WatchPartyBot(commands.Bot):
         async def help_command(interaction: discord.Interaction) -> None:
             await interaction.response.send_message(build_help_text())
 
-        logger.info("Synchronizing slash commands...")
-        synced = await self.tree.sync()
-        logger.info(f"Synchronized {len(synced)} command(s)")
+        if self.guild_id:
+            logger.info(f"Synchronizing slash commands to development guild {self.guild_id}...")
+            guild = discord.Object(id=self.guild_id)
+            self.tree.copy_global_to(guild=guild)
+            synced = await self.tree.sync(guild=guild)
+            logger.info(f"Synchronized {len(synced)} command(s) to guild {self.guild_id}")
+        else:
+            logger.info("Synchronizing slash commands globally...")
+            synced = await self.tree.sync()
+            logger.info(f"Synchronized {len(synced)} command(s) globally")
 
     async def on_ready(self) -> None:
         logger.info(f"Logged in as {self.user}")
@@ -53,6 +61,32 @@ class WatchPartyBot(commands.Bot):
         except discord.errors.LoginFailure:
             logger.error("Failed to login. Invalid DISCORD_TOKEN or bot token has been revoked.")
             raise
+
+
+def parse_guild_id(guild_id_str: Optional[str]) -> Optional[int]:
+    """Parse and validate a guild ID from an environment variable.
+    
+    Args:
+        guild_id_str: The guild ID as a string from the environment.
+    
+    Returns:
+        The guild ID as an integer, or None if not provided.
+    
+    Raises:
+        ValueError: If the guild ID is provided but not a valid integer.
+    """
+    if not guild_id_str:
+        return None
+    
+    try:
+        guild_id = int(guild_id_str)
+        if guild_id <= 0:
+            raise ValueError(f"Guild ID must be a positive integer, got {guild_id}")
+        return guild_id
+    except ValueError as e:
+        if "invalid literal" in str(e).lower():
+            raise ValueError(f"DISCORD_GUILD_ID must be a valid integer, got '{guild_id_str}'")
+        raise
 
 
 def build_help_text() -> str:
@@ -71,7 +105,15 @@ def main() -> None:
     
     load_dotenv()
     token = os.getenv("DISCORD_TOKEN")
-    bot = WatchPartyBot(token=token)
+    
+    guild_id_str = os.getenv("DISCORD_GUILD_ID")
+    try:
+        guild_id = parse_guild_id(guild_id_str)
+    except ValueError as e:
+        logger.error(f"Configuration error: {e}")
+        exit(1)
+    
+    bot = WatchPartyBot(token=token, guild_id=guild_id)
 
     try:
         asyncio.run(bot.start_bot())
