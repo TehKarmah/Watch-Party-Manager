@@ -245,3 +245,15 @@ Normal operation should never delete:
 Instead, records transition between active and historical states while remaining available for reporting and statistics.
 
 Only explicit administrative actions may permanently remove historical data.
+
+---
+
+## Watch Item Journey
+
+**Purpose**
+
+Stores the complete lifecycle history for a Watch Item.
+
+**Fields**
+
+_To be defined during FR-002._
