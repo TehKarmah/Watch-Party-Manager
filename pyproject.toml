@@ -3,3 +3,9 @@ name = "watch-party-manager"
 version = "0.1.0"
 description = "A configurable, self-hosted Discord bot for managing recurring watch parties."
 requires-python = ">=3.12"
+dependencies = [
+  "discord.py>=2.4.0",
+]
+
+[project.scripts]
+watch-party-manager = "watch_party_manager.bot:main"
