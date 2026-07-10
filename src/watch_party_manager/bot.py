@@ -10,6 +10,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from watch_party_manager.logger_config import configure_logging
+from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class WatchPartyBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
         self.token = token
         self.guild_id = guild_id
+        self.suggestion_service = SuggestionService()
 
     async def setup_hook(self) -> None:
         @self.tree.command(name="ping")
@@ -36,6 +38,15 @@ class WatchPartyBot(commands.Bot):
         @self.tree.command(name="help")
         async def help_command(interaction: discord.Interaction) -> None:
             await interaction.response.send_message(build_help_text())
+
+        @self.tree.command(name="suggest")
+        async def suggest(
+            interaction: discord.Interaction,
+            title: str,
+            imdb_url: Optional[str] = None,
+        ) -> None:
+            result = self.suggestion_service.suggest(title, imdb_url)
+            await interaction.response.send_message(result.message)
 
         if self.guild_id:
             logger.info(f"Synchronizing slash commands to development guild {self.guild_id}...")
@@ -91,7 +102,7 @@ def parse_guild_id(guild_id_str: Optional[str]) -> Optional[int]:
 
 
 def build_help_text() -> str:
-    return "Available commands:\n- /ping\n- /version\n- /help"
+    return "Available commands:\n- /ping\n- /version\n- /help\n- /suggest"
 
 
 def build_version_text(version: str) -> str:

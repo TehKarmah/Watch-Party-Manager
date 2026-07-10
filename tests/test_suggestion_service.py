@@ -1,0 +1,110 @@
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from watch_party_manager.domain.watch_item import MetadataProvider
+from watch_party_manager.services.suggestion_service import SuggestionService
+
+
+class SuggestionServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """Create a fresh service for each test."""
+        self.service = SuggestionService()
+
+    def test_suggest_successful_addition(self) -> None:
+        result = self.service.suggest("The Matrix")
+        self.assertTrue(result.success)
+        self.assertIn("Added", result.message)
+        self.assertIn("The Matrix", result.message)
+        self.assertEqual(self.service.suggestion_count(), 1)
+
+    def test_suggest_rejects_empty_title(self) -> None:
+        result = self.service.suggest("")
+        self.assertFalse(result.success)
+        self.assertIn("I need a title", result.message)
+        self.assertEqual(self.service.suggestion_count(), 0)
+
+    def test_suggest_rejects_whitespace_only_title(self) -> None:
+        result = self.service.suggest("   ")
+        self.assertFalse(result.success)
+        self.assertIn("I need a title", result.message)
+        self.assertEqual(self.service.suggestion_count(), 0)
+
+    def test_suggest_detects_case_insensitive_duplicates(self) -> None:
+        result1 = self.service.suggest("The Matrix")
+        self.assertTrue(result1.success)
+
+        result2 = self.service.suggest("the matrix")
+        self.assertFalse(result2.success)
+        self.assertIn("already on the list", result2.message)
+        self.assertEqual(self.service.suggestion_count(), 1)
+
+    def test_suggest_detects_duplicates_with_different_casing(self) -> None:
+        result1 = self.service.suggest("The Matrix")
+        self.assertTrue(result1.success)
+
+        result2 = self.service.suggest("THE MATRIX")
+        self.assertFalse(result2.success)
+        self.assertEqual(self.service.suggestion_count(), 1)
+
+    def test_suggest_strips_whitespace_from_title(self) -> None:
+        result = self.service.suggest("  Inception  ")
+        self.assertTrue(result.success)
+
+        suggestions = self.service.get_suggestions()
+        self.assertEqual(suggestions[0].title, "Inception")
+
+    def test_suggest_stores_imdb_url(self) -> None:
+        result = self.service.suggest("The Matrix", "tt0133093")
+        self.assertTrue(result.success)
+
+        suggestions = self.service.get_suggestions()
+        self.assertEqual(len(suggestions), 1)
+        self.assertIn(MetadataProvider.IMDB, suggestions[0].metadata_ids)
+        self.assertEqual(suggestions[0].metadata_ids[MetadataProvider.IMDB], "tt0133093")
+
+    def test_suggest_handles_imdb_url_with_whitespace(self) -> None:
+        result = self.service.suggest("The Matrix", "  tt0133093  ")
+        self.assertTrue(result.success)
+
+        suggestions = self.service.get_suggestions()
+        self.assertEqual(suggestions[0].metadata_ids[MetadataProvider.IMDB], "tt0133093")
+
+    def test_suggest_ignores_empty_imdb_url(self) -> None:
+        result = self.service.suggest("The Matrix", "   ")
+        self.assertTrue(result.success)
+
+        suggestions = self.service.get_suggestions()
+        self.assertEqual(len(suggestions[0].metadata_ids), 0)
+
+    def test_get_suggestions_returns_all_suggestions(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+        self.service.suggest("Interstellar")
+
+        suggestions = self.service.get_suggestions()
+        self.assertEqual(len(suggestions), 3)
+        titles = {s.title for s in suggestions}
+        self.assertEqual(titles, {"The Matrix", "Inception", "Interstellar"})
+
+    def test_suggestion_count_increments(self) -> None:
+        self.assertEqual(self.service.suggestion_count(), 0)
+        self.service.suggest("The Matrix")
+        self.assertEqual(self.service.suggestion_count(), 1)
+        self.service.suggest("Inception")
+        self.assertEqual(self.service.suggestion_count(), 2)
+
+    def test_clear_suggestions_removes_all(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+        self.assertEqual(self.service.suggestion_count(), 2)
+
+        self.service.clear_suggestions()
+        self.assertEqual(self.service.suggestion_count(), 0)
+        self.assertEqual(len(self.service.get_suggestions()), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
