@@ -105,6 +105,44 @@ class SuggestionServiceTests(unittest.TestCase):
         self.assertEqual(self.service.suggestion_count(), 0)
         self.assertEqual(len(self.service.get_suggestions()), 0)
 
+    def test_format_suggestion_list_when_empty(self) -> None:
+        message = self.service.format_suggestion_list()
+        self.assertEqual(message, "The suggestion list is currently empty.")
+
+    def test_format_suggestion_list_with_single_suggestion(self) -> None:
+        self.service.suggest("The Matrix")
+
+        message = self.service.format_suggestion_list()
+        self.assertEqual(message, "Current suggestions:\n1. The Matrix")
+
+    def test_format_suggestion_list_with_multiple_suggestions(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+        self.service.suggest("Interstellar")
+
+        message = self.service.format_suggestion_list()
+        self.assertEqual(
+            message,
+            "Current suggestions:\n1. The Matrix\n2. Inception\n3. Interstellar",
+        )
+
+    def test_format_suggestion_list_preserves_insertion_order(self) -> None:
+        self.service.suggest("Interstellar")
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+
+        message = self.service.format_suggestion_list()
+        self.assertEqual(
+            message,
+            "Current suggestions:\n1. Interstellar\n2. The Matrix\n3. Inception",
+        )
+
+    def test_format_suggestion_list_omits_imdb_information(self) -> None:
+        self.service.suggest("The Matrix", "tt0133093")
+
+        message = self.service.format_suggestion_list()
+        self.assertNotIn("tt0133093", message)
+
 
 if __name__ == "__main__":
     unittest.main()

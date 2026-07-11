@@ -15,6 +15,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("/version", help_text)
         self.assertIn("/help", help_text)
         self.assertIn("/suggest", help_text)
+        self.assertIn("/suggestions", help_text)
 
     def test_version_text_uses_the_provided_version(self) -> None:
         self.assertEqual(build_version_text("0.2.0"), "Watch Party Manager version 0.2.0")

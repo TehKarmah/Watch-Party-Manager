@@ -48,6 +48,10 @@ class WatchPartyBot(commands.Bot):
             result = self.suggestion_service.suggest(title, imdb_url)
             await interaction.response.send_message(result.message)
 
+        @self.tree.command(name="suggestions")
+        async def suggestions(interaction: discord.Interaction) -> None:
+            await interaction.response.send_message(self.suggestion_service.format_suggestion_list())
+
         if self.guild_id:
             logger.info(f"Synchronizing slash commands to development guild {self.guild_id}...")
             guild = discord.Object(id=self.guild_id)
@@ -102,7 +106,7 @@ def parse_guild_id(guild_id_str: Optional[str]) -> Optional[int]:
 
 
 def build_help_text() -> str:
-    return "Available commands:\n- /ping\n- /version\n- /help\n- /suggest"
+    return "Available commands:\n- /ping\n- /version\n- /help\n- /suggest\n- /suggestions"
 
 
 def build_version_text(version: str) -> str:

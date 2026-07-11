@@ -86,3 +86,19 @@ class SuggestionService:
             Number of suggestions in the list.
         """
         return len(self._suggestions)
+
+    def format_suggestion_list(self) -> str:
+        """Build the user-facing text for the current suggestion list.
+
+        Returns:
+            A message stating the list is empty, or a numbered list of
+            suggestion titles in the order they were added. IMDb and other
+            metadata are intentionally omitted from this view.
+        """
+        if not self._suggestions:
+            return "The suggestion list is currently empty."
+
+        lines = ["Current suggestions:"]
+        for index, watch_item in enumerate(self._suggestions.values(), start=1):
+            lines.append(f"{index}. {watch_item.title}")
+        return "\n".join(lines)
