@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem
+from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 
 
 @dataclass
@@ -15,13 +16,22 @@ class SuggestionResult:
 
 
 class SuggestionService:
-    """Manages in-memory movie suggestions."""
+    """Manages movie suggestions, persisted through a suggestion repository."""
 
-    def __init__(self) -> None:
-        """Initialize the suggestion service."""
+    def __init__(self, repository: Optional[JsonSuggestionRepository] = None) -> None:
+        """Initialize the suggestion service and load any persisted suggestions.
+
+        Args:
+            repository: The persistence layer to load from and save to.
+                Defaults to a JsonSuggestionRepository using the default
+                on-disk location.
+        """
+        self._repository = repository if repository is not None else JsonSuggestionRepository()
         # Store suggestions as a dict with lowercase title as key for duplicate detection
         # Value is the actual WatchItem with original casing
         self._suggestions: dict[str, WatchItem] = {}
+        for watch_item in self._repository.load():
+            self._suggestions[watch_item.title.lower()] = watch_item
 
     def suggest(self, title: str, imdb_url: Optional[str] = None) -> SuggestionResult:
         """Add a suggestion to the list.
@@ -62,6 +72,7 @@ class SuggestionService:
             metadata_ids=metadata_ids,
         )
         self._suggestions[title_lower] = watch_item
+        self._save()
         return SuggestionResult(
             success=True,
             message=f'Added "{title}" to the suggestion list.',
@@ -129,7 +140,12 @@ class SuggestionService:
                 message="That title is not on the suggestion list.",
             )
 
+        self._save()
         return SuggestionResult(
             success=True,
             message=f'Removed "{watch_item.title}" from the suggestion list.',
         )
+
+    def _save(self) -> None:
+        """Persist the current suggestion list via the repository."""
+        self._repository.save(self.get_suggestions())

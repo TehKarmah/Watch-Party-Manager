@@ -1,17 +1,24 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.domain.watch_item import MetadataProvider
+from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.services.suggestion_service import SuggestionService
 
 
 class SuggestionServiceTests(unittest.TestCase):
     def setUp(self) -> None:
-        """Create a fresh service for each test."""
-        self.service = SuggestionService()
+        """Create a fresh service backed by an isolated, temporary repository."""
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.repository = JsonSuggestionRepository(Path(self._temp_dir.name) / "suggestions.json")
+        self.service = SuggestionService(repository=self.repository)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
 
     def test_suggest_successful_addition(self) -> None:
         result = self.service.suggest("The Matrix")
@@ -214,6 +221,42 @@ class SuggestionServiceTests(unittest.TestCase):
             message,
             "Current suggestions:\n1. Interstellar\n2. Inception",
         )
+
+    def test_suggest_persists_the_new_suggestion(self) -> None:
+        self.service.suggest("The Matrix")
+
+        reloaded_titles = [item.title for item in self.repository.load()]
+        self.assertEqual(reloaded_titles, ["The Matrix"])
+
+    def test_remove_suggestion_persists_the_removal(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+
+        self.service.remove_suggestion("The Matrix")
+
+        reloaded_titles = [item.title for item in self.repository.load()]
+        self.assertEqual(reloaded_titles, ["Inception"])
+
+    def test_failed_suggest_does_not_persist_anything(self) -> None:
+        self.service.suggest("")
+
+        self.assertEqual(self.repository.load(), [])
+
+    def test_new_service_loads_previously_persisted_suggestions(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+
+        reloaded_service = SuggestionService(repository=self.repository)
+
+        titles = [item.title for item in reloaded_service.get_suggestions()]
+        self.assertEqual(titles, ["The Matrix", "Inception"])
+
+    def test_new_service_starts_empty_when_no_suggestions_file_exists(self) -> None:
+        empty_repository = JsonSuggestionRepository(Path(self._temp_dir.name) / "does_not_exist.json")
+
+        service = SuggestionService(repository=empty_repository)
+
+        self.assertEqual(service.suggestion_count(), 0)
 
 
 if __name__ == "__main__":
