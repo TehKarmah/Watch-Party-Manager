@@ -102,3 +102,34 @@ class SuggestionService:
         for index, watch_item in enumerate(self._suggestions.values(), start=1):
             lines.append(f"{index}. {watch_item.title}")
         return "\n".join(lines)
+
+    def remove_suggestion(self, title: str) -> SuggestionResult:
+        """Remove a suggestion from the list by title.
+
+        Args:
+            title: The movie/show title to remove. Matched case-insensitively,
+                with leading/trailing whitespace ignored.
+
+        Returns:
+            SuggestionResult indicating success or failure. The stored title's
+            original capitalization is used in the success message.
+        """
+        if not title or not title.strip():
+            return SuggestionResult(
+                success=False,
+                message="I need a title before I can remove it.",
+            )
+
+        title_lower = title.strip().lower()
+
+        watch_item = self._suggestions.pop(title_lower, None)
+        if watch_item is None:
+            return SuggestionResult(
+                success=False,
+                message="That title is not on the suggestion list.",
+            )
+
+        return SuggestionResult(
+            success=True,
+            message=f'Removed "{watch_item.title}" from the suggestion list.',
+        )

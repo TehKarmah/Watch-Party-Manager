@@ -143,6 +143,78 @@ class SuggestionServiceTests(unittest.TestCase):
         message = self.service.format_suggestion_list()
         self.assertNotIn("tt0133093", message)
 
+    def test_remove_suggestion_successful_removal(self) -> None:
+        self.service.suggest("The Matrix")
+
+        result = self.service.remove_suggestion("The Matrix")
+        self.assertTrue(result.success)
+        self.assertEqual(result.message, 'Removed "The Matrix" from the suggestion list.')
+        self.assertEqual(self.service.suggestion_count(), 0)
+
+    def test_remove_suggestion_matches_case_insensitively(self) -> None:
+        self.service.suggest("The Matrix")
+
+        result = self.service.remove_suggestion("the matrix")
+        self.assertTrue(result.success)
+        self.assertEqual(result.message, 'Removed "The Matrix" from the suggestion list.')
+        self.assertEqual(self.service.suggestion_count(), 0)
+
+    def test_remove_suggestion_ignores_surrounding_whitespace(self) -> None:
+        self.service.suggest("The Matrix")
+
+        result = self.service.remove_suggestion("  The Matrix  ")
+        self.assertTrue(result.success)
+        self.assertEqual(result.message, 'Removed "The Matrix" from the suggestion list.')
+        self.assertEqual(self.service.suggestion_count(), 0)
+
+    def test_remove_suggestion_rejects_empty_title(self) -> None:
+        self.service.suggest("The Matrix")
+
+        result = self.service.remove_suggestion("")
+        self.assertFalse(result.success)
+        self.assertEqual(result.message, "I need a title before I can remove it.")
+        self.assertEqual(self.service.suggestion_count(), 1)
+
+    def test_remove_suggestion_rejects_whitespace_only_title(self) -> None:
+        self.service.suggest("The Matrix")
+
+        result = self.service.remove_suggestion("   ")
+        self.assertFalse(result.success)
+        self.assertEqual(result.message, "I need a title before I can remove it.")
+        self.assertEqual(self.service.suggestion_count(), 1)
+
+    def test_remove_suggestion_reports_title_not_found(self) -> None:
+        self.service.suggest("The Matrix")
+
+        result = self.service.remove_suggestion("Inception")
+        self.assertFalse(result.success)
+        self.assertEqual(result.message, "That title is not on the suggestion list.")
+        self.assertEqual(self.service.suggestion_count(), 1)
+
+    def test_remove_suggestion_leaves_other_suggestions_intact(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+        self.service.suggest("Interstellar")
+
+        result = self.service.remove_suggestion("Inception")
+        self.assertTrue(result.success)
+
+        remaining_titles = [item.title for item in self.service.get_suggestions()]
+        self.assertEqual(remaining_titles, ["The Matrix", "Interstellar"])
+
+    def test_remove_suggestion_preserves_insertion_order_of_remaining_items(self) -> None:
+        self.service.suggest("Interstellar")
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+
+        self.service.remove_suggestion("The Matrix")
+
+        message = self.service.format_suggestion_list()
+        self.assertEqual(
+            message,
+            "Current suggestions:\n1. Interstellar\n2. Inception",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

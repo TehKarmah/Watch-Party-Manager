@@ -52,6 +52,11 @@ class WatchPartyBot(commands.Bot):
         async def suggestions(interaction: discord.Interaction) -> None:
             await interaction.response.send_message(self.suggestion_service.format_suggestion_list())
 
+        @self.tree.command(name="remove_suggestion")
+        async def remove_suggestion(interaction: discord.Interaction, title: str) -> None:
+            result = self.suggestion_service.remove_suggestion(title)
+            await interaction.response.send_message(result.message)
+
         if self.guild_id:
             logger.info(f"Synchronizing slash commands to development guild {self.guild_id}...")
             guild = discord.Object(id=self.guild_id)
@@ -106,7 +111,7 @@ def parse_guild_id(guild_id_str: Optional[str]) -> Optional[int]:
 
 
 def build_help_text() -> str:
-    return "Available commands:\n- /ping\n- /version\n- /help\n- /suggest\n- /suggestions"
+    return "Available commands:\n- /ping\n- /version\n- /help\n- /suggest\n- /suggestions\n- /remove_suggestion"
 
 
 def build_version_text(version: str) -> str:
