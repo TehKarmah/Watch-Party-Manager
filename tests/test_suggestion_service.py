@@ -120,7 +120,7 @@ class SuggestionServiceTests(unittest.TestCase):
         self.service.suggest("The Matrix")
 
         message = self.service.format_suggestion_list()
-        self.assertEqual(message, "Current suggestions:\n1. The Matrix")
+        self.assertEqual(message, "Current suggestions:\n1. [1] The Matrix")
 
     def test_format_suggestion_list_with_multiple_suggestions(self) -> None:
         self.service.suggest("The Matrix")
@@ -130,7 +130,7 @@ class SuggestionServiceTests(unittest.TestCase):
         message = self.service.format_suggestion_list()
         self.assertEqual(
             message,
-            "Current suggestions:\n1. The Matrix\n2. Inception\n3. Interstellar",
+            "Current suggestions:\n1. [1] The Matrix\n2. [2] Inception\n3. [3] Interstellar",
         )
 
     def test_format_suggestion_list_preserves_insertion_order(self) -> None:
@@ -141,7 +141,7 @@ class SuggestionServiceTests(unittest.TestCase):
         message = self.service.format_suggestion_list()
         self.assertEqual(
             message,
-            "Current suggestions:\n1. Interstellar\n2. The Matrix\n3. Inception",
+            "Current suggestions:\n1. [1] Interstellar\n2. [2] The Matrix\n3. [3] Inception",
         )
 
     def test_format_suggestion_list_omits_imdb_information(self) -> None:
@@ -219,13 +219,13 @@ class SuggestionServiceTests(unittest.TestCase):
         message = self.service.format_suggestion_list()
         self.assertEqual(
             message,
-            "Current suggestions:\n1. Interstellar\n2. Inception",
+            "Current suggestions:\n1. [1] Interstellar\n2. [3] Inception",
         )
 
     def test_suggest_persists_the_new_suggestion(self) -> None:
         self.service.suggest("The Matrix")
 
-        reloaded_titles = [item.title for item in self.repository.load()]
+        reloaded_titles = [item.title for item in self.repository.load().watch_items]
         self.assertEqual(reloaded_titles, ["The Matrix"])
 
     def test_remove_suggestion_persists_the_removal(self) -> None:
@@ -234,13 +234,13 @@ class SuggestionServiceTests(unittest.TestCase):
 
         self.service.remove_suggestion("The Matrix")
 
-        reloaded_titles = [item.title for item in self.repository.load()]
+        reloaded_titles = [item.title for item in self.repository.load().watch_items]
         self.assertEqual(reloaded_titles, ["Inception"])
 
     def test_failed_suggest_does_not_persist_anything(self) -> None:
         self.service.suggest("")
 
-        self.assertEqual(self.repository.load(), [])
+        self.assertEqual(self.repository.load().watch_items, [])
 
     def test_new_service_loads_previously_persisted_suggestions(self) -> None:
         self.service.suggest("The Matrix")
@@ -257,6 +257,95 @@ class SuggestionServiceTests(unittest.TestCase):
         service = SuggestionService(repository=empty_repository)
 
         self.assertEqual(service.suggestion_count(), 0)
+
+    def test_suggestion_ids_are_assigned_sequentially(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+        self.service.suggest("Interstellar")
+
+        ids = [item.id for item in self.service.get_suggestions()]
+        self.assertEqual(ids, [1, 2, 3])
+
+    def test_suggestion_ids_are_never_reused_after_removal(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+        self.service.remove_suggestion("The Matrix")
+        self.service.suggest("Interstellar")
+
+        ids = [item.id for item in self.service.get_suggestions()]
+        # Inception keeps ID 2; the removed Matrix's ID (1) is not reissued.
+        self.assertEqual(ids, [2, 3])
+
+    def test_suggestion_ids_persist_across_simulated_restarts(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+
+        restarted_service = SuggestionService(repository=self.repository)
+        restarted_service.suggest("Interstellar")
+
+        ids = [item.id for item in restarted_service.get_suggestions()]
+        self.assertEqual(ids, [1, 2, 3])
+
+    def test_existing_suggestions_keep_their_ids_after_reload(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+
+        reloaded_service = SuggestionService(repository=self.repository)
+
+        original_ids = {item.title: item.id for item in self.service.get_suggestions()}
+        reloaded_ids = {item.title: item.id for item in reloaded_service.get_suggestions()}
+        self.assertEqual(original_ids, reloaded_ids)
+
+    def test_legacy_suggestions_file_without_ids_is_migrated_on_load(self) -> None:
+        legacy_json = """
+        {
+          "suggestions": [
+            {"title": "The Matrix", "media_type": "movie", "metadata_ids": {}},
+            {"title": "Inception", "media_type": "movie", "metadata_ids": {}}
+          ]
+        }
+        """
+        legacy_path = Path(self._temp_dir.name) / "legacy_suggestions.json"
+        legacy_path.write_text(legacy_json, encoding="utf-8")
+        legacy_repository = JsonSuggestionRepository(legacy_path)
+
+        service = SuggestionService(repository=legacy_repository)
+
+        ids = [item.id for item in service.get_suggestions()]
+        self.assertEqual(ids, [1, 2])
+
+        # A newly suggested title should not collide with the migrated IDs.
+        service.suggest("Interstellar")
+        new_ids = [item.id for item in service.get_suggestions()]
+        self.assertEqual(new_ids, [1, 2, 3])
+
+    def test_migrated_ids_are_written_back_to_disk(self) -> None:
+        legacy_json = """
+        {
+          "suggestions": [
+            {"title": "The Matrix", "media_type": "movie", "metadata_ids": {}}
+          ]
+        }
+        """
+        legacy_path = Path(self._temp_dir.name) / "legacy_suggestions.json"
+        legacy_path.write_text(legacy_json, encoding="utf-8")
+        legacy_repository = JsonSuggestionRepository(legacy_path)
+
+        SuggestionService(repository=legacy_repository)
+
+        reloaded = legacy_repository.load()
+        self.assertEqual(reloaded.watch_items[0].id, 1)
+        self.assertFalse(reloaded.migrated)
+
+    def test_suggestions_command_output_includes_ids(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+
+        message = self.service.format_suggestion_list()
+        self.assertEqual(
+            message,
+            "Current suggestions:\n1. [1] The Matrix\n2. [2] Inception",
+        )
 
 
 if __name__ == "__main__":

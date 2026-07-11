@@ -42,11 +42,13 @@ class WatchItem:
     metadata_ids: Dict[MetadataProvider, str] = field(default_factory=dict)
     status: WatchItemStatus = WatchItemStatus.SUGGESTED
     description: Optional[str] = None
+    id: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.title = self.title.strip()
         self._validate_title()
         self._validate_runtime()
+        self._validate_id()
         self.genres = self._normalize_genres(self.genres)
         self.metadata_ids = self._normalize_metadata_ids(self.metadata_ids)
 
@@ -57,6 +59,10 @@ class WatchItem:
     def _validate_runtime(self) -> None:
         if self.runtime_minutes is not None and self.runtime_minutes <= 0:
             raise ValueError("runtime_minutes must be greater than zero when provided")
+
+    def _validate_id(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ValueError("id must be a positive integer when provided")
 
     @staticmethod
     def _normalize_genres(genres: Tuple[str, ...] | list[str] | None) -> Tuple[str, ...]:

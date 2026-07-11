@@ -64,6 +64,20 @@ class WatchItemModelTests(unittest.TestCase):
                 metadata_ids={MetadataProvider.IMDB: "   "},
             )
 
+    def test_watch_item_id_defaults_to_none(self) -> None:
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE)
+
+        self.assertIsNone(item.id)
+
+    def test_watch_item_accepts_a_positive_id(self) -> None:
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE, id=7)
+
+        self.assertEqual(item.id, 7)
+
+    def test_watch_item_rejects_a_non_positive_id(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchItem(title="Arrival", media_type=MediaType.MOVIE, id=0)
+
 
 if __name__ == "__main__":
     unittest.main()

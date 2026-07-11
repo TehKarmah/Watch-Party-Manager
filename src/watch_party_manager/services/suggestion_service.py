@@ -30,8 +30,14 @@ class SuggestionService:
         # Store suggestions as a dict with lowercase title as key for duplicate detection
         # Value is the actual WatchItem with original casing
         self._suggestions: dict[str, WatchItem] = {}
-        for watch_item in self._repository.load():
+        load_result = self._repository.load()
+        for watch_item in load_result.watch_items:
             self._suggestions[watch_item.title.lower()] = watch_item
+        self._next_id = load_result.next_id
+        if load_result.migrated:
+            # An older file had suggestions with no ID; write the newly
+            # assigned IDs back so they're stable from now on.
+            self._save()
 
     def suggest(self, title: str, imdb_url: Optional[str] = None) -> SuggestionResult:
         """Add a suggestion to the list.
@@ -70,7 +76,9 @@ class SuggestionService:
             title=title,
             media_type=MediaType.MOVIE,
             metadata_ids=metadata_ids,
+            id=self._next_id,
         )
+        self._next_id += 1
         self._suggestions[title_lower] = watch_item
         self._save()
         return SuggestionResult(
@@ -111,7 +119,7 @@ class SuggestionService:
 
         lines = ["Current suggestions:"]
         for index, watch_item in enumerate(self._suggestions.values(), start=1):
-            lines.append(f"{index}. {watch_item.title}")
+            lines.append(f"{index}. [{watch_item.id}] {watch_item.title}")
         return "\n".join(lines)
 
     def remove_suggestion(self, title: str) -> SuggestionResult:
@@ -148,4 +156,4 @@ class SuggestionService:
 
     def _save(self) -> None:
         """Persist the current suggestion list via the repository."""
-        self._repository.save(self.get_suggestions())
+        self._repository.save(self.get_suggestions(), self._next_id)
