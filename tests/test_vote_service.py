@@ -1,0 +1,283 @@
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from watch_party_manager.domain.vote import VoteRoundStatus, VoteVisibility
+from watch_party_manager.persistence.vote_repository import JsonVoteRepository
+from watch_party_manager.services.vote_service import VoteService
+
+
+class FakeSuggestionLookup:
+    """Minimal stand-in for SuggestionService.suggestion_exists()."""
+
+    def __init__(self, existing_ids):
+        self._existing_ids = set(existing_ids)
+
+    def suggestion_exists(self, suggestion_id: int) -> bool:
+        return suggestion_id in self._existing_ids
+
+
+class VoteServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """Create a fresh service backed by an isolated, temporary repository."""
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.repository = JsonVoteRepository(Path(self._temp_dir.name) / "voting.json")
+        self.suggestion_lookup = FakeSuggestionLookup(existing_ids=[1, 2, 3])
+        self.service = VoteService(self.suggestion_lookup, repository=self.repository)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    # --- Round creation -----------------------------------------------
+
+    def test_create_round_opens_a_round(self) -> None:
+        result = self.service.create_round()
+
+        self.assertTrue(result.success)
+        self.assertIsNotNone(result.vote_round)
+        self.assertEqual(result.vote_round.status, VoteRoundStatus.OPEN)
+        self.assertEqual(result.vote_round.id, 1)
+
+    def test_create_round_defaults_to_visible(self) -> None:
+        result = self.service.create_round()
+        self.assertEqual(result.vote_round.visibility, VoteVisibility.VISIBLE)
+
+    def test_create_round_supports_blind_visibility(self) -> None:
+        result = self.service.create_round(visibility=VoteVisibility.BLIND)
+        self.assertEqual(result.vote_round.visibility, VoteVisibility.BLIND)
+
+    def test_cannot_create_a_second_open_round(self) -> None:
+        self.service.create_round()
+
+        result = self.service.create_round()
+        self.assertFalse(result.success)
+        self.assertIn("already open", result.message)
+
+    def test_can_create_a_new_round_after_closing_the_previous_one(self) -> None:
+        first = self.service.create_round()
+        self.service.close_round(first.vote_round.id)
+
+        second = self.service.create_round()
+        self.assertTrue(second.success)
+        self.assertEqual(second.vote_round.id, 2)
+
+    # --- Casting votes --------------------------------------------------
+
+    def test_casting_a_first_vote_succeeds(self) -> None:
+        self.service.create_round()
+
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.assertTrue(result.success)
+
+        open_round = self.service.get_open_round()
+        self.assertEqual(open_round.votes[111].suggestion_id, 1)
+        self.assertEqual(open_round.votes[111].changes_used, 0)
+
+    def test_first_vote_sets_original_and_current_suggestion_id_to_the_same_value(self) -> None:
+        self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        vote = self.service.get_open_round().votes[111]
+        self.assertEqual(vote.original_suggestion_id, 1)
+        self.assertEqual(vote.suggestion_id, 1)
+
+    def test_casting_a_vote_for_unknown_suggestion_is_rejected(self) -> None:
+        self.service.create_round()
+
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=999)
+        self.assertFalse(result.success)
+        self.assertIn("doesn't exist", result.message)
+
+    def test_casting_a_vote_with_no_open_round_is_rejected(self) -> None:
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.assertFalse(result.success)
+        self.assertIn("no open voting round", result.message)
+
+    def test_casting_a_vote_in_a_closed_round_is_rejected(self) -> None:
+        created = self.service.create_round()
+        self.service.close_round(created.vote_round.id)
+
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.assertFalse(result.success)
+
+    def test_changing_a_vote_once_succeeds(self) -> None:
+        self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+        self.assertTrue(result.success)
+
+        open_round = self.service.get_open_round()
+        self.assertEqual(open_round.votes[111].suggestion_id, 2)
+        self.assertEqual(open_round.votes[111].changes_used, 1)
+
+    def test_changing_a_vote_preserves_the_original_suggestion_id(self) -> None:
+        self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+
+        vote = self.service.get_open_round().votes[111]
+        self.assertEqual(vote.original_suggestion_id, 1)
+
+    def test_changing_a_vote_updates_the_current_suggestion_id(self) -> None:
+        self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+
+        vote = self.service.get_open_round().votes[111]
+        self.assertEqual(vote.suggestion_id, 2)
+
+    def test_changing_a_vote_preserves_the_original_first_voted_at(self) -> None:
+        self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        original_first_voted_at = self.service.get_open_round().votes[111].first_voted_at
+
+        self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+
+        updated_first_voted_at = self.service.get_open_round().votes[111].first_voted_at
+        self.assertEqual(original_first_voted_at, updated_first_voted_at)
+
+    def test_rejects_a_second_vote_change(self) -> None:
+        self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=3)
+        self.assertFalse(result.success)
+        self.assertIn("already used your one vote change", result.message)
+
+        # The rejected change must not have been applied.
+        open_round = self.service.get_open_round()
+        self.assertEqual(open_round.votes[111].suggestion_id, 2)
+        self.assertEqual(open_round.votes[111].changes_used, 1)
+
+    def test_revoting_for_the_same_suggestion_is_rejected_and_does_not_consume_a_change(self) -> None:
+        self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.assertFalse(result.success)
+
+        open_round = self.service.get_open_round()
+        self.assertEqual(open_round.votes[111].changes_used, 0)
+
+    def test_different_members_vote_independently(self) -> None:
+        self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=222, suggestion_id=2)
+
+        open_round = self.service.get_open_round()
+        self.assertEqual(open_round.votes[111].suggestion_id, 1)
+        self.assertEqual(open_round.votes[222].suggestion_id, 2)
+        self.assertEqual(len(open_round.votes), 2)
+
+    # --- Closing and retrieving rounds -----------------------------------
+
+    def test_closing_a_round_succeeds(self) -> None:
+        created = self.service.create_round()
+
+        result = self.service.close_round(created.vote_round.id)
+        self.assertTrue(result.success)
+        self.assertEqual(self.service.get_round(created.vote_round.id).status, VoteRoundStatus.CLOSED)
+
+    def test_closing_an_already_closed_round_is_rejected(self) -> None:
+        created = self.service.create_round()
+        self.service.close_round(created.vote_round.id)
+
+        result = self.service.close_round(created.vote_round.id)
+        self.assertFalse(result.success)
+
+    def test_closing_an_unknown_round_is_rejected(self) -> None:
+        result = self.service.close_round(999)
+        self.assertFalse(result.success)
+        self.assertIn("doesn't exist", result.message)
+
+    def test_get_open_round_returns_none_when_nothing_is_open(self) -> None:
+        self.assertIsNone(self.service.get_open_round())
+
+    def test_get_round_retrieves_a_round_by_id(self) -> None:
+        created = self.service.create_round()
+
+        fetched = self.service.get_round(created.vote_round.id)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched.id, created.vote_round.id)
+
+    def test_get_round_returns_none_for_unknown_id(self) -> None:
+        self.assertIsNone(self.service.get_round(999))
+
+    # --- Reset behaviors --------------------------------------------------
+
+    def test_remove_member_vote_deletes_the_vote_entirely(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        result = self.service.remove_member_vote(created.vote_round.id, 111)
+        self.assertTrue(result.success)
+        self.assertNotIn(111, self.service.get_round(created.vote_round.id).votes)
+
+    def test_member_can_vote_again_after_their_vote_is_removed(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.remove_member_vote(created.vote_round.id, 111)
+
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+        self.assertTrue(result.success)
+        new_vote = self.service.get_open_round().votes[111]
+        self.assertEqual(new_vote.changes_used, 0)
+        # A fresh vote after removal starts a new "original" pick.
+        self.assertEqual(new_vote.original_suggestion_id, 2)
+        self.assertEqual(new_vote.suggestion_id, 2)
+
+    def test_remove_member_vote_for_a_member_who_has_not_voted_is_rejected(self) -> None:
+        created = self.service.create_round()
+
+        result = self.service.remove_member_vote(created.vote_round.id, 111)
+        self.assertFalse(result.success)
+
+    def test_reset_member_vote_changes_keeps_the_vote_but_restores_the_allowance(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+
+        result = self.service.reset_member_vote_changes(created.vote_round.id, 111)
+        self.assertTrue(result.success)
+
+        vote = self.service.get_round(created.vote_round.id).votes[111]
+        self.assertEqual(vote.suggestion_id, 2)
+        self.assertEqual(vote.changes_used, 0)
+
+    def test_reset_member_vote_changes_preserves_both_suggestion_ids(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+
+        self.service.reset_member_vote_changes(created.vote_round.id, 111)
+
+        vote = self.service.get_round(created.vote_round.id).votes[111]
+        self.assertEqual(vote.original_suggestion_id, 1)
+        self.assertEqual(vote.suggestion_id, 2)
+
+    def test_reset_member_vote_changes_allows_a_further_change(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+        self.service.reset_member_vote_changes(created.vote_round.id, 111)
+
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=3)
+        self.assertTrue(result.success)
+        self.assertEqual(self.service.get_open_round().votes[111].suggestion_id, 3)
+
+    def test_reset_member_vote_changes_for_a_member_who_has_not_voted_is_rejected(self) -> None:
+        created = self.service.create_round()
+
+        result = self.service.reset_member_vote_changes(created.vote_round.id, 111)
+        self.assertFalse(result.success)
+
+
+if __name__ == "__main__":
+    unittest.main()

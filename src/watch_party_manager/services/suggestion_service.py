@@ -106,6 +106,17 @@ class SuggestionService:
         """
         return len(self._suggestions)
 
+    def suggestion_exists(self, suggestion_id: int) -> bool:
+        """Check whether a suggestion with the given ID is currently on the list.
+
+        Args:
+            suggestion_id: The suggestion ID to look up.
+
+        Returns:
+            True if a suggestion with this ID currently exists.
+        """
+        return any(watch_item.id == suggestion_id for watch_item in self._suggestions.values())
+
     def format_suggestion_list(self) -> str:
         """Build the user-facing text for the current suggestion list.
 
