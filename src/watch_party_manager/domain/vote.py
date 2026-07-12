@@ -10,6 +10,17 @@ from typing import Dict, Optional
 # A member may use at most this many vote changes per round.
 MAX_VOTE_CHANGES = 1
 
+# A voting round needs at least this many suggestions to choose between.
+MIN_CANDIDATES_FOR_A_ROUND = 2
+
+# How many days a voting round stays open by default when no explicit
+# duration is given.
+DEFAULT_VOTE_DURATION_DAYS = 7
+
+# Bounds for a custom voting duration, inclusive.
+MIN_VOTE_DURATION_DAYS = 1
+MAX_VOTE_DURATION_DAYS = 30
+
 
 class VoteVisibility(str, Enum):
     """Whether individual votes are visible to other members."""

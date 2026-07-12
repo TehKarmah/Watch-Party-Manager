@@ -8,6 +8,7 @@ from typing import List, Optional, Protocol
 
 from watch_party_manager.domain.vote import (
     MAX_VOTE_CHANGES,
+    MIN_CANDIDATES_FOR_A_ROUND,
     VoteRecord,
     VoteRound,
     VoteRoundStatus,
@@ -17,15 +18,19 @@ from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 
 
 class SuggestionLookup(Protocol):
-    """Anything that can confirm whether a suggestion ID currently exists.
+    """Anything that can confirm whether a suggestion ID currently exists,
+    and how many suggestions currently exist.
 
-    SuggestionService satisfies this by way of its suggestion_exists()
-    method. Keeping this as a small Protocol (rather than importing
-    SuggestionService directly) means VoteService only depends on the one
-    capability it actually needs, and tests can supply a lightweight fake.
+    SuggestionService satisfies this by way of its suggestion_exists() and
+    suggestion_count() methods. Keeping this as a small Protocol (rather
+    than importing SuggestionService directly) means VoteService only
+    depends on the capabilities it actually needs, and tests can supply a
+    lightweight fake.
     """
 
     def suggestion_exists(self, suggestion_id: int) -> bool: ...
+
+    def suggestion_count(self) -> int: ...
 
 
 @dataclass
@@ -126,11 +131,21 @@ class VoteService:
                 this milestone; stored for future use.
 
         Returns:
-            VoteRoundResult. Fails if a round is already open, since only
-            one round may be open at a time.
+            VoteRoundResult. Fails if a round is already open (only one
+            round may be open at a time), or if there currently aren't
+            enough suggestions to choose between.
         """
         if self.get_open_round() is not None:
             return VoteRoundResult(success=False, message="A voting round is already open.")
+
+        if self._suggestion_lookup.suggestion_count() < MIN_CANDIDATES_FOR_A_ROUND:
+            return VoteRoundResult(
+                success=False,
+                message=(
+                    f"At least {MIN_CANDIDATES_FOR_A_ROUND} suggestions are needed "
+                    "to start a voting round."
+                ),
+            )
 
         new_round = VoteRound(
             id=self._next_round_id,
@@ -157,6 +172,21 @@ class VoteService:
             if vote_round.status == VoteRoundStatus.OPEN:
                 return vote_round
         return None
+
+    def get_latest_round(self) -> Optional[VoteRound]:
+        """Get the most recently created voting round, open or closed.
+
+        Round IDs are assigned sequentially and never reused, so the round
+        with the highest ID is always the most recently created one. This
+        is what /vote_status shows when no round ID is specified.
+
+        Returns:
+            The most recently created VoteRound, or None if no round has
+            ever been created.
+        """
+        if not self._rounds:
+            return None
+        return max(self._rounds.values(), key=lambda vote_round: vote_round.id)
 
     def get_round(self, round_id: int) -> Optional[VoteRound]:
         """Get a voting round by ID.
@@ -339,7 +369,7 @@ class VoteService:
 
         return StandingsResult(success=True, message="Standings calculated.", standings=standings)
 
-    def calculate_winners(self, round_id: int) -> WinnerResult:
+    def get_current_winners(self, round_id: int) -> WinnerResult:
         """Determine which suggestion(s) currently have the most votes.
 
         This is a pure calculation: it does not close the round, and it

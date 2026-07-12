@@ -11,13 +11,16 @@ from watch_party_manager.services.vote_service import VoteService
 
 
 class FakeSuggestionLookup:
-    """Minimal stand-in for SuggestionService.suggestion_exists()."""
+    """Minimal stand-in for SuggestionService.suggestion_exists()/suggestion_count()."""
 
     def __init__(self, existing_ids):
         self._existing_ids = set(existing_ids)
 
     def suggestion_exists(self, suggestion_id: int) -> bool:
         return suggestion_id in self._existing_ids
+
+    def suggestion_count(self) -> int:
+        return len(self._existing_ids)
 
 
 class VoteServiceTests(unittest.TestCase):
@@ -63,6 +66,28 @@ class VoteServiceTests(unittest.TestCase):
         second = self.service.create_round()
         self.assertTrue(second.success)
         self.assertEqual(second.vote_round.id, 2)
+
+    def test_cannot_create_a_round_with_fewer_than_two_suggestions(self) -> None:
+        repository = JsonVoteRepository(Path(self._temp_dir.name) / "one_suggestion_voting.json")
+        service = VoteService(FakeSuggestionLookup(existing_ids=[1]), repository=repository)
+
+        result = service.create_round()
+        self.assertFalse(result.success)
+        self.assertIn("At least 2 suggestions", result.message)
+
+    def test_cannot_create_a_round_with_no_suggestions(self) -> None:
+        repository = JsonVoteRepository(Path(self._temp_dir.name) / "no_suggestions_voting.json")
+        service = VoteService(FakeSuggestionLookup(existing_ids=[]), repository=repository)
+
+        result = service.create_round()
+        self.assertFalse(result.success)
+
+    def test_can_create_a_round_with_exactly_two_suggestions(self) -> None:
+        repository = JsonVoteRepository(Path(self._temp_dir.name) / "two_suggestions_voting.json")
+        service = VoteService(FakeSuggestionLookup(existing_ids=[1, 2]), repository=repository)
+
+        result = service.create_round()
+        self.assertTrue(result.success)
 
     # --- Casting votes --------------------------------------------------
 
@@ -209,6 +234,30 @@ class VoteServiceTests(unittest.TestCase):
 
     def test_get_round_returns_none_for_unknown_id(self) -> None:
         self.assertIsNone(self.service.get_round(999))
+
+    def test_get_latest_round_returns_none_when_no_rounds_exist(self) -> None:
+        self.assertIsNone(self.service.get_latest_round())
+
+    def test_get_latest_round_returns_the_only_round(self) -> None:
+        created = self.service.create_round()
+
+        latest = self.service.get_latest_round()
+        self.assertEqual(latest.id, created.vote_round.id)
+
+    def test_get_latest_round_returns_the_most_recently_created_round(self) -> None:
+        first = self.service.create_round()
+        self.service.close_round(first.vote_round.id)
+        second = self.service.create_round()
+
+        latest = self.service.get_latest_round()
+        self.assertEqual(latest.id, second.vote_round.id)
+
+    def test_get_latest_round_returns_a_closed_round_if_it_is_the_most_recent(self) -> None:
+        created = self.service.create_round()
+        self.service.close_round(created.vote_round.id)
+
+        latest = self.service.get_latest_round()
+        self.assertEqual(latest.status, VoteRoundStatus.CLOSED)
 
     # --- Reset behaviors --------------------------------------------------
 
@@ -382,7 +431,7 @@ class VoteServiceStandingsAndWinnersTests(unittest.TestCase):
     # --- Winners ------------------------------------------------------------
 
     def test_winners_for_a_missing_round_is_a_failure(self) -> None:
-        result = self.service.calculate_winners(999)
+        result = self.service.get_current_winners(999)
 
         self.assertFalse(result.success)
         self.assertEqual(result.winning_suggestion_ids, [])
@@ -390,7 +439,7 @@ class VoteServiceStandingsAndWinnersTests(unittest.TestCase):
     def test_no_winners_when_no_votes_have_been_cast(self) -> None:
         created = self.service.create_round()
 
-        result = self.service.calculate_winners(created.vote_round.id)
+        result = self.service.get_current_winners(created.vote_round.id)
         self.assertTrue(result.success)
         self.assertEqual(result.winning_suggestion_ids, [])
 
@@ -400,7 +449,7 @@ class VoteServiceStandingsAndWinnersTests(unittest.TestCase):
         self.service.cast_vote(discord_user_id=222, suggestion_id=1)
         self.service.cast_vote(discord_user_id=333, suggestion_id=2)
 
-        result = self.service.calculate_winners(created.vote_round.id)
+        result = self.service.get_current_winners(created.vote_round.id)
         self.assertEqual(result.winning_suggestion_ids, [1])
 
     def test_a_two_way_tie_returns_both_winners(self) -> None:
@@ -408,7 +457,7 @@ class VoteServiceStandingsAndWinnersTests(unittest.TestCase):
         self.service.cast_vote(discord_user_id=111, suggestion_id=1)
         self.service.cast_vote(discord_user_id=222, suggestion_id=2)
 
-        result = self.service.calculate_winners(created.vote_round.id)
+        result = self.service.get_current_winners(created.vote_round.id)
         self.assertEqual(result.winning_suggestion_ids, [1, 2])
 
     def test_a_multi_way_tie_returns_every_tied_winner(self) -> None:
@@ -421,14 +470,14 @@ class VoteServiceStandingsAndWinnersTests(unittest.TestCase):
         self.service.cast_vote(discord_user_id=444, suggestion_id=4)
         self.service.remove_member_vote(created.vote_round.id, 444)
 
-        result = self.service.calculate_winners(created.vote_round.id)
+        result = self.service.get_current_winners(created.vote_round.id)
         self.assertEqual(result.winning_suggestion_ids, [1, 2, 3])
 
     def test_winners_work_for_an_open_round(self) -> None:
         created = self.service.create_round()
         self.service.cast_vote(discord_user_id=111, suggestion_id=1)
 
-        result = self.service.calculate_winners(created.vote_round.id)
+        result = self.service.get_current_winners(created.vote_round.id)
         self.assertEqual(result.winning_suggestion_ids, [1])
 
     def test_winners_work_for_a_closed_round(self) -> None:
@@ -436,14 +485,14 @@ class VoteServiceStandingsAndWinnersTests(unittest.TestCase):
         self.service.cast_vote(discord_user_id=111, suggestion_id=1)
         self.service.close_round(created.vote_round.id)
 
-        result = self.service.calculate_winners(created.vote_round.id)
+        result = self.service.get_current_winners(created.vote_round.id)
         self.assertEqual(result.winning_suggestion_ids, [1])
 
     def test_calculating_winners_does_not_close_the_round(self) -> None:
         created = self.service.create_round()
         self.service.cast_vote(discord_user_id=111, suggestion_id=1)
 
-        self.service.calculate_winners(created.vote_round.id)
+        self.service.get_current_winners(created.vote_round.id)
 
         self.assertEqual(self.service.get_round(created.vote_round.id).status, VoteRoundStatus.OPEN)
 
@@ -451,7 +500,7 @@ class VoteServiceStandingsAndWinnersTests(unittest.TestCase):
         created = self.service.create_round()
         self.service.cast_vote(discord_user_id=111, suggestion_id=1)
 
-        self.service.calculate_winners(created.vote_round.id)
+        self.service.get_current_winners(created.vote_round.id)
 
         self.assertIsNone(self.service.get_round(created.vote_round.id).winning_suggestion_id)
 
@@ -460,7 +509,7 @@ class VoteServiceStandingsAndWinnersTests(unittest.TestCase):
         self.service.cast_vote(discord_user_id=111, suggestion_id=1)
         self.service.cast_vote(discord_user_id=222, suggestion_id=2)
 
-        self.service.calculate_winners(created.vote_round.id)
+        self.service.get_current_winners(created.vote_round.id)
 
         self.assertIsNone(self.service.get_round(created.vote_round.id).winning_suggestion_id)
 
@@ -469,7 +518,7 @@ class VoteServiceStandingsAndWinnersTests(unittest.TestCase):
         self.service.cast_vote(discord_user_id=111, suggestion_id=1)
         self.service.cast_vote(discord_user_id=111, suggestion_id=2)
 
-        result = self.service.calculate_winners(created.vote_round.id)
+        result = self.service.get_current_winners(created.vote_round.id)
         self.assertEqual(result.winning_suggestion_ids, [2])
 
 
