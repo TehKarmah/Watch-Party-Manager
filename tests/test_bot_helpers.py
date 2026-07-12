@@ -1,11 +1,13 @@
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import (
     build_help_text,
+    format_datetime_for_display,
     build_version_text,
     is_wash_crew_member,
     parse_guild_id,
@@ -163,6 +165,35 @@ class BotHelperTests(unittest.TestCase):
     def test_parse_vote_duration_days_rejects_values_above_the_maximum(self) -> None:
         with self.assertRaises(ValueError):
             parse_vote_duration_days(31)
+
+    # --- Discord timestamp formatting ---------------------------------------
+
+    def test_format_datetime_for_display_returns_fallback_for_none(self) -> None:
+        self.assertEqual(format_datetime_for_display(None), "No deadline set")
+
+    def test_format_datetime_for_display_uses_full_and_relative_discord_codes(self) -> None:
+        value = datetime(2026, 7, 19, 18, 52, tzinfo=timezone.utc)
+        timestamp = int(value.timestamp())
+
+        self.assertEqual(
+            format_datetime_for_display(value),
+            f"<t:{timestamp}:F> (<t:{timestamp}:R>)",
+        )
+
+    def test_format_datetime_for_display_preserves_the_same_instant_across_timezones(self) -> None:
+        utc_value = datetime(2026, 7, 19, 18, 52, tzinfo=timezone.utc)
+        local_value = utc_value.astimezone(timezone(timedelta(hours=-7)))
+
+        self.assertEqual(
+            format_datetime_for_display(local_value),
+            format_datetime_for_display(utc_value),
+        )
+
+    def test_format_datetime_for_display_rejects_naive_datetime(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            format_datetime_for_display(datetime(2026, 7, 19, 18, 52))
+
+        self.assertIn("timezone-aware", str(ctx.exception))
 
 
 if __name__ == "__main__":

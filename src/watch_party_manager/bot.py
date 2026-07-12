@@ -261,18 +261,29 @@ def parse_vote_duration_days(duration_days: Optional[int]) -> int:
 
 
 def format_datetime_for_display(value: Optional[datetime]) -> str:
-    """Format a timezone-aware datetime for display in a Discord message.
+    """Format a datetime using Discord's native timestamp syntax.
+
+    Discord renders native timestamps in each member's local timezone. The
+    full timestamp gives the exact date and time, while the relative timestamp
+    provides quick context such as "in 7 days."
 
     Args:
-        value: The datetime to format, or None.
+        value: A timezone-aware datetime, or None.
 
     Returns:
-        A "YYYY-MM-DD HH:MM UTC" string, or a fallback message if value is
-        None (no deadline set).
+        Discord full and relative timestamp codes, or a fallback message when
+        no deadline is set.
+
+    Raises:
+        ValueError: If value is a naive datetime.
     """
     if value is None:
         return "No deadline set"
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("value must be timezone-aware")
+
+    unix_timestamp = int(value.timestamp())
+    return f"<t:{unix_timestamp}:F> (<t:{unix_timestamp}:R>)"
 
 
 def format_vote_changes_setting() -> str:
