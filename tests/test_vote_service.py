@@ -279,5 +279,199 @@ class VoteServiceTests(unittest.TestCase):
         self.assertFalse(result.success)
 
 
+class VoteServiceStandingsAndWinnersTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """A fresh service with a wider pool of valid suggestion IDs for tie scenarios."""
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.repository = JsonVoteRepository(Path(self._temp_dir.name) / "voting.json")
+        self.suggestion_lookup = FakeSuggestionLookup(existing_ids=range(1, 11))
+        self.service = VoteService(self.suggestion_lookup, repository=self.repository)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    # --- Standings --------------------------------------------------------
+
+    def test_standings_for_a_missing_round_is_a_failure(self) -> None:
+        result = self.service.calculate_standings(999)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.standings, [])
+
+    def test_standings_are_empty_when_no_votes_have_been_cast(self) -> None:
+        created = self.service.create_round()
+
+        result = self.service.calculate_standings(created.vote_round.id)
+        self.assertTrue(result.success)
+        self.assertEqual(result.standings, [])
+
+    def test_standings_with_a_single_vote(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        result = self.service.calculate_standings(created.vote_round.id)
+        self.assertEqual(len(result.standings), 1)
+        self.assertEqual(result.standings[0].suggestion_id, 1)
+        self.assertEqual(result.standings[0].vote_count, 1)
+
+    def test_standings_tally_multiple_suggestions_with_different_totals(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=222, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=333, suggestion_id=2)
+
+        result = self.service.calculate_standings(created.vote_round.id)
+        counts = {entry.suggestion_id: entry.vote_count for entry in result.standings}
+        self.assertEqual(counts, {1: 2, 2: 1})
+
+    def test_standings_sort_by_vote_count_descending(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+        self.service.cast_vote(discord_user_id=222, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=333, suggestion_id=1)
+
+        result = self.service.calculate_standings(created.vote_round.id)
+        ordered_ids = [entry.suggestion_id for entry in result.standings]
+        self.assertEqual(ordered_ids, [1, 2])
+
+    def test_standings_break_ties_by_ascending_suggestion_id(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=3)
+        self.service.cast_vote(discord_user_id=222, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=333, suggestion_id=2)
+
+        result = self.service.calculate_standings(created.vote_round.id)
+        ordered_ids = [entry.suggestion_id for entry in result.standings]
+        # All tied at one vote each: deterministic order is ascending ID.
+        self.assertEqual(ordered_ids, [1, 2, 3])
+
+    def test_standings_reflect_a_changed_vote_under_the_new_suggestion(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+
+        result = self.service.calculate_standings(created.vote_round.id)
+        counts = {entry.suggestion_id: entry.vote_count for entry in result.standings}
+        self.assertEqual(counts, {2: 1})
+        self.assertNotIn(1, counts)
+
+    def test_standings_use_current_suggestion_id_not_original(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+        self.service.cast_vote(discord_user_id=222, suggestion_id=2)
+
+        vote = self.service.get_round(created.vote_round.id).votes[111]
+        self.assertEqual(vote.original_suggestion_id, 1)  # sanity check on the fixture
+
+        result = self.service.calculate_standings(created.vote_round.id)
+        counts = {entry.suggestion_id: entry.vote_count for entry in result.standings}
+        # Suggestion 1 got zero votes counted even though it was member 111's
+        # original pick; only the current suggestion_id (2) is tallied.
+        self.assertEqual(counts, {2: 2})
+
+    def test_standings_work_for_a_closed_round(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.close_round(created.vote_round.id)
+
+        result = self.service.calculate_standings(created.vote_round.id)
+        self.assertTrue(result.success)
+        self.assertEqual(result.standings[0].suggestion_id, 1)
+
+    # --- Winners ------------------------------------------------------------
+
+    def test_winners_for_a_missing_round_is_a_failure(self) -> None:
+        result = self.service.calculate_winners(999)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.winning_suggestion_ids, [])
+
+    def test_no_winners_when_no_votes_have_been_cast(self) -> None:
+        created = self.service.create_round()
+
+        result = self.service.calculate_winners(created.vote_round.id)
+        self.assertTrue(result.success)
+        self.assertEqual(result.winning_suggestion_ids, [])
+
+    def test_a_single_clear_winner(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=222, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=333, suggestion_id=2)
+
+        result = self.service.calculate_winners(created.vote_round.id)
+        self.assertEqual(result.winning_suggestion_ids, [1])
+
+    def test_a_two_way_tie_returns_both_winners(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=222, suggestion_id=2)
+
+        result = self.service.calculate_winners(created.vote_round.id)
+        self.assertEqual(result.winning_suggestion_ids, [1, 2])
+
+    def test_a_multi_way_tie_returns_every_tied_winner(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=3)
+        self.service.cast_vote(discord_user_id=222, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=333, suggestion_id=2)
+        # A fourth suggestion that ends up with zero votes should not
+        # appear as a winner alongside the three-way tie.
+        self.service.cast_vote(discord_user_id=444, suggestion_id=4)
+        self.service.remove_member_vote(created.vote_round.id, 444)
+
+        result = self.service.calculate_winners(created.vote_round.id)
+        self.assertEqual(result.winning_suggestion_ids, [1, 2, 3])
+
+    def test_winners_work_for_an_open_round(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        result = self.service.calculate_winners(created.vote_round.id)
+        self.assertEqual(result.winning_suggestion_ids, [1])
+
+    def test_winners_work_for_a_closed_round(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.close_round(created.vote_round.id)
+
+        result = self.service.calculate_winners(created.vote_round.id)
+        self.assertEqual(result.winning_suggestion_ids, [1])
+
+    def test_calculating_winners_does_not_close_the_round(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        self.service.calculate_winners(created.vote_round.id)
+
+        self.assertEqual(self.service.get_round(created.vote_round.id).status, VoteRoundStatus.OPEN)
+
+    def test_calculating_winners_does_not_write_winning_suggestion_id(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        self.service.calculate_winners(created.vote_round.id)
+
+        self.assertIsNone(self.service.get_round(created.vote_round.id).winning_suggestion_id)
+
+    def test_calculating_winners_on_a_tie_does_not_write_winning_suggestion_id(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=222, suggestion_id=2)
+
+        self.service.calculate_winners(created.vote_round.id)
+
+        self.assertIsNone(self.service.get_round(created.vote_round.id).winning_suggestion_id)
+
+    def test_winners_use_current_suggestion_id_not_original(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=111, suggestion_id=2)
+
+        result = self.service.calculate_winners(created.vote_round.id)
+        self.assertEqual(result.winning_suggestion_ids, [2])
+
+
 if __name__ == "__main__":
     unittest.main()

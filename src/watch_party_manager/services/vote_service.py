@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, Protocol
+from typing import List, Optional, Protocol
 
 from watch_party_manager.domain.vote import (
     MAX_VOTE_CHANGES,
@@ -43,6 +43,37 @@ class VoteRoundResult:
     success: bool
     message: str
     vote_round: Optional[VoteRound] = None
+
+
+@dataclass
+class StandingsEntry:
+    """A single suggestion's vote count within a round's standings."""
+
+    suggestion_id: int
+    vote_count: int
+
+
+@dataclass
+class StandingsResult:
+    """Result of calculating standings for a voting round."""
+
+    success: bool
+    message: str
+    standings: List[StandingsEntry] = field(default_factory=list)
+
+
+@dataclass
+class WinnerResult:
+    """Result of calculating the winner(s) of a voting round.
+
+    winning_suggestion_ids holds every suggestion tied for the highest vote
+    count. It's empty (with success=True) when the round has no votes yet;
+    that's a valid outcome, not an error.
+    """
+
+    success: bool
+    message: str
+    winning_suggestion_ids: List[int] = field(default_factory=list)
 
 
 class VoteService:
@@ -268,6 +299,81 @@ class VoteService:
         return VoteResult(
             success=True,
             message="The member's vote change allowance has been reset.",
+        )
+
+    def calculate_standings(self, round_id: int) -> StandingsResult:
+        """Tally votes by current suggestion_id for a round.
+
+        Works for both open and closed rounds — standings are just a tally
+        of the votes as they currently stand, regardless of whether the
+        round is still accepting them. A member's original_suggestion_id is
+        never counted; only where their vote currently stands matters.
+
+        Only suggestions that received at least one vote appear here.
+        VoteService only has a way to check whether a specific suggestion
+        ID exists (SuggestionLookup.suggestion_exists), not to list every
+        current suggestion, so it can't cleanly fill in zero-vote entries
+        for suggestions nobody voted for.
+
+        Args:
+            round_id: The round to tally.
+
+        Returns:
+            StandingsResult with entries sorted by vote count descending,
+            then by suggestion ID ascending to break ties deterministically.
+            A failure result if the round doesn't exist.
+        """
+        vote_round = self._rounds.get(round_id)
+        if vote_round is None:
+            return StandingsResult(success=False, message="That voting round doesn't exist.")
+
+        vote_counts: dict[int, int] = {}
+        for vote in vote_round.votes.values():
+            vote_counts[vote.suggestion_id] = vote_counts.get(vote.suggestion_id, 0) + 1
+
+        standings = [
+            StandingsEntry(suggestion_id=suggestion_id, vote_count=vote_count)
+            for suggestion_id, vote_count in vote_counts.items()
+        ]
+        standings.sort(key=lambda entry: (-entry.vote_count, entry.suggestion_id))
+
+        return StandingsResult(success=True, message="Standings calculated.", standings=standings)
+
+    def calculate_winners(self, round_id: int) -> WinnerResult:
+        """Determine which suggestion(s) currently have the most votes.
+
+        This is a pure calculation: it does not close the round, and it
+        does not write to VoteRound.winning_suggestion_id. That field can
+        only hold one ID, so it can't accurately represent a tie. Winners
+        are only ever reported back here, never persisted, until that
+        field's design is revisited.
+
+        Args:
+            round_id: The round to evaluate.
+
+        Returns:
+            WinnerResult with every suggestion tied for the highest vote
+            count, in ascending suggestion ID order. Empty (but still
+            success=True) if no votes have been cast. A failure result if
+            the round doesn't exist.
+        """
+        standings_result = self.calculate_standings(round_id)
+        if not standings_result.success:
+            return WinnerResult(success=False, message=standings_result.message)
+
+        if not standings_result.standings:
+            return WinnerResult(success=True, message="No votes have been cast yet.")
+
+        top_vote_count = standings_result.standings[0].vote_count
+        winning_suggestion_ids = sorted(
+            entry.suggestion_id
+            for entry in standings_result.standings
+            if entry.vote_count == top_vote_count
+        )
+        return WinnerResult(
+            success=True,
+            message="Winner(s) calculated.",
+            winning_suggestion_ids=winning_suggestion_ids,
         )
 
     def _save(self) -> None:
