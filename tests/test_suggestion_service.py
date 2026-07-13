@@ -6,16 +6,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.domain.watch_item import MetadataProvider
+from watch_party_manager.persistence.suggestion_database_repository import (
+    JsonSuggestionDatabaseRepository,
+)
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.services.suggestion_service import SuggestionService
 
 
 class SuggestionServiceTests(unittest.TestCase):
     def setUp(self) -> None:
-        """Create a fresh service backed by an isolated, temporary repository."""
+        """Create a fresh service backed by isolated, temporary repositories."""
         self._temp_dir = tempfile.TemporaryDirectory()
         self.repository = JsonSuggestionRepository(Path(self._temp_dir.name) / "suggestions.json")
-        self.service = SuggestionService(repository=self.repository)
+        self.database_repository = JsonSuggestionDatabaseRepository(
+            Path(self._temp_dir.name) / "suggestion_databases.json"
+        )
+        self.service = SuggestionService(
+            repository=self.repository, database_repository=self.database_repository
+        )
 
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
@@ -246,7 +254,9 @@ class SuggestionServiceTests(unittest.TestCase):
         self.service.suggest("The Matrix")
         self.service.suggest("Inception")
 
-        reloaded_service = SuggestionService(repository=self.repository)
+        reloaded_service = SuggestionService(
+            repository=self.repository, database_repository=self.database_repository
+        )
 
         titles = [item.title for item in reloaded_service.get_suggestions()]
         self.assertEqual(titles, ["The Matrix", "Inception"])
@@ -254,7 +264,7 @@ class SuggestionServiceTests(unittest.TestCase):
     def test_new_service_starts_empty_when_no_suggestions_file_exists(self) -> None:
         empty_repository = JsonSuggestionRepository(Path(self._temp_dir.name) / "does_not_exist.json")
 
-        service = SuggestionService(repository=empty_repository)
+        service = SuggestionService(repository=empty_repository, database_repository=self.database_repository)
 
         self.assertEqual(service.suggestion_count(), 0)
 
@@ -280,7 +290,9 @@ class SuggestionServiceTests(unittest.TestCase):
         self.service.suggest("The Matrix")
         self.service.suggest("Inception")
 
-        restarted_service = SuggestionService(repository=self.repository)
+        restarted_service = SuggestionService(
+            repository=self.repository, database_repository=self.database_repository
+        )
         restarted_service.suggest("Interstellar")
 
         ids = [item.id for item in restarted_service.get_suggestions()]
@@ -290,7 +302,9 @@ class SuggestionServiceTests(unittest.TestCase):
         self.service.suggest("The Matrix")
         self.service.suggest("Inception")
 
-        reloaded_service = SuggestionService(repository=self.repository)
+        reloaded_service = SuggestionService(
+            repository=self.repository, database_repository=self.database_repository
+        )
 
         original_ids = {item.title: item.id for item in self.service.get_suggestions()}
         reloaded_ids = {item.title: item.id for item in reloaded_service.get_suggestions()}
@@ -309,7 +323,7 @@ class SuggestionServiceTests(unittest.TestCase):
         legacy_path.write_text(legacy_json, encoding="utf-8")
         legacy_repository = JsonSuggestionRepository(legacy_path)
 
-        service = SuggestionService(repository=legacy_repository)
+        service = SuggestionService(repository=legacy_repository, database_repository=self.database_repository)
 
         ids = [item.id for item in service.get_suggestions()]
         self.assertEqual(ids, [1, 2])
@@ -331,7 +345,7 @@ class SuggestionServiceTests(unittest.TestCase):
         legacy_path.write_text(legacy_json, encoding="utf-8")
         legacy_repository = JsonSuggestionRepository(legacy_path)
 
-        SuggestionService(repository=legacy_repository)
+        SuggestionService(repository=legacy_repository, database_repository=self.database_repository)
 
         reloaded = legacy_repository.load()
         self.assertEqual(reloaded.watch_items[0].id, 1)
@@ -346,6 +360,169 @@ class SuggestionServiceTests(unittest.TestCase):
             message,
             "Current suggestions:\n1. [1] The Matrix\n2. [2] Inception",
         )
+
+
+class SuggestionServiceDatabaseTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """Create a fresh service backed by isolated, temporary repositories."""
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.repository = JsonSuggestionRepository(Path(self._temp_dir.name) / "suggestions.json")
+        self.database_repository = JsonSuggestionDatabaseRepository(
+            Path(self._temp_dir.name) / "suggestion_databases.json"
+        )
+        self.service = SuggestionService(
+            repository=self.repository, database_repository=self.database_repository
+        )
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_create_database_succeeds(self) -> None:
+        result = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        self.assertTrue(result.success)
+        self.assertIsNotNone(result.database)
+        self.assertEqual(result.database.name, "Sunday Watch Party")
+        self.assertEqual(result.database.database_id, 1)
+
+    def test_create_database_assigns_sequential_ids(self) -> None:
+        first = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        second = self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+
+        self.assertEqual(first.database.database_id, 1)
+        self.assertEqual(second.database.database_id, 2)
+
+    def test_create_database_rejects_empty_name(self) -> None:
+        result = self.service.create_database("", guild_id=100, channel_id=200)
+
+        self.assertFalse(result.success)
+        self.assertIsNone(result.database)
+
+    def test_create_database_rejects_whitespace_only_name(self) -> None:
+        result = self.service.create_database("   ", guild_id=100, channel_id=200)
+        self.assertFalse(result.success)
+
+    def test_create_database_trims_the_name(self) -> None:
+        result = self.service.create_database("  Sunday Watch Party  ", guild_id=100, channel_id=200)
+        self.assertEqual(result.database.name, "Sunday Watch Party")
+
+    def test_create_database_rejects_duplicate_name_case_insensitively(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        result = self.service.create_database("sunday watch party", guild_id=100, channel_id=201)
+
+        self.assertFalse(result.success)
+        self.assertIn("already exists", result.message)
+
+    def test_create_database_allows_the_same_name_in_a_different_guild(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        result = self.service.create_database("Sunday Watch Party", guild_id=101, channel_id=201)
+
+        self.assertTrue(result.success)
+
+    def test_create_database_rejects_duplicate_channel_id(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        result = self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=200)
+
+        self.assertFalse(result.success)
+        self.assertIn("already has a suggestion database", result.message)
+
+    def test_create_database_allows_the_same_channel_id_in_a_different_guild(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        result = self.service.create_database("Sunday Watch Party", guild_id=101, channel_id=200)
+
+        self.assertTrue(result.success)
+
+    def test_create_database_defaults_to_active(self) -> None:
+        result = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.assertTrue(result.database.active)
+
+    def test_create_database_supports_creating_an_inactive_database(self) -> None:
+        result = self.service.create_database(
+            "Halloween Movies", guild_id=100, channel_id=200, active=False
+        )
+        self.assertTrue(result.success)
+        self.assertFalse(result.database.active)
+
+    def test_get_database_retrieves_by_id(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        fetched = self.service.get_database(created.database.database_id)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched.name, "Sunday Watch Party")
+
+    def test_get_database_returns_none_for_unknown_id(self) -> None:
+        self.assertIsNone(self.service.get_database(999))
+
+    def test_database_exists_true_for_a_created_database(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.assertTrue(self.service.database_exists(created.database.database_id))
+
+    def test_database_exists_false_for_an_unknown_id(self) -> None:
+        self.assertFalse(self.service.database_exists(999))
+
+    def test_list_databases_is_empty_initially(self) -> None:
+        self.assertEqual(self.service.list_databases(), [])
+
+    def test_list_databases_preserves_creation_order(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+        self.service.create_database("Halloween Movies", guild_id=100, channel_id=202)
+
+        names = [database.name for database in self.service.list_databases()]
+        self.assertEqual(names, ["Sunday Watch Party", "Kung Fu Movies", "Halloween Movies"])
+
+    def test_list_databases_includes_inactive_databases(self) -> None:
+        self.service.create_database("Halloween Movies", guild_id=100, channel_id=200, active=False)
+
+        names = [database.name for database in self.service.list_databases()]
+        self.assertEqual(names, ["Halloween Movies"])
+
+    def test_create_database_persists_the_new_database(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        reloaded = self.database_repository.load()
+        self.assertEqual(len(reloaded.databases), 1)
+        self.assertEqual(reloaded.databases[0].name, "Sunday Watch Party")
+
+    def test_failed_create_database_does_not_persist_anything(self) -> None:
+        self.service.create_database("", guild_id=100, channel_id=200)
+
+        reloaded = self.database_repository.load()
+        self.assertEqual(reloaded.databases, [])
+
+    def test_new_service_loads_previously_persisted_databases(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+
+        reloaded_service = SuggestionService(
+            repository=self.repository, database_repository=self.database_repository
+        )
+
+        names = [database.name for database in reloaded_service.list_databases()]
+        self.assertEqual(names, ["Sunday Watch Party", "Kung Fu Movies"])
+
+    def test_new_service_starts_with_no_databases_when_no_file_exists(self) -> None:
+        empty_database_repository = JsonSuggestionDatabaseRepository(
+            Path(self._temp_dir.name) / "does_not_exist.json"
+        )
+
+        service = SuggestionService(repository=self.repository, database_repository=empty_database_repository)
+
+        self.assertEqual(service.list_databases(), [])
+
+    def test_database_ids_persist_and_are_not_reused_across_restarts(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        restarted_service = SuggestionService(
+            repository=self.repository, database_repository=self.database_repository
+        )
+        result = restarted_service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+
+        self.assertEqual(result.database.database_id, 2)
 
 
 if __name__ == "__main__":

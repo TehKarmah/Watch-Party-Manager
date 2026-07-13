@@ -9,6 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import perform_start_vote, perform_vote, perform_vote_status
 from watch_party_manager.domain.vote import VoteVisibility
+from watch_party_manager.persistence.suggestion_database_repository import (
+    JsonSuggestionDatabaseRepository,
+)
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.suggestion_service import SuggestionService
@@ -35,9 +38,13 @@ class VoteCommandTests(unittest.TestCase):
         """
         self._temp_dir = tempfile.TemporaryDirectory()
         suggestions_path = Path(self._temp_dir.name) / "suggestions.json"
+        suggestion_databases_path = Path(self._temp_dir.name) / "suggestion_databases.json"
         voting_path = Path(self._temp_dir.name) / "voting.json"
 
-        self.suggestion_service = SuggestionService(repository=JsonSuggestionRepository(suggestions_path))
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(suggestions_path),
+            database_repository=JsonSuggestionDatabaseRepository(suggestion_databases_path),
+        )
         self.vote_service = VoteService(self.suggestion_service, repository=JsonVoteRepository(voting_path))
 
         self.suggestion_service.suggest("The Matrix")

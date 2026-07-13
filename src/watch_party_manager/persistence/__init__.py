@@ -10,6 +10,11 @@ from watch_party_manager.persistence.vote_repository import (
     JsonVoteRepository,
     VoteLoadResult,
 )
+from watch_party_manager.persistence.suggestion_database_repository import (
+    DEFAULT_SUGGESTION_DATABASES_PATH,
+    JsonSuggestionDatabaseRepository,
+    SuggestionDatabaseLoadResult,
+)
 
 __all__ = [
     "DEFAULT_SUGGESTIONS_PATH",
@@ -18,4 +23,7 @@ __all__ = [
     "DEFAULT_VOTING_PATH",
     "JsonVoteRepository",
     "VoteLoadResult",
+    "DEFAULT_SUGGESTION_DATABASES_PATH",
+    "JsonSuggestionDatabaseRepository",
+    "SuggestionDatabaseLoadResult",
 ]

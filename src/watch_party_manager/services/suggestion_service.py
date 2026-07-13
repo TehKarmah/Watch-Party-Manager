@@ -3,7 +3,11 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem
+from watch_party_manager.persistence.suggestion_database_repository import (
+    JsonSuggestionDatabaseRepository,
+)
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 
 
@@ -15,16 +19,33 @@ class SuggestionResult:
     message: str
 
 
+@dataclass
+class SuggestionDatabaseResult:
+    """Result of a suggestion-database operation."""
+
+    success: bool
+    message: str
+    database: Optional[SuggestionDatabase] = None
+
+
 class SuggestionService:
     """Manages movie suggestions, persisted through a suggestion repository."""
 
-    def __init__(self, repository: Optional[JsonSuggestionRepository] = None) -> None:
-        """Initialize the suggestion service and load any persisted suggestions.
+    def __init__(
+        self,
+        repository: Optional[JsonSuggestionRepository] = None,
+        database_repository: Optional[JsonSuggestionDatabaseRepository] = None,
+    ) -> None:
+        """Initialize the suggestion service and load any persisted state.
 
         Args:
-            repository: The persistence layer to load from and save to.
-                Defaults to a JsonSuggestionRepository using the default
-                on-disk location.
+            repository: The persistence layer to load suggestions from and
+                save them to. Defaults to a JsonSuggestionRepository using
+                the default on-disk location.
+            database_repository: The persistence layer to load suggestion
+                databases from and save them to. Defaults to a
+                JsonSuggestionDatabaseRepository using the default on-disk
+                location.
         """
         self._repository = repository if repository is not None else JsonSuggestionRepository()
         # Store suggestions as a dict with lowercase title as key for duplicate detection
@@ -38,6 +59,17 @@ class SuggestionService:
             # An older file had suggestions with no ID; write the newly
             # assigned IDs back so they're stable from now on.
             self._save()
+
+        self._database_repository = (
+            database_repository if database_repository is not None else JsonSuggestionDatabaseRepository()
+        )
+        # Keyed by database_id, in creation order. Suggestions don't belong
+        # to a database yet -- this is groundwork for a future milestone.
+        self._databases: dict[int, SuggestionDatabase] = {}
+        database_load_result = self._database_repository.load()
+        for database in database_load_result.databases:
+            self._databases[database.database_id] = database
+        self._next_database_id = database_load_result.next_id
 
     def suggest(self, title: str, imdb_url: Optional[str] = None) -> SuggestionResult:
         """Add a suggestion to the list.
@@ -168,3 +200,106 @@ class SuggestionService:
     def _save(self) -> None:
         """Persist the current suggestion list via the repository."""
         self._repository.save(self.get_suggestions(), self._next_id)
+
+    def create_database(
+        self,
+        name: str,
+        guild_id: int,
+        channel_id: int,
+        active: bool = True,
+    ) -> SuggestionDatabaseResult:
+        """Create a new suggestion database.
+
+        A suggestion database is a WASH Crew-configured collection tied to
+        a specific Discord channel or thread (e.g. "Sunday Watch Party").
+        Suggestions themselves don't belong to a database yet.
+
+        Args:
+            name: Display name for the database. Matched case-insensitively
+                against other databases in the same guild to reject
+                duplicates.
+            guild_id: The Discord guild (server) this database belongs to.
+            channel_id: The Discord channel or thread ID this database is
+                associated with. A guild may not have two databases on the
+                same channel.
+            active: Whether the database starts active. Defaults to True.
+                Nothing in this service filters on this flag yet -- it's
+                groundwork for future archive behavior.
+
+        Returns:
+            SuggestionDatabaseResult indicating success or failure.
+        """
+        if not name or not name.strip():
+            return SuggestionDatabaseResult(
+                success=False,
+                message="I need a name before I can create a suggestion database.",
+            )
+
+        trimmed_name = name.strip()
+        name_lower = trimmed_name.lower()
+
+        for database in self._databases.values():
+            if database.guild_id != guild_id:
+                continue
+            if database.name.lower() == name_lower:
+                return SuggestionDatabaseResult(
+                    success=False,
+                    message=f'A suggestion database named "{trimmed_name}" already exists in this server.',
+                )
+            if database.channel_id == channel_id:
+                return SuggestionDatabaseResult(
+                    success=False,
+                    message="This channel already has a suggestion database.",
+                )
+
+        database = SuggestionDatabase(
+            database_id=self._next_database_id,
+            name=trimmed_name,
+            guild_id=guild_id,
+            channel_id=channel_id,
+            active=active,
+        )
+        self._next_database_id += 1
+        self._databases[database.database_id] = database
+        self._save_databases()
+        return SuggestionDatabaseResult(
+            success=True,
+            message=f'Created suggestion database "{trimmed_name}".',
+            database=database,
+        )
+
+    def get_database(self, database_id: int) -> Optional[SuggestionDatabase]:
+        """Get a suggestion database by ID.
+
+        Args:
+            database_id: The database ID to look up.
+
+        Returns:
+            The matching SuggestionDatabase, or None if no database has
+            that ID.
+        """
+        return self._databases.get(database_id)
+
+    def list_databases(self) -> list[SuggestionDatabase]:
+        """Get all suggestion databases, in the order they were created.
+
+        Returns:
+            List of every SuggestionDatabase, active or not -- this
+            service doesn't filter by active status.
+        """
+        return list(self._databases.values())
+
+    def database_exists(self, database_id: int) -> bool:
+        """Check whether a suggestion database with the given ID currently exists.
+
+        Args:
+            database_id: The database ID to look up.
+
+        Returns:
+            True if a database with this ID currently exists.
+        """
+        return database_id in self._databases
+
+    def _save_databases(self) -> None:
+        """Persist the current suggestion databases via the repository."""
+        self._database_repository.save(self.list_databases(), self._next_database_id)
