@@ -59,7 +59,7 @@ class WatchPartyBot(commands.Bot):
         async def help_command(interaction: discord.Interaction) -> None:
             await interaction.response.send_message(build_help_text())
 
-        @self.tree.command(name="suggest")
+        @self.tree.command(name="add")
         async def suggest(
             interaction: discord.Interaction,
             title: str,
@@ -68,11 +68,11 @@ class WatchPartyBot(commands.Bot):
             result = self.suggestion_service.suggest(title, imdb_url)
             await interaction.response.send_message(result.message)
 
-        @self.tree.command(name="suggestions")
+        @self.tree.command(name="list")
         async def suggestions(interaction: discord.Interaction) -> None:
             await interaction.response.send_message(self.suggestion_service.format_suggestion_list())
 
-        @self.tree.command(name="remove_suggestion")
+        @self.tree.command(name="remove")
         async def remove_suggestion(interaction: discord.Interaction, title: str) -> None:
             result = self.suggestion_service.remove_suggestion(title)
             await interaction.response.send_message(result.message)
@@ -562,9 +562,9 @@ def build_help_text() -> str:
         "- /ping\n"
         "- /version\n"
         "- /help\n"
-        "- /suggest\n"
-        "- /suggestions\n"
-        "- /remove_suggestion\n"
+        "- /add\n"
+        "- /list\n"
+        "- /remove\n"
         "- /start_vote\n"
         "- /vote_status\n"
         "- /vote"

@@ -40,9 +40,9 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("/ping", help_text)
         self.assertIn("/version", help_text)
         self.assertIn("/help", help_text)
-        self.assertIn("/suggest", help_text)
-        self.assertIn("/suggestions", help_text)
-        self.assertIn("/remove_suggestion", help_text)
+        self.assertIn("/add", help_text)
+        self.assertIn("/list", help_text)
+        self.assertIn("/remove", help_text)
         self.assertIn("/start_vote", help_text)
         self.assertIn("/vote_status", help_text)
 
