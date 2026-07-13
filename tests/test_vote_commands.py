@@ -7,12 +7,12 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from watch_party_manager.bot import perform_start_vote, perform_vote_status
+from watch_party_manager.bot import perform_start_vote, perform_vote, perform_vote_status
 from watch_party_manager.domain.vote import VoteVisibility
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.suggestion_service import SuggestionService
-from watch_party_manager.services.vote_service import StandingsResult, VoteService
+from watch_party_manager.services.vote_service import StandingsResult, VoteResult, VoteService
 
 
 class FakeRole:
@@ -277,6 +277,169 @@ class VoteCommandTests(unittest.TestCase):
 
         self.assertIn("Standings unavailable", message)
         self.assertIn("Something went wrong.", message)
+
+    # --- /vote ------------------------------------------------------------
+
+    def test_successful_first_vote(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
+        message, ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertTrue(ephemeral)
+        self.assertIn("recorded", message)
+        self.assertIn("#1", message)
+        self.assertEqual(self.vote_service.get_open_round().votes[111].suggestion_id, 1)
+
+    def test_successful_visible_vote_shows_standings(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
+        message, ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertTrue(ephemeral)
+        self.assertIn("Standings:", message)
+        self.assertIn("Suggestion #1", message)
+
+    def test_successful_blind_vote_hides_standings(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.BLIND)
+
+        message, ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertTrue(ephemeral)
+        self.assertNotIn("Standings", message)
+
+    def test_blind_vote_never_reveals_another_members_vote(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.BLIND)
+        self.vote_service.cast_vote(discord_user_id=222, suggestion_id=2)
+
+        message, _ = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertNotIn("222", message)
+        self.assertNotIn("#2", message)
+
+    def test_duplicate_vote_for_the_same_suggestion_is_rejected(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+        perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        message, ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertTrue(ephemeral)
+        self.assertIn("already voted", message)
+
+    def test_vote_change_is_allowed_once(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+        perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        message, ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=2)
+
+        self.assertTrue(ephemeral)
+        self.assertIn("updated", message)
+        self.assertIn("#2", message)
+        self.assertEqual(self.vote_service.get_open_round().votes[111].suggestion_id, 2)
+
+    def test_vote_change_reports_no_remaining_changes(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+        perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        message, _ = perform_vote(self.vote_service, user_id=111, suggestion_id=2)
+
+        self.assertIn("no vote changes remaining", message.lower())
+
+    def test_vote_changes_exhausted_is_rejected(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+        perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+        perform_vote(self.vote_service, user_id=111, suggestion_id=2)
+
+        message, ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertTrue(ephemeral)
+        self.assertIn("already used your one vote change", message)
+        # The rejected attempt must not have changed the recorded vote.
+        self.assertEqual(self.vote_service.get_open_round().votes[111].suggestion_id, 2)
+
+    def test_suggestion_does_not_exist_is_rejected(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
+        message, ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=999)
+
+        self.assertTrue(ephemeral)
+        self.assertIn("doesn't exist", message)
+        self.assertEqual(self.vote_service.get_open_round().votes, {})
+
+    def test_no_active_round_is_rejected(self) -> None:
+        message, ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertTrue(ephemeral)
+        self.assertIn("no open voting round", message.lower())
+
+    def test_closed_round_is_rejected(self) -> None:
+        created = self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+        self.vote_service.close_round(created.vote_round.id)
+
+        message, ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertTrue(ephemeral)
+        self.assertIn("no open voting round", message.lower())
+        self.assertIsNone(self.vote_service.get_open_round())
+
+    def test_confirmation_formatting_for_a_first_vote(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
+        message, _ = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertEqual(
+            message,
+            "Your vote for suggestion #1 has been recorded.\n\nStandings:\n1. Suggestion #1 — 1 vote",
+        )
+
+    def test_confirmation_formatting_for_a_changed_vote(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.BLIND)
+        perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        message, _ = perform_vote(self.vote_service, user_id=111, suggestion_id=2)
+
+        self.assertEqual(
+            message,
+            "Your vote has been updated to suggestion #2.\nYou have no vote changes remaining.",
+        )
+
+    def test_standings_only_shown_for_visible_rounds(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.BLIND)
+
+        message, _ = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertNotIn("Standings", message)
+
+    def test_vote_responses_are_always_ephemeral(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
+        success_message, success_ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+        failure_message, failure_ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertTrue(success_ephemeral)
+        self.assertTrue(failure_ephemeral)
+
+    def test_vote_service_failure_is_relayed_cleanly(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
+        with patch.object(
+            self.vote_service,
+            "cast_vote",
+            return_value=VoteResult(success=False, message="Something unexpected happened."),
+        ):
+            message, ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertTrue(ephemeral)
+        self.assertEqual(message, "Something unexpected happened.")
+
+    def test_different_members_can_vote_independently(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
+        perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+        perform_vote(self.vote_service, user_id=222, suggestion_id=2)
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertEqual(vote_round.votes[111].suggestion_id, 1)
+        self.assertEqual(vote_round.votes[222].suggestion_id, 2)
 
 
 if __name__ == "__main__":

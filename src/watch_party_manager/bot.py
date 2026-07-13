@@ -15,6 +15,7 @@ from watch_party_manager.domain.vote import (
     MAX_VOTE_CHANGES,
     MAX_VOTE_DURATION_DAYS,
     MIN_VOTE_DURATION_DAYS,
+    VoteRecord,
     VoteRound,
     VoteRoundStatus,
     VoteVisibility,
@@ -99,6 +100,15 @@ class WatchPartyBot(commands.Bot):
                 suggestion_service=self.suggestion_service,
             )
             await interaction.response.send_message(message)
+
+        @self.tree.command(name="vote")
+        async def vote(interaction: discord.Interaction, suggestion_id: int) -> None:
+            message, ephemeral = perform_vote(
+                vote_service=self.vote_service,
+                user_id=interaction.user.id,
+                suggestion_id=suggestion_id,
+            )
+            await interaction.response.send_message(message, ephemeral=ephemeral)
 
         if self.guild_id:
             logger.info(f"Synchronizing slash commands to development guild {self.guild_id}...")
@@ -320,6 +330,39 @@ def build_start_vote_confirmation(vote_round: VoteRound, candidate_count: int) -
     )
 
 
+def format_standings_lines(
+    standings: Optional[List[StandingsEntry]],
+    standings_error: Optional[str],
+) -> List[str]:
+    """Build the display lines for a round's standings, if any are shown.
+
+    Shared by /vote_status and /vote (for visible rounds) so the standings
+    format stays identical and isn't duplicated per call site.
+
+    Args:
+        standings: Standings entries to display, or None to show nothing.
+        standings_error: A message to show instead of standings if
+            calculating them failed, or None.
+
+    Returns:
+        Lines to append to a message, starting with a blank separator
+        line. Empty if there's nothing to show (both args are None).
+    """
+    if standings_error is not None:
+        return ["", f"Standings unavailable: {standings_error}"]
+
+    if standings is not None:
+        if not standings:
+            return ["", "Standings: no votes yet."]
+        lines = ["", "Standings:"]
+        for position, entry in enumerate(standings, start=1):
+            vote_word = "vote" if entry.vote_count == 1 else "votes"
+            lines.append(f"{position}. Suggestion #{entry.suggestion_id} — {entry.vote_count} {vote_word}")
+        return lines
+
+    return []
+
+
 def build_vote_status_text(
     vote_round: VoteRound,
     candidate_count: int,
@@ -351,19 +394,7 @@ def build_vote_status_text(
         f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
         f"Vote changes allowed: {format_vote_changes_setting()}",
     ]
-
-    if standings_error is not None:
-        lines.append("")
-        lines.append(f"Standings unavailable: {standings_error}")
-    elif standings is not None:
-        lines.append("")
-        if not standings:
-            lines.append("Standings: no votes yet.")
-        else:
-            lines.append("Standings:")
-            for position, entry in enumerate(standings, start=1):
-                vote_word = "vote" if entry.vote_count == 1 else "votes"
-                lines.append(f"{position}. Suggestion #{entry.suggestion_id} — {entry.vote_count} {vote_word}")
+    lines.extend(format_standings_lines(standings, standings_error))
 
     return "\n".join(lines)
 
@@ -457,6 +488,74 @@ def perform_vote_status(vote_service: VoteService, suggestion_service: Suggestio
     return build_vote_status_text(vote_round, candidate_count, standings, standings_error)
 
 
+def build_vote_confirmation(vote_record: VoteRecord, is_first_vote: bool, remaining_changes: int) -> str:
+    """Build the /vote confirmation message.
+
+    Args:
+        vote_record: The member's own vote record after casting.
+        is_first_vote: True if this was the member's first vote this round.
+        remaining_changes: How many vote changes the member has left.
+
+    Returns:
+        A confirmation message. Never mentions any other member's vote.
+    """
+    if is_first_vote:
+        return f"Your vote for suggestion #{vote_record.suggestion_id} has been recorded."
+
+    lines = [f"Your vote has been updated to suggestion #{vote_record.suggestion_id}."]
+    if remaining_changes > 0:
+        change_word = "change" if remaining_changes == 1 else "changes"
+        lines.append(f"You have {remaining_changes} vote {change_word} remaining.")
+    else:
+        lines.append("You have no vote changes remaining.")
+    return "\n".join(lines)
+
+
+def perform_vote(vote_service: VoteService, user_id: int, suggestion_id: int) -> tuple[str, bool]:
+    """Core logic for /vote, kept entirely free of Discord objects.
+
+    All eligibility rules — an open round existing, the suggestion ID
+    existing, one active vote per member, one allowed change per member —
+    are enforced by VoteService.cast_vote(). This function never
+    duplicates those checks; it only decides how to present the result
+    and whether to attach standings.
+
+    Args:
+        vote_service: The vote service to cast the vote through.
+        user_id: The voting member's Discord user ID.
+        suggestion_id: The suggestion ID they're voting for.
+
+    Returns:
+        A (message, ephemeral) tuple. Every /vote response is ephemeral —
+        a member's own vote, and any standings shown alongside it, are for
+        their eyes only.
+    """
+    open_round_before = vote_service.get_open_round()
+    had_existing_vote = open_round_before is not None and user_id in open_round_before.votes
+
+    result = vote_service.cast_vote(discord_user_id=user_id, suggestion_id=suggestion_id)
+    if not result.success:
+        return result.message, True
+
+    # cast_vote() succeeded, so there is now an open round with this
+    # member's vote recorded in it.
+    vote_round = vote_service.get_open_round()
+    vote_record = vote_round.votes[user_id]
+    is_first_vote = not had_existing_vote
+    remaining_changes = MAX_VOTE_CHANGES - vote_record.changes_used
+
+    lines = [build_vote_confirmation(vote_record, is_first_vote, remaining_changes)]
+
+    if vote_round.visibility == VoteVisibility.VISIBLE:
+        standings_result = vote_service.calculate_standings(vote_round.id)
+        if standings_result.success:
+            lines.extend(format_standings_lines(standings_result.standings, None))
+        else:
+            lines.extend(format_standings_lines(None, standings_result.message))
+
+    return "\n".join(lines), True
+
+
 def build_help_text() -> str:
     return (
         "Available commands:\n"
@@ -467,7 +566,8 @@ def build_help_text() -> str:
         "- /suggestions\n"
         "- /remove_suggestion\n"
         "- /start_vote\n"
-        "- /vote_status"
+        "- /vote_status\n"
+        "- /vote"
     )
 
 
