@@ -396,14 +396,23 @@ class SuggestionService:
         """
         return self._databases.get(database_id)
 
-    def list_databases(self) -> list[SuggestionDatabase]:
-        """Get all suggestion databases, in the order they were created.
+    def list_databases(self, guild_id: Optional[int] = None) -> list[SuggestionDatabase]:
+        """Get suggestion databases, in the order they were created.
+
+        Args:
+            guild_id: If given, only databases belonging to this guild are
+                included. If None, every database is returned regardless
+                of guild -- this preserves the original, pre-filtering
+                behavior for anything that doesn't need to scope by guild.
 
         Returns:
-            List of every SuggestionDatabase, active or not -- this
-            service doesn't filter by active status.
+            List of matching SuggestionDatabase instances, active or not
+            -- this service doesn't filter by active status here.
         """
-        return list(self._databases.values())
+        databases = list(self._databases.values())
+        if guild_id is not None:
+            databases = [database for database in databases if database.guild_id == guild_id]
+        return databases
 
     def database_exists(self, database_id: int) -> bool:
         """Check whether a suggestion database with the given ID currently exists.
@@ -416,17 +425,70 @@ class SuggestionService:
         """
         return database_id in self._databases
 
+    def deactivate_database(
+        self, database_id: int, guild_id: int
+    ) -> SuggestionDatabaseResult:
+        """Mark a suggestion database inactive.
+
+        This does not delete the database, and it doesn't touch any
+        suggestions already assigned to it -- they're preserved as-is. It
+        only prevents the database from being selected automatically for
+        future commands (see resolve_database_for_channel). Permanently
+        deleting a database is not implemented.
+
+        Args:
+            database_id: The database to deactivate.
+            guild_id: The Discord guild requesting the deactivation.
+
+        Returns:
+            SuggestionDatabaseResult indicating success or failure.
+        """
+        database = self._databases.get(database_id)
+        if database is None or database.guild_id != guild_id:
+            return SuggestionDatabaseResult(
+                success=False,
+                message="That suggestion database doesn't exist.",
+            )
+
+        if not database.active:
+            return SuggestionDatabaseResult(
+                success=False,
+                message="That suggestion database is already inactive.",
+            )
+
+        database.active = False
+        self._save_databases()
+        return SuggestionDatabaseResult(
+            success=True,
+            message=f'Suggestion database "{database.name}" has been deactivated.',
+            database=database,
+        )
+
+    def suggestion_count_for_database(self, database_id: int) -> int:
+        """Count suggestions currently assigned to a database.
+
+        Args:
+            database_id: The database to count suggestions for.
+
+        Returns:
+            The number of suggestions with this database_id.
+        """
+        return sum(1 for watch_item in self._suggestions.values() if watch_item.database_id == database_id)
+
     def resolve_database_for_channel(
         self, guild_id: int, channel_id: int
     ) -> DatabaseResolution:
         """Determine which suggestion database applies in a guild/channel.
 
-        Resolution considers only databases belonging to the supplied guild:
+        Resolution considers only active databases belonging to the
+        supplied guild -- an inactive (deactivated) database is never
+        selected automatically, whether by a direct channel match or as
+        the guild's sole database:
           1. A database configured for this exact channel (or thread) ID.
           2. If none matches but exactly one database exists in the guild, use it.
           3. If multiple databases exist in the guild and none match, resolution
              is ambiguous until interactive selection is implemented.
-          4. If the guild has no databases, WASH Crew needs to configure one.
+          4. If the guild has no (active) databases, WASH Crew needs to configure one.
 
         Args:
             guild_id: The Discord guild (server) where the command was run.
@@ -436,11 +498,7 @@ class SuggestionService:
             DatabaseResolution with either a usable database or a clear
             error message to show the user.
         """
-        databases = [
-            database
-            for database in self._databases.values()
-            if database.guild_id == guild_id
-        ]
+        databases = [database for database in self.list_databases(guild_id) if database.active]
         for database in databases:
             if database.channel_id == channel_id:
                 return DatabaseResolution(database=database)

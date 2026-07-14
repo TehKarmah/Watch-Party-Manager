@@ -481,6 +481,20 @@ class SuggestionServiceDatabaseTests(unittest.TestCase):
         names = [database.name for database in self.service.list_databases()]
         self.assertEqual(names, ["Halloween Movies"])
 
+    def test_list_databases_filters_by_guild_when_given(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.create_database("Kung Fu Movies", guild_id=101, channel_id=201)
+
+        names = [database.name for database in self.service.list_databases(guild_id=100)]
+        self.assertEqual(names, ["Sunday Watch Party"])
+
+    def test_list_databases_without_a_guild_returns_every_database(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.create_database("Kung Fu Movies", guild_id=101, channel_id=201)
+
+        names = [database.name for database in self.service.list_databases()]
+        self.assertEqual(names, ["Sunday Watch Party", "Kung Fu Movies"])
+
     def test_create_database_persists_the_new_database(self) -> None:
         self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
 
@@ -523,6 +537,116 @@ class SuggestionServiceDatabaseTests(unittest.TestCase):
         result = restarted_service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
 
         self.assertEqual(result.database.database_id, 2)
+
+    # --- Deactivating a database ---------------------------------------------
+
+    def test_deactivate_database_succeeds(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        result = self.service.deactivate_database(created.database.database_id, guild_id=100)
+
+        self.assertTrue(result.success)
+        self.assertFalse(self.service.get_database(created.database.database_id).active)
+
+    def test_deactivate_database_rejects_an_unknown_id(self) -> None:
+        result = self.service.deactivate_database(999, guild_id=100)
+
+        self.assertFalse(result.success)
+        self.assertIn("doesn't exist", result.message)
+
+    def test_deactivate_database_rejects_a_database_from_another_guild(self) -> None:
+        created = self.service.create_database(
+            "Other Guild", guild_id=200, channel_id=300
+        )
+
+        result = self.service.deactivate_database(
+            created.database.database_id, guild_id=100
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("doesn't exist", result.message)
+        self.assertTrue(self.service.get_database(created.database.database_id).active)
+
+    def test_deactivate_database_rejects_an_already_inactive_database(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.deactivate_database(created.database.database_id, guild_id=100)
+
+        result = self.service.deactivate_database(created.database.database_id, guild_id=100)
+
+        self.assertFalse(result.success)
+        self.assertIn("already inactive", result.message)
+
+    def test_deactivate_database_does_not_delete_it(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        self.service.deactivate_database(created.database.database_id, guild_id=100)
+
+        self.assertTrue(self.service.database_exists(created.database.database_id))
+        self.assertIn(created.database.database_id, [db.database_id for db in self.service.list_databases()])
+
+    def test_deactivate_database_preserves_its_suggestions(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.suggest("The Matrix", database_id=created.database.database_id)
+
+        self.service.deactivate_database(created.database.database_id, guild_id=100)
+
+        titles = [item.title for item in self.service.get_suggestions()]
+        self.assertEqual(titles, ["The Matrix"])
+        self.assertEqual(
+            self.service.suggestion_count_for_database(created.database.database_id), 1
+        )
+
+    def test_deactivate_database_persists_the_change(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.deactivate_database(created.database.database_id, guild_id=100)
+
+        reloaded = self.database_repository.load()
+        self.assertFalse(reloaded.databases[0].active)
+
+    # --- Suggestion counts per database --------------------------------------
+
+    def test_suggestion_count_for_database_is_zero_when_empty(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.assertEqual(self.service.suggestion_count_for_database(created.database.database_id), 0)
+
+    def test_suggestion_count_for_database_counts_only_that_database(self) -> None:
+        first = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        second = self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+        self.service.suggest("The Matrix", database_id=first.database.database_id)
+        self.service.suggest("Inception", database_id=first.database.database_id)
+        self.service.suggest("Enter the Dragon", database_id=second.database.database_id)
+
+        self.assertEqual(self.service.suggestion_count_for_database(first.database.database_id), 2)
+        self.assertEqual(self.service.suggestion_count_for_database(second.database.database_id), 1)
+
+    # --- Inactive databases are excluded from automatic resolution ----------
+
+    def test_resolve_database_for_channel_ignores_an_inactive_database_matching_the_channel(self) -> None:
+        created = self.service.create_database(
+            "Sunday Watch Party", guild_id=100, channel_id=200, active=False
+        )
+
+        resolution = self.service.resolve_database_for_channel(100, created.database.channel_id)
+
+        self.assertIsNone(resolution.database)
+        self.assertIn("configure a suggestion database", resolution.error_message)
+
+    def test_resolve_database_for_channel_ignores_an_inactive_database_as_the_sole_database(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200, active=False)
+
+        resolution = self.service.resolve_database_for_channel(100, 999)
+
+        self.assertIsNone(resolution.database)
+        self.assertIn("configure a suggestion database", resolution.error_message)
+
+    def test_resolve_database_for_channel_uses_the_only_active_database(self) -> None:
+        self.service.create_database("Retired", guild_id=100, channel_id=200, active=False)
+        active = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=201)
+
+        resolution = self.service.resolve_database_for_channel(100, 999)
+
+        self.assertIsNotNone(resolution.database)
+        self.assertEqual(resolution.database.database_id, active.database.database_id)
 
 
 class SuggestionServiceDatabaseAssociationTests(unittest.TestCase):

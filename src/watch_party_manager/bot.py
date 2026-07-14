@@ -20,6 +20,7 @@ from watch_party_manager.domain.vote import (
     VoteRoundStatus,
     VoteVisibility,
 )
+from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.services.suggestion_service import SuggestionService
@@ -122,6 +123,39 @@ class WatchPartyBot(commands.Bot):
                 vote_service=self.vote_service,
                 user_id=interaction.user.id,
                 suggestion_id=suggestion_id,
+            )
+            await interaction.response.send_message(message, ephemeral=ephemeral)
+
+        @self.tree.command(name="database_add")
+        async def database_add(interaction: discord.Interaction, name: str) -> None:
+            message, ephemeral = perform_database_add(
+                suggestion_service=self.suggestion_service,
+                user=interaction.user,
+                wash_crew_role_id=self.wash_crew_role_id,
+                guild_id=interaction.guild_id,
+                channel_id=interaction.channel_id,
+                name=name,
+            )
+            await interaction.response.send_message(message, ephemeral=ephemeral)
+
+        @self.tree.command(name="database_list")
+        async def database_list(interaction: discord.Interaction) -> None:
+            message, ephemeral = perform_database_list(
+                suggestion_service=self.suggestion_service,
+                user=interaction.user,
+                wash_crew_role_id=self.wash_crew_role_id,
+                guild_id=interaction.guild_id,
+            )
+            await interaction.response.send_message(message, ephemeral=ephemeral)
+
+        @self.tree.command(name="database_remove")
+        async def database_remove(interaction: discord.Interaction, database_id: int) -> None:
+            message, ephemeral = perform_database_remove(
+                suggestion_service=self.suggestion_service,
+                user=interaction.user,
+                wash_crew_role_id=self.wash_crew_role_id,
+                guild_id=interaction.guild_id,
+                database_id=database_id,
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
 
@@ -645,6 +679,180 @@ def perform_list_suggestions(
     return suggestion_service.format_suggestion_list(resolution.database.database_id)
 
 
+def build_database_add_confirmation(database: SuggestionDatabase) -> str:
+    """Build the /database_add confirmation message.
+
+    Args:
+        database: The newly created suggestion database.
+
+    Returns:
+        A confirmation naming the database, its ID, and its channel.
+    """
+    return (
+        f'Suggestion database "{database.name}" created.\n'
+        f"Database ID: {database.database_id}\n"
+        f"Channel: <#{database.channel_id}>"
+    )
+
+
+def build_database_list_text(
+    suggestion_service: SuggestionService, databases: List[SuggestionDatabase]
+) -> str:
+    """Build the /database_list message for a set of databases.
+
+    Args:
+        suggestion_service: Used to look up each database's suggestion count.
+        databases: The databases to display, in the order given.
+
+    Returns:
+        A line per database with its ID, name, active/inactive status,
+        channel, and current suggestion count.
+    """
+    lines = ["Configured suggestion databases:"]
+    for database in databases:
+        status = "Active" if database.active else "Inactive"
+        suggestion_count = suggestion_service.suggestion_count_for_database(database.database_id)
+        suggestion_word = "suggestion" if suggestion_count == 1 else "suggestions"
+        lines.append(
+            f"[{database.database_id}] {database.name} — {status} — "
+            f"<#{database.channel_id}> — {suggestion_count} {suggestion_word}"
+        )
+    return "\n".join(lines)
+
+
+def perform_database_add(
+    suggestion_service: SuggestionService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    guild_id: Optional[int],
+    channel_id: Optional[int],
+    name: str,
+) -> tuple[str, bool]:
+    """Core logic for /database_add, kept free of Discord objects except `user`.
+
+    All the actual creation rules (duplicate name, duplicate channel) are
+    enforced by SuggestionService.create_database(); this function only
+    handles the WASH Crew permission check and presentation.
+
+    Args:
+        suggestion_service: The suggestion service to create the database in.
+        user: The member invoking the command.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if
+            unconfigured.
+        guild_id: The Discord guild the command was run in.
+        channel_id: The Discord channel or thread the command was run in.
+        name: The desired database name.
+
+    Returns:
+        A (message, ephemeral) tuple. Every /database_add response is
+        ephemeral -- this is an admin configuration command.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+        )
+
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to configure a suggestion database.", True
+
+    if guild_id is None:
+        return "This command can only be used in a Discord server.", True
+
+    if channel_id is None:
+        return "This command must be used in a server channel or thread.", True
+
+    result = suggestion_service.create_database(name, guild_id=guild_id, channel_id=channel_id)
+    if not result.success:
+        return result.message, True
+
+    return build_database_add_confirmation(result.database), True
+
+
+def perform_database_list(
+    suggestion_service: SuggestionService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    guild_id: Optional[int],
+) -> tuple[str, bool]:
+    """Core logic for /database_list, kept free of Discord objects except `user`.
+
+    Args:
+        suggestion_service: The suggestion service to read databases from.
+        user: The member invoking the command.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if
+            unconfigured.
+        guild_id: The Discord guild the command was run in.
+
+    Returns:
+        A (message, ephemeral) tuple. Every /database_list response is
+        ephemeral -- this is an admin configuration command.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+        )
+
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to view suggestion databases.", True
+
+    if guild_id is None:
+        return "This command can only be used in a Discord server.", True
+
+    databases = suggestion_service.list_databases(guild_id)
+    if not databases:
+        return "No suggestion databases are configured yet.", True
+
+    return build_database_list_text(suggestion_service, databases), True
+
+
+def perform_database_remove(
+    suggestion_service: SuggestionService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    guild_id: Optional[int],
+    database_id: int,
+) -> tuple[str, bool]:
+    """Core logic for /database_remove, kept free of Discord objects except `user`.
+
+    This deactivates a database rather than deleting it -- all the actual
+    rules (unknown ID, already inactive) are enforced by
+    SuggestionService.deactivate_database().
+
+    Args:
+        suggestion_service: The suggestion service to deactivate the
+            database in.
+        user: The member invoking the command.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if
+            unconfigured.
+        guild_id: The Discord guild the command was run in, or None outside
+            a guild.
+        database_id: The database to deactivate.
+
+    Returns:
+        A (message, ephemeral) tuple. Every /database_remove response is
+        ephemeral -- this is an admin configuration command.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+        )
+
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to remove a suggestion database.", True
+
+    if guild_id is None:
+        return "This command can only be used in a Discord server.", True
+
+    result = suggestion_service.deactivate_database(database_id, guild_id)
+    return result.message, True
+
+
 def build_help_text() -> str:
     return (
         "Available commands:\n"
@@ -656,7 +864,10 @@ def build_help_text() -> str:
         "- /remove\n"
         "- /start_vote\n"
         "- /vote_status\n"
-        "- /vote"
+        "- /vote\n"
+        "- /database_add\n"
+        "- /database_list\n"
+        "- /database_remove"
     )
 
 
