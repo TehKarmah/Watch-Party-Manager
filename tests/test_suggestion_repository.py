@@ -169,6 +169,44 @@ class JsonSuggestionRepositoryTests(unittest.TestCase):
         self.assertEqual(ids, [1, 2])
         self.assertEqual(third_load.next_id, 3)
 
+    def test_save_then_load_round_trips_database_and_message_location(self) -> None:
+        watch_item = WatchItem(
+            title="The Matrix",
+            media_type=MediaType.MOVIE,
+            id=1,
+            database_id=10,
+            guild_id=100,
+            channel_id=200,
+            message_id=300,
+        )
+        self.repository.save([watch_item], next_id=2)
+
+        result = self.repository.load()
+        loaded = result.watch_items[0]
+        self.assertEqual(loaded.database_id, 10)
+        self.assertEqual(loaded.guild_id, 100)
+        self.assertEqual(loaded.channel_id, 200)
+        self.assertEqual(loaded.message_id, 300)
+
+    def test_loading_a_file_without_database_fields_defaults_them_to_none(self) -> None:
+        legacy_json = """
+        {
+          "next_id": 2,
+          "suggestions": [
+            {"id": 1, "title": "The Matrix", "media_type": "movie", "metadata_ids": {}}
+          ]
+        }
+        """
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+        loaded = result.watch_items[0]
+        self.assertIsNone(loaded.database_id)
+        self.assertIsNone(loaded.guild_id)
+        self.assertIsNone(loaded.channel_id)
+        self.assertIsNone(loaded.message_id)
+
 
 if __name__ == "__main__":
     unittest.main()

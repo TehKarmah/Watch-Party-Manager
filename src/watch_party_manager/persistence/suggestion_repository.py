@@ -121,8 +121,8 @@ class JsonSuggestionRepository:
     def _serialize(watch_item: WatchItem) -> dict:
         """Convert a WatchItem into a JSON-friendly dict.
 
-        Only id, title, media_type, and metadata_ids are persisted for this
-        milestone.
+        id, title, media_type, metadata_ids, database_id, guild_id,
+        channel_id, and message_id are persisted.
         """
         return {
             "id": watch_item.id,
@@ -132,11 +132,19 @@ class JsonSuggestionRepository:
                 provider.value: identifier
                 for provider, identifier in watch_item.metadata_ids.items()
             },
+            "database_id": watch_item.database_id,
+            "guild_id": watch_item.guild_id,
+            "channel_id": watch_item.channel_id,
+            "message_id": watch_item.message_id,
         }
 
     @staticmethod
     def _deserialize(entry: dict, entry_id: int) -> WatchItem:
         """Rebuild a WatchItem from a dict produced by _serialize().
+
+        database_id, guild_id, channel_id, and message_id all default to
+        None when absent, so a file saved before this milestone (which has
+        none of these keys) still loads without any special handling.
 
         Args:
             entry: The raw JSON dict for one suggestion.
@@ -152,4 +160,8 @@ class JsonSuggestionRepository:
             media_type=MediaType(entry["media_type"]),
             metadata_ids=metadata_ids,
             id=entry_id,
+            database_id=entry.get("database_id"),
+            guild_id=entry.get("guild_id"),
+            channel_id=entry.get("channel_id"),
+            message_id=entry.get("message_id"),
         )

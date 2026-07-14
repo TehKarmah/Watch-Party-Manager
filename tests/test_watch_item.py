@@ -78,6 +78,45 @@ class WatchItemModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             WatchItem(title="Arrival", media_type=MediaType.MOVIE, id=0)
 
+    def test_watch_item_database_location_fields_default_to_none(self) -> None:
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE)
+
+        self.assertIsNone(item.database_id)
+        self.assertIsNone(item.guild_id)
+        self.assertIsNone(item.channel_id)
+        self.assertIsNone(item.message_id)
+
+    def test_watch_item_accepts_database_location_fields(self) -> None:
+        item = WatchItem(
+            title="Arrival",
+            media_type=MediaType.MOVIE,
+            database_id=1,
+            guild_id=100,
+            channel_id=200,
+            message_id=300,
+        )
+
+        self.assertEqual(item.database_id, 1)
+        self.assertEqual(item.guild_id, 100)
+        self.assertEqual(item.channel_id, 200)
+        self.assertEqual(item.message_id, 300)
+
+    def test_watch_item_rejects_a_non_positive_database_id(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchItem(title="Arrival", media_type=MediaType.MOVIE, database_id=0)
+
+    def test_watch_item_rejects_a_non_positive_guild_id(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchItem(title="Arrival", media_type=MediaType.MOVIE, guild_id=0)
+
+    def test_watch_item_rejects_a_non_positive_channel_id(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchItem(title="Arrival", media_type=MediaType.MOVIE, channel_id=0)
+
+    def test_watch_item_rejects_a_non_positive_message_id(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchItem(title="Arrival", media_type=MediaType.MOVIE, message_id=0)
+
 
 if __name__ == "__main__":
     unittest.main()

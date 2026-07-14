@@ -43,12 +43,20 @@ class WatchItem:
     status: WatchItemStatus = WatchItemStatus.SUGGESTED
     description: Optional[str] = None
     id: Optional[int] = None
+    database_id: Optional[int] = None
+    guild_id: Optional[int] = None
+    channel_id: Optional[int] = None
+    message_id: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.title = self.title.strip()
         self._validate_title()
         self._validate_runtime()
         self._validate_id()
+        self._validate_database_id()
+        self._validate_guild_id()
+        self._validate_channel_id()
+        self._validate_message_id()
         self.genres = self._normalize_genres(self.genres)
         self.metadata_ids = self._normalize_metadata_ids(self.metadata_ids)
 
@@ -63,6 +71,22 @@ class WatchItem:
     def _validate_id(self) -> None:
         if self.id is not None and self.id <= 0:
             raise ValueError("id must be a positive integer when provided")
+
+    def _validate_database_id(self) -> None:
+        if self.database_id is not None and self.database_id <= 0:
+            raise ValueError("database_id must be a positive integer when provided")
+
+    def _validate_guild_id(self) -> None:
+        if self.guild_id is not None and self.guild_id <= 0:
+            raise ValueError("guild_id must be a positive integer when provided")
+
+    def _validate_channel_id(self) -> None:
+        if self.channel_id is not None and self.channel_id <= 0:
+            raise ValueError("channel_id must be a positive integer when provided")
+
+    def _validate_message_id(self) -> None:
+        if self.message_id is not None and self.message_id <= 0:
+            raise ValueError("message_id must be a positive integer when provided")
 
     @staticmethod
     def _normalize_genres(genres: Tuple[str, ...] | list[str] | None) -> Tuple[str, ...]:

@@ -20,6 +20,7 @@ from watch_party_manager.domain.vote import (
     VoteRoundStatus,
     VoteVisibility,
 )
+from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
@@ -65,12 +66,26 @@ class WatchPartyBot(commands.Bot):
             title: str,
             imdb_url: Optional[str] = None,
         ) -> None:
-            result = self.suggestion_service.suggest(title, imdb_url)
-            await interaction.response.send_message(result.message)
+            message, ephemeral, watch_item = perform_add_suggestion(
+                suggestion_service=self.suggestion_service,
+                guild_id=interaction.guild_id,
+                channel_id=interaction.channel_id,
+                title=title,
+                imdb_url=imdb_url,
+            )
+            await interaction.response.send_message(message, ephemeral=ephemeral)
+            if watch_item is not None:
+                sent_message = await interaction.original_response()
+                self.suggestion_service.attach_message_reference(watch_item.id, sent_message.id)
 
         @self.tree.command(name="list")
         async def suggestions(interaction: discord.Interaction) -> None:
-            await interaction.response.send_message(self.suggestion_service.format_suggestion_list())
+            message = perform_list_suggestions(
+                suggestion_service=self.suggestion_service,
+                guild_id=interaction.guild_id,
+                channel_id=interaction.channel_id,
+            )
+            await interaction.response.send_message(message)
 
         @self.tree.command(name="remove")
         async def remove_suggestion(interaction: discord.Interaction, title: str) -> None:
@@ -554,6 +569,80 @@ def perform_vote(vote_service: VoteService, user_id: int, suggestion_id: int) ->
             lines.extend(format_standings_lines(None, standings_result.message))
 
     return "\n".join(lines), True
+
+
+def perform_add_suggestion(
+    suggestion_service: SuggestionService,
+    guild_id: Optional[int],
+    channel_id: Optional[int],
+    title: str,
+    imdb_url: Optional[str],
+) -> tuple[str, bool, Optional[WatchItem]]:
+    """Core logic for /add, kept free of Discord objects except raw IDs.
+
+    Resolves which suggestion database this channel maps to (via
+    SuggestionService.resolve_database_for_channel) before delegating the
+    actual suggestion creation to SuggestionService.suggest(). This
+    function never duplicates either of those services' own validation.
+
+    Args:
+        suggestion_service: The suggestion service to resolve a database
+            through and add the suggestion to.
+        guild_id: The Discord guild the command was run in.
+        channel_id: The Discord channel or thread the command was run in.
+        title: The movie/show title.
+        imdb_url: Optional IMDb URL or ID.
+
+    Returns:
+        A (message, ephemeral, watch_item) tuple. watch_item is the newly
+        created suggestion on success, so its Discord message ID can be
+        attached once the confirmation has actually been sent -- it's
+        None on any failure (no usable database, or suggest() itself
+        rejected the title).
+    """
+    resolution = suggestion_service.resolve_database_for_channel(guild_id, channel_id)
+    if resolution.database is None:
+        return resolution.error_message, True, None
+
+    result = suggestion_service.suggest(
+        title,
+        imdb_url,
+        database_id=resolution.database.database_id,
+        guild_id=guild_id,
+        channel_id=channel_id,
+    )
+    if not result.success:
+        return result.message, False, None
+
+    return result.message, False, result.watch_item
+
+
+def perform_list_suggestions(
+    suggestion_service: SuggestionService,
+    guild_id: Optional[int],
+    channel_id: Optional[int],
+) -> str:
+    """Core logic for /list, kept free of Discord objects except raw IDs.
+
+    Resolves which suggestion database this channel maps to (the same way
+    perform_add_suggestion does) and shows only that database's
+    suggestions, rather than duplicating the resolution rules here.
+
+    Args:
+        suggestion_service: The suggestion service to resolve a database
+            through and read suggestions from.
+        guild_id: The Discord guild the command was run in.
+        channel_id: The Discord channel or thread the command was run in.
+
+    Returns:
+        The formatted suggestion list, or a clear explanatory message if
+        no single database could be resolved for this channel.
+    """
+    resolution = suggestion_service.resolve_database_for_channel(guild_id, channel_id)
+    if resolution.database is None:
+        return resolution.error_message
+
+    return suggestion_service.format_suggestion_list(resolution.database.database_id)
 
 
 def build_help_text() -> str:

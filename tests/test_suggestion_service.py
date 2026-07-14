@@ -525,5 +525,223 @@ class SuggestionServiceDatabaseTests(unittest.TestCase):
         self.assertEqual(result.database.database_id, 2)
 
 
+class SuggestionServiceDatabaseAssociationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """Create a fresh service backed by isolated, temporary repositories."""
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.repository = JsonSuggestionRepository(Path(self._temp_dir.name) / "suggestions.json")
+        self.database_repository = JsonSuggestionDatabaseRepository(
+            Path(self._temp_dir.name) / "suggestion_databases.json"
+        )
+        self.service = SuggestionService(
+            repository=self.repository, database_repository=self.database_repository
+        )
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    # --- Suggestions belonging to a database -------------------------------
+
+    def test_suggestion_belongs_to_the_database_it_was_created_in(self) -> None:
+        created_database = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        result = self.service.suggest("The Matrix", database_id=created_database.database.database_id)
+
+        self.assertEqual(result.watch_item.database_id, created_database.database.database_id)
+
+    def test_suggestion_without_a_database_id_defaults_to_none(self) -> None:
+        result = self.service.suggest("The Matrix")
+        self.assertIsNone(result.watch_item.database_id)
+
+    def test_format_suggestion_list_filters_by_database(self) -> None:
+        first_database = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        second_database = self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+        self.service.suggest("The Matrix", database_id=first_database.database.database_id)
+        self.service.suggest("Enter the Dragon", database_id=second_database.database.database_id)
+
+        message = self.service.format_suggestion_list(first_database.database.database_id)
+        self.assertIn("The Matrix", message)
+        self.assertNotIn("Enter the Dragon", message)
+
+    # --- Migration of pre-existing suggestions ------------------------------
+
+    def test_migration_assigns_orphaned_suggestions_to_the_first_database_created(self) -> None:
+        self.service.suggest("The Matrix")
+        self.service.suggest("Inception")
+
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        database_ids = {item.title: item.database_id for item in self.service.get_suggestions()}
+        self.assertEqual(
+            database_ids,
+            {
+                "The Matrix": created.database.database_id,
+                "Inception": created.database.database_id,
+            },
+        )
+
+    def test_migration_persists_the_reassigned_suggestions(self) -> None:
+        self.service.suggest("The Matrix")
+
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        reloaded = self.repository.load()
+        self.assertEqual(reloaded.watch_items[0].database_id, created.database.database_id)
+
+    def test_migration_does_not_touch_suggestions_already_in_a_database(self) -> None:
+        first_database = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.suggest("The Matrix", database_id=first_database.database.database_id)
+        self.service.suggest("Inception")  # Orphaned, created after the first database exists.
+
+        second_database = self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+
+        database_ids = {item.title: item.database_id for item in self.service.get_suggestions()}
+        # "The Matrix" already belonged to the first database and must stay there;
+        # a second database being created does not re-trigger migration for
+        # "Inception", which is left orphaned.
+        self.assertEqual(database_ids["The Matrix"], first_database.database.database_id)
+        self.assertIsNone(database_ids["Inception"])
+        self.assertNotEqual(database_ids["The Matrix"], second_database.database.database_id)
+
+    def test_creating_a_database_with_no_orphaned_suggestions_does_not_error(self) -> None:
+        result = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.assertTrue(result.success)
+
+    # --- Resolving a database for a channel ---------------------------------
+
+    def test_resolve_database_for_channel_matches_the_configured_channel(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+
+        resolution = self.service.resolve_database_for_channel(100, 201)
+        self.assertIsNotNone(resolution.database)
+        self.assertEqual(resolution.database.name, "Kung Fu Movies")
+
+    def test_resolve_database_for_channel_uses_the_only_database_when_no_channel_matches(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        resolution = self.service.resolve_database_for_channel(100, 999)
+        self.assertIsNotNone(resolution.database)
+        self.assertEqual(resolution.database.name, "Sunday Watch Party")
+
+    def test_resolve_database_for_channel_is_ambiguous_with_multiple_non_matching_databases(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+
+        resolution = self.service.resolve_database_for_channel(100, 999)
+        self.assertIsNone(resolution.database)
+        self.assertIn("Multiple suggestion databases", resolution.error_message)
+
+    def test_resolve_database_for_channel_fails_when_no_databases_exist(self) -> None:
+        resolution = self.service.resolve_database_for_channel(100, 999)
+        self.assertIsNone(resolution.database)
+        self.assertIn("configure a suggestion database", resolution.error_message)
+
+    # --- Discord message reference -------------------------------------------
+
+    def test_attach_message_reference_updates_the_suggestion(self) -> None:
+        result = self.service.suggest("The Matrix")
+
+        updated = self.service.attach_message_reference(result.watch_item.id, message_id=999)
+
+        self.assertTrue(updated)
+        matching = next(item for item in self.service.get_suggestions() if item.id == result.watch_item.id)
+        self.assertEqual(matching.message_id, 999)
+
+    def test_attach_message_reference_persists_the_update(self) -> None:
+        result = self.service.suggest("The Matrix")
+        self.service.attach_message_reference(result.watch_item.id, message_id=999)
+
+        reloaded = self.repository.load()
+        self.assertEqual(reloaded.watch_items[0].message_id, 999)
+
+    def test_attach_message_reference_returns_false_for_an_unknown_suggestion(self) -> None:
+        updated = self.service.attach_message_reference(999, message_id=123)
+        self.assertFalse(updated)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class SuggestionDatabaseScopingTests(unittest.TestCase):
+    """Cross-guild resolution and database-scoped duplicate/removal behavior."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "databases.json"),
+        )
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_resolution_never_uses_another_guilds_only_database(self) -> None:
+        self.service.create_database("Other Guild", guild_id=2, channel_id=200)
+
+        resolution = self.service.resolve_database_for_channel(guild_id=1, channel_id=999)
+
+        self.assertIsNone(resolution.database)
+        self.assertIn("configure a suggestion database", resolution.error_message)
+
+    def test_resolution_uses_only_the_sole_database_in_the_requested_guild(self) -> None:
+        self.service.create_database("Guild One", guild_id=1, channel_id=100)
+        self.service.create_database("Guild Two", guild_id=2, channel_id=200)
+
+        resolution = self.service.resolve_database_for_channel(guild_id=1, channel_id=999)
+
+        self.assertEqual(resolution.database.guild_id, 1)
+        self.assertEqual(resolution.database.channel_id, 100)
+
+    def test_duplicate_title_is_rejected_within_the_same_database(self) -> None:
+        database = self.service.create_database("One", guild_id=1, channel_id=100).database
+        self.service.suggest("The Matrix", database_id=database.database_id)
+
+        result = self.service.suggest("the matrix", database_id=database.database_id)
+
+        self.assertFalse(result.success)
+
+    def test_same_title_is_allowed_in_separate_databases(self) -> None:
+        first = self.service.create_database("One", guild_id=1, channel_id=100).database
+        second = self.service.create_database("Two", guild_id=1, channel_id=200).database
+
+        one = self.service.suggest("The Matrix", database_id=first.database_id)
+        two = self.service.suggest("The Matrix", database_id=second.database_id)
+
+        self.assertTrue(one.success)
+        self.assertTrue(two.success)
+        self.assertNotEqual(one.watch_item.id, two.watch_item.id)
+
+    def test_legacy_database_none_duplicate_behavior_is_preserved(self) -> None:
+        self.service.suggest("The Matrix")
+
+        result = self.service.suggest("the matrix")
+
+        self.assertFalse(result.success)
+
+    def test_ambiguous_title_only_removal_does_not_remove_anything(self) -> None:
+        first = self.service.create_database("One", guild_id=1, channel_id=100).database
+        second = self.service.create_database("Two", guild_id=1, channel_id=200).database
+        self.service.suggest("The Matrix", database_id=first.database_id)
+        self.service.suggest("The Matrix", database_id=second.database_id)
+
+        result = self.service.remove_suggestion("The Matrix")
+
+        self.assertFalse(result.success)
+        self.assertIn("more than one suggestion database", result.message)
+        self.assertEqual(self.service.suggestion_count(), 2)
+
+    def test_removal_with_database_context_removes_only_the_matching_item(self) -> None:
+        first = self.service.create_database("One", guild_id=1, channel_id=100).database
+        second = self.service.create_database("Two", guild_id=1, channel_id=200).database
+        self.service.suggest("The Matrix", database_id=first.database_id)
+        self.service.suggest("The Matrix", database_id=second.database_id)
+
+        result = self.service.remove_suggestion("The Matrix", database_id=first.database_id)
+
+        self.assertTrue(result.success)
+        remaining = self.service.get_suggestions()
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].database_id, second.database_id)
