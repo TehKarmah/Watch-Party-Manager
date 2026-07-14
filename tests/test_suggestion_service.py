@@ -128,7 +128,31 @@ class SuggestionServiceTests(unittest.TestCase):
         self.service.suggest("The Matrix")
 
         message = self.service.format_suggestion_list()
-        self.assertEqual(message, "Current suggestions:\n1. [1] The Matrix")
+        self.assertEqual(message, "Current watch items:\n- The Matrix")
+
+    def test_format_suggestion_list_links_to_the_original_suggestion_post(self) -> None:
+        self.service.suggest(
+            "The Matrix",
+            database_id=1,
+            guild_id=100,
+            channel_id=200,
+            message_id=300,
+        )
+
+        message = self.service.format_suggestion_list()
+
+        self.assertEqual(
+            message,
+            "Current watch items:\n"
+            "- [The Matrix](https://discord.com/channels/100/200/300)",
+        )
+
+    def test_format_suggestion_list_omits_suggestion_ids(self) -> None:
+        self.service.suggest("The Matrix")
+
+        message = self.service.format_suggestion_list()
+
+        self.assertNotIn("[1]", message)
 
     def test_format_suggestion_list_with_multiple_suggestions(self) -> None:
         self.service.suggest("The Matrix")
@@ -138,7 +162,7 @@ class SuggestionServiceTests(unittest.TestCase):
         message = self.service.format_suggestion_list()
         self.assertEqual(
             message,
-            "Current suggestions:\n1. [1] The Matrix\n2. [2] Inception\n3. [3] Interstellar",
+            "Current watch items:\n- The Matrix\n- Inception\n- Interstellar",
         )
 
     def test_format_suggestion_list_preserves_insertion_order(self) -> None:
@@ -149,7 +173,7 @@ class SuggestionServiceTests(unittest.TestCase):
         message = self.service.format_suggestion_list()
         self.assertEqual(
             message,
-            "Current suggestions:\n1. [1] Interstellar\n2. [2] The Matrix\n3. [3] Inception",
+            "Current watch items:\n- Interstellar\n- The Matrix\n- Inception",
         )
 
     def test_format_suggestion_list_omits_imdb_information(self) -> None:
@@ -227,7 +251,7 @@ class SuggestionServiceTests(unittest.TestCase):
         message = self.service.format_suggestion_list()
         self.assertEqual(
             message,
-            "Current suggestions:\n1. [1] Interstellar\n2. [3] Inception",
+            "Current watch items:\n- Interstellar\n- Inception",
         )
 
     def test_suggest_persists_the_new_suggestion(self) -> None:
@@ -351,14 +375,14 @@ class SuggestionServiceTests(unittest.TestCase):
         self.assertEqual(reloaded.watch_items[0].id, 1)
         self.assertFalse(reloaded.migrated)
 
-    def test_suggestions_command_output_includes_ids(self) -> None:
+    def test_suggestions_command_output_omits_internal_ids(self) -> None:
         self.service.suggest("The Matrix")
         self.service.suggest("Inception")
 
         message = self.service.format_suggestion_list()
         self.assertEqual(
             message,
-            "Current suggestions:\n1. [1] The Matrix\n2. [2] Inception",
+            "Current watch items:\n- The Matrix\n- Inception",
         )
 
 

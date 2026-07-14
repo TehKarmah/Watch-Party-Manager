@@ -221,9 +221,11 @@ class SuggestionService:
                 a database context.
 
         Returns:
-            A message stating the list is empty, or a numbered list of
-            suggestion titles in the order they were added. IMDb and other
-            metadata are intentionally omitted from this view.
+            A message stating the list is empty, or a simple list of watch
+            item titles in the order they were added. When the suggestion
+            has a complete Discord message reference, the title links to
+            the original suggestion post. IMDb and other metadata are
+            intentionally omitted from this view.
         """
         if database_id is not None:
             watch_items = [
@@ -237,9 +239,20 @@ class SuggestionService:
         if not watch_items:
             return "The suggestion list is currently empty."
 
-        lines = ["Current suggestions:"]
-        for index, watch_item in enumerate(watch_items, start=1):
-            lines.append(f"{index}. [{watch_item.id}] {watch_item.title}")
+        lines = ["Current watch items:"]
+        for watch_item in watch_items:
+            if (
+                watch_item.guild_id is not None
+                and watch_item.channel_id is not None
+                and watch_item.message_id is not None
+            ):
+                message_url = (
+                    "https://discord.com/channels/"
+                    f"{watch_item.guild_id}/{watch_item.channel_id}/{watch_item.message_id}"
+                )
+                lines.append(f"- [{watch_item.title}]({message_url})")
+            else:
+                lines.append(f"- {watch_item.title}")
         return "\n".join(lines)
 
     def remove_suggestion(

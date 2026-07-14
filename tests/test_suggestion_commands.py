@@ -158,7 +158,7 @@ class SuggestionCommandTests(unittest.TestCase):
         self.assertIn("The Matrix", message)
         self.assertNotIn("Enter the Dragon", message)
 
-    def test_list_shows_movie_title_and_suggestion_id(self) -> None:
+    def test_list_shows_only_the_watch_item_name_when_no_post_link_exists(self) -> None:
         created = self.suggestion_service.create_database(
             "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
         )
@@ -166,8 +166,31 @@ class SuggestionCommandTests(unittest.TestCase):
 
         message = perform_list_suggestions(self.suggestion_service, GUILD_ID, CONFIGURED_CHANNEL_ID)
 
-        self.assertIn("The Matrix", message)
-        self.assertIn("[1]", message)
+        self.assertIn("- The Matrix", message)
+        self.assertNotIn("[1]", message)
+
+    def test_list_links_the_watch_item_name_to_its_suggestion_post(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        result = self.suggestion_service.suggest(
+            "The Matrix",
+            database_id=created.database.database_id,
+            guild_id=GUILD_ID,
+            channel_id=CONFIGURED_CHANNEL_ID,
+            message_id=555,
+        )
+
+        message = perform_list_suggestions(
+            self.suggestion_service, GUILD_ID, CONFIGURED_CHANNEL_ID
+        )
+
+        self.assertIsNotNone(result.watch_item)
+        self.assertIn(
+            f"[The Matrix](https://discord.com/channels/{GUILD_ID}/"
+            f"{CONFIGURED_CHANNEL_ID}/555)",
+            message,
+        )
 
     def test_list_never_shows_imdb_information(self) -> None:
         created = self.suggestion_service.create_database(
