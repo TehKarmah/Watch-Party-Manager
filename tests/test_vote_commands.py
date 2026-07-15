@@ -34,7 +34,7 @@ WASH_CREW_ROLE_ID = 999
 class VoteCommandTests(unittest.TestCase):
     def setUp(self) -> None:
         """A real SuggestionService and VoteService, both backed by temp files,
-        pre-loaded with two suggestions (the minimum needed to start a round).
+        pre-loaded with three suggestions (the default nominee count).
         """
         self._temp_dir = tempfile.TemporaryDirectory()
         suggestions_path = Path(self._temp_dir.name) / "suggestions.json"
@@ -49,6 +49,7 @@ class VoteCommandTests(unittest.TestCase):
 
         self.suggestion_service.suggest("The Matrix")
         self.suggestion_service.suggest("Inception")
+        self.suggestion_service.suggest("Arrival")
 
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
@@ -172,8 +173,9 @@ class VoteCommandTests(unittest.TestCase):
 
         self.assertEqual(self.vote_service.get_open_round().visibility, VoteVisibility.VISIBLE)
 
-    def test_fewer_than_two_suggestions_is_rejected(self) -> None:
+    def test_fewer_than_default_nominee_count_is_rejected(self) -> None:
         self.suggestion_service.remove_suggestion("Inception")
+        self.suggestion_service.remove_suggestion("Arrival")
 
         message, ephemeral = self._start_vote()
 
@@ -206,7 +208,7 @@ class VoteCommandTests(unittest.TestCase):
         self.assertFalse(ephemeral)
         self.assertIn("Voting round 1", message)
         self.assertIn("Blind", message)
-        self.assertIn("Candidates: 2", message)
+        self.assertIn("Candidates: 3", message)
         self.assertIn("Voting ends:", message)
         self.assertIn("Vote changes allowed:", message)
 
@@ -223,7 +225,7 @@ class VoteCommandTests(unittest.TestCase):
         self.assertIn("movie title or IMDb link", message)
 
     def test_low_suggestion_pool_warning_is_not_shown_at_ten(self) -> None:
-        for index in range(3, 11):
+        for index in range(4, 11):
             self.suggestion_service.suggest(f"Movie {index}")
 
         message, _ = self._start_vote()
@@ -231,7 +233,7 @@ class VoteCommandTests(unittest.TestCase):
         self.assertNotIn("suggestion pool is getting low", message.lower())
 
     def test_low_suggestion_pool_warning_is_shown_at_nine(self) -> None:
-        for index in range(3, 10):
+        for index in range(4, 10):
             self.suggestion_service.suggest(f"Movie {index}")
 
         message, _ = self._start_vote()

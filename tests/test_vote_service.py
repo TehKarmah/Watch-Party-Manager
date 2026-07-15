@@ -259,6 +259,32 @@ class VoteServiceTests(unittest.TestCase):
         latest = self.service.get_latest_round()
         self.assertEqual(latest.status, VoteRoundStatus.CLOSED)
 
+    # --- Discord message reference ------------------------------------------
+
+    def test_attach_message_reference_updates_the_round(self) -> None:
+        created = self.service.create_round()
+
+        updated = self.service.attach_message_reference(
+            created.vote_round.id, guild_id=100, channel_id=200, message_id=300
+        )
+
+        self.assertTrue(updated)
+        vote_round = self.service.get_round(created.vote_round.id)
+        self.assertEqual(vote_round.guild_id, 100)
+        self.assertEqual(vote_round.channel_id, 200)
+        self.assertEqual(vote_round.message_id, 300)
+
+    def test_attach_message_reference_persists_the_update(self) -> None:
+        created = self.service.create_round()
+        self.service.attach_message_reference(created.vote_round.id, guild_id=100, channel_id=200, message_id=300)
+
+        reloaded = self.repository.load()
+        self.assertEqual(reloaded.rounds[0].message_id, 300)
+
+    def test_attach_message_reference_returns_false_for_an_unknown_round(self) -> None:
+        updated = self.service.attach_message_reference(999, guild_id=100, channel_id=200, message_id=300)
+        self.assertFalse(updated)
+
     # --- Reset behaviors --------------------------------------------------
 
     def test_remove_member_vote_deletes_the_vote_entirely(self) -> None:
@@ -524,3 +550,31 @@ class VoteServiceStandingsAndWinnersTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class VoteServiceCandidateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        repository = JsonVoteRepository(Path(self._temp_dir.name) / "candidate_voting.json")
+        self.service = VoteService(FakeSuggestionLookup(existing_ids=[1, 2, 3, 4]), repository=repository)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_create_round_persists_exact_candidate_ids(self) -> None:
+        result = self.service.create_round(candidate_suggestion_ids=[3, 1, 2])
+        self.assertTrue(result.success)
+        self.assertEqual(result.vote_round.candidate_suggestion_ids, [3, 1, 2])
+
+    def test_create_round_rejects_duplicate_candidate_ids(self) -> None:
+        result = self.service.create_round(candidate_suggestion_ids=[1, 1, 2])
+        self.assertFalse(result.success)
+
+    def test_create_round_rejects_missing_candidate(self) -> None:
+        result = self.service.create_round(candidate_suggestion_ids=[1, 2, 99])
+        self.assertFalse(result.success)
+
+    def test_vote_for_non_nominee_is_rejected(self) -> None:
+        self.service.create_round(candidate_suggestion_ids=[1, 2, 3])
+        result = self.service.cast_vote(discord_user_id=123, suggestion_id=4)
+        self.assertFalse(result.success)
+        self.assertIn("not a nominee", result.message)

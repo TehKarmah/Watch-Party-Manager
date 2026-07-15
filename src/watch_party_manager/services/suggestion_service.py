@@ -1,6 +1,7 @@
 """Service for managing movie suggestions."""
 
 from dataclasses import dataclass
+import random
 from typing import Optional
 
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
@@ -186,6 +187,51 @@ class SuggestionService:
             List of all suggested WatchItems.
         """
         return list(self._suggestions.values())
+
+    def get_suggestions_for_database(self, database_id: int) -> list[WatchItem]:
+        """Return suggestions belonging to one database, in insertion order."""
+        return [
+            item for item in self._suggestions.values()
+            if item.database_id == database_id
+        ]
+
+    def select_vote_nominees(
+        self, database_id: int, count: int, rng: Optional[random.Random] = None
+    ) -> list[WatchItem]:
+        """Select a diverse random nominee set using currently available metadata.
+
+        The selector starts randomly, then greedily prefers candidates that add
+        previously unseen genres and media types. Random tie-breaking keeps the
+        outcome from becoming deterministic while still favoring variety. As more
+        metadata is added later, this method can expand without changing callers.
+        """
+        candidates = self.get_suggestions_for_database(database_id)
+        if count <= 0:
+            raise ValueError("count must be positive")
+        if len(candidates) < count:
+            return []
+        chooser = rng if rng is not None else random.SystemRandom()
+        remaining = list(candidates)
+        first = chooser.choice(remaining)
+        selected = [first]
+        remaining.remove(first)
+        seen_genres = {genre.lower() for genre in first.genres}
+        seen_media_types = {first.media_type}
+
+        while len(selected) < count:
+            scored: list[tuple[int, float, WatchItem]] = []
+            for item in remaining:
+                new_genres = sum(1 for genre in item.genres if genre.lower() not in seen_genres)
+                new_media_type = 1 if item.media_type not in seen_media_types else 0
+                score = new_genres * 3 + new_media_type
+                scored.append((score, chooser.random(), item))
+            _, _, chosen = max(scored, key=lambda entry: (entry[0], entry[1]))
+            selected.append(chosen)
+            remaining.remove(chosen)
+            seen_genres.update(genre.lower() for genre in chosen.genres)
+            seen_media_types.add(chosen.media_type)
+
+        return selected
 
     def clear_suggestions(self) -> None:
         """Clear all suggestions. Used for testing or bot reset."""

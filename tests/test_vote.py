@@ -211,6 +211,47 @@ class VoteRoundModelTests(unittest.TestCase):
 
         self.assertEqual(list(vote_round.votes.keys()), [111, 222])
 
+    def test_discord_location_fields_default_to_none(self) -> None:
+        vote_round = VoteRound(id=1)
+
+        self.assertIsNone(vote_round.guild_id)
+        self.assertIsNone(vote_round.channel_id)
+        self.assertIsNone(vote_round.message_id)
+
+    def test_accepts_discord_location_fields(self) -> None:
+        vote_round = VoteRound(id=1, guild_id=100, channel_id=200, message_id=300)
+
+        self.assertEqual(vote_round.guild_id, 100)
+        self.assertEqual(vote_round.channel_id, 200)
+        self.assertEqual(vote_round.message_id, 300)
+
+    def test_rejects_a_non_positive_guild_id(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, guild_id=0)
+
+    def test_rejects_a_non_positive_channel_id(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, channel_id=0)
+
+    def test_rejects_a_non_positive_message_id(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, message_id=0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+class VoteRoundCandidateTests(unittest.TestCase):
+    def test_candidate_ids_are_defensively_copied(self) -> None:
+        candidate_ids = [1, 2, 3]
+        vote_round = VoteRound(id=1, candidate_suggestion_ids=candidate_ids)
+        candidate_ids.append(4)
+        self.assertEqual(vote_round.candidate_suggestion_ids, [1, 2, 3])
+
+    def test_duplicate_candidate_ids_are_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, candidate_suggestion_ids=[1, 1, 2])
+
+    def test_non_positive_candidate_ids_are_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, candidate_suggestion_ids=[1, 0, 2])

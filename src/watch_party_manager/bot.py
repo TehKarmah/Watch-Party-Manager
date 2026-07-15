@@ -11,9 +11,12 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from watch_party_manager.domain.vote import (
+    DEFAULT_VOTE_CANDIDATE_COUNT,
     DEFAULT_VOTE_DURATION_DAYS,
     MAX_VOTE_CHANGES,
+    MAX_VOTE_CANDIDATE_COUNT,
     MAX_VOTE_DURATION_DAYS,
+    MIN_VOTE_CANDIDATE_COUNT,
     MIN_VOTE_DURATION_DAYS,
     VoteRecord,
     VoteRound,
@@ -26,6 +29,7 @@ from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
 from watch_party_manager.version import __version__
+from watch_party_manager.voting_view import VotingView
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +102,7 @@ class WatchPartyBot(commands.Bot):
             interaction: discord.Interaction,
             visibility: Literal["blind", "visible"],
             duration_days: Optional[int] = None,
+            nominee_count: Optional[int] = None,
         ) -> None:
             message, ephemeral = perform_start_vote(
                 vote_service=self.vote_service,
@@ -106,8 +111,31 @@ class WatchPartyBot(commands.Bot):
                 wash_crew_role_id=self.wash_crew_role_id,
                 visibility_str=visibility,
                 duration_days=duration_days,
+                nominee_count=nominee_count,
+                guild_id=interaction.guild_id,
+                channel_id=interaction.channel_id,
             )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
+            if ephemeral:
+                # Permission failure or validation error -- no round was
+                # created, so there's no voting post to build.
+                await interaction.response.send_message(message, ephemeral=True)
+                return
+
+            vote_round = self.vote_service.get_open_round()
+            candidates = get_round_candidates(self.suggestion_service, vote_round)
+
+            async def on_vote_click(button_interaction: discord.Interaction, suggestion_id: int) -> None:
+                await handle_nominee_vote(
+                    button_interaction, self.vote_service, self.suggestion_service, suggestion_id
+                )
+
+            view = VotingView(candidates, on_vote=on_vote_click)
+            post_text = build_voting_post_text(vote_round, candidates, standings=None, standings_error=None)
+            await interaction.response.send_message(post_text, view=view)
+            sent_message = await interaction.original_response()
+            self.vote_service.attach_message_reference(
+                vote_round.id, interaction.guild_id, interaction.channel_id, sent_message.id
+            )
 
         @self.tree.command(name="vote_status")
         async def vote_status(interaction: discord.Interaction) -> None:
@@ -319,6 +347,18 @@ def parse_vote_duration_days(duration_days: Optional[int]) -> int:
     return duration_days
 
 
+def parse_vote_nominee_count(value: Optional[int]) -> int:
+    """Validate and resolve the nominee count for /start_vote."""
+    if value is None:
+        return DEFAULT_VOTE_CANDIDATE_COUNT
+    if not (MIN_VOTE_CANDIDATE_COUNT <= value <= MAX_VOTE_CANDIDATE_COUNT):
+        raise ValueError(
+            f"nominee_count must be between {MIN_VOTE_CANDIDATE_COUNT} and "
+            f"{MAX_VOTE_CANDIDATE_COUNT}."
+        )
+    return value
+
+
 def format_datetime_for_display(value: Optional[datetime]) -> str:
     """Format a datetime using Discord's native timestamp syntax.
 
@@ -372,7 +412,9 @@ def build_low_suggestion_pool_warning(candidate_count: int) -> str:
     )
 
 
-def build_start_vote_confirmation(vote_round: VoteRound, candidate_count: int) -> str:
+def build_start_vote_confirmation(
+    vote_round: VoteRound, candidate_count: int, pool_count: Optional[int] = None
+) -> str:
     """Build the /start_vote confirmation message.
 
     Args:
@@ -389,7 +431,7 @@ def build_start_vote_confirmation(vote_round: VoteRound, candidate_count: int) -
         f"Candidates: {candidate_count}\n"
         f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}\n"
         f"Vote changes allowed: {format_vote_changes_setting()}"
-        f"{build_low_suggestion_pool_warning(candidate_count)}"
+        f"{build_low_suggestion_pool_warning(pool_count if pool_count is not None else candidate_count)}"
     )
 
 
@@ -469,6 +511,9 @@ def perform_start_vote(
     wash_crew_role_id: Optional[int],
     visibility_str: str,
     duration_days: Optional[int],
+    nominee_count: Optional[int] = None,
+    guild_id: Optional[int] = None,
+    channel_id: Optional[int] = None,
 ) -> tuple[str, bool]:
     """Core logic for /start_vote, kept free of Discord objects except `user`.
 
@@ -507,14 +552,43 @@ def perform_start_vote(
     except ValueError as exc:
         return str(exc), True
 
-    closes_at = datetime.now(timezone.utc) + timedelta(days=days)
+    try:
+        count = parse_vote_nominee_count(nominee_count)
+    except ValueError as exc:
+        return str(exc), True
 
-    result = vote_service.create_round(visibility=visibility, closes_at=closes_at)
+    if guild_id is not None and channel_id is not None:
+        resolution = suggestion_service.resolve_database_for_channel(guild_id, channel_id)
+        if resolution.database is None:
+            return resolution.error_message or "No suggestion database is available here.", True
+        candidates = suggestion_service.select_vote_nominees(
+            resolution.database.database_id, count
+        )
+    else:
+        available = suggestion_service.get_suggestions()
+        candidates = available[:count] if len(available) >= count else []
+
+    if len(candidates) < count:
+        return f"At least {count} eligible suggestions are needed to start this vote.", True
+
+    closes_at = datetime.now(timezone.utc) + timedelta(days=days)
+    result = vote_service.create_round(
+        visibility=visibility,
+        closes_at=closes_at,
+        candidate_suggestion_ids=[candidate.id for candidate in candidates],
+    )
     if not result.success:
         return result.message, True
 
-    candidate_count = suggestion_service.suggestion_count()
-    return build_start_vote_confirmation(result.vote_round, candidate_count), False
+    if guild_id is not None and channel_id is not None:
+        pool_count = len(
+            suggestion_service.get_suggestions_for_database(resolution.database.database_id)
+        )
+    else:
+        pool_count = suggestion_service.suggestion_count()
+    return build_start_vote_confirmation(
+        result.vote_round, len(candidates), pool_count=pool_count
+    ), False
 
 
 def perform_vote_status(vote_service: VoteService, suggestion_service: SuggestionService) -> str:
@@ -547,7 +621,11 @@ def perform_vote_status(vote_service: VoteService, suggestion_service: Suggestio
         else:
             standings_error = standings_result.message
 
-    candidate_count = suggestion_service.suggestion_count()
+    candidate_count = (
+        len(vote_round.candidate_suggestion_ids)
+        if vote_round.candidate_suggestion_ids
+        else suggestion_service.suggestion_count()
+    )
     return build_vote_status_text(vote_round, candidate_count, standings, standings_error)
 
 
@@ -617,6 +695,117 @@ def perform_vote(vote_service: VoteService, user_id: int, suggestion_id: int) ->
             lines.extend(format_standings_lines(None, standings_result.message))
 
     return "\n".join(lines), True
+
+
+def get_round_candidates(
+    suggestion_service: SuggestionService, vote_round: VoteRound
+) -> List[WatchItem]:
+    """Resolve a round's persisted nominees in their original order."""
+    suggestions_by_id = {item.id: item for item in suggestion_service.get_suggestions()}
+    if not vote_round.candidate_suggestion_ids:
+        return list(suggestions_by_id.values())
+    return [
+        suggestions_by_id[candidate_id]
+        for candidate_id in vote_round.candidate_suggestion_ids
+        if candidate_id in suggestions_by_id
+    ]
+
+
+def build_voting_post_text(
+    vote_round: VoteRound,
+    candidates: List[WatchItem],
+    standings: Optional[List[StandingsEntry]],
+    standings_error: Optional[str],
+) -> str:
+    """Build the public voting post message for a round.
+
+    Used both for the initial post created by /start_vote and to refresh
+    it after each vote in a visible round. Reuses format_datetime_for_display
+    and format_standings_lines rather than reformatting either here.
+
+    Args:
+        vote_round: The round this post is for.
+        candidates: The nominees to list, in order. These are whichever
+            suggestions existed when /start_vote was run -- this milestone
+            doesn't implement nominee selection, so the list is fixed for
+            the life of the post.
+        standings: Standings entries to display, or None if standings
+            shouldn't be shown (a blind round, or none computed yet).
+        standings_error: A message to show instead of standings if
+            calculating them failed, or None.
+
+    Returns:
+        The formatted post text. Total votes cast is always shown -- for a
+        blind round that's the only vote information revealed; standings
+        are additionally shown for a visible round.
+    """
+    lines = [
+        f"Voting round {vote_round.id} is open!",
+        f"Visibility: {vote_round.visibility.value.capitalize()}",
+        f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
+        "",
+        "Nominees:",
+    ]
+    for candidate in candidates:
+        lines.append(f"[{candidate.id}] {candidate.title}")
+    lines.append("")
+    lines.append(f"Votes cast: {len(vote_round.votes)}")
+
+    if vote_round.visibility == VoteVisibility.VISIBLE:
+        lines.extend(format_standings_lines(standings, standings_error))
+
+    return "\n".join(lines)
+
+
+async def refresh_voting_post(
+    interaction: discord.Interaction,
+    vote_service: VoteService,
+    suggestion_service: SuggestionService,
+    vote_round: VoteRound,
+) -> None:
+    """Update the public voting post after a vote, for visible rounds only.
+
+    Args:
+        interaction: The button-click interaction whose message is the
+            voting post to edit.
+        vote_service: Used to recompute standings.
+        suggestion_service: Used to re-list the current nominees.
+        vote_round: The round being voted in.
+    """
+    candidates = get_round_candidates(suggestion_service, vote_round)
+    standings_result = vote_service.calculate_standings(vote_round.id)
+    standings = standings_result.standings if standings_result.success else None
+    standings_error = None if standings_result.success else standings_result.message
+
+    text = build_voting_post_text(vote_round, candidates, standings, standings_error)
+    await interaction.message.edit(content=text)
+
+
+async def handle_nominee_vote(
+    interaction: discord.Interaction,
+    vote_service: VoteService,
+    suggestion_service: SuggestionService,
+    suggestion_id: int,
+) -> None:
+    """Core logic for a nominee button click.
+
+    Reuses perform_vote() for the actual vote-casting and ephemeral
+    confirmation -- exactly the same logic /vote uses -- then refreshes
+    the public voting post for a visible round. Never duplicates
+    VoteService's own validation.
+
+    Args:
+        interaction: The button-click interaction.
+        vote_service: The vote service to cast the vote through.
+        suggestion_service: Used to re-list nominees when refreshing the post.
+        suggestion_id: The nominee this button represents.
+    """
+    message, ephemeral = perform_vote(vote_service, interaction.user.id, suggestion_id)
+    await interaction.response.send_message(message, ephemeral=ephemeral)
+
+    vote_round = vote_service.get_open_round()
+    if vote_round is not None and vote_round.visibility == VoteVisibility.VISIBLE:
+        await refresh_voting_post(interaction, vote_service, suggestion_service, vote_round)
 
 
 def perform_add_suggestion(

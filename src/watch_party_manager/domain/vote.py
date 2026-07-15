@@ -21,6 +21,11 @@ DEFAULT_VOTE_DURATION_DAYS = 7
 MIN_VOTE_DURATION_DAYS = 1
 MAX_VOTE_DURATION_DAYS = 30
 
+# Nominee-count defaults and bounds for interactive voting.
+DEFAULT_VOTE_CANDIDATE_COUNT = 3
+MIN_VOTE_CANDIDATE_COUNT = 3
+MAX_VOTE_CANDIDATE_COUNT = 10
+
 
 class VoteVisibility(str, Enum):
     """Whether individual votes are visible to other members."""
@@ -103,11 +108,19 @@ class VoteRound:
     closes_at: Optional[datetime] = None
     votes: Dict[int, VoteRecord] = field(default_factory=dict)
     winning_suggestion_id: Optional[int] = None
+    guild_id: Optional[int] = None
+    channel_id: Optional[int] = None
+    message_id: Optional[int] = None
+    candidate_suggestion_ids: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self._validate_id()
         self._validate_winning_suggestion_id()
         self._validate_timestamps()
+        self._validate_guild_id()
+        self._validate_channel_id()
+        self._validate_message_id()
+        self._validate_candidate_suggestion_ids()
 
     def _validate_id(self) -> None:
         if self.id <= 0:
@@ -122,3 +135,23 @@ class VoteRound:
             raise ValueError("created_at must be timezone-aware")
         if self.closes_at is not None and self.closes_at.tzinfo is None:
             raise ValueError("closes_at must be timezone-aware")
+
+    def _validate_guild_id(self) -> None:
+        if self.guild_id is not None and self.guild_id <= 0:
+            raise ValueError("guild_id must be a positive integer when provided")
+
+    def _validate_channel_id(self) -> None:
+        if self.channel_id is not None and self.channel_id <= 0:
+            raise ValueError("channel_id must be a positive integer when provided")
+
+    def _validate_message_id(self) -> None:
+        if self.message_id is not None and self.message_id <= 0:
+            raise ValueError("message_id must be a positive integer when provided")
+
+    def _validate_candidate_suggestion_ids(self) -> None:
+        candidate_ids = list(self.candidate_suggestion_ids)
+        if any(candidate_id <= 0 for candidate_id in candidate_ids):
+            raise ValueError("candidate_suggestion_ids must contain only positive integers")
+        if len(candidate_ids) != len(set(candidate_ids)):
+            raise ValueError("candidate_suggestion_ids must not contain duplicates")
+        self.candidate_suggestion_ids = candidate_ids

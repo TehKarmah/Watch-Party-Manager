@@ -106,6 +106,10 @@ class JsonVoteRepository:
             "created_at": vote_round.created_at.isoformat(),
             "closes_at": vote_round.closes_at.isoformat() if vote_round.closes_at else None,
             "winning_suggestion_id": vote_round.winning_suggestion_id,
+            "guild_id": vote_round.guild_id,
+            "channel_id": vote_round.channel_id,
+            "message_id": vote_round.message_id,
+            "candidate_suggestion_ids": list(vote_round.candidate_suggestion_ids),
             "votes": [
                 JsonVoteRepository._serialize_vote(vote_record)
                 for vote_record in vote_round.votes.values()
@@ -139,6 +143,10 @@ class JsonVoteRepository:
             closes_at=datetime.fromisoformat(closes_at_raw) if closes_at_raw else None,
             votes=votes,
             winning_suggestion_id=entry.get("winning_suggestion_id"),
+            guild_id=entry.get("guild_id"),
+            channel_id=entry.get("channel_id"),
+            message_id=entry.get("message_id"),
+            candidate_suggestion_ids=entry.get("candidate_suggestion_ids", []),
         )
 
     @staticmethod

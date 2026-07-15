@@ -244,6 +244,73 @@ class JsonVoteRepositoryTests(unittest.TestCase):
         self.assertIn('"original_suggestion_id": 1', raw_text)
         self.assertIn('"next_round_id": 2', raw_text)
 
+    def test_save_then_load_round_trips_discord_location(self) -> None:
+        vote_round = VoteRound(id=1, guild_id=100, channel_id=200, message_id=300)
+        self.repository.save([vote_round], next_round_id=2)
+
+        result = self.repository.load()
+        loaded = result.rounds[0]
+        self.assertEqual(loaded.guild_id, 100)
+        self.assertEqual(loaded.channel_id, 200)
+        self.assertEqual(loaded.message_id, 300)
+
+    def test_loading_a_file_without_discord_location_fields_defaults_them_to_none(self) -> None:
+        now = utc_now()
+        legacy_json = f"""
+        {{
+          "next_round_id": 2,
+          "rounds": [
+            {{
+              "id": 1,
+              "status": "open",
+              "visibility": "visible",
+              "created_at": "{now.isoformat()}",
+              "closes_at": null,
+              "winning_suggestion_id": null,
+              "votes": []
+            }}
+          ]
+        }}
+        """
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+        loaded = result.rounds[0]
+        self.assertIsNone(loaded.guild_id)
+        self.assertIsNone(loaded.channel_id)
+        self.assertIsNone(loaded.message_id)
+
+
+    def test_save_then_load_round_trips_candidate_ids(self) -> None:
+        vote_round = VoteRound(id=1, candidate_suggestion_ids=[3, 1, 2])
+        self.repository.save([vote_round], next_round_id=2)
+
+        loaded = self.repository.load().rounds[0]
+        self.assertEqual(loaded.candidate_suggestion_ids, [3, 1, 2])
+
+    def test_loading_legacy_round_without_candidate_ids_defaults_to_empty(self) -> None:
+        now = utc_now()
+        legacy_json = f"""
+        {{
+          "next_round_id": 2,
+          "rounds": [{{
+            "id": 1,
+            "status": "open",
+            "visibility": "visible",
+            "created_at": "{now.isoformat()}",
+            "closes_at": null,
+            "winning_suggestion_id": null,
+            "votes": []
+          }}]
+        }}
+        """
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        loaded = self.repository.load().rounds[0]
+        self.assertEqual(loaded.candidate_suggestion_ids, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -121,14 +121,16 @@ class VoteService:
         self,
         visibility: VoteVisibility = VoteVisibility.VISIBLE,
         closes_at: Optional[datetime] = None,
+        candidate_suggestion_ids: Optional[List[int]] = None,
     ) -> VoteRoundResult:
         """Open a new voting round.
 
         Args:
             visibility: Whether individual votes are visible to other
                 members. Defaults to visible.
-            closes_at: Optional deadline for the round. Not enforced by
-                this milestone; stored for future use.
+            closes_at: Optional deadline for the round.
+            candidate_suggestion_ids: The exact nominees eligible in this round.
+                When omitted, legacy service callers retain the previous behavior.
 
         Returns:
             VoteRoundResult. Fails if a round is already open (only one
@@ -138,20 +140,38 @@ class VoteService:
         if self.get_open_round() is not None:
             return VoteRoundResult(success=False, message="A voting round is already open.")
 
-        if self._suggestion_lookup.suggestion_count() < MIN_CANDIDATES_FOR_A_ROUND:
-            return VoteRoundResult(
-                success=False,
-                message=(
-                    f"At least {MIN_CANDIDATES_FOR_A_ROUND} suggestions are needed "
-                    "to start a voting round."
-                ),
-            )
+        if candidate_suggestion_ids is not None:
+            candidate_ids = list(candidate_suggestion_ids)
+            if len(candidate_ids) < MIN_CANDIDATES_FOR_A_ROUND:
+                return VoteRoundResult(
+                    success=False,
+                    message=(
+                        f"At least {MIN_CANDIDATES_FOR_A_ROUND} nominees are needed "
+                        "to start a voting round."
+                    ),
+                )
+            if len(candidate_ids) != len(set(candidate_ids)):
+                return VoteRoundResult(success=False, message="Nominee IDs must be unique.")
+            missing = [candidate_id for candidate_id in candidate_ids if not self._suggestion_lookup.suggestion_exists(candidate_id)]
+            if missing:
+                return VoteRoundResult(success=False, message="One or more selected nominees no longer exist.")
+        else:
+            candidate_ids = []
+            if self._suggestion_lookup.suggestion_count() < MIN_CANDIDATES_FOR_A_ROUND:
+                return VoteRoundResult(
+                    success=False,
+                    message=(
+                        f"At least {MIN_CANDIDATES_FOR_A_ROUND} suggestions are needed "
+                        "to start a voting round."
+                    ),
+                )
 
         new_round = VoteRound(
             id=self._next_round_id,
             status=VoteRoundStatus.OPEN,
             visibility=visibility,
             closes_at=closes_at,
+            candidate_suggestion_ids=candidate_ids,
         )
         self._next_round_id += 1
         self._rounds[new_round.id] = new_round
@@ -199,6 +219,36 @@ class VoteService:
         """
         return self._rounds.get(round_id)
 
+    def attach_message_reference(
+        self, round_id: int, guild_id: int, channel_id: int, message_id: int
+    ) -> bool:
+        """Record where a round's public voting post lives.
+
+        Discord doesn't hand back a new message's ID until after it's been
+        sent, so this exists to backfill it onto a round that was just
+        created moments earlier in the same command.
+
+        Args:
+            round_id: The round to update.
+            guild_id: The Discord guild the voting post was sent in.
+            channel_id: The Discord channel or thread the voting post was
+                sent in.
+            message_id: The Discord message ID of the voting post.
+
+        Returns:
+            True if a matching round was found and updated, False if no
+            round has that ID.
+        """
+        vote_round = self._rounds.get(round_id)
+        if vote_round is None:
+            return False
+
+        vote_round.guild_id = guild_id
+        vote_round.channel_id = channel_id
+        vote_round.message_id = message_id
+        self._save()
+        return True
+
     def cast_vote(self, discord_user_id: int, suggestion_id: int) -> VoteResult:
         """Cast or change a member's vote in the currently open round.
 
@@ -219,6 +269,9 @@ class VoteService:
 
         if not self._suggestion_lookup.suggestion_exists(suggestion_id):
             return VoteResult(success=False, message="That suggestion ID doesn't exist.")
+
+        if vote_round.candidate_suggestion_ids and suggestion_id not in vote_round.candidate_suggestion_ids:
+            return VoteResult(success=False, message="That suggestion is not a nominee in this voting round.")
 
         now = datetime.now(timezone.utc)
         existing_vote = vote_round.votes.get(discord_user_id)
