@@ -359,6 +359,19 @@ def format_vote_changes_setting() -> str:
     return f"Yes (up to {MAX_VOTE_CHANGES} {change_word})"
 
 
+LOW_SUGGESTION_POOL_THRESHOLD = 10
+
+
+def build_low_suggestion_pool_warning(candidate_count: int) -> str:
+    """Return a reminder when the suggestion pool is running low."""
+    if candidate_count >= LOW_SUGGESTION_POOL_THRESHOLD:
+        return ""
+    return (
+        "\n\nThe suggestion pool is getting low. "
+        "Add a movie with `/add` followed by a movie title or IMDb link."
+    )
+
+
 def build_start_vote_confirmation(vote_round: VoteRound, candidate_count: int) -> str:
     """Build the /start_vote confirmation message.
 
@@ -376,6 +389,7 @@ def build_start_vote_confirmation(vote_round: VoteRound, candidate_count: int) -
         f"Candidates: {candidate_count}\n"
         f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}\n"
         f"Vote changes allowed: {format_vote_changes_setting()}"
+        f"{build_low_suggestion_pool_warning(candidate_count)}"
     )
 
 

@@ -215,6 +215,29 @@ class VoteCommandTests(unittest.TestCase):
 
         self.assertNotIn("voter", message.lower())
 
+    def test_low_suggestion_pool_warning_is_shown_below_ten(self) -> None:
+        message, _ = self._start_vote()
+
+        self.assertIn("suggestion pool is getting low", message.lower())
+        self.assertIn("`/add`", message)
+        self.assertIn("movie title or IMDb link", message)
+
+    def test_low_suggestion_pool_warning_is_not_shown_at_ten(self) -> None:
+        for index in range(3, 11):
+            self.suggestion_service.suggest(f"Movie {index}")
+
+        message, _ = self._start_vote()
+
+        self.assertNotIn("suggestion pool is getting low", message.lower())
+
+    def test_low_suggestion_pool_warning_is_shown_at_nine(self) -> None:
+        for index in range(3, 10):
+            self.suggestion_service.suggest(f"Movie {index}")
+
+        message, _ = self._start_vote()
+
+        self.assertIn("suggestion pool is getting low", message.lower())
+
     # --- /vote_status ----------------------------------------------------
 
     def test_vote_status_when_no_round_exists(self) -> None:
