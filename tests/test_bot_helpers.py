@@ -34,17 +34,37 @@ class FakeMember:
 
 
 class BotHelperTests(unittest.TestCase):
-    def test_help_text_lists_available_commands(self) -> None:
+    def test_help_text_groups_and_lists_available_commands(self) -> None:
         help_text = build_help_text()
 
-        self.assertIn("/ping", help_text)
-        self.assertIn("/version", help_text)
-        self.assertIn("/help", help_text)
-        self.assertIn("/add", help_text)
-        self.assertIn("/list", help_text)
-        self.assertIn("/remove", help_text)
-        self.assertIn("/start_vote", help_text)
-        self.assertIn("/vote_status", help_text)
+        self.assertIn("**General**", help_text)
+        self.assertIn("**Watch Items**", help_text)
+        self.assertIn("**Voting**", help_text)
+        self.assertIn("**WASH Crew: Suggestion Databases**", help_text)
+
+        expected_commands = (
+            "/help",
+            "/ping",
+            "/version",
+            "/add",
+            "/list",
+            "/remove",
+            "/start_vote",
+            "/vote_status",
+            "/vote",
+            "/database_add",
+            "/database_list",
+            "/database_remove",
+        )
+        for command in expected_commands:
+            self.assertIn(command, help_text)
+
+        self.assertLess(help_text.index("**General**"), help_text.index("**Watch Items**"))
+        self.assertLess(help_text.index("**Watch Items**"), help_text.index("**Voting**"))
+        self.assertLess(
+            help_text.index("**Voting**"),
+            help_text.index("**WASH Crew: Suggestion Databases**"),
+        )
 
     def test_version_text_uses_the_provided_version(self) -> None:
         self.assertEqual(build_version_text("0.2.0"), "Watch Party Manager version 0.2.0")

@@ -855,19 +855,23 @@ def perform_database_remove(
 
 def build_help_text() -> str:
     return (
-        "Available commands:\n"
-        "- /ping\n"
-        "- /version\n"
-        "- /help\n"
-        "- /add\n"
-        "- /list\n"
-        "- /remove\n"
-        "- /start_vote\n"
-        "- /vote_status\n"
-        "- /vote\n"
-        "- /database_add\n"
-        "- /database_list\n"
-        "- /database_remove"
+        "**WASH Commands**\n\n"
+        "**General**\n"
+        "`/help` - Show this command guide.\n"
+        "`/ping` - Check whether WASH is responding.\n"
+        "`/version` - Show the current WASH version.\n\n"
+        "**Watch Items**\n"
+        "`/add` - Add a watch item by title or IMDb link.\n"
+        "`/list` - List watch items in the relevant suggestion database.\n"
+        "`/remove` - Remove a watch item.\n\n"
+        "**Voting**\n"
+        "`/start_vote` - Start a new voting round.\n"
+        "`/vote_status` - View the current voting round.\n"
+        "`/vote` - Cast or update your vote.\n\n"
+        "**WASH Crew: Suggestion Databases**\n"
+        "`/database_add` - Create a database for the current channel or thread.\n"
+        "`/database_list` - List databases configured for this server.\n"
+        "`/database_remove` - Deactivate a suggestion database."
     )
 
 
