@@ -715,23 +715,25 @@ def build_database_list_text(
     """Build the /database_list message for a set of databases.
 
     Args:
-        suggestion_service: Used to look up each database's suggestion count.
+        suggestion_service: Used to look up each database's watch-item count.
         databases: The databases to display, in the order given.
 
     Returns:
-        A line per database with its ID, name, active/inactive status,
-        channel, and current suggestion count.
+        A readable multi-line block per database with its ID, name, status,
+        Discord channel mention, and current watch-item count.
     """
-    lines = ["Configured suggestion databases:"]
+    sections = ["Suggestion Databases"]
     for database in databases:
         status = "Active" if database.active else "Inactive"
         suggestion_count = suggestion_service.suggestion_count_for_database(database.database_id)
-        suggestion_word = "suggestion" if suggestion_count == 1 else "suggestions"
-        lines.append(
-            f"[{database.database_id}] {database.name} — {status} — "
-            f"<#{database.channel_id}> — {suggestion_count} {suggestion_word}"
+        item_word = "watch item" if suggestion_count == 1 else "watch items"
+        sections.append(
+            f"[{database.database_id}] {database.name}\n"
+            f"Status: {status}\n"
+            f"Channel: <#{database.channel_id}>\n"
+            f"Watch items: {suggestion_count} {item_word}"
         )
-    return "\n".join(lines)
+    return "\n\n".join(sections)
 
 
 def perform_database_add(

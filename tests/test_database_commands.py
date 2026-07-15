@@ -213,7 +213,24 @@ class DatabaseCommandTests(unittest.TestCase):
             self.suggestion_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, GUILD_ID
         )
 
-        self.assertIn("2 suggestions", message)
+        self.assertIn("Watch items: 2 watch items", message)
+
+
+    def test_database_list_uses_readable_multiline_format(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        )
+        self.suggestion_service.suggest("The Matrix", database_id=created.database.database_id)
+
+        message, _ = perform_database_list(
+            self.suggestion_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, GUILD_ID
+        )
+
+        self.assertTrue(message.startswith("Suggestion Databases\n\n"))
+        self.assertIn("[1] Sunday Watch Party\n", message)
+        self.assertIn("Status: Active\n", message)
+        self.assertIn(f"Channel: <#{CHANNEL_ID}>\n", message)
+        self.assertIn("Watch items: 1 watch item", message)
 
     def test_database_list_only_shows_databases_for_the_current_guild(self) -> None:
         self.suggestion_service.create_database("Sunday Watch Party", guild_id=GUILD_ID, channel_id=CHANNEL_ID)
