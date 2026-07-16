@@ -90,11 +90,14 @@ class DiagnosticsCommandTests(unittest.TestCase):
         self.assertIn("discord.py: 2.6.0", text)
         self.assertIn("Gateway latency: 43 ms", text)
         self.assertIn("Uptime: 2h 3m 4s", text)
-        self.assertIn("Suggestion databases: 3", text)
-        self.assertIn("Watch items: 12", text)
-        self.assertIn("Active suggestions: 8", text)
+        self.assertIn("**Runtime**", text)
+        self.assertIn("**Loaded Data**", text)
+        self.assertIn("**Voting**", text)
+        self.assertIn("Suggestion databases: 3 databases", text)
+        self.assertIn("Watch items: 12 watch items", text)
+        self.assertIn("Active suggestions: 8 suggestions", text)
         self.assertIn("Open voting round: Yes", text)
-        self.assertIn("Interactive voting restored: Yes", text)
+        self.assertIn("Interactive controls restored: Yes", text)
 
     def test_build_diagnostics_text_reports_no_open_round_or_restoration(self) -> None:
         text = build_diagnostics_text(
@@ -108,7 +111,7 @@ class DiagnosticsCommandTests(unittest.TestCase):
             interactive_voting_restored=False,
         )
         self.assertIn("Open voting round: No", text)
-        self.assertIn("Interactive voting restored: No", text)
+        self.assertIn("Interactive controls restored: No", text)
 
     def test_diagnostics_is_ephemeral_and_guild_scoped(self) -> None:
         service = FakeStatisticsService(make_snapshot())

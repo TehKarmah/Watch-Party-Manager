@@ -101,6 +101,11 @@ class WatchPartyBot(commands.Bot):
                 guild_id=interaction.guild_id,
             )
             await interaction.response.send_message(message)
+            logger.info(
+                "User %s requested statistics in guild %s",
+                interaction.user.id,
+                interaction.guild_id,
+            )
 
         @self.tree.command(name="diagnostics")
         async def diagnostics(interaction: discord.Interaction) -> None:
@@ -118,6 +123,12 @@ class WatchPartyBot(commands.Bot):
                 interactive_voting_restored=self.interactive_voting_restored,
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
+            if message.startswith("**WASH Diagnostics**"):
+                logger.info(
+                    "User %s requested diagnostics in guild %s",
+                    interaction.user.id,
+                    interaction.guild_id,
+                )
 
         @self.tree.command(name="add")
         async def suggest(
@@ -285,11 +296,16 @@ class WatchPartyBot(commands.Bot):
 
     async def on_ready(self) -> None:
         logger.info(f"Logged in as {self.user}")
+        snapshot = self.statistics_service.snapshot()
         logger.info(
-            "Loaded %s suggestion database(s), %s watch item(s), open voting round: %s",
-            len(self.suggestion_service.list_databases()),
-            self.suggestion_service.suggestion_count(),
-            "yes" if self.vote_service.get_open_round() is not None else "no",
+            "Startup summary: %s database(s) (%s active), %s watch item(s), "
+            "%s active suggestion(s), open voting round: %s, interactive controls restored: %s",
+            snapshot.total_databases,
+            snapshot.active_databases,
+            snapshot.total_watch_items,
+            snapshot.active_suggestions,
+            "yes" if snapshot.open_vote_rounds else "no",
+            "yes" if self.interactive_voting_restored else "no",
         )
         logger.info("Nominee selector initialized")
         logger.info("Ready")
@@ -1287,20 +1303,32 @@ def perform_database_remove(
     return result.message, True
 
 
+def format_count(count: int, singular: str, plural: Optional[str] = None) -> str:
+    """Return a count with correct singular or plural wording."""
+    word = singular if count == 1 else (plural or f"{singular}s")
+    return f"{count} {word}"
+
+
 def build_statistics_text(snapshot: StatisticsSnapshot) -> str:
     """Format a guild-scoped statistics snapshot for Discord."""
     return "\n".join(
         [
             "**Watch Party Statistics**",
-            f"Watch items: {snapshot.total_watch_items}",
-            f"Active suggestions: {snapshot.active_suggestions}",
-            f"Watched items: {snapshot.watched_items}",
-            f"Suggestion databases: {snapshot.total_databases}",
-            f"Active databases: {snapshot.active_databases}",
-            f"Voting rounds: {snapshot.total_vote_rounds}",
-            f"Open rounds: {snapshot.open_vote_rounds}",
-            f"Closed rounds: {snapshot.closed_vote_rounds}",
-            f"Votes cast: {snapshot.total_votes_cast}",
+            "",
+            "**Watch Items**",
+            f"Total: {format_count(snapshot.total_watch_items, 'watch item')}",
+            f"Active suggestions: {format_count(snapshot.active_suggestions, 'suggestion')}",
+            f"Watched: {format_count(snapshot.watched_items, 'watch item')}",
+            "",
+            "**Suggestion Databases**",
+            f"Total: {format_count(snapshot.total_databases, 'database')}",
+            f"Active: {format_count(snapshot.active_databases, 'database')}",
+            "",
+            "**Voting**",
+            f"Rounds: {format_count(snapshot.total_vote_rounds, 'round')}",
+            f"Open: {format_count(snapshot.open_vote_rounds, 'round')}",
+            f"Closed: {format_count(snapshot.closed_vote_rounds, 'round')}",
+            f"Votes cast: {format_count(snapshot.total_votes_cast, 'vote')}",
             f"Average votes per round: {snapshot.average_votes_per_round:.1f}",
         ]
     )
@@ -1334,16 +1362,22 @@ def build_diagnostics_text(
     return "\n".join(
         [
             "**WASH Diagnostics**",
+            "",
+            "**Runtime**",
             f"WASH version: {version}",
             f"Python: {python_version}",
             f"discord.py: {discord_version}",
             f"Gateway latency: {latency_line}",
             f"Uptime: {uptime_line}",
-            f"Suggestion databases: {snapshot.total_databases}",
-            f"Watch items: {snapshot.total_watch_items}",
-            f"Active suggestions: {snapshot.active_suggestions}",
+            "",
+            "**Loaded Data**",
+            f"Suggestion databases: {format_count(snapshot.total_databases, 'database')}",
+            f"Watch items: {format_count(snapshot.total_watch_items, 'watch item')}",
+            f"Active suggestions: {format_count(snapshot.active_suggestions, 'suggestion')}",
+            "",
+            "**Voting**",
             f"Open voting round: {'Yes' if snapshot.open_vote_rounds else 'No'}",
-            f"Interactive voting restored: {'Yes' if interactive_voting_restored else 'No'}",
+            f"Interactive controls restored: {'Yes' if interactive_voting_restored else 'No'}",
         ]
     )
 
