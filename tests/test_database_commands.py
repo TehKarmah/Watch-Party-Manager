@@ -245,6 +245,26 @@ class DatabaseCommandTests(unittest.TestCase):
         self.assertIn("Sunday Watch Party", message)
         self.assertNotIn("A Different Server's Database", message)
 
+
+    def test_database_list_sorts_active_databases_alphabetically_then_inactive(self) -> None:
+        zulu = self.suggestion_service.create_database(
+            "Zulu", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        inactive = self.suggestion_service.create_database(
+            "Alpha Inactive", guild_id=GUILD_ID, channel_id=OTHER_CHANNEL_ID
+        ).database
+        self.suggestion_service.create_database(
+            "Alpha Active", guild_id=GUILD_ID, channel_id=OTHER_CHANNEL_ID + 1
+        )
+        self.suggestion_service.deactivate_database(inactive.database_id, guild_id=GUILD_ID)
+
+        message, _ = perform_database_list(
+            self.suggestion_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, GUILD_ID
+        )
+
+        self.assertLess(message.index("Alpha Active"), message.index("Zulu"))
+        self.assertLess(message.index("Zulu"), message.index("Alpha Inactive"))
+
     def test_database_list_rejects_a_non_wash_crew_member(self) -> None:
         message, ephemeral = perform_database_list(
             self.suggestion_service, self._regular_member(), WASH_CREW_ROLE_ID, GUILD_ID

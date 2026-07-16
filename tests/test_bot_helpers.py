@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import (
     build_help_text,
+    build_ping_text,
     format_datetime_for_display,
     build_version_text,
     is_wash_crew_member,
@@ -39,8 +40,8 @@ class FakeMember:
 
 
 class BotHelperTests(unittest.TestCase):
-    def test_help_text_groups_and_lists_available_commands(self) -> None:
-        help_text = build_help_text()
+    def test_help_text_groups_and_lists_available_commands_for_wash_crew(self) -> None:
+        help_text = build_help_text(show_admin=True)
 
         self.assertIn("**General**", help_text)
         self.assertIn("**Watch Items**", help_text)
@@ -71,8 +72,60 @@ class BotHelperTests(unittest.TestCase):
             help_text.index("**WASH Crew: Suggestion Databases**"),
         )
 
+    def test_help_text_hides_wash_crew_commands_for_regular_members(self) -> None:
+        help_text = build_help_text(show_admin=False)
+
+        self.assertIn("**General**", help_text)
+        self.assertIn("**Watch Items**", help_text)
+        self.assertIn("**Voting**", help_text)
+        self.assertNotIn("**WASH Crew: Suggestion Databases**", help_text)
+        self.assertNotIn("/database_add", help_text)
+        self.assertNotIn("/database_list", help_text)
+        self.assertNotIn("/database_remove", help_text)
+
     def test_version_text_uses_the_provided_version(self) -> None:
         self.assertEqual(build_version_text("0.2.0"), "Watch Party Manager version 0.2.0")
+
+    def test_version_text_can_include_runtime_summary(self) -> None:
+        self.assertEqual(
+            build_version_text(
+                "0.2.0", database_count=2, watch_item_count=27, has_open_round=True
+            ),
+            "Watch Party Manager version 0.2.0\n"
+            "Suggestion databases: 2\n"
+            "Watch items: 27\n"
+            "Open voting round: Yes",
+        )
+
+    def test_version_text_reports_no_open_round(self) -> None:
+        self.assertIn(
+            "Open voting round: No",
+            build_version_text("0.2.0", has_open_round=False),
+        )
+
+    def test_ping_text_includes_latency_and_uptime(self) -> None:
+        started_at = datetime(2026, 7, 16, 10, 0, tzinfo=timezone.utc)
+        now = started_at + timedelta(days=1, hours=2, minutes=3, seconds=4)
+
+        self.assertEqual(
+            build_ping_text(42.6, started_at, now),
+            "Pong.\nGateway latency: 43 ms\nUptime: 1d 2h 3m 4s",
+        )
+
+    def test_ping_text_handles_subminute_uptime(self) -> None:
+        started_at = datetime(2026, 7, 16, 10, 0, tzinfo=timezone.utc)
+        now = started_at + timedelta(seconds=9)
+
+        self.assertTrue(build_ping_text(0.4, started_at, now).endswith("Uptime: 9s"))
+
+    def test_ping_text_rejects_naive_datetimes(self) -> None:
+        aware = datetime(2026, 7, 16, 10, 0, tzinfo=timezone.utc)
+        naive = datetime(2026, 7, 16, 10, 0)
+
+        with self.assertRaises(ValueError):
+            build_ping_text(10, naive, aware)
+        with self.assertRaises(ValueError):
+            build_ping_text(10, aware, naive)
 
     def test_parse_guild_id_returns_none_when_not_provided(self) -> None:
         self.assertIsNone(parse_guild_id(None))

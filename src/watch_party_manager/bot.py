@@ -53,6 +53,7 @@ class WatchPartyBot(commands.Bot):
         self.guild_id = guild_id
         self.wash_crew_role_id = wash_crew_role_id
         self.default_nominee_count = default_nominee_count
+        self.started_at = datetime.now(timezone.utc)
         self.suggestion_service = SuggestionService()
         self.vote_service = VoteService(self.suggestion_service)
         self.nominee_selection_service = NomineeSelectionService(self.suggestion_service, self.vote_service)
@@ -60,15 +61,34 @@ class WatchPartyBot(commands.Bot):
     async def setup_hook(self) -> None:
         @self.tree.command(name="ping")
         async def ping(interaction: discord.Interaction) -> None:
-            await interaction.response.send_message("Pong.")
+            await interaction.response.send_message(
+                build_ping_text(
+                    latency_ms=self.latency * 1000,
+                    started_at=self.started_at,
+                    now=datetime.now(timezone.utc),
+                )
+            )
 
         @self.tree.command(name="version")
         async def version(interaction: discord.Interaction) -> None:
-            await interaction.response.send_message(build_version_text(__version__))
+            database_count = (
+                len(self.suggestion_service.list_databases(interaction.guild_id))
+                if interaction.guild_id is not None
+                else len(self.suggestion_service.list_databases())
+            )
+            await interaction.response.send_message(
+                build_version_text(
+                    __version__,
+                    database_count=database_count,
+                    watch_item_count=self.suggestion_service.suggestion_count(),
+                    has_open_round=self.vote_service.get_open_round() is not None,
+                )
+            )
 
         @self.tree.command(name="help")
         async def help_command(interaction: discord.Interaction) -> None:
-            await interaction.response.send_message(build_help_text())
+            show_admin = is_wash_crew_member(interaction.user, self.wash_crew_role_id)
+            await interaction.response.send_message(build_help_text(show_admin=show_admin))
 
         @self.tree.command(name="add")
         async def suggest(
@@ -207,6 +227,13 @@ class WatchPartyBot(commands.Bot):
 
     async def on_ready(self) -> None:
         logger.info(f"Logged in as {self.user}")
+        logger.info(
+            "Loaded %s suggestion database(s), %s watch item(s), open voting round: %s",
+            len(self.suggestion_service.list_databases()),
+            self.suggestion_service.suggestion_count(),
+            "yes" if self.vote_service.get_open_round() is not None else "no",
+        )
+        logger.info("Nominee selector initialized")
         logger.info("Ready")
 
     async def start_bot(self) -> None:
@@ -991,7 +1018,11 @@ def build_database_list_text(
         Discord channel mention, and current watch-item count.
     """
     sections = ["Suggestion Databases"]
-    for database in databases:
+    ordered_databases = sorted(
+        databases,
+        key=lambda database: (not database.active, database.name.casefold(), database.database_id),
+    )
+    for database in ordered_databases:
         status = "Active" if database.active else "Inactive"
         suggestion_count = suggestion_service.suggestion_count_for_database(database.database_id)
         item_word = "watch item" if suggestion_count == 1 else "watch items"
@@ -1137,30 +1168,74 @@ def perform_database_remove(
     return result.message, True
 
 
-def build_help_text() -> str:
-    return (
-        "**WASH Commands**\n\n"
+def build_help_text(show_admin: bool = True) -> str:
+    """Build the command guide, optionally including WASH Crew commands."""
+    sections = [
+        "**WASH Commands**",
         "**General**\n"
         "`/help` - Show this command guide.\n"
-        "`/ping` - Check whether WASH is responding.\n"
-        "`/version` - Show the current WASH version.\n\n"
+        "`/ping` - Check WASH latency and uptime.\n"
+        "`/version` - Show the current WASH version and runtime summary.",
         "**Watch Items**\n"
         "`/add` - Add a watch item by title or IMDb link.\n"
         "`/list` - List watch items in the relevant suggestion database.\n"
-        "`/remove` - Remove a watch item.\n\n"
+        "`/remove` - Remove a watch item.",
         "**Voting**\n"
         "`/start_vote` - Start a new voting round.\n"
         "`/vote_status` - View the current voting round.\n"
-        "`/vote` - Cast or update your vote.\n\n"
-        "**WASH Crew: Suggestion Databases**\n"
-        "`/database_add` - Create a database for the current channel or thread.\n"
-        "`/database_list` - List databases configured for this server.\n"
-        "`/database_remove` - Deactivate a suggestion database."
-    )
+        "`/vote` - Cast or update your vote.",
+    ]
+
+    if show_admin:
+        sections.append(
+            "**WASH Crew: Suggestion Databases**\n"
+            "`/database_add` - Create a database for the current channel or thread.\n"
+            "`/database_list` - List databases configured for this server.\n"
+            "`/database_remove` - Deactivate a suggestion database."
+        )
+
+    return "\n\n".join(sections)
 
 
-def build_version_text(version: str) -> str:
-    return f"Watch Party Manager version {version}"
+def build_ping_text(latency_ms: float, started_at: datetime, now: datetime) -> str:
+    """Build a compact /ping response with gateway latency and uptime."""
+    if started_at.tzinfo is None or started_at.utcoffset() is None:
+        raise ValueError("started_at must be timezone-aware")
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+
+    uptime_seconds = max(0, int((now - started_at).total_seconds()))
+    days, remainder = divmod(uptime_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    uptime_parts = []
+    if days:
+        uptime_parts.append(f"{days}d")
+    if hours or days:
+        uptime_parts.append(f"{hours}h")
+    if minutes or hours or days:
+        uptime_parts.append(f"{minutes}m")
+    uptime_parts.append(f"{seconds}s")
+
+    return f"Pong.\nGateway latency: {round(latency_ms)} ms\nUptime: {' '.join(uptime_parts)}"
+
+
+def build_version_text(
+    version: str,
+    database_count: Optional[int] = None,
+    watch_item_count: Optional[int] = None,
+    has_open_round: Optional[bool] = None,
+) -> str:
+    """Build the /version response with optional runtime information."""
+    lines = [f"Watch Party Manager version {version}"]
+    if database_count is not None:
+        lines.append(f"Suggestion databases: {database_count}")
+    if watch_item_count is not None:
+        lines.append(f"Watch items: {watch_item_count}")
+    if has_open_round is not None:
+        lines.append(f"Open voting round: {'Yes' if has_open_round else 'No'}")
+    return "\n".join(lines)
 
 
 def main() -> None:
