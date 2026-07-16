@@ -250,6 +250,41 @@ class StatisticsServiceTests(unittest.TestCase):
         self.assertEqual(1, result.total_watch_items)
         self.assertEqual(1, result.total_vote_rounds)
 
+
+    def test_snapshot_accepts_sequence_based_sources(self):
+        class TupleSuggestionSource:
+            def get_suggestions(self):
+                return (make_item(1), make_item(2, status=WatchItemStatus.WATCHED))
+
+            def list_databases(self, guild_id=None):
+                return (make_database(1),)
+
+        class TupleVoteSource:
+            def load(self):
+                return VoteLoadResult(
+                    rounds=(make_round(1, voter_ids=(1, 2)),),
+                    next_round_id=2,
+                )
+
+        result = StatisticsService(TupleSuggestionSource(), TupleVoteSource()).snapshot()
+
+        self.assertEqual(2, result.total_watch_items)
+        self.assertEqual(1, result.total_suggestions)
+        self.assertEqual(1, result.watched_items)
+        self.assertEqual(2, result.total_votes_cast)
+
+    def test_snapshot_does_not_mutate_source_collections(self):
+        items = [make_item(1), make_item(2, status=WatchItemStatus.WATCHED)]
+        databases = [make_database(1)]
+        rounds = [make_round(1, voter_ids=(1,))]
+        service, _ = self.make_service(items=items, databases=databases, rounds=rounds)
+
+        service.snapshot()
+
+        self.assertEqual([1, 2], [item.id for item in items])
+        self.assertEqual([1], [database.database_id for database in databases])
+        self.assertEqual([1], [vote_round.id for vote_round in rounds])
+
     def test_snapshot_returns_float_average(self):
         service, _ = self.make_service(rounds=[make_round(1, voter_ids=(1,))])
         self.assertIsInstance(service.snapshot().average_votes_per_round, float)

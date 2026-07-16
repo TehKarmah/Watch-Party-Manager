@@ -14,9 +14,11 @@ from watch_party_manager.persistence.vote_repository import JsonVoteRepository, 
 class SuggestionStatisticsSource(Protocol):
     """Suggestion data required by :class:`StatisticsService`."""
 
-    def get_suggestions(self) -> list[WatchItem]: ...
+    def get_suggestions(self) -> Sequence[WatchItem]: ...
 
-    def list_databases(self, guild_id: int | None = None) -> list[SuggestionDatabase]: ...
+    def list_databases(
+        self, guild_id: int | None = None
+    ) -> Sequence[SuggestionDatabase]: ...
 
 
 class VoteStatisticsSource(Protocol):
@@ -72,29 +74,13 @@ class StatisticsService:
         databases = self._databases(guild_id)
         vote_rounds = self._vote_rounds(guild_id)
 
-        active_database_ids = {
+        active_database_ids = frozenset(
             database.database_id for database in databases if database.active
-        }
-        watched_items = sum(
-            1 for item in watch_items if item.status == WatchItemStatus.WATCHED
         )
-        total_suggestions = sum(
-            1 for item in watch_items if item.status != WatchItemStatus.WATCHED
+        watched_items, total_suggestions, active_suggestions = self._count_watch_items(
+            watch_items, active_database_ids
         )
-        active_suggestions = sum(
-            1
-            for item in watch_items
-            if item.status != WatchItemStatus.WATCHED
-            and item.database_id in active_database_ids
-        )
-
-        open_rounds = sum(
-            1 for vote_round in vote_rounds if vote_round.status == VoteRoundStatus.OPEN
-        )
-        closed_rounds = sum(
-            1 for vote_round in vote_rounds if vote_round.status == VoteRoundStatus.CLOSED
-        )
-        total_votes = sum(len(vote_round.votes) for vote_round in vote_rounds)
+        open_rounds, closed_rounds, total_votes = self._count_vote_rounds(vote_rounds)
         average_votes = total_votes / len(vote_rounds) if vote_rounds else 0.0
 
         return StatisticsSnapshot(
@@ -143,6 +129,45 @@ class StatisticsService:
 
     def average_votes_per_round(self, guild_id: int | None = None) -> float:
         return self.snapshot(guild_id).average_votes_per_round
+
+
+    @staticmethod
+    def _count_watch_items(
+        watch_items: Sequence[WatchItem], active_database_ids: frozenset[int]
+    ) -> tuple[int, int, int]:
+        """Return watched, current-suggestion, and active-suggestion counts."""
+        watched_items = 0
+        total_suggestions = 0
+        active_suggestions = 0
+
+        for item in watch_items:
+            if item.status == WatchItemStatus.WATCHED:
+                watched_items += 1
+                continue
+
+            total_suggestions += 1
+            if item.database_id in active_database_ids:
+                active_suggestions += 1
+
+        return watched_items, total_suggestions, active_suggestions
+
+    @staticmethod
+    def _count_vote_rounds(
+        vote_rounds: Sequence[VoteRound],
+    ) -> tuple[int, int, int]:
+        """Return open-round, closed-round, and current-vote counts."""
+        open_rounds = 0
+        closed_rounds = 0
+        total_votes = 0
+
+        for vote_round in vote_rounds:
+            if vote_round.status == VoteRoundStatus.OPEN:
+                open_rounds += 1
+            elif vote_round.status == VoteRoundStatus.CLOSED:
+                closed_rounds += 1
+            total_votes += len(vote_round.votes)
+
+        return open_rounds, closed_rounds, total_votes
 
     def _watch_items(self, guild_id: int | None) -> Sequence[WatchItem]:
         items = self._suggestion_source.get_suggestions()
