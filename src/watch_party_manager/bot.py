@@ -107,6 +107,14 @@ class WatchPartyBot(commands.Bot):
             if watch_item is not None:
                 sent_message = await interaction.original_response()
                 self.suggestion_service.attach_message_reference(watch_item.id, sent_message.id)
+                logger.info(
+                    "User %s added watch item %s (%r) to database %s in guild %s",
+                    interaction.user.id,
+                    watch_item.id,
+                    watch_item.title,
+                    watch_item.database_id,
+                    interaction.guild_id,
+                )
 
         @self.tree.command(name="list")
         async def suggestions(interaction: discord.Interaction) -> None:
@@ -121,6 +129,13 @@ class WatchPartyBot(commands.Bot):
         async def remove_suggestion(interaction: discord.Interaction, title: str) -> None:
             result = self.suggestion_service.remove_suggestion(title)
             await interaction.response.send_message(result.message)
+            if result.success:
+                logger.info(
+                    "User %s removed watch item %r in guild %s",
+                    interaction.user.id,
+                    title,
+                    interaction.guild_id,
+                )
 
         @self.tree.command(name="start_vote")
         async def start_vote(
@@ -151,17 +166,25 @@ class WatchPartyBot(commands.Bot):
             vote_round = self.vote_service.get_open_round()
             candidates = get_round_candidates(self.suggestion_service, vote_round)
 
-            async def on_vote_click(button_interaction: discord.Interaction, suggestion_id: int) -> None:
-                await handle_nominee_vote(
-                    button_interaction, self.vote_service, self.suggestion_service, suggestion_id
-                )
-
-            view = VotingView(candidates, on_vote=on_vote_click)
+            view = build_voting_view(
+                vote_service=self.vote_service,
+                suggestion_service=self.suggestion_service,
+                candidates=candidates,
+            )
             post_text = build_voting_post_text(vote_round, candidates, standings=None, standings_error=None)
             await interaction.response.send_message(post_text, view=view)
             sent_message = await interaction.original_response()
             self.vote_service.attach_message_reference(
                 vote_round.id, interaction.guild_id, interaction.channel_id, sent_message.id
+            )
+            logger.info(
+                "User %s started voting round %s with %s nominee(s) in database %s (guild %s, channel %s)",
+                interaction.user.id,
+                vote_round.id,
+                len(candidates),
+                vote_round.database_id,
+                interaction.guild_id,
+                interaction.channel_id,
             )
 
         @self.tree.command(name="vote_status")
@@ -213,6 +236,12 @@ class WatchPartyBot(commands.Bot):
                 database_id=database_id,
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
+
+        restore_persistent_voting_view(
+            bot=self,
+            vote_service=self.vote_service,
+            suggestion_service=self.suggestion_service,
+        )
 
         if self.guild_id:
             logger.info(f"Synchronizing slash commands to development guild {self.guild_id}...")
@@ -801,6 +830,67 @@ def perform_vote(vote_service: VoteService, user_id: int, suggestion_id: int) ->
             lines.extend(format_standings_lines(None, standings_result.message))
 
     return "\n".join(lines), True
+
+
+def build_voting_view(
+    vote_service: VoteService,
+    suggestion_service: SuggestionService,
+    candidates: List[WatchItem],
+) -> VotingView:
+    """Build a voting view whose buttons use the shared vote handler."""
+
+    async def on_vote_click(
+        interaction: discord.Interaction, suggestion_id: int
+    ) -> None:
+        await handle_nominee_vote(
+            interaction, vote_service, suggestion_service, suggestion_id
+        )
+
+    return VotingView(candidates, on_vote=on_vote_click)
+
+
+def restore_persistent_voting_view(
+    bot: object,
+    vote_service: VoteService,
+    suggestion_service: SuggestionService,
+) -> bool:
+    """Restore button handling for the currently open voting post.
+
+    Discord persistent views must be re-registered each time the bot starts.
+    The round and its Discord message reference are already persisted, so
+    this function reconstructs the same stable button custom IDs and binds
+    the view to the original message.
+
+    Returns:
+        True when a view was registered, otherwise False.
+    """
+    vote_round = vote_service.get_open_round()
+    if vote_round is None:
+        logger.debug("No open voting round found; no persistent view to restore")
+        return False
+    if vote_round.message_id is None:
+        logger.warning(
+            "Open voting round %s has no message ID; interactive buttons cannot be restored",
+            vote_round.id,
+        )
+        return False
+
+    candidates = get_round_candidates(suggestion_service, vote_round)
+    if not candidates:
+        logger.warning(
+            "Open voting round %s has no resolvable nominees; interactive buttons cannot be restored",
+            vote_round.id,
+        )
+        return False
+
+    view = build_voting_view(vote_service, suggestion_service, candidates)
+    bot.add_view(view, message_id=vote_round.message_id)
+    logger.info(
+        "Restored interactive voting controls for round %s on message %s",
+        vote_round.id,
+        vote_round.message_id,
+    )
+    return True
 
 
 def get_round_candidates(

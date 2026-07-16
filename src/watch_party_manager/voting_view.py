@@ -19,9 +19,8 @@ from watch_party_manager.domain.watch_item import WatchItem
 BUTTON_LABEL_MAX_LENGTH = 80
 
 # Discord's hard limit on the number of components a single View may hold
-# (5 per row, 5 rows). Since nominee selection isn't implemented yet, a
-# suggestion pool larger than this is simply truncated for the buttons --
-# see VotingView's docstring.
+# (5 per row, 5 rows). WASH currently allows at most 10 nominees, so this
+# remains a defensive platform limit rather than a normal workflow limit.
 MAX_NOMINEE_BUTTONS = 25
 
 OnVoteCallback = Callable[[discord.Interaction, int], Awaitable[None]]
@@ -75,13 +74,11 @@ class VotingView(discord.ui.View):
     """One button per nominee for an open voting round.
 
     Capped at MAX_NOMINEE_BUTTONS to respect Discord's 25-component limit
-    per view. If there are more candidates than that, only the first
-    MAX_NOMINEE_BUTTONS get a button -- choosing which ones would be
-    nominee selection, which is out of scope for this milestone.
+    per view. The configured WASH nominee limit is lower, so truncation is
+    only a defensive safeguard.
 
-    timeout=None means this view never auto-disables during the bot's
-    current run. It does NOT survive a bot restart on its own; see bot.py
-    for the current limitations around that.
+    timeout=None and stable custom IDs make this a persistent Discord view.
+    bot.py re-registers the view for the stored voting message on startup.
     """
 
     def __init__(self, candidates: List[WatchItem], on_vote: OnVoteCallback) -> None:
