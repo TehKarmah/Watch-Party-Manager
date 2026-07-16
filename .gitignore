@@ -39,3 +39,6 @@ htmlcov/
 
 # VS:Code Workspace
 *.code-workspace
+
+# Graphic Assets
+WatchPartyManager.ai
