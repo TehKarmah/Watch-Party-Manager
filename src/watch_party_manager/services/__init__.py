@@ -11,6 +11,10 @@ from watch_party_manager.services.vote_service import (
     VoteService,
 )
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
+from watch_party_manager.services.statistics_service import (
+    StatisticsService,
+    StatisticsSnapshot,
+)
 
 __all__ = [
     "SuggestionResult",
@@ -20,4 +24,6 @@ __all__ = [
     "VoteRoundResult",
     "VoteService",
     "NomineeSelectionService",
+    "StatisticsService",
+    "StatisticsSnapshot",
 ]
