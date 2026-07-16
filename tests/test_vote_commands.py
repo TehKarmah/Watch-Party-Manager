@@ -66,6 +66,7 @@ class VoteCommandTests(unittest.TestCase):
         return perform_start_vote(
             vote_service=self.vote_service,
             suggestion_service=self.suggestion_service,
+            nominee_selection_service=None,
             user=user if user is not None else self._authorized_user(),
             wash_crew_role_id=wash_crew_role_id,
             visibility_str=visibility,

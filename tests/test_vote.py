@@ -255,3 +255,14 @@ class VoteRoundCandidateTests(unittest.TestCase):
     def test_non_positive_candidate_ids_are_rejected(self) -> None:
         with self.assertRaises(ValueError):
             VoteRound(id=1, candidate_suggestion_ids=[1, 0, 2])
+
+class VoteRoundDatabaseTests(unittest.TestCase):
+    def test_database_id_defaults_to_none(self) -> None:
+        self.assertIsNone(VoteRound(id=1).database_id)
+
+    def test_accepts_positive_database_id(self) -> None:
+        self.assertEqual(VoteRound(id=1, database_id=7).database_id, 7)
+
+    def test_rejects_non_positive_database_id(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, database_id=0)

@@ -578,3 +578,56 @@ class VoteServiceCandidateTests(unittest.TestCase):
         result = self.service.cast_vote(discord_user_id=123, suggestion_id=4)
         self.assertFalse(result.success)
         self.assertIn("not a nominee", result.message)
+
+class VoteServiceDatabaseHistoryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.service = VoteService(
+            FakeSuggestionLookup(existing_ids=[1, 2, 3, 4]),
+            repository=JsonVoteRepository(Path(self._temp_dir.name) / "voting.json"),
+        )
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _closed_round(self, database_id: int, candidates: list[int]):
+        created = self.service.create_round(
+            candidate_suggestion_ids=candidates,
+            database_id=database_id,
+        )
+        self.service.close_round(created.vote_round.id)
+        return created.vote_round
+
+    def test_create_round_stores_database_id(self) -> None:
+        created = self.service.create_round(
+            candidate_suggestion_ids=[1, 2], database_id=5
+        )
+        self.assertEqual(created.vote_round.database_id, 5)
+
+    def test_recent_closed_rounds_can_be_filtered_by_database(self) -> None:
+        first_a = self._closed_round(10, [1, 2])
+        self._closed_round(20, [3, 4])
+        second_a = self._closed_round(10, [2, 3])
+
+        rounds = self.service.get_recent_closed_rounds(5, database_id=10)
+
+        self.assertEqual([round_.id for round_ in rounds], [second_a.id, first_a.id])
+
+    def test_limit_is_applied_after_database_filtering(self) -> None:
+        old_a = self._closed_round(10, [1, 2])
+        for _ in range(3):
+            self._closed_round(20, [3, 4])
+        new_a = self._closed_round(10, [2, 3])
+
+        rounds = self.service.get_recent_closed_rounds(2, database_id=10)
+
+        self.assertEqual([round_.id for round_ in rounds], [new_a.id, old_a.id])
+
+    def test_legacy_round_does_not_affect_database_specific_history(self) -> None:
+        legacy = self.service.create_round(candidate_suggestion_ids=[1, 2])
+        self.service.close_round(legacy.vote_round.id)
+        scoped = self._closed_round(10, [2, 3])
+
+        rounds = self.service.get_recent_closed_rounds(5, database_id=10)
+
+        self.assertEqual([round_.id for round_ in rounds], [scoped.id])

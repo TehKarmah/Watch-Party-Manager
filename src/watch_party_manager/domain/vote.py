@@ -23,7 +23,7 @@ MAX_VOTE_DURATION_DAYS = 30
 
 # Nominee-count defaults and bounds for interactive voting.
 DEFAULT_VOTE_CANDIDATE_COUNT = 3
-MIN_VOTE_CANDIDATE_COUNT = 3
+MIN_VOTE_CANDIDATE_COUNT = 2
 MAX_VOTE_CANDIDATE_COUNT = 10
 
 
@@ -111,6 +111,7 @@ class VoteRound:
     guild_id: Optional[int] = None
     channel_id: Optional[int] = None
     message_id: Optional[int] = None
+    database_id: Optional[int] = None
     candidate_suggestion_ids: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -120,6 +121,7 @@ class VoteRound:
         self._validate_guild_id()
         self._validate_channel_id()
         self._validate_message_id()
+        self._validate_database_id()
         self._validate_candidate_suggestion_ids()
 
     def _validate_id(self) -> None:
@@ -147,6 +149,10 @@ class VoteRound:
     def _validate_message_id(self) -> None:
         if self.message_id is not None and self.message_id <= 0:
             raise ValueError("message_id must be a positive integer when provided")
+
+    def _validate_database_id(self) -> None:
+        if self.database_id is not None and self.database_id <= 0:
+            raise ValueError("database_id must be a positive integer when provided")
 
     def _validate_candidate_suggestion_ids(self) -> None:
         candidate_ids = list(self.candidate_suggestion_ids)

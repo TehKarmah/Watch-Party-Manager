@@ -109,6 +109,7 @@ class JsonVoteRepository:
             "guild_id": vote_round.guild_id,
             "channel_id": vote_round.channel_id,
             "message_id": vote_round.message_id,
+            "database_id": vote_round.database_id,
             "candidate_suggestion_ids": list(vote_round.candidate_suggestion_ids),
             "votes": [
                 JsonVoteRepository._serialize_vote(vote_record)
@@ -146,6 +147,7 @@ class JsonVoteRepository:
             guild_id=entry.get("guild_id"),
             channel_id=entry.get("channel_id"),
             message_id=entry.get("message_id"),
+            database_id=entry.get("database_id"),
             candidate_suggestion_ids=entry.get("candidate_suggestion_ids", []),
         )
 

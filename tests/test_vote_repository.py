@@ -314,3 +314,26 @@ class JsonVoteRepositoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class VoteRepositoryDatabaseTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.file_path = Path(self._temp_dir.name) / "voting_database.json"
+        self.repository = JsonVoteRepository(self.file_path)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_database_id_round_trips(self) -> None:
+        self.repository.save([VoteRound(id=1, database_id=9)], next_round_id=2)
+        self.assertEqual(self.repository.load().rounds[0].database_id, 9)
+
+    def test_legacy_round_without_database_id_defaults_to_none(self) -> None:
+        now = utc_now()
+        self.file_path.write_text(
+            '{"next_round_id": 2, "rounds": [{"id": 1, "status": "closed", '
+            '"visibility": "visible", "created_at": "' + now.isoformat() + '", '
+            '"closes_at": null, "winning_suggestion_id": null, "votes": []}]}',
+            encoding="utf-8",
+        )
+        self.assertIsNone(self.repository.load().rounds[0].database_id)

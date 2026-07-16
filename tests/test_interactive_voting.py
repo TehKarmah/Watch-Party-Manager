@@ -16,6 +16,7 @@ from watch_party_manager.persistence.suggestion_database_repository import (
 )
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
+from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import VoteService
 from watch_party_manager.voting_view import MAX_NOMINEE_BUTTONS, VotingView
@@ -316,6 +317,7 @@ class StartVoteCreatesAVotingPostTests(unittest.IsolatedAsyncioTestCase):
         message, ephemeral = perform_start_vote(
             vote_service=self.vote_service,
             suggestion_service=self.suggestion_service,
+            nominee_selection_service=None,
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
@@ -342,6 +344,7 @@ class StartVoteCreatesAVotingPostTests(unittest.IsolatedAsyncioTestCase):
         perform_start_vote(
             vote_service=self.vote_service,
             suggestion_service=self.suggestion_service,
+            nominee_selection_service=None,
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
@@ -360,6 +363,154 @@ class StartVoteCreatesAVotingPostTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored_round.guild_id, 100)
         self.assertEqual(stored_round.channel_id, 200)
         self.assertEqual(stored_round.message_id, sent_message.id)
+
+
+class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
+    """Exercises /start_vote's database-aware path, where nominees come from
+    NomineeSelectionService rather than the simple in-memory slice used when
+    there's no guild/channel context.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(Path(self._temp_dir.name) / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(
+                Path(self._temp_dir.name) / "suggestion_databases.json"
+            ),
+        )
+        self.vote_service = VoteService(
+            self.suggestion_service, repository=JsonVoteRepository(Path(self._temp_dir.name) / "voting.json")
+        )
+        self.selector = NomineeSelectionService(self.suggestion_service, self.vote_service)
+        self.database_id = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=100, channel_id=200
+        ).database.database_id
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _authorized_user(self) -> FakeMember:
+        return FakeMember(user_id=1, roles=[FakeRole(WASH_CREW_ROLE_ID)])
+
+    def test_selection_is_limited_to_the_resolved_database(self) -> None:
+        other_database_id = self.suggestion_service.create_database(
+            "Kung Fu Movies", guild_id=100, channel_id=201
+        ).database.database_id
+        self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
+        self.suggestion_service.suggest("Inception", database_id=self.database_id)
+        self.suggestion_service.suggest("Enter the Dragon", database_id=other_database_id)
+
+        message, ephemeral = perform_start_vote(
+            vote_service=self.vote_service,
+            suggestion_service=self.suggestion_service,
+            nominee_selection_service=self.selector,
+            user=self._authorized_user(),
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            visibility_str="visible",
+            duration_days=None,
+            guild_id=100,
+            channel_id=200,
+        )
+
+        self.assertFalse(ephemeral)
+        vote_round = self.vote_service.get_open_round()
+        self.assertEqual(len(vote_round.candidate_suggestion_ids), 2)
+
+        titles_by_id = {item.id: item.title for item in self.suggestion_service.get_suggestions()}
+        nominee_titles = {titles_by_id[nid] for nid in vote_round.candidate_suggestion_ids}
+        self.assertNotIn("Enter the Dragon", nominee_titles)
+
+    def test_low_pool_uses_every_eligible_suggestion_instead_of_rejecting(self) -> None:
+        self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
+        self.suggestion_service.suggest("Inception", database_id=self.database_id)
+
+        message, ephemeral = perform_start_vote(
+            vote_service=self.vote_service,
+            suggestion_service=self.suggestion_service,
+            nominee_selection_service=self.selector,
+            user=self._authorized_user(),
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            visibility_str="visible",
+            duration_days=None,
+            nominee_count=5,
+            guild_id=100,
+            channel_id=200,
+        )
+
+        self.assertFalse(ephemeral)
+        vote_round = self.vote_service.get_open_round()
+        self.assertEqual(len(vote_round.candidate_suggestion_ids), 2)
+
+    def test_insufficient_suggestions_is_rejected(self) -> None:
+        self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
+
+        message, ephemeral = perform_start_vote(
+            vote_service=self.vote_service,
+            suggestion_service=self.suggestion_service,
+            nominee_selection_service=self.selector,
+            user=self._authorized_user(),
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            visibility_str="visible",
+            duration_days=None,
+            guild_id=100,
+            channel_id=200,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("At least 2", message)
+        self.assertIsNone(self.vote_service.get_open_round())
+
+    def test_selected_nominees_persist_correctly(self) -> None:
+        self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
+        self.suggestion_service.suggest("Inception", database_id=self.database_id)
+        self.suggestion_service.suggest("Interstellar", database_id=self.database_id)
+
+        perform_start_vote(
+            vote_service=self.vote_service,
+            suggestion_service=self.suggestion_service,
+            nominee_selection_service=self.selector,
+            user=self._authorized_user(),
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            visibility_str="visible",
+            duration_days=None,
+            nominee_count=2,
+            guild_id=100,
+            channel_id=200,
+        )
+        vote_round = self.vote_service.get_open_round()
+        self.assertEqual(vote_round.database_id, self.database_id)
+
+        reloaded = JsonVoteRepository(Path(self._temp_dir.name) / "voting.json").load()
+        self.assertEqual(reloaded.rounds[0].candidate_suggestion_ids, vote_round.candidate_suggestion_ids)
+        self.assertEqual(len(reloaded.rounds[0].candidate_suggestion_ids), 2)
+
+    async def test_interactive_voting_still_functions_with_selected_nominees(self) -> None:
+        self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
+        self.suggestion_service.suggest("Inception", database_id=self.database_id)
+        self.suggestion_service.suggest("Interstellar", database_id=self.database_id)
+
+        perform_start_vote(
+            vote_service=self.vote_service,
+            suggestion_service=self.suggestion_service,
+            nominee_selection_service=self.selector,
+            user=self._authorized_user(),
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            visibility_str="visible",
+            duration_days=None,
+            nominee_count=2,
+            guild_id=100,
+            channel_id=200,
+        )
+        vote_round = self.vote_service.get_open_round()
+        nominee_id = vote_round.candidate_suggestion_ids[0]
+
+        interaction = FakeInteraction(user_id=111, message=FakeVotingPostMessage())
+        await handle_nominee_vote(interaction, self.vote_service, self.suggestion_service, suggestion_id=nominee_id)
+
+        self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertIn("recorded", interaction.response.sent_message)
+        self.assertEqual(self.vote_service.get_open_round().votes[111].suggestion_id, nominee_id)
 
 
 if __name__ == "__main__":

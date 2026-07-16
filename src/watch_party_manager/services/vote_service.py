@@ -122,6 +122,7 @@ class VoteService:
         visibility: VoteVisibility = VoteVisibility.VISIBLE,
         closes_at: Optional[datetime] = None,
         candidate_suggestion_ids: Optional[List[int]] = None,
+        database_id: Optional[int] = None,
     ) -> VoteRoundResult:
         """Open a new voting round.
 
@@ -131,6 +132,7 @@ class VoteService:
             closes_at: Optional deadline for the round.
             candidate_suggestion_ids: The exact nominees eligible in this round.
                 When omitted, legacy service callers retain the previous behavior.
+            database_id: The suggestion database this round belongs to, when known.
 
         Returns:
             VoteRoundResult. Fails if a round is already open (only one
@@ -172,6 +174,7 @@ class VoteService:
             visibility=visibility,
             closes_at=closes_at,
             candidate_suggestion_ids=candidate_ids,
+            database_id=database_id,
         )
         self._next_round_id += 1
         self._rounds[new_round.id] = new_round
@@ -207,6 +210,35 @@ class VoteService:
         if not self._rounds:
             return None
         return max(self._rounds.values(), key=lambda vote_round: vote_round.id)
+
+    def get_recent_closed_rounds(
+        self, limit: int, database_id: Optional[int] = None
+    ) -> List[VoteRound]:
+        """Get the most recently closed voting rounds, most recent first.
+
+        Used by nominee selection to see which suggestions were recently
+        nominated or won, so they can be deprioritized in favor of
+        rotation. Round IDs are sequential and never reused, so ordering
+        by ID descending is equivalent to ordering by recency.
+
+        Args:
+            limit: Maximum number of rounds to return.
+            database_id: Optional database ID to scope history to. Legacy rounds
+                without a database ID are excluded from database-specific results.
+
+        Returns:
+            Up to `limit` closed rounds, most recently created first. Open
+            rounds are never included, since they have no final nominee
+            list or determined outcome that's safe to compare against.
+        """
+        closed_rounds = [
+            vote_round
+            for vote_round in self._rounds.values()
+            if vote_round.status == VoteRoundStatus.CLOSED
+            and (database_id is None or vote_round.database_id == database_id)
+        ]
+        closed_rounds.sort(key=lambda vote_round: vote_round.id, reverse=True)
+        return closed_rounds[:limit]
 
     def get_round(self, round_id: int) -> Optional[VoteRound]:
         """Get a voting round by ID.

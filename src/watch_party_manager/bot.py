@@ -16,6 +16,7 @@ from watch_party_manager.domain.vote import (
     MAX_VOTE_CHANGES,
     MAX_VOTE_CANDIDATE_COUNT,
     MAX_VOTE_DURATION_DAYS,
+    MIN_CANDIDATES_FOR_A_ROUND,
     MIN_VOTE_CANDIDATE_COUNT,
     MIN_VOTE_DURATION_DAYS,
     VoteRecord,
@@ -26,6 +27,7 @@ from watch_party_manager.domain.vote import (
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.logger_config import configure_logging
+from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
 from watch_party_manager.version import __version__
@@ -43,14 +45,17 @@ class WatchPartyBot(commands.Bot):
         token: Optional[str] = None,
         guild_id: Optional[int] = None,
         wash_crew_role_id: Optional[int] = None,
+        default_nominee_count: int = DEFAULT_VOTE_CANDIDATE_COUNT,
     ) -> None:
         intents = discord.Intents.default()
         super().__init__(command_prefix="!", intents=intents)
         self.token = token
         self.guild_id = guild_id
         self.wash_crew_role_id = wash_crew_role_id
+        self.default_nominee_count = default_nominee_count
         self.suggestion_service = SuggestionService()
         self.vote_service = VoteService(self.suggestion_service)
+        self.nominee_selection_service = NomineeSelectionService(self.suggestion_service, self.vote_service)
 
     async def setup_hook(self) -> None:
         @self.tree.command(name="ping")
@@ -107,11 +112,13 @@ class WatchPartyBot(commands.Bot):
             message, ephemeral = perform_start_vote(
                 vote_service=self.vote_service,
                 suggestion_service=self.suggestion_service,
+                nominee_selection_service=self.nominee_selection_service,
                 user=interaction.user,
                 wash_crew_role_id=self.wash_crew_role_id,
                 visibility_str=visibility,
                 duration_days=duration_days,
                 nominee_count=nominee_count,
+                default_nominee_count=self.default_nominee_count,
                 guild_id=interaction.guild_id,
                 channel_id=interaction.channel_id,
             )
@@ -347,16 +354,67 @@ def parse_vote_duration_days(duration_days: Optional[int]) -> int:
     return duration_days
 
 
-def parse_vote_nominee_count(value: Optional[int]) -> int:
-    """Validate and resolve the nominee count for /start_vote."""
+def parse_vote_nominee_count(value: Optional[int], default: int = DEFAULT_VOTE_CANDIDATE_COUNT) -> int:
+    """Validate and resolve the nominee count for /start_vote.
+
+    Args:
+        value: The raw nominee_count option, or None to use the default.
+        default: The count to use when value is None. Defaults to
+            DEFAULT_VOTE_CANDIDATE_COUNT, but callers pass the
+            WASH Crew-configured default (see parse_default_nominee_count)
+            when one is set.
+
+    Returns:
+        The resolved nominee count.
+
+    Raises:
+        ValueError: If value is outside [MIN_VOTE_CANDIDATE_COUNT, MAX_VOTE_CANDIDATE_COUNT].
+    """
     if value is None:
-        return DEFAULT_VOTE_CANDIDATE_COUNT
+        return default
     if not (MIN_VOTE_CANDIDATE_COUNT <= value <= MAX_VOTE_CANDIDATE_COUNT):
         raise ValueError(
             f"nominee_count must be between {MIN_VOTE_CANDIDATE_COUNT} and "
             f"{MAX_VOTE_CANDIDATE_COUNT}."
         )
     return value
+
+
+def parse_default_nominee_count(value: Optional[str]) -> int:
+    """Parse and validate the configured default nominee count from an
+    environment variable.
+
+    This is the "default settings" nominee count /start_vote falls back to
+    when nominee_count isn't explicitly overridden -- WASH Crew configures
+    it once here rather than needing to pass it on every /start_vote call.
+    A future setup flow can replace reading this from the environment
+    without changing how the rest of the system uses it.
+
+    Args:
+        value: The configured default as a string from the environment.
+
+    Returns:
+        The parsed default, or DEFAULT_VOTE_CANDIDATE_COUNT if not configured.
+
+    Raises:
+        ValueError: If provided but not a valid integer in
+            [MIN_VOTE_CANDIDATE_COUNT, MAX_VOTE_CANDIDATE_COUNT].
+    """
+    if not value:
+        return DEFAULT_VOTE_CANDIDATE_COUNT
+
+    try:
+        count = int(value)
+    except ValueError:
+        raise ValueError(f"DEFAULT_VOTE_NOMINEE_COUNT must be a valid integer, got '{value}'")
+
+    if not (MIN_VOTE_CANDIDATE_COUNT <= count <= MAX_VOTE_CANDIDATE_COUNT):
+        raise ValueError(
+            f"DEFAULT_VOTE_NOMINEE_COUNT must be between {MIN_VOTE_CANDIDATE_COUNT} and "
+            f"{MAX_VOTE_CANDIDATE_COUNT}, got {count}"
+        )
+
+    return count
 
 
 def format_datetime_for_display(value: Optional[datetime]) -> str:
@@ -507,11 +565,13 @@ def build_vote_status_text(
 def perform_start_vote(
     vote_service: VoteService,
     suggestion_service: SuggestionService,
+    nominee_selection_service: Optional[NomineeSelectionService],
     user: object,
     wash_crew_role_id: Optional[int],
     visibility_str: str,
     duration_days: Optional[int],
     nominee_count: Optional[int] = None,
+    default_nominee_count: int = DEFAULT_VOTE_CANDIDATE_COUNT,
     guild_id: Optional[int] = None,
     channel_id: Optional[int] = None,
 ) -> tuple[str, bool]:
@@ -519,13 +579,25 @@ def perform_start_vote(
 
     Args:
         vote_service: The vote service to open a round on.
-        suggestion_service: Used to report the current candidate count.
+        suggestion_service: Used to resolve a database and report pool size.
+        nominee_selection_service: Used to choose nominees when a database
+            context is available (see resolve_database_for_channel).
+            Optional so this stays usable in tests/contexts with no
+            selection service configured.
         user: The member invoking the command (checked against the WASH
             Crew role).
         wash_crew_role_id: The configured WASH Crew role ID, or None if
             unconfigured.
         visibility_str: The raw visibility option text ("blind"/"visible").
         duration_days: The raw duration option, or None for the default.
+        nominee_count: The raw nominee_count option ("customize this
+            vote"), or None to use default_nominee_count ("use default
+            settings").
+        default_nominee_count: The WASH Crew-configured default nominee
+            count, used when nominee_count is None.
+        guild_id: The Discord guild the command was run in, if known.
+        channel_id: The Discord channel or thread the command was run in,
+            if known.
 
     Returns:
         A (message, ephemeral) tuple. Errors and permission failures are
@@ -553,37 +625,44 @@ def perform_start_vote(
         return str(exc), True
 
     try:
-        count = parse_vote_nominee_count(nominee_count)
+        count = parse_vote_nominee_count(nominee_count, default=default_nominee_count)
     except ValueError as exc:
         return str(exc), True
 
-    if guild_id is not None and channel_id is not None:
+    resolution = None
+    if guild_id is not None and channel_id is not None and nominee_selection_service is not None:
         resolution = suggestion_service.resolve_database_for_channel(guild_id, channel_id)
         if resolution.database is None:
             return resolution.error_message or "No suggestion database is available here.", True
-        candidates = suggestion_service.select_vote_nominees(
-            resolution.database.database_id, count
-        )
+        candidates = nominee_selection_service.select_nominees(resolution.database.database_id, count)
     else:
+        # No database context (or no selection service configured): fall
+        # back to a simple, non-database-scoped pool, same low-pool rule
+        # applied below.
         available = suggestion_service.get_suggestions()
-        candidates = available[:count] if len(available) >= count else []
+        if len(available) >= count:
+            candidates = available[:count]
+        else:
+            candidates = available
 
-    if len(candidates) < count:
-        return f"At least {count} eligible suggestions are needed to start this vote.", True
+    if len(candidates) < MIN_CANDIDATES_FOR_A_ROUND:
+        return (
+            f"At least {MIN_CANDIDATES_FOR_A_ROUND} eligible suggestions are needed to start this vote.",
+            True,
+        )
 
     closes_at = datetime.now(timezone.utc) + timedelta(days=days)
     result = vote_service.create_round(
         visibility=visibility,
         closes_at=closes_at,
         candidate_suggestion_ids=[candidate.id for candidate in candidates],
+        database_id=(resolution.database.database_id if resolution is not None else None),
     )
     if not result.success:
         return result.message, True
 
-    if guild_id is not None and channel_id is not None:
-        pool_count = len(
-            suggestion_service.get_suggestions_for_database(resolution.database.database_id)
-        )
+    if resolution is not None:
+        pool_count = len(suggestion_service.get_suggestions_for_database(resolution.database.database_id))
     else:
         pool_count = suggestion_service.suggestion_count()
     return build_start_vote_confirmation(
@@ -1104,7 +1183,19 @@ def main() -> None:
         logger.error(f"Configuration error: {e}")
         exit(1)
 
-    bot = WatchPartyBot(token=token, guild_id=guild_id, wash_crew_role_id=wash_crew_role_id)
+    default_nominee_count_str = os.getenv("DEFAULT_VOTE_NOMINEE_COUNT")
+    try:
+        default_nominee_count = parse_default_nominee_count(default_nominee_count_str)
+    except ValueError as e:
+        logger.error(f"Configuration error: {e}")
+        exit(1)
+
+    bot = WatchPartyBot(
+        token=token,
+        guild_id=guild_id,
+        wash_crew_role_id=wash_crew_role_id,
+        default_nominee_count=default_nominee_count,
+    )
 
     try:
         asyncio.run(bot.start_bot())

@@ -10,14 +10,19 @@ from watch_party_manager.bot import (
     format_datetime_for_display,
     build_version_text,
     is_wash_crew_member,
+    parse_default_nominee_count,
     parse_guild_id,
     parse_vote_duration_days,
+    parse_vote_nominee_count,
     parse_vote_visibility,
     parse_wash_crew_role_id,
 )
 from watch_party_manager.domain.vote import (
+    DEFAULT_VOTE_CANDIDATE_COUNT,
     DEFAULT_VOTE_DURATION_DAYS,
+    MAX_VOTE_CANDIDATE_COUNT,
     MAX_VOTE_DURATION_DAYS,
+    MIN_VOTE_CANDIDATE_COUNT,
     MIN_VOTE_DURATION_DAYS,
     VoteVisibility,
 )
@@ -214,6 +219,57 @@ class BotHelperTests(unittest.TestCase):
             format_datetime_for_display(datetime(2026, 7, 19, 18, 52))
 
         self.assertIn("timezone-aware", str(ctx.exception))
+
+    # --- Nominee count parsing -----------------------------------------------
+
+    def test_parse_vote_nominee_count_returns_default_when_not_given(self) -> None:
+        self.assertEqual(parse_vote_nominee_count(None), DEFAULT_VOTE_CANDIDATE_COUNT)
+
+    def test_parse_vote_nominee_count_uses_a_custom_default_when_given(self) -> None:
+        self.assertEqual(parse_vote_nominee_count(None, default=5), 5)
+
+    def test_parse_vote_nominee_count_accepts_every_value_from_two_to_ten(self) -> None:
+        for count in range(MIN_VOTE_CANDIDATE_COUNT, MAX_VOTE_CANDIDATE_COUNT + 1):
+            with self.subTest(count=count):
+                self.assertEqual(parse_vote_nominee_count(count), count)
+
+    def test_parse_vote_nominee_count_rejects_one(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_vote_nominee_count(1)
+
+    def test_parse_vote_nominee_count_rejects_zero(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_vote_nominee_count(0)
+
+    def test_parse_vote_nominee_count_rejects_eleven(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_vote_nominee_count(11)
+
+    def test_parse_default_nominee_count_returns_default_when_unset(self) -> None:
+        self.assertEqual(parse_default_nominee_count(None), DEFAULT_VOTE_CANDIDATE_COUNT)
+
+    def test_parse_default_nominee_count_returns_default_for_empty_string(self) -> None:
+        self.assertEqual(parse_default_nominee_count(""), DEFAULT_VOTE_CANDIDATE_COUNT)
+
+    def test_parse_default_nominee_count_converts_a_valid_string(self) -> None:
+        self.assertEqual(parse_default_nominee_count("5"), 5)
+
+    def test_parse_default_nominee_count_rejects_non_numeric_strings(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            parse_default_nominee_count("not_a_number")
+        self.assertIn("must be a valid integer", str(ctx.exception))
+
+    def test_parse_default_nominee_count_rejects_a_value_below_the_minimum(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_default_nominee_count("1")
+
+    def test_parse_default_nominee_count_rejects_a_value_above_the_maximum(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_default_nominee_count("11")
+
+    def test_parse_default_nominee_count_accepts_the_boundaries(self) -> None:
+        self.assertEqual(parse_default_nominee_count(str(MIN_VOTE_CANDIDATE_COUNT)), MIN_VOTE_CANDIDATE_COUNT)
+        self.assertEqual(parse_default_nominee_count(str(MAX_VOTE_CANDIDATE_COUNT)), MAX_VOTE_CANDIDATE_COUNT)
 
 
 if __name__ == "__main__":

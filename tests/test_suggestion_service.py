@@ -894,31 +894,6 @@ class SuggestionDatabaseScopingTests(unittest.TestCase):
         self.assertEqual(len(remaining), 1)
         self.assertEqual(remaining[0].database_id, second.database_id)
 
-class NomineeSelectionTests(unittest.TestCase):
-    def setUp(self) -> None:
-        import random
-        self.random = random.Random(7)
-        self._temp_dir = tempfile.TemporaryDirectory()
-        self.service = SuggestionService(
-            repository=JsonSuggestionRepository(Path(self._temp_dir.name) / "suggestions.json"),
-            database_repository=JsonSuggestionDatabaseRepository(
-                Path(self._temp_dir.name) / "suggestion_databases.json"
-            ),
-        )
-        database = self.service.create_database("Sunday", 100, 200).database
-        self.database_id = database.database_id
 
-    def tearDown(self) -> None:
-        self._temp_dir.cleanup()
-
-    def test_selection_returns_requested_count_from_one_database(self) -> None:
-        for title in ("A", "B", "C", "D"):
-            self.service.suggest(title, database_id=self.database_id)
-        selected = self.service.select_vote_nominees(self.database_id, 3, self.random)
-        self.assertEqual(len(selected), 3)
-        self.assertEqual(len({item.id for item in selected}), 3)
-
-    def test_selection_returns_empty_when_pool_is_too_small(self) -> None:
-        self.service.suggest("A", database_id=self.database_id)
-        self.service.suggest("B", database_id=self.database_id)
-        self.assertEqual(self.service.select_vote_nominees(self.database_id, 3, self.random), [])
+if __name__ == "__main__":
+    unittest.main()
