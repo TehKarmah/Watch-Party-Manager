@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import platform
 from datetime import datetime, timedelta, timezone
 from typing import List, Literal, Optional
 
@@ -29,6 +30,7 @@ from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.suggestion_service import SuggestionService
+from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
 from watch_party_manager.version import __version__
 from watch_party_manager.voting_view import VotingView
@@ -57,6 +59,8 @@ class WatchPartyBot(commands.Bot):
         self.suggestion_service = SuggestionService()
         self.vote_service = VoteService(self.suggestion_service)
         self.nominee_selection_service = NomineeSelectionService(self.suggestion_service, self.vote_service)
+        self.statistics_service = StatisticsService(self.suggestion_service)
+        self.interactive_voting_restored = False
 
     async def setup_hook(self) -> None:
         @self.tree.command(name="ping")
@@ -89,6 +93,31 @@ class WatchPartyBot(commands.Bot):
         async def help_command(interaction: discord.Interaction) -> None:
             show_admin = is_wash_crew_member(interaction.user, self.wash_crew_role_id)
             await interaction.response.send_message(build_help_text(show_admin=show_admin))
+
+        @self.tree.command(name="stats")
+        async def stats(interaction: discord.Interaction) -> None:
+            message = perform_stats(
+                statistics_service=self.statistics_service,
+                guild_id=interaction.guild_id,
+            )
+            await interaction.response.send_message(message)
+
+        @self.tree.command(name="diagnostics")
+        async def diagnostics(interaction: discord.Interaction) -> None:
+            message, ephemeral = perform_diagnostics(
+                statistics_service=self.statistics_service,
+                user=interaction.user,
+                wash_crew_role_id=self.wash_crew_role_id,
+                guild_id=interaction.guild_id,
+                version=__version__,
+                python_version=platform.python_version(),
+                discord_version=getattr(discord, "__version__", "Unknown"),
+                latency_ms=self.latency * 1000,
+                started_at=self.started_at,
+                now=datetime.now(timezone.utc),
+                interactive_voting_restored=self.interactive_voting_restored,
+            )
+            await interaction.response.send_message(message, ephemeral=ephemeral)
 
         @self.tree.command(name="add")
         async def suggest(
@@ -237,7 +266,7 @@ class WatchPartyBot(commands.Bot):
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
 
-        restore_persistent_voting_view(
+        self.interactive_voting_restored = restore_persistent_voting_view(
             bot=self,
             vote_service=self.vote_service,
             suggestion_service=self.suggestion_service,
@@ -1258,6 +1287,108 @@ def perform_database_remove(
     return result.message, True
 
 
+def build_statistics_text(snapshot: StatisticsSnapshot) -> str:
+    """Format a guild-scoped statistics snapshot for Discord."""
+    return "\n".join(
+        [
+            "**Watch Party Statistics**",
+            f"Watch items: {snapshot.total_watch_items}",
+            f"Active suggestions: {snapshot.active_suggestions}",
+            f"Watched items: {snapshot.watched_items}",
+            f"Suggestion databases: {snapshot.total_databases}",
+            f"Active databases: {snapshot.active_databases}",
+            f"Voting rounds: {snapshot.total_vote_rounds}",
+            f"Open rounds: {snapshot.open_vote_rounds}",
+            f"Closed rounds: {snapshot.closed_vote_rounds}",
+            f"Votes cast: {snapshot.total_votes_cast}",
+            f"Average votes per round: {snapshot.average_votes_per_round:.1f}",
+        ]
+    )
+
+
+def perform_stats(
+    statistics_service: StatisticsService,
+    guild_id: Optional[int],
+) -> str:
+    """Return the /stats response for the current Discord server."""
+    if guild_id is None:
+        return "This command can only be used in a Discord server."
+    return build_statistics_text(statistics_service.snapshot(guild_id))
+
+
+def build_diagnostics_text(
+    *,
+    version: str,
+    python_version: str,
+    discord_version: str,
+    latency_ms: float,
+    started_at: datetime,
+    now: datetime,
+    snapshot: StatisticsSnapshot,
+    interactive_voting_restored: bool,
+) -> str:
+    """Format WASH Crew runtime diagnostics."""
+    ping_lines = build_ping_text(latency_ms, started_at, now).splitlines()
+    latency_line = ping_lines[1].removeprefix("Gateway latency: ")
+    uptime_line = ping_lines[2].removeprefix("Uptime: ")
+    return "\n".join(
+        [
+            "**WASH Diagnostics**",
+            f"WASH version: {version}",
+            f"Python: {python_version}",
+            f"discord.py: {discord_version}",
+            f"Gateway latency: {latency_line}",
+            f"Uptime: {uptime_line}",
+            f"Suggestion databases: {snapshot.total_databases}",
+            f"Watch items: {snapshot.total_watch_items}",
+            f"Active suggestions: {snapshot.active_suggestions}",
+            f"Open voting round: {'Yes' if snapshot.open_vote_rounds else 'No'}",
+            f"Interactive voting restored: {'Yes' if interactive_voting_restored else 'No'}",
+        ]
+    )
+
+
+def perform_diagnostics(
+    *,
+    statistics_service: StatisticsService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    guild_id: Optional[int],
+    version: str,
+    python_version: str,
+    discord_version: str,
+    latency_ms: float,
+    started_at: datetime,
+    now: datetime,
+    interactive_voting_restored: bool,
+) -> tuple[str, bool]:
+    """Return the WASH Crew-only /diagnostics response."""
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+        )
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to view diagnostics.", True
+    if guild_id is None:
+        return "This command can only be used in a Discord server.", True
+
+    return (
+        build_diagnostics_text(
+            version=version,
+            python_version=python_version,
+            discord_version=discord_version,
+            latency_ms=latency_ms,
+            started_at=started_at,
+            now=now,
+            snapshot=statistics_service.snapshot(guild_id),
+            interactive_voting_restored=interactive_voting_restored,
+        ),
+        True,
+    )
+
+
 def build_help_text(show_admin: bool = True) -> str:
     """Build the command guide, optionally including WASH Crew commands."""
     sections = [
@@ -1265,7 +1396,8 @@ def build_help_text(show_admin: bool = True) -> str:
         "**General**\n"
         "`/help` - Show this command guide.\n"
         "`/ping` - Check WASH latency and uptime.\n"
-        "`/version` - Show the current WASH version and runtime summary.",
+        "`/version` - Show the current WASH version and runtime summary.\n"
+        "`/stats` - Show watch-party activity statistics.",
         "**Watch Items**\n"
         "`/add` - Add a watch item by title or IMDb link.\n"
         "`/list` - List watch items in the relevant suggestion database.\n"
@@ -1281,7 +1413,8 @@ def build_help_text(show_admin: bool = True) -> str:
             "**WASH Crew: Suggestion Databases**\n"
             "`/database_add` - Create a database for the current channel or thread.\n"
             "`/database_list` - List databases configured for this server.\n"
-            "`/database_remove` - Deactivate a suggestion database."
+            "`/database_remove` - Deactivate a suggestion database.\n"
+            "`/diagnostics` - Show WASH runtime diagnostics."
         )
 
     return "\n\n".join(sections)

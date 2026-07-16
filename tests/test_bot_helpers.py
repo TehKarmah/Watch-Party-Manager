@@ -52,6 +52,7 @@ class BotHelperTests(unittest.TestCase):
             "/help",
             "/ping",
             "/version",
+            "/stats",
             "/add",
             "/list",
             "/remove",
@@ -61,6 +62,7 @@ class BotHelperTests(unittest.TestCase):
             "/database_add",
             "/database_list",
             "/database_remove",
+            "/diagnostics",
         )
         for command in expected_commands:
             self.assertIn(command, help_text)
@@ -82,6 +84,8 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("/database_add", help_text)
         self.assertNotIn("/database_list", help_text)
         self.assertNotIn("/database_remove", help_text)
+        self.assertNotIn("/diagnostics", help_text)
+        self.assertIn("/stats", help_text)
 
     def test_version_text_uses_the_provided_version(self) -> None:
         self.assertEqual(build_version_text("0.2.0"), "Watch Party Manager version 0.2.0")
