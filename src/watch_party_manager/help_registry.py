@@ -85,6 +85,12 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
+        "/repair_suggestions",
+        "Repair legacy IMDb titles and remove malformed suggestions.",
+        "WASH Crew: Maintenance",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
         "/diagnostics",
         "Show WASH runtime diagnostics.",
         "WASH Crew: Diagnostics",

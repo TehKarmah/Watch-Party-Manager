@@ -33,6 +33,7 @@ from watch_party_manager.services.help_service import build_help_response
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_service import SuggestionService
+from watch_party_manager.services.suggestion_repair_service import SuggestionRepairService
 from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
 from watch_party_manager.start_vote_view import (
@@ -65,6 +66,9 @@ class WatchPartyBot(commands.Bot):
         self.started_at = datetime.now(timezone.utc)
         self.suggestion_service = SuggestionService()
         self.suggestion_input_service = SuggestionInputService()
+        self.suggestion_repair_service = SuggestionRepairService(
+            self.suggestion_service, self.suggestion_input_service
+        )
         self.vote_service = VoteService(self.suggestion_service)
         self.nominee_selection_service = NomineeSelectionService(self.suggestion_service, self.vote_service)
         self.statistics_service = StatisticsService(self.suggestion_service)
@@ -182,6 +186,15 @@ class WatchPartyBot(commands.Bot):
                 channel_id=interaction.channel_id,
             )
             await interaction.response.send_message(message)
+
+        @self.tree.command(name="repair_suggestions")
+        async def repair_suggestions(interaction: discord.Interaction) -> None:
+            message, ephemeral = await perform_repair_suggestions(
+                repair_service=self.suggestion_repair_service,
+                user=interaction.user,
+                wash_crew_role_id=self.wash_crew_role_id,
+            )
+            await interaction.response.send_message(message, ephemeral=ephemeral)
 
         @self.tree.command(name="remove")
         async def remove_suggestion(interaction: discord.Interaction, title: str) -> None:
@@ -1268,6 +1281,23 @@ def perform_add_suggestion(
         return result.message, False, None
 
     return result.message, False, result.watch_item
+
+
+async def perform_repair_suggestions(
+    repair_service: SuggestionRepairService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+) -> tuple[str, bool]:
+    """Run the WASH Crew-only suggestion repair workflow."""
+    if wash_crew_role_id is None:
+        return (
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+        )
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to repair suggestions.", True
+    report = await repair_service.repair_all()
+    return report.format_message(), True
 
 
 def perform_list_suggestions(

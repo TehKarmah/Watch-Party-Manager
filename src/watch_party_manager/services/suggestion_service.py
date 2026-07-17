@@ -322,6 +322,45 @@ class SuggestionService:
             message=f'Removed "{watch_item.title}" from the suggestion list.',
         )
 
+
+    def remove_suggestion_by_id(self, suggestion_id: int | None) -> bool:
+        """Remove a suggestion by its stable ID."""
+        if suggestion_id is None:
+            return False
+        for key, item in list(self._suggestions.items()):
+            if item.id == suggestion_id:
+                del self._suggestions[key]
+                self._save()
+                return True
+        return False
+
+    def update_suggestion_identity(
+        self, suggestion_id: int | None, title: str, imdb_url: str
+    ) -> str:
+        """Replace a malformed title/IMDb identity while preserving references.
+
+        Returns ``updated``, ``removed_duplicate``, or ``not_found``.
+        """
+        if suggestion_id is None:
+            return "not_found"
+        for old_key, item in list(self._suggestions.items()):
+            if item.id != suggestion_id:
+                continue
+            new_title = title.strip()
+            new_key = (item.database_id, new_title.casefold())
+            existing = self._suggestions.get(new_key)
+            if existing is not None and existing.id != suggestion_id:
+                del self._suggestions[old_key]
+                self._save()
+                return "removed_duplicate"
+            del self._suggestions[old_key]
+            item.title = new_title
+            item.metadata_ids[MetadataProvider.IMDB] = imdb_url.strip()
+            self._suggestions[new_key] = item
+            self._save()
+            return "updated"
+        return "not_found"
+
     def _save(self) -> None:
         """Persist the current suggestion list via the repository."""
         self._repository.save(self.get_suggestions(), self._next_id)

@@ -40,6 +40,7 @@ class HelpRegistryTests(unittest.TestCase):
         commands = [entry.name for _, entries in sections for entry in entries]
         self.assertIn("/database_add", commands)
         self.assertIn("/diagnostics", commands)
+        self.assertIn("/repair_suggestions", commands)
 
     def test_sections_preserve_declared_order(self) -> None:
         sections = command_sections(show_wash_crew=True)
@@ -50,6 +51,7 @@ class HelpRegistryTests(unittest.TestCase):
                 "Watch Items",
                 "Voting",
                 "WASH Crew: Suggestion Databases",
+                "WASH Crew: Maintenance",
                 "WASH Crew: Diagnostics",
             ],
         )

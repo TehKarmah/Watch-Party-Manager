@@ -17,6 +17,10 @@ from watch_party_manager.services.integrity_service import (
     IntegrityService,
     IntegritySeverity,
 )
+from watch_party_manager.services.suggestion_repair_service import (
+    SuggestionRepairReport,
+    SuggestionRepairService,
+)
 from watch_party_manager.services.statistics_service import (
     StatisticsService,
     StatisticsSnapshot,
@@ -34,6 +38,8 @@ __all__ = [
     "IntegrityReport",
     "IntegrityService",
     "IntegritySeverity",
+    "SuggestionRepairReport",
+    "SuggestionRepairService",
     "StatisticsService",
     "StatisticsSnapshot",
 ]
