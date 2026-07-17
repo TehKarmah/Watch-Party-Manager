@@ -9,6 +9,7 @@ from watch_party_manager.bot import (
     perform_add_suggestion,
     perform_add_suggestion_from_input,
     perform_list_suggestions,
+    perform_list_suggestions_response,
 )
 from watch_party_manager.domain.watch_item import MetadataProvider
 from watch_party_manager.persistence.suggestion_database_repository import (
@@ -23,6 +24,16 @@ GUILD_ID = 100
 CONFIGURED_CHANNEL_ID = 200
 OTHER_CONFIGURED_CHANNEL_ID = 201
 UNCONFIGURED_CHANNEL_ID = 999
+
+
+class FakeRole:
+    def __init__(self, role_id: int) -> None:
+        self.id = role_id
+
+
+class FakeMember:
+    def __init__(self, role_ids=()) -> None:
+        self.roles = [FakeRole(role_id) for role_id in role_ids]
 
 
 class SuggestionCommandTests(unittest.TestCase):
@@ -248,6 +259,98 @@ class SuggestionCommandTests(unittest.TestCase):
         message = perform_list_suggestions(self.suggestion_service, GUILD_ID, CONFIGURED_CHANNEL_ID)
 
         self.assertIn("currently empty", message)
+
+    def test_list_response_is_ephemeral_by_default(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        self.suggestion_service.suggest("The Matrix", database_id=created.database.database_id)
+
+        message, ephemeral = perform_list_suggestions_response(
+            self.suggestion_service, GUILD_ID, CONFIGURED_CHANNEL_ID
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("The Matrix", message)
+
+    def test_crew_view_requires_wash_crew_role(self) -> None:
+        self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+
+        message, ephemeral = perform_list_suggestions_response(
+            self.suggestion_service,
+            GUILD_ID,
+            CONFIGURED_CHANNEL_ID,
+            user=FakeMember(),
+            wash_crew_role_id=777,
+            view="crew",
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("WASH Crew role", message)
+
+    def test_crew_view_shows_expanded_details(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        result = self.suggestion_service.suggest(
+            "The Matrix",
+            "https://www.imdb.com/title/tt0133093/",
+            database_id=created.database.database_id,
+        )
+
+        message, ephemeral = perform_list_suggestions_response(
+            self.suggestion_service,
+            GUILD_ID,
+            CONFIGURED_CHANNEL_ID,
+            user=FakeMember([777]),
+            wash_crew_role_id=777,
+            view="crew",
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn(f"#{result.watch_item.id}", message)
+        self.assertIn("Status: Suggested", message)
+        self.assertIn("IMDb:", message)
+
+    def test_only_wash_crew_can_post_list_publicly(self) -> None:
+        self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+
+        denied, denied_ephemeral = perform_list_suggestions_response(
+            self.suggestion_service,
+            GUILD_ID,
+            CONFIGURED_CHANNEL_ID,
+            user=FakeMember(),
+            wash_crew_role_id=777,
+            public=True,
+        )
+        allowed, allowed_ephemeral = perform_list_suggestions_response(
+            self.suggestion_service,
+            GUILD_ID,
+            CONFIGURED_CHANNEL_ID,
+            user=FakeMember([777]),
+            wash_crew_role_id=777,
+            public=True,
+        )
+
+        self.assertTrue(denied_ephemeral)
+        self.assertIn("WASH Crew role", denied)
+        self.assertFalse(allowed_ephemeral)
+        self.assertIn("currently empty", allowed)
+
+    def test_list_rejects_unknown_view(self) -> None:
+        message, ephemeral = perform_list_suggestions_response(
+            self.suggestion_service,
+            GUILD_ID,
+            CONFIGURED_CHANNEL_ID,
+            view="detailed",
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("standard, crew", message)
 
 
 if __name__ == "__main__":

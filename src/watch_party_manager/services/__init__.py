@@ -17,6 +17,10 @@ from watch_party_manager.services.integrity_service import (
     IntegrityService,
     IntegritySeverity,
 )
+from watch_party_manager.services.suggestion_list_formatter import (
+    SuggestionListFormatter,
+    SuggestionListView,
+)
 from watch_party_manager.services.suggestion_repair_service import (
     SuggestionRepairReport,
     SuggestionRepairService,
@@ -49,6 +53,8 @@ __all__ = [
     "IntegrityReport",
     "IntegrityService",
     "IntegritySeverity",
+    "SuggestionListFormatter",
+    "SuggestionListView",
     "SuggestionRepairReport",
     "SuggestionRepairService",
     "BackupCreationResult",

@@ -32,6 +32,10 @@ from watch_party_manager.services.about_service import build_about_content
 from watch_party_manager.services.help_service import build_help_response
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
+from watch_party_manager.services.suggestion_list_formatter import (
+    SuggestionListFormatter,
+    SuggestionListView,
+)
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.suggestion_repair_service import SuggestionRepairService
 from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
@@ -179,13 +183,31 @@ class WatchPartyBot(commands.Bot):
                 )
 
         @self.tree.command(name="list")
-        async def suggestions(interaction: discord.Interaction) -> None:
-            message = perform_list_suggestions(
+        @discord.app_commands.describe(
+            view="Choose the simple member list or the expanded WASH Crew list.",
+            public="Post the list publicly instead of showing it only to you (WASH Crew only).",
+        )
+        @discord.app_commands.choices(
+            view=[
+                discord.app_commands.Choice(name="Standard", value="standard"),
+                discord.app_commands.Choice(name="WASH Crew", value="crew"),
+            ]
+        )
+        async def suggestions(
+            interaction: discord.Interaction,
+            view: str = "standard",
+            public: bool = False,
+        ) -> None:
+            message, ephemeral = perform_list_suggestions_response(
                 suggestion_service=self.suggestion_service,
                 guild_id=interaction.guild_id,
                 channel_id=interaction.channel_id,
+                user=interaction.user,
+                wash_crew_role_id=self.wash_crew_role_id,
+                view=view,
+                public=public,
             )
-            await interaction.response.send_message(message)
+            await interaction.response.send_message(message, ephemeral=ephemeral)
 
         @self.tree.command(name="repair_suggestions")
         async def repair_suggestions(interaction: discord.Interaction) -> None:
@@ -1300,32 +1322,52 @@ async def perform_repair_suggestions(
     return report.format_message(), True
 
 
+def perform_list_suggestions_response(
+    suggestion_service: SuggestionService,
+    guild_id: Optional[int],
+    channel_id: Optional[int],
+    user: object | None = None,
+    wash_crew_role_id: Optional[int] = None,
+    view: str | None = None,
+    public: bool = False,
+) -> tuple[str, bool]:
+    """Build the role-aware ``/list`` response.
+
+    The standard view is available to everyone and is ephemeral by default.
+    The expanded Crew view and public posting are restricted to WASH Crew.
+    """
+    try:
+        parsed_view = SuggestionListView.parse(view)
+    except ValueError as exc:
+        return str(exc), True
+
+    is_crew = is_wash_crew_member(user, wash_crew_role_id) if user is not None else False
+    if parsed_view is SuggestionListView.CREW and not is_crew:
+        return "You need the WASH Crew role to use the Crew list view.", True
+    if public and not is_crew:
+        return "You need the WASH Crew role to post the suggestion list publicly.", True
+
+    resolution = suggestion_service.resolve_database_for_channel(guild_id, channel_id)
+    if resolution.database is None:
+        return resolution.error_message or "No suggestion database is available here.", True
+
+    items = suggestion_service.get_suggestions_for_database(resolution.database.database_id)
+    message = SuggestionListFormatter().format(items, resolution.database, parsed_view)
+    return message, not public
+
+
 def perform_list_suggestions(
     suggestion_service: SuggestionService,
     guild_id: Optional[int],
     channel_id: Optional[int],
 ) -> str:
-    """Core logic for /list, kept free of Discord objects except raw IDs.
-
-    Resolves which suggestion database this channel maps to (the same way
-    perform_add_suggestion does) and shows only that database's
-    suggestions, rather than duplicating the resolution rules here.
-
-    Args:
-        suggestion_service: The suggestion service to resolve a database
-            through and read suggestions from.
-        guild_id: The Discord guild the command was run in.
-        channel_id: The Discord channel or thread the command was run in.
-
-    Returns:
-        The formatted suggestion list, or a clear explanatory message if
-        no single database could be resolved for this channel.
-    """
-    resolution = suggestion_service.resolve_database_for_channel(guild_id, channel_id)
-    if resolution.database is None:
-        return resolution.error_message
-
-    return suggestion_service.format_suggestion_list(resolution.database.database_id)
+    """Backward-compatible standard list formatter used by existing callers."""
+    message, _ = perform_list_suggestions_response(
+        suggestion_service=suggestion_service,
+        guild_id=guild_id,
+        channel_id=channel_id,
+    )
+    return message
 
 
 def build_database_add_confirmation(database: SuggestionDatabase) -> str:
