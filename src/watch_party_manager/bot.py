@@ -87,6 +87,8 @@ class WatchPartyBot(commands.Bot):
             embed = discord.Embed(
                 title=content.title,
                 description=content.description,
+                url=content.url,
+                color=content.color,
             )
             for field in content.fields:
                 embed.add_field(
@@ -94,6 +96,7 @@ class WatchPartyBot(commands.Bot):
                     value=field.value,
                     inline=field.inline,
                 )
+            embed.set_footer(text=content.footer)
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         @self.tree.command(name="help")

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 PROJECT_REPOSITORY_URL = "https://github.com/TehKarmah/Watch-Party-Manager"
 TAGLINE = "Organizing great watch parties, one vote at a time."
+WASH_ACCENT_COLOR = 0xF5C518
+ABOUT_FOOTER = "Watch Party Manager • TehKarmah"
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +26,9 @@ class AboutContent:
     title: str
     description: str
     fields: tuple[AboutField, ...]
+    url: str
+    color: int
+    footer: str
 
 
 def build_about_content(version: str, build: str) -> AboutContent:
@@ -76,4 +81,7 @@ def build_about_content(version: str, build: str) -> AboutContent:
                 ),
             ),
         ),
+        url=PROJECT_REPOSITORY_URL,
+        color=WASH_ACCENT_COLOR,
+        footer=ABOUT_FOOTER,
     )

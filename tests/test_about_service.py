@@ -5,8 +5,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.services.about_service import (
+    ABOUT_FOOTER,
     PROJECT_REPOSITORY_URL,
     TAGLINE,
+    WASH_ACCENT_COLOR,
     build_about_content,
 )
 
@@ -43,6 +45,21 @@ class AboutServiceTests(unittest.TestCase):
     def test_about_fields_are_not_inline(self) -> None:
         content = build_about_content("1.0.0", "2026.07.17")
         self.assertTrue(all(not field.inline for field in content.fields))
+
+
+    def test_about_content_includes_embed_presentation_metadata(self) -> None:
+        content = build_about_content("1.0.0", "2026.07.17")
+
+        self.assertEqual(content.url, PROJECT_REPOSITORY_URL)
+        self.assertEqual(content.color, WASH_ACCENT_COLOR)
+        self.assertEqual(content.footer, ABOUT_FOOTER)
+
+    def test_about_embed_metadata_is_discord_safe(self) -> None:
+        content = build_about_content("1.0.0", "2026.07.17")
+
+        self.assertGreaterEqual(content.color, 0)
+        self.assertLessEqual(content.color, 0xFFFFFF)
+        self.assertLessEqual(len(content.footer), 2048)
 
     def test_about_content_rejects_blank_version(self) -> None:
         with self.assertRaisesRegex(ValueError, "version is required"):
