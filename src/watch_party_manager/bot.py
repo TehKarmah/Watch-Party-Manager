@@ -31,6 +31,7 @@ from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.services.about_service import build_about_content
 from watch_party_manager.services.help_service import build_help_response
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
+from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_list_formatter import (
     SuggestionListFormatter,
@@ -59,6 +60,7 @@ class WatchPartyBot(commands.Bot):
         token: Optional[str] = None,
         guild_id: Optional[int] = None,
         wash_crew_role_id: Optional[int] = None,
+        watch_party_member_role_id: Optional[int] = None,
         default_nominee_count: int = DEFAULT_VOTE_CANDIDATE_COUNT,
     ) -> None:
         intents = discord.Intents.default()
@@ -66,6 +68,11 @@ class WatchPartyBot(commands.Bot):
         self.token = token
         self.guild_id = guild_id
         self.wash_crew_role_id = wash_crew_role_id
+        self.watch_party_member_role_id = watch_party_member_role_id
+        self.permission_service = PermissionService(
+            watch_party_member_role_id=watch_party_member_role_id,
+            wash_crew_role_id=wash_crew_role_id,
+        )
         self.default_nominee_count = default_nominee_count
         self.started_at = datetime.now(timezone.utc)
         self.suggestion_service = SuggestionService()
@@ -161,6 +168,10 @@ class WatchPartyBot(commands.Bot):
             title: str,
             imdb_url: Optional[str] = None,
         ) -> None:
+            permission = self.permission_service.require_watch_party_member(interaction.user)
+            if not permission.allowed:
+                await interaction.response.send_message(permission.message, ephemeral=True)
+                return
             message, ephemeral, watch_item = await perform_add_suggestion_from_input(
                 suggestion_input_service=self.suggestion_input_service,
                 suggestion_service=self.suggestion_service,
@@ -198,6 +209,10 @@ class WatchPartyBot(commands.Bot):
             view: str = "standard",
             public: bool = False,
         ) -> None:
+            permission = self.permission_service.require_watch_party_member(interaction.user)
+            if not permission.allowed:
+                await interaction.response.send_message(permission.message, ephemeral=True)
+                return
             message, ephemeral = perform_list_suggestions_response(
                 suggestion_service=self.suggestion_service,
                 guild_id=interaction.guild_id,
@@ -270,6 +285,10 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="vote_status")
         async def vote_status(interaction: discord.Interaction) -> None:
+            permission = self.permission_service.require_watch_party_member(interaction.user)
+            if not permission.allowed:
+                await interaction.response.send_message(permission.message, ephemeral=True)
+                return
             message = perform_vote_status(
                 vote_service=self.vote_service,
                 suggestion_service=self.suggestion_service,
@@ -278,6 +297,10 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="vote")
         async def vote(interaction: discord.Interaction, suggestion_id: int) -> None:
+            permission = self.permission_service.require_watch_party_member(interaction.user)
+            if not permission.allowed:
+                await interaction.response.send_message(permission.message, ephemeral=True)
+                return
             message, ephemeral = perform_vote(
                 vote_service=self.vote_service,
                 user_id=interaction.user.id,
@@ -322,6 +345,7 @@ class WatchPartyBot(commands.Bot):
             bot=self,
             vote_service=self.vote_service,
             suggestion_service=self.suggestion_service,
+            permission_service=self.permission_service,
         )
 
         if self.guild_id:
@@ -418,6 +442,24 @@ def parse_wash_crew_role_id(role_id_str: Optional[str]) -> Optional[int]:
     except ValueError as e:
         if "invalid literal" in str(e).lower():
             raise ValueError(f"WASH_CREW_ROLE_ID must be a valid integer, got '{role_id_str}'")
+        raise
+
+
+def parse_watch_party_member_role_id(role_id_str: Optional[str]) -> Optional[int]:
+    """Parse and validate WATCH_PARTY_MEMBER_ROLE_ID."""
+    if not role_id_str:
+        return None
+    try:
+        role_id = int(role_id_str)
+        if role_id <= 0:
+            raise ValueError(f"Role ID must be a positive integer, got {role_id}")
+        return role_id
+    except ValueError as exc:
+        if "invalid literal" in str(exc).lower():
+            raise ValueError(
+                "WATCH_PARTY_MEMBER_ROLE_ID must be a valid integer, "
+                f"got '{role_id_str}'"
+            )
         raise
 
 
@@ -878,6 +920,12 @@ async def handle_start_vote_completion(
         vote_service=vote_service,
         suggestion_service=suggestion_service,
         candidates=candidates,
+        permission_service=PermissionService(
+            watch_party_member_role_id=parse_watch_party_member_role_id(
+                os.getenv("WATCH_PARTY_MEMBER_ROLE_ID")
+            ),
+            wash_crew_role_id=wash_crew_role_id,
+        ),
     )
     post_text = build_voting_post_text(
         vote_round, candidates, standings=None, standings_error=None
@@ -1064,6 +1112,7 @@ def build_voting_view(
     vote_service: VoteService,
     suggestion_service: SuggestionService,
     candidates: List[WatchItem],
+    permission_service: Optional[PermissionService] = None,
 ) -> VotingView:
     """Build a voting view whose buttons use the shared vote handler."""
 
@@ -1071,7 +1120,11 @@ def build_voting_view(
         interaction: discord.Interaction, suggestion_id: int
     ) -> None:
         await handle_nominee_vote(
-            interaction, vote_service, suggestion_service, suggestion_id
+            interaction,
+            vote_service,
+            suggestion_service,
+            suggestion_id,
+            permission_service=permission_service,
         )
 
     return VotingView(candidates, on_vote=on_vote_click)
@@ -1081,6 +1134,7 @@ def restore_persistent_voting_view(
     bot: object,
     vote_service: VoteService,
     suggestion_service: SuggestionService,
+    permission_service: Optional[PermissionService] = None,
 ) -> bool:
     """Restore button handling for the currently open voting post.
 
@@ -1111,7 +1165,12 @@ def restore_persistent_voting_view(
         )
         return False
 
-    view = build_voting_view(vote_service, suggestion_service, candidates)
+    view = build_voting_view(
+        vote_service,
+        suggestion_service,
+        candidates,
+        permission_service=permission_service,
+    )
     bot.add_view(view, message_id=vote_round.message_id)
     logger.info(
         "Restored interactive voting controls for round %s on message %s",
@@ -1210,6 +1269,7 @@ async def handle_nominee_vote(
     vote_service: VoteService,
     suggestion_service: SuggestionService,
     suggestion_id: int,
+    permission_service: Optional[PermissionService] = None,
 ) -> None:
     """Core logic for a nominee button click.
 
@@ -1224,6 +1284,12 @@ async def handle_nominee_vote(
         suggestion_service: Used to re-list nominees when refreshing the post.
         suggestion_id: The nominee this button represents.
     """
+    if permission_service is not None:
+        permission = permission_service.require_watch_party_member(interaction.user)
+        if not permission.allowed:
+            await interaction.response.send_message(permission.message, ephemeral=True)
+            return
+
     message, ephemeral = perform_vote(vote_service, interaction.user.id, suggestion_id)
     await interaction.response.send_message(message, ephemeral=ephemeral)
 
@@ -1725,6 +1791,15 @@ def main() -> None:
         logger.error(f"Configuration error: {e}")
         exit(1)
 
+    watch_party_member_role_id_str = os.getenv("WATCH_PARTY_MEMBER_ROLE_ID")
+    try:
+        watch_party_member_role_id = parse_watch_party_member_role_id(
+            watch_party_member_role_id_str
+        )
+    except ValueError as e:
+        logger.error(f"Configuration error: {e}")
+        exit(1)
+
     default_nominee_count_str = os.getenv("DEFAULT_VOTE_NOMINEE_COUNT")
     try:
         default_nominee_count = parse_default_nominee_count(default_nominee_count_str)
@@ -1736,6 +1811,7 @@ def main() -> None:
         token=token,
         guild_id=guild_id,
         wash_crew_role_id=wash_crew_role_id,
+        watch_party_member_role_id=watch_party_member_role_id,
         default_nominee_count=default_nominee_count,
     )
 

@@ -16,6 +16,7 @@ from watch_party_manager.bot import (
     parse_vote_nominee_count,
     parse_vote_visibility,
     parse_wash_crew_role_id,
+    parse_watch_party_member_role_id,
 )
 from watch_party_manager.domain.vote import (
     DEFAULT_VOTE_CANDIDATE_COUNT,
@@ -184,6 +185,24 @@ class BotHelperTests(unittest.TestCase):
     def test_is_wash_crew_member_false_when_member_has_no_roles(self) -> None:
         member = FakeMember(roles=[])
         self.assertFalse(is_wash_crew_member(member, wash_crew_role_id=222))
+
+    # --- Watch Party member role parsing -----------------------------------
+
+    def test_parse_watch_party_member_role_id_returns_none_when_unset(self) -> None:
+        self.assertIsNone(parse_watch_party_member_role_id(None))
+        self.assertIsNone(parse_watch_party_member_role_id(""))
+
+    def test_parse_watch_party_member_role_id_accepts_positive_integer(self) -> None:
+        self.assertEqual(parse_watch_party_member_role_id("123"), 123)
+
+    def test_parse_watch_party_member_role_id_rejects_non_integer(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            parse_watch_party_member_role_id("abc")
+        self.assertIn("WATCH_PARTY_MEMBER_ROLE_ID", str(ctx.exception))
+
+    def test_parse_watch_party_member_role_id_rejects_non_positive(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_watch_party_member_role_id("0")
 
     # --- Vote visibility parsing --------------------------------------------
 

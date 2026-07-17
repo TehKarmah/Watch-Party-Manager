@@ -36,6 +36,7 @@ from watch_party_manager.services.backup_service import (
     BackupService,
     BackupValidationResult,
 )
+from watch_party_manager.services.permission_service import PermissionCheck, PermissionService
 from watch_party_manager.services.statistics_service import (
     StatisticsService,
     StatisticsSnapshot,
@@ -66,6 +67,8 @@ __all__ = [
     "BackupScheduleSettings",
     "BackupService",
     "BackupValidationResult",
+    "PermissionCheck",
+    "PermissionService",
     "StatisticsService",
     "StatisticsSnapshot",
 ]
