@@ -1,51 +1,46 @@
 # Watch Party Manager
 
-## Specification Table of Contents
+## Documentation Table of Contents
 
-| Property     | Value                     |
-| ------------ | ------------------------- |
-| Document     | Table of Contents         |
-| File         | `00-Table-of-Contents.md` |
-| Version      | 1.0 Draft                 |
-| Status       | Draft                     |
-| Last Updated | July 2026                 |
-| Authors      | TehKarmah & ChatGPT       |
+| Property | Value |
+| --- | --- |
+| Document | Table of Contents |
+| File | `00-Table-of-Contents.md` |
+| Version | 1.0 Draft |
+| Status | Active Draft |
+| Last Updated | July 2026 |
+| Authors | TehKarmah & ChatGPT |
 
----
+## Start Here
 
-## Documents
+- [Current Project State](project_state.md), for the implemented status, current milestone, test baseline, and next work.
+- [README](../README.md), for installation, commands, and a concise project overview.
 
-The Watch Party Manager specification is intended to be read in the following order.
-
-### Foundation
+## Foundation
 
 1. [Product Vision](01-Product-Vision.md)
 2. [Architecture](02-Architecture.md)
 
-These documents explain **why** Watch Party Manager exists and the principles guiding its design.
+These documents explain why Watch Party Manager exists and the principles guiding its design.
 
----
-
-### Functional Specification
+## Functional Specification
 
 3. [Functional Specification](03-Functional-Specification.md)
 4. [Data Model](04-Data-Model.md)
+5. [Implementation Checklist](07-Implementation-Checklist.md)
 
-These documents describe **what** the application does and the information it manages.
+These documents describe intended behavior, information managed by the application, and implementation traceability.
 
----
+## Administration and Development
 
-### Administration & Development
+6. [Administration](05-Administration.md)
+7. [Developer Guide](06-Developer-Guide.md)
 
-5. [Administration](05-Administration.md)
-6. [Developer Guide](06-Developer-Guide.md)
+These documents distinguish currently available administration from planned Version 1 capabilities and explain how the application is developed and tested.
 
-These documents explain **how** Watch Party Manager is configured, maintained, and implemented.
-
----
-
-### Reference
+## Reference
 
 - [Glossary](98-Glossary.md)
 - [Decision Log](99-Decision-Log.md)
 - [Future Ideas](Future-Ideas.md)
+- [Changelog](../CHANGELOG.md)

@@ -2,223 +2,187 @@
 
 ## Developer Guide
 
-| Property     | Value                   |
-| ------------ | ----------------------- |
-| Document     | Developer Guide         |
-| File         | `06-Developer-Guide.md` |
-| Version      | 1.0 Draft               |
-| Status       | Draft                   |
-| Last Updated | July 2026               |
-| Authors      | TehKarmah & ChatGPT     |
+| Property | Value |
+| --- | --- |
+| Document | Developer Guide |
+| File | `06-Developer-Guide.md` |
+| Version | 1.0 Draft |
+| Status | Active Draft |
+| Last Updated | July 2026 |
+| Authors | TehKarmah & ChatGPT |
 
----
+## 1. Technology Stack
 
-> [!NOTE]
-> This document provides technical guidance for developers implementing or contributing to Watch Party Manager. It complements the Product Vision, Architecture, Functional Specification, Data Model, and Administration documents.
+| Component | Current Choice |
+| --- | --- |
+| Language | Python 3.12 or later |
+| Discord library | discord.py 2.4 or later |
+| Configuration | Environment variables loaded through python-dotenv |
+| Persistence | JSON repositories |
+| Tests | Python unittest |
+| Source control | Git and GitHub |
+| Development environment | VS Code |
+| Hosting | Self-hosted |
 
----
+The Version 1 architecture may later introduce a database migration path. Current code and tests must treat JSON persistence as the implemented source of truth.
 
-## Table of Contents
-
-1. Purpose
-2. Development Philosophy
-3. Recommended Technology Stack
-4. Project Structure
-5. Coding Standards
-6. Database Guidelines
-7. Logging
-8. Testing
-9. Versioning
-10. Future Development
-
----
-
-# 1. Purpose
-
-The Developer Guide establishes technical standards for implementing Watch Party Manager.
-
-It does not define application behavior. Functional requirements are documented in the Functional Specification.
-
----
-
-# 2. Development Philosophy
-
-Development should prioritize:
-
-- Readability
-- Maintainability
-- Reliability
-- Modularity
-- Simplicity
-
-Code should be understandable before it is clever.
-
-Whenever practical, business logic should remain separate from Discord-specific functionality.
-
----
-
-# 3. Recommended Technology Stack
-
-Version 1 is designed around the following technologies.
-
-| Component       | Recommendation |
-| --------------- | -------------- |
-| Language        | Python         |
-| Discord Library | discord.py     |
-| Database        | SQLite         |
-| Configuration   | JSON           |
-| Source Control  | Git            |
-| Repository      | GitHub         |
-| Documentation   | Markdown       |
-| Hosting         | Self-hosted    |
-
-Alternative implementations are acceptable provided they satisfy the Functional Specification.
-
----
-
-# 4. Project Structure
-
-The recommended project layout is:
+## 2. Project Structure
 
 ```text
 Watch-Party-Manager/
-│
 ├── docs/
-├── src/
+├── src/watch_party_manager/
+│   ├── domain/
+│   ├── engine/
+│   ├── persistence/
+│   ├── services/
+│   ├── bot.py
+│   ├── start_vote_view.py
+│   └── voting_view.py
 ├── tests/
-├── data/
-├── README.md
-├── LICENSE
 ├── CHANGELOG.md
-└── .gitignore
+├── README.md
+├── env.example
+└── pyproject.toml
 ```
 
-Within `src/`, modules should remain organized by responsibility rather than by command.
+Responsibilities:
 
-Example modules include:
+- `domain/` owns entities, validation, enums, and business invariants.
+- `persistence/` owns serialization and storage details.
+- `services/` coordinates application behavior without depending on Discord interactions.
+- `bot.py` defines command wiring and Discord-facing helpers.
+- View modules own Discord components and callback coordination.
+- `tests/` mirrors implemented behavior with unit and integration-style tests.
 
-- Discord Interface
-- Scheduler
-- Rotation Engine
-- Voting Engine
-- Statistics
-- Database
-- Metadata Providers
+## 3. Architectural Rules
 
----
+Preserve these rules when adding features:
 
-# 5. Coding Standards
+- Keep Discord objects out of domain models and repositories.
+- Keep command callbacks thin and delegate business behavior to services or testable helpers.
+- Keep repository access behind repository classes.
+- Preserve historical records whenever practical.
+- Keep all guild-owned data and operations guild-scoped.
+- Fail closed for privileged actions when authorization is not configured.
+- Reuse existing winner, standings, parsing, and formatting logic rather than duplicating it.
+- Prefer small helpers with one clear responsibility.
+- Keep user-facing dates and times in Discord timestamp format.
 
-Developers should follow these principles.
+## 4. Local Setup
 
-## Naming
+PowerShell:
 
-Names should clearly describe their purpose.
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
+Copy-Item env.example .env
+```
 
-Avoid abbreviations unless they are widely recognized.
+Populate `DISCORD_TOKEN` in `.env`. During command development, setting `DISCORD_GUILD_ID` provides faster synchronization than global commands.
 
----
+Start WASH:
 
-## Comments
+```powershell
+.\.venv\Scripts\python.exe -m watch_party_manager.bot
+```
 
-Comments should explain **why**, not **what**.
+## 5. Testing
 
-Good code should already explain what it is doing.
+Run the complete suite before handing off or committing work:
 
----
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
 
-## Error Handling
+Current baseline:
 
-Unexpected situations should produce meaningful log entries.
+```text
+Ran 569 tests
 
-Errors presented to users should remain friendly and avoid exposing implementation details.
+OK
+```
 
----
+Testing requirements:
 
-## Configuration
+- Add focused tests for every new behavior.
+- Add a regression test for every corrected defect when practical.
+- Test domain validation independently from Discord wiring.
+- Test repository serialization, malformed data behavior, and historical retention.
+- Test guild scoping explicitly for guild-owned features.
+- Test authorization success, failure, and unconfigured fail-closed behavior.
+- Test restart restoration for persistent Discord interactions.
+- Avoid duplicating large setup blocks. Reuse existing test helpers and factories.
 
-Values that communities may reasonably wish to change should be configurable rather than hardcoded.
+A feature is not complete until the full suite passes, not only the new test module.
 
----
+## 6. Discord Development
 
-# 6. Database Guidelines
+Commands are registered in `WatchPartyBot.setup_hook()`.
 
-The database should prioritize:
+When adding or changing a command:
 
-- Data integrity
-- Historical accuracy
-- Easy backup
-- Easy migration
+1. Put reusable behavior in a service or standalone helper.
+2. Keep the interaction callback responsible for Discord input and output only.
+3. Use ephemeral responses for private errors or administrative setup interactions when appropriate.
+4. Confirm WASH Crew authorization for restricted commands.
+5. Update `/help`, README command lists, administration documentation, and tests.
+6. Run a focused Discord smoke test after automated tests pass.
 
-Destructive updates should be avoided whenever practical.
+Development guild synchronization is recommended during active work. Global synchronization can take longer to propagate.
 
-Historical records should remain available for reporting.
+## 7. Persistence
 
----
+Current repositories store JSON data for suggestion databases, suggestions, and votes.
 
-# 7. Logging
+Repository work should:
 
-Logging should support both troubleshooting and auditing.
+- Validate loaded structures.
+- Preserve stable identifiers.
+- Avoid destructive history loss.
+- Write deterministic, readable JSON where practical.
+- Treat missing files as an empty initial state when the repository contract permits it.
+- Surface malformed data with useful diagnostic context.
+- Preserve backward compatibility or provide an explicit migration when formats change.
 
-Logs should include:
+Never let Discord-specific values leak into repository APIs unless they are stored as plain identifiers.
 
-- Startup
-- Shutdown
-- Errors
+## 8. Logging and Diagnostics
+
+Use the configured module logger rather than `print()`.
+
+Log meaningful operational events such as:
+
+- Startup and command synchronization
 - Administrative actions
-- Scheduling events
-- Vote processing
-- Backup operations
+- Suggestion and vote lifecycle changes
+- Persistence or integrity failures
+- Restoration of persistent Discord views
+- Unexpected exceptions
 
-Logging verbosity should be configurable.
+Do not log bot tokens or other secrets. User-facing errors should be clear without exposing internal stack details.
 
----
+## 9. Versioning and Documentation
 
-# 8. Testing
+The package version is defined in both `pyproject.toml` and `src/watch_party_manager/version.py`. Keep them synchronized.
 
-Automated testing should verify:
+Before a milestone handoff:
 
-- Rotation logic
-- Voting logic
-- Scheduling
-- Statistics
-- Import and export
-- Backup and restore
+- Update `CHANGELOG.md`.
+- Update `docs/project_state.md`.
+- Update command documentation when behavior changes.
+- Confirm the implementation checklist reflects completed foundations.
+- Keep planned functionality clearly separated from implemented functionality.
 
-Regression tests should accompany bug fixes whenever practical.
+## 10. Current Development Priorities
 
----
+The active sequence is:
 
-# 9. Versioning
+1. Complete automatic voting lifecycle behavior.
+2. Record winners in watch history and Watch Item Journey.
+3. Build scheduling and Discord Event foundations.
+4. Add setup and broader configuration workflows.
+5. Add backup, restore, import, export, and migration support.
 
-Watch Party Manager follows semantic versioning.
-
-Examples:
-
-- 1.0.0
-- 1.1.0
-- 1.1.1
-- 2.0.0
-
-Major versions may introduce breaking changes.
-
-Minor versions introduce new functionality without breaking compatibility.
-
-Patch versions address defects.
-
----
-
-# 10. Future Development
-
-Future contributions should align with the Product Vision and Design Principles.
-
-Before introducing significant new functionality, contributors should consider:
-
-- Does this support the mission of Watch Party Manager?
-- Is the feature broadly useful?
-- Can it be configured?
-- Does it preserve existing community data?
-- Does it maintain accessibility?
-- Does it integrate cleanly with the existing architecture?
-
-Features that significantly expand the scope of the application should be documented in `Future-Ideas.md` before implementation.
+See `project_state.md` for the authoritative current milestone and known limitations.
