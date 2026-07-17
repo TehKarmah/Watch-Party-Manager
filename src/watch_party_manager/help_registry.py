@@ -55,7 +55,7 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     CommandHelp("/help", "Show the WASH command guide and key definitions.", "General"),
     CommandHelp("/ping", "Check WASH latency and uptime.", "General"),
     CommandHelp(
-        "/version", "Show the current WASH version and runtime summary.", "General"
+        "/about", "Learn about WASH, its features, roles, version, and project.", "General"
     ),
     CommandHelp("/stats", "Show watch-party activity statistics.", "General"),
     CommandHelp("/add", "Add a watch item by title or IMDb link.", "Watch Items"),

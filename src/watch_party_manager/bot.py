@@ -28,6 +28,7 @@ from watch_party_manager.domain.vote import (
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.logger_config import configure_logging
+from watch_party_manager.services.about_service import build_about_content
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
@@ -36,7 +37,7 @@ from watch_party_manager.start_vote_view import (
     CustomizeVoteModal,
     StartVoteChoiceView,
 )
-from watch_party_manager.version import __version__
+from watch_party_manager.version import __build__, __version__
 from watch_party_manager.voting_view import VotingView
 
 logger = logging.getLogger(__name__)
@@ -77,21 +78,20 @@ class WatchPartyBot(commands.Bot):
                 )
             )
 
-        @self.tree.command(name="version")
-        async def version(interaction: discord.Interaction) -> None:
-            database_count = (
-                len(self.suggestion_service.list_databases(interaction.guild_id))
-                if interaction.guild_id is not None
-                else len(self.suggestion_service.list_databases())
+        @self.tree.command(name="about")
+        async def about(interaction: discord.Interaction) -> None:
+            content = build_about_content(__version__, __build__)
+            embed = discord.Embed(
+                title=content.title,
+                description=content.description,
             )
-            await interaction.response.send_message(
-                build_version_text(
-                    __version__,
-                    database_count=database_count,
-                    watch_item_count=self.suggestion_service.suggestion_count(),
-                    has_open_round=self.vote_service.get_open_round() is not None,
+            for field in content.fields:
+                embed.add_field(
+                    name=field.name,
+                    value=field.value,
+                    inline=field.inline,
                 )
-            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
         @self.tree.command(name="help")
         async def help_command(interaction: discord.Interaction) -> None:
@@ -1564,7 +1564,7 @@ def build_help_text(show_admin: bool = True) -> str:
         "**General**\n"
         "`/help` - Show this command guide.\n"
         "`/ping` - Check WASH latency and uptime.\n"
-        "`/version` - Show the current WASH version and runtime summary.\n"
+        "`/about` - Learn about WASH, its features, roles, version, and project.\n"
         "`/stats` - Show watch-party activity statistics.",
         "**Watch Items**\n"
         "`/add` - Add a watch item by title or IMDb link.\n"
@@ -1611,22 +1611,6 @@ def build_ping_text(latency_ms: float, started_at: datetime, now: datetime) -> s
 
     return f"Pong.\nGateway latency: {round(latency_ms)} ms\nUptime: {' '.join(uptime_parts)}"
 
-
-def build_version_text(
-    version: str,
-    database_count: Optional[int] = None,
-    watch_item_count: Optional[int] = None,
-    has_open_round: Optional[bool] = None,
-) -> str:
-    """Build the /version response with optional runtime information."""
-    lines = [f"Watch Party Manager version {version}"]
-    if database_count is not None:
-        lines.append(f"Suggestion databases: {database_count}")
-    if watch_item_count is not None:
-        lines.append(f"Watch items: {watch_item_count}")
-    if has_open_round is not None:
-        lines.append(f"Open voting round: {'Yes' if has_open_round else 'No'}")
-    return "\n".join(lines)
 
 
 def main() -> None:

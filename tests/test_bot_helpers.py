@@ -9,7 +9,6 @@ from watch_party_manager.bot import (
     build_help_text,
     build_ping_text,
     format_datetime_for_display,
-    build_version_text,
     is_wash_crew_member,
     parse_default_nominee_count,
     parse_guild_id,
@@ -51,7 +50,7 @@ class BotHelperTests(unittest.TestCase):
         expected_commands = (
             "/help",
             "/ping",
-            "/version",
+            "/about",
             "/stats",
             "/add",
             "/list",
@@ -86,26 +85,6 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("/database_remove", help_text)
         self.assertNotIn("/diagnostics", help_text)
         self.assertIn("/stats", help_text)
-
-    def test_version_text_uses_the_provided_version(self) -> None:
-        self.assertEqual(build_version_text("0.2.0"), "Watch Party Manager version 0.2.0")
-
-    def test_version_text_can_include_runtime_summary(self) -> None:
-        self.assertEqual(
-            build_version_text(
-                "0.2.0", database_count=2, watch_item_count=27, has_open_round=True
-            ),
-            "Watch Party Manager version 0.2.0\n"
-            "Suggestion databases: 2\n"
-            "Watch items: 27\n"
-            "Open voting round: Yes",
-        )
-
-    def test_version_text_reports_no_open_round(self) -> None:
-        self.assertIn(
-            "Open voting round: No",
-            build_version_text("0.2.0", has_open_round=False),
-        )
 
     def test_ping_text_includes_latency_and_uptime(self) -> None:
         started_at = datetime(2026, 7, 16, 10, 0, tzinfo=timezone.utc)
