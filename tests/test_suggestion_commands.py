@@ -169,7 +169,7 @@ class SuggestionCommandTests(unittest.TestCase):
         self.assertIn("- The Matrix", message)
         self.assertNotIn("[1]", message)
 
-    def test_list_links_the_watch_item_name_to_its_suggestion_post(self) -> None:
+    def test_list_displays_a_separate_discord_post_link(self) -> None:
         created = self.suggestion_service.create_database(
             "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
         )
@@ -187,8 +187,8 @@ class SuggestionCommandTests(unittest.TestCase):
 
         self.assertIsNotNone(result.watch_item)
         self.assertIn(
-            f"The Matrix ([post](https://discord.com/channels/{GUILD_ID}/"
-            f"{CONFIGURED_CHANNEL_ID}/555))",
+            f"The Matrix | [Discord post](https://discord.com/channels/{GUILD_ID}/"
+            f"{CONFIGURED_CHANNEL_ID}/555)",
             message,
         )
 

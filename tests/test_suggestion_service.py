@@ -144,7 +144,7 @@ class SuggestionServiceTests(unittest.TestCase):
         self.assertEqual(
             message,
             "Current watch items:\n"
-            "- The Matrix ([post](https://discord.com/channels/100/200/300))",
+            "- The Matrix | [Discord post](https://discord.com/channels/100/200/300)",
         )
 
     def test_format_suggestion_list_omits_suggestion_ids(self) -> None:
