@@ -230,9 +230,9 @@ class SuggestionService:
         Returns:
             A message stating the list is empty, or a simple list of watch
             item titles in the order they were added. When the suggestion
-            has a complete Discord message reference, the title links to
-            the original suggestion post. IMDb and other metadata are
-            intentionally omitted from this view.
+            has a complete Discord message reference, a compact ``post`` link
+            appears beside the title. IMDb and other metadata are intentionally
+            omitted from this view.
         """
         if database_id is not None:
             watch_items = [
@@ -257,7 +257,7 @@ class SuggestionService:
                     "https://discord.com/channels/"
                     f"{watch_item.guild_id}/{watch_item.channel_id}/{watch_item.message_id}"
                 )
-                lines.append(f"- [{watch_item.title}]({message_url})")
+                lines.append(f"- {watch_item.title} ([post]({message_url}))")
             else:
                 lines.append(f"- {watch_item.title}")
         return "\n".join(lines)

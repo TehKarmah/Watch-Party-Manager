@@ -187,8 +187,8 @@ class SuggestionCommandTests(unittest.TestCase):
 
         self.assertIsNotNone(result.watch_item)
         self.assertIn(
-            f"[The Matrix](https://discord.com/channels/{GUILD_ID}/"
-            f"{CONFIGURED_CHANNEL_ID}/555)",
+            f"The Matrix ([post](https://discord.com/channels/{GUILD_ID}/"
+            f"{CONFIGURED_CHANNEL_ID}/555))",
             message,
         )
 
