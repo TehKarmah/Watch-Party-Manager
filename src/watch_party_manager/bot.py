@@ -5,7 +5,7 @@ import logging
 import os
 import platform
 from datetime import datetime, timedelta, timezone
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 import discord
 from discord.ext import commands
@@ -32,6 +32,10 @@ from watch_party_manager.services.nominee_selection_service import NomineeSelect
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
+from watch_party_manager.start_vote_view import (
+    CustomizeVoteModal,
+    StartVoteChoiceView,
+)
 from watch_party_manager.version import __version__
 from watch_party_manager.voting_view import VotingView
 
@@ -178,53 +182,41 @@ class WatchPartyBot(commands.Bot):
                 )
 
         @self.tree.command(name="start_vote")
-        async def start_vote(
-            interaction: discord.Interaction,
-            visibility: Literal["blind", "visible"],
-            duration_days: Optional[int] = None,
-            nominee_count: Optional[int] = None,
-        ) -> None:
-            message, ephemeral = perform_start_vote(
-                vote_service=self.vote_service,
-                suggestion_service=self.suggestion_service,
-                nominee_selection_service=self.nominee_selection_service,
-                user=interaction.user,
-                wash_crew_role_id=self.wash_crew_role_id,
-                visibility_str=visibility,
-                duration_days=duration_days,
-                nominee_count=nominee_count,
-                default_nominee_count=self.default_nominee_count,
-                guild_id=interaction.guild_id,
-                channel_id=interaction.channel_id,
-            )
-            if ephemeral:
-                # Permission failure or validation error -- no round was
-                # created, so there's no voting post to build.
-                await interaction.response.send_message(message, ephemeral=True)
-                return
+        async def start_vote(interaction: discord.Interaction) -> None:
+            async def on_use_defaults(choice_interaction: discord.Interaction) -> None:
+                await handle_start_vote_use_defaults(
+                    choice_interaction,
+                    vote_service=self.vote_service,
+                    suggestion_service=self.suggestion_service,
+                    nominee_selection_service=self.nominee_selection_service,
+                    wash_crew_role_id=self.wash_crew_role_id,
+                    default_nominee_count=self.default_nominee_count,
+                )
 
-            vote_round = self.vote_service.get_open_round()
-            candidates = get_round_candidates(self.suggestion_service, vote_round)
+            async def on_customize(choice_interaction: discord.Interaction) -> None:
+                async def on_modal_submit(
+                    modal_interaction: discord.Interaction,
+                    nominee_count_text: Optional[str],
+                    duration_days_text: Optional[str],
+                    visibility_text: Optional[str],
+                ) -> None:
+                    await handle_customize_vote_submit(
+                        modal_interaction,
+                        vote_service=self.vote_service,
+                        suggestion_service=self.suggestion_service,
+                        nominee_selection_service=self.nominee_selection_service,
+                        wash_crew_role_id=self.wash_crew_role_id,
+                        default_nominee_count=self.default_nominee_count,
+                        nominee_count_text=nominee_count_text,
+                        duration_days_text=duration_days_text,
+                        visibility_text=visibility_text,
+                    )
 
-            view = build_voting_view(
-                vote_service=self.vote_service,
-                suggestion_service=self.suggestion_service,
-                candidates=candidates,
-            )
-            post_text = build_voting_post_text(vote_round, candidates, standings=None, standings_error=None)
-            await interaction.response.send_message(post_text, view=view)
-            sent_message = await interaction.original_response()
-            self.vote_service.attach_message_reference(
-                vote_round.id, interaction.guild_id, interaction.channel_id, sent_message.id
-            )
-            logger.info(
-                "User %s started voting round %s with %s nominee(s) in database %s (guild %s, channel %s)",
-                interaction.user.id,
-                vote_round.id,
-                len(candidates),
-                vote_round.database_id,
-                interaction.guild_id,
-                interaction.channel_id,
+                await choice_interaction.response.send_modal(CustomizeVoteModal(on_modal_submit))
+
+            view = StartVoteChoiceView(on_use_defaults, on_customize)
+            await interaction.response.send_message(
+                "How would you like to start this voting round?", view=view, ephemeral=True
             )
 
         @self.tree.command(name="vote_status")
@@ -408,9 +400,8 @@ def is_wash_crew_member(user: object, wash_crew_role_id: Optional[int]) -> bool:
 def parse_vote_visibility(value: str) -> VoteVisibility:
     """Parse a /start_vote visibility option into a VoteVisibility.
 
-    Discord's UI already restricts the option to "blind"/"visible" via
-    Literal-based choices (see the /start_vote command), so this mainly
-    serves as defensive validation for anything else that calls it.
+    This is the sole place visibility text gets validated. Both the
+    default and customized /start_vote paths rely on this helper.
 
     Args:
         value: The raw text entered for the visibility option, expected to
@@ -769,6 +760,134 @@ def perform_start_vote(
     return build_start_vote_confirmation(
         result.vote_round, len(candidates), pool_count=pool_count
     ), False
+
+
+def parse_optional_int_field(value: Optional[str]) -> Optional[int]:
+    """Parse an optional whole-number field from a Discord modal.
+
+    Blank values use the configured default. Range validation remains in
+    the existing vote parsing helpers called by :func:`perform_start_vote`.
+    """
+    if value is None or not value.strip():
+        return None
+    try:
+        return int(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"'{value.strip()}' is not a whole number.") from exc
+
+
+async def handle_start_vote_completion(
+    interaction: discord.Interaction,
+    vote_service: VoteService,
+    suggestion_service: SuggestionService,
+    nominee_selection_service: Optional[NomineeSelectionService],
+    user: object,
+    wash_crew_role_id: Optional[int],
+    visibility_str: str,
+    duration_days: Optional[int],
+    nominee_count: Optional[int],
+    default_nominee_count: int,
+) -> None:
+    """Create a round and publish its interactive voting post."""
+    message, ephemeral = perform_start_vote(
+        vote_service=vote_service,
+        suggestion_service=suggestion_service,
+        nominee_selection_service=nominee_selection_service,
+        user=user,
+        wash_crew_role_id=wash_crew_role_id,
+        visibility_str=visibility_str,
+        duration_days=duration_days,
+        nominee_count=nominee_count,
+        default_nominee_count=default_nominee_count,
+        guild_id=interaction.guild_id,
+        channel_id=interaction.channel_id,
+    )
+    if ephemeral:
+        await interaction.response.send_message(message, ephemeral=True)
+        return
+
+    vote_round = vote_service.get_open_round()
+    candidates = get_round_candidates(suggestion_service, vote_round)
+    view = build_voting_view(
+        vote_service=vote_service,
+        suggestion_service=suggestion_service,
+        candidates=candidates,
+    )
+    post_text = build_voting_post_text(
+        vote_round, candidates, standings=None, standings_error=None
+    )
+    await interaction.response.send_message(post_text, view=view)
+    sent_message = await interaction.original_response()
+    vote_service.attach_message_reference(
+        vote_round.id, interaction.guild_id, interaction.channel_id, sent_message.id
+    )
+    logger.info(
+        "User %s started voting round %s with %s nominee(s) in database %s "
+        "(guild %s, channel %s)",
+        interaction.user.id,
+        vote_round.id,
+        len(candidates),
+        vote_round.database_id,
+        interaction.guild_id,
+        interaction.channel_id,
+    )
+
+
+async def handle_start_vote_use_defaults(
+    interaction: discord.Interaction,
+    vote_service: VoteService,
+    suggestion_service: SuggestionService,
+    nominee_selection_service: Optional[NomineeSelectionService],
+    wash_crew_role_id: Optional[int],
+    default_nominee_count: int,
+) -> None:
+    """Start a visible round using the configured defaults."""
+    await handle_start_vote_completion(
+        interaction,
+        vote_service,
+        suggestion_service,
+        nominee_selection_service,
+        interaction.user,
+        wash_crew_role_id,
+        visibility_str="visible",
+        duration_days=None,
+        nominee_count=None,
+        default_nominee_count=default_nominee_count,
+    )
+
+
+async def handle_customize_vote_submit(
+    interaction: discord.Interaction,
+    vote_service: VoteService,
+    suggestion_service: SuggestionService,
+    nominee_selection_service: Optional[NomineeSelectionService],
+    wash_crew_role_id: Optional[int],
+    default_nominee_count: int,
+    nominee_count_text: Optional[str],
+    duration_days_text: Optional[str],
+    visibility_text: Optional[str],
+) -> None:
+    """Start a round using optional one-time modal overrides."""
+    try:
+        nominee_count = parse_optional_int_field(nominee_count_text)
+        duration_days = parse_optional_int_field(duration_days_text)
+    except ValueError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+        return
+
+    visibility_str = (visibility_text or "").strip() or "visible"
+    await handle_start_vote_completion(
+        interaction,
+        vote_service,
+        suggestion_service,
+        nominee_selection_service,
+        interaction.user,
+        wash_crew_role_id,
+        visibility_str=visibility_str,
+        duration_days=duration_days,
+        nominee_count=nominee_count,
+        default_nominee_count=default_nominee_count,
+    )
 
 
 def perform_vote_status(vote_service: VoteService, suggestion_service: SuggestionService) -> str:
