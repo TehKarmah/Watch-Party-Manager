@@ -21,6 +21,17 @@ from watch_party_manager.services.suggestion_repair_service import (
     SuggestionRepairReport,
     SuggestionRepairService,
 )
+from watch_party_manager.services.backup_service import (
+    BackupCreationResult,
+    BackupError,
+    BackupFile,
+    BackupKind,
+    BackupManifest,
+    BackupRestoreResult,
+    BackupScheduleSettings,
+    BackupService,
+    BackupValidationResult,
+)
 from watch_party_manager.services.statistics_service import (
     StatisticsService,
     StatisticsSnapshot,
@@ -40,6 +51,15 @@ __all__ = [
     "IntegritySeverity",
     "SuggestionRepairReport",
     "SuggestionRepairService",
+    "BackupCreationResult",
+    "BackupError",
+    "BackupFile",
+    "BackupKind",
+    "BackupManifest",
+    "BackupRestoreResult",
+    "BackupScheduleSettings",
+    "BackupService",
+    "BackupValidationResult",
     "StatisticsService",
     "StatisticsSnapshot",
 ]
