@@ -776,12 +776,29 @@ def parse_optional_int_field(value: Optional[str]) -> Optional[int]:
         raise ValueError(f"'{value.strip()}' is not a whole number.") from exc
 
 
+def parse_start_vote_overrides(
+    nominee_count_text: Optional[str],
+    duration_days_text: Optional[str],
+    visibility_text: Optional[str],
+) -> tuple[Optional[int], Optional[int], str]:
+    """Parse raw customization-modal values into start-vote arguments.
+
+    Blank numeric fields remain ``None`` so :func:`perform_start_vote` can
+    apply configured defaults. Blank visibility uses the established visible
+    default. Range and enum validation remain centralized in
+    :func:`perform_start_vote`.
+    """
+    nominee_count = parse_optional_int_field(nominee_count_text)
+    duration_days = parse_optional_int_field(duration_days_text)
+    visibility = (visibility_text or "").strip() or "visible"
+    return nominee_count, duration_days, visibility
+
+
 async def handle_start_vote_completion(
     interaction: discord.Interaction,
     vote_service: VoteService,
     suggestion_service: SuggestionService,
     nominee_selection_service: Optional[NomineeSelectionService],
-    user: object,
     wash_crew_role_id: Optional[int],
     visibility_str: str,
     duration_days: Optional[int],
@@ -793,7 +810,7 @@ async def handle_start_vote_completion(
         vote_service=vote_service,
         suggestion_service=suggestion_service,
         nominee_selection_service=nominee_selection_service,
-        user=user,
+        user=interaction.user,
         wash_crew_role_id=wash_crew_role_id,
         visibility_str=visibility_str,
         duration_days=duration_days,
@@ -847,7 +864,6 @@ async def handle_start_vote_use_defaults(
         vote_service,
         suggestion_service,
         nominee_selection_service,
-        interaction.user,
         wash_crew_role_id,
         visibility_str="visible",
         duration_days=None,
@@ -869,19 +885,18 @@ async def handle_customize_vote_submit(
 ) -> None:
     """Start a round using optional one-time modal overrides."""
     try:
-        nominee_count = parse_optional_int_field(nominee_count_text)
-        duration_days = parse_optional_int_field(duration_days_text)
+        nominee_count, duration_days, visibility_str = parse_start_vote_overrides(
+            nominee_count_text, duration_days_text, visibility_text
+        )
     except ValueError as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
 
-    visibility_str = (visibility_text or "").strip() or "visible"
     await handle_start_vote_completion(
         interaction,
         vote_service,
         suggestion_service,
         nominee_selection_service,
-        interaction.user,
         wash_crew_role_id,
         visibility_str=visibility_str,
         duration_days=duration_days,

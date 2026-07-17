@@ -19,6 +19,8 @@ OnCustomizeSubmit = Callable[
     [discord.Interaction, Optional[str], Optional[str], Optional[str]], Awaitable[None]
 ]
 
+START_VOTE_CHOICE_TIMEOUT_SECONDS = 180
+
 
 class UseDefaultsButton(discord.ui.Button):
     """Starts a voting round using the configured defaults."""
@@ -29,10 +31,11 @@ class UseDefaultsButton(discord.ui.Button):
             style=discord.ButtonStyle.primary,
             custom_id="wpm_start_vote_use_defaults",
         )
-        self._on_click = on_click
+        self._callback = on_click
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await self._on_click(interaction)
+        """Forward the interaction to the configured defaults handler."""
+        await self._callback(interaction)
 
 
 class CustomizeVoteButton(discord.ui.Button):
@@ -44,10 +47,11 @@ class CustomizeVoteButton(discord.ui.Button):
             style=discord.ButtonStyle.secondary,
             custom_id="wpm_start_vote_customize",
         )
-        self._on_click = on_click
+        self._callback = on_click
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await self._on_click(interaction)
+        """Forward the interaction to the configured customization handler."""
+        await self._callback(interaction)
 
 
 class StartVoteChoiceView(discord.ui.View):
@@ -66,7 +70,7 @@ class StartVoteChoiceView(discord.ui.View):
             on_use_defaults: Called when "Use Defaults" is clicked.
             on_customize: Called when "Customize This Vote" is clicked.
         """
-        super().__init__(timeout=180)
+        super().__init__(timeout=START_VOTE_CHOICE_TIMEOUT_SECONDS)
         self.add_item(UseDefaultsButton(on_use_defaults))
         self.add_item(CustomizeVoteButton(on_customize))
 
@@ -91,7 +95,7 @@ class CustomizeVoteModal(discord.ui.Modal):
                 duration_days_text, visibility_text) once submitted.
         """
         super().__init__(title="Customize This Vote")
-        self._on_submit_callback = on_submit
+        self._submit_callback = on_submit
 
         self.nominee_count_input = discord.ui.TextInput(
             label="Nominee count (2-10)",
@@ -113,7 +117,8 @@ class CustomizeVoteModal(discord.ui.Modal):
         self.add_item(self.visibility_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        await self._on_submit_callback(
+        """Forward the raw optional field values to the configured handler."""
+        await self._submit_callback(
             interaction,
             self.nominee_count_input.value or None,
             self.duration_days_input.value or None,

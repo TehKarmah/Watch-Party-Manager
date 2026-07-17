@@ -10,6 +10,7 @@ from watch_party_manager.bot import (
     handle_customize_vote_submit,
     handle_start_vote_use_defaults,
     parse_optional_int_field,
+    parse_start_vote_overrides,
 )
 from watch_party_manager.domain.vote import VoteVisibility
 from watch_party_manager.persistence.suggestion_database_repository import (
@@ -21,6 +22,7 @@ from watch_party_manager.services.nominee_selection_service import NomineeSelect
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import VoteService
 from watch_party_manager.start_vote_view import (
+    START_VOTE_CHOICE_TIMEOUT_SECONDS,
     CustomizeVoteModal,
     StartVoteChoiceView,
 )
@@ -430,6 +432,20 @@ class StartVoteChoiceViewTests(unittest.IsolatedAsyncioTestCase):
         view = StartVoteChoiceView(self._noop, self._noop)
         self.assertEqual(len(view.children), 2)
 
+    async def test_choice_view_uses_the_expected_timeout(self) -> None:
+        view = StartVoteChoiceView(self._noop, self._noop)
+        self.assertEqual(view.timeout, START_VOTE_CHOICE_TIMEOUT_SECONDS)
+
+    async def test_choice_buttons_have_stable_labels_and_custom_ids(self) -> None:
+        view = StartVoteChoiceView(self._noop, self._noop)
+        self.assertEqual(
+            [(button.label, button.custom_id) for button in view.children],
+            [
+                ("Use Defaults", "wpm_start_vote_use_defaults"),
+                ("Customize This Vote", "wpm_start_vote_customize"),
+            ],
+        )
+
     async def test_use_defaults_button_triggers_its_callback(self) -> None:
         calls = []
 
@@ -480,6 +496,7 @@ class CustomizeVoteModalTests(unittest.TestCase):
         self.assertTrue(all(not field.required for field in modal.children))
 
 
+
 class ParseOptionalIntFieldTests(unittest.TestCase):
     def test_returns_none_for_none(self) -> None:
         self.assertIsNone(parse_optional_int_field(None))
@@ -496,6 +513,24 @@ class ParseOptionalIntFieldTests(unittest.TestCase):
     def test_rejects_non_numeric_text(self) -> None:
         with self.assertRaises(ValueError):
             parse_optional_int_field("abc")
+
+
+class ParseStartVoteOverridesTests(unittest.TestCase):
+    def test_blank_values_resolve_to_defaults(self) -> None:
+        self.assertEqual(
+            parse_start_vote_overrides(None, "   ", ""),
+            (None, None, "visible"),
+        )
+
+    def test_values_are_trimmed_and_parsed(self) -> None:
+        self.assertEqual(
+            parse_start_vote_overrides(" 5 ", " 3 ", " blind "),
+            (5, 3, "blind"),
+        )
+
+    def test_numeric_parse_errors_are_preserved(self) -> None:
+        with self.assertRaisesRegex(ValueError, "not a whole number"):
+            parse_start_vote_overrides("many", None, None)
 
 
 if __name__ == "__main__":
