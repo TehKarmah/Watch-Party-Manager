@@ -5,11 +5,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from watch_party_manager.bot import perform_add_suggestion, perform_list_suggestions
+from watch_party_manager.bot import (
+    perform_add_suggestion,
+    perform_add_suggestion_from_input,
+    perform_list_suggestions,
+)
+from watch_party_manager.domain.watch_item import MetadataProvider
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
+from watch_party_manager.services.suggestion_input_service import SuggestionInputService
+from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService
 from watch_party_manager.services.suggestion_service import SuggestionService
 
 GUILD_ID = 100
@@ -187,7 +194,7 @@ class SuggestionCommandTests(unittest.TestCase):
 
         self.assertIsNotNone(result.watch_item)
         self.assertIn(
-            f"The Matrix | [Discord post](https://discord.com/channels/{GUILD_ID}/"
+            f"The Matrix | [Original suggestion](https://discord.com/channels/{GUILD_ID}/"
             f"{CONFIGURED_CHANNEL_ID}/555)",
             message,
         )
@@ -280,3 +287,81 @@ class SuggestionCommandGuildScopingTests(unittest.TestCase):
 
         self.assertIn("configure a suggestion database", message)
         self.assertNotIn("The Matrix", message)
+
+
+class SuggestionInputCommandIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        repository = JsonSuggestionRepository(Path(self._temp_dir.name) / "suggestions.json")
+        database_repository = JsonSuggestionDatabaseRepository(
+            Path(self._temp_dir.name) / "suggestion_databases.json"
+        )
+        self.suggestion_service = SuggestionService(
+            repository=repository, database_repository=database_repository
+        )
+        self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        metadata_service = ImdbMetadataService(
+            fetch_html=lambda _: '<meta property="og:title" content="Star Wars: Episode IV - A New Hope (1977) - IMDb">'
+        )
+        self.input_service = SuggestionInputService(metadata_service)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    async def test_add_resolves_imdb_link_entered_as_title_before_persisting(self) -> None:
+        message, ephemeral, watch_item = await perform_add_suggestion_from_input(
+            self.input_service,
+            self.suggestion_service,
+            GUILD_ID,
+            CONFIGURED_CHANNEL_ID,
+            "https://www.imdb.com/title/tt0076759/",
+            None,
+        )
+
+        self.assertFalse(ephemeral)
+        self.assertIsNotNone(watch_item)
+        self.assertEqual(watch_item.title, "Star Wars: Episode IV - A New Hope")
+        self.assertEqual(
+            watch_item.metadata_ids[MetadataProvider.IMDB],
+            "https://www.imdb.com/title/tt0076759/",
+        )
+        self.assertIn("Star Wars: Episode IV - A New Hope", message)
+
+    async def test_add_does_not_persist_when_imdb_resolution_fails(self) -> None:
+        failing_input_service = SuggestionInputService(
+            ImdbMetadataService(fetch_html=lambda _: "<html>No title metadata</html>")
+        )
+
+        message, ephemeral, watch_item = await perform_add_suggestion_from_input(
+            failing_input_service,
+            self.suggestion_service,
+            GUILD_ID,
+            CONFIGURED_CHANNEL_ID,
+            "https://www.imdb.com/title/tt0076759/",
+            None,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIsNone(watch_item)
+        self.assertIn("could not determine", message)
+        self.assertEqual(self.suggestion_service.suggestion_count(), 0)
+
+    async def test_add_preserves_a_normal_title_and_separate_imdb_link(self) -> None:
+        _, ephemeral, watch_item = await perform_add_suggestion_from_input(
+            self.input_service,
+            self.suggestion_service,
+            GUILD_ID,
+            CONFIGURED_CHANNEL_ID,
+            "The Matrix",
+            "imdb.com/title/tt0133093",
+        )
+
+        self.assertFalse(ephemeral)
+        self.assertEqual(watch_item.title, "The Matrix")
+        self.assertEqual(
+            watch_item.metadata_ids[MetadataProvider.IMDB],
+            "https://www.imdb.com/title/tt0133093/",
+        )
+

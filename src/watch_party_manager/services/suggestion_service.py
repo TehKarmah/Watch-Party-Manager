@@ -257,7 +257,7 @@ class SuggestionService:
                     "https://discord.com/channels/"
                     f"{watch_item.guild_id}/{watch_item.channel_id}/{watch_item.message_id}"
                 )
-                lines.append(f"- {watch_item.title} | [Discord post]({message_url})")
+                lines.append(f"- {watch_item.title} | [Original suggestion]({message_url})")
             else:
                 lines.append(f"- {watch_item.title}")
         return "\n".join(lines)

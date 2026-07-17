@@ -30,6 +30,7 @@ from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.services.about_service import build_about_content
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
+from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
@@ -62,6 +63,7 @@ class WatchPartyBot(commands.Bot):
         self.default_nominee_count = default_nominee_count
         self.started_at = datetime.now(timezone.utc)
         self.suggestion_service = SuggestionService()
+        self.suggestion_input_service = SuggestionInputService()
         self.vote_service = VoteService(self.suggestion_service)
         self.nominee_selection_service = NomineeSelectionService(self.suggestion_service, self.vote_service)
         self.statistics_service = StatisticsService(self.suggestion_service)
@@ -140,7 +142,8 @@ class WatchPartyBot(commands.Bot):
             title: str,
             imdb_url: Optional[str] = None,
         ) -> None:
-            message, ephemeral, watch_item = perform_add_suggestion(
+            message, ephemeral, watch_item = await perform_add_suggestion_from_input(
+                suggestion_input_service=self.suggestion_input_service,
                 suggestion_service=self.suggestion_service,
                 guild_id=interaction.guild_id,
                 channel_id=interaction.channel_id,
@@ -1181,6 +1184,33 @@ async def handle_nominee_vote(
     vote_round = vote_service.get_open_round()
     if vote_round is not None and vote_round.visibility == VoteVisibility.VISIBLE:
         await refresh_voting_post(interaction, vote_service, suggestion_service, vote_round)
+
+
+async def perform_add_suggestion_from_input(
+    suggestion_input_service: SuggestionInputService,
+    suggestion_service: SuggestionService,
+    guild_id: Optional[int],
+    channel_id: Optional[int],
+    title: str,
+    imdb_url: Optional[str],
+) -> tuple[str, bool, Optional[WatchItem]]:
+    """Resolve user input before adding a suggestion.
+
+    IMDb links entered in the title field are converted to the actual watch
+    item title while preserving the canonical IMDb URL as metadata. Input
+    failures are returned as ephemeral responses and are never persisted.
+    """
+    resolved = await suggestion_input_service.resolve(title, imdb_url)
+    if not resolved.success:
+        return resolved.error_message or "I could not resolve that suggestion.", True, None
+
+    return perform_add_suggestion(
+        suggestion_service=suggestion_service,
+        guild_id=guild_id,
+        channel_id=channel_id,
+        title=resolved.title or title,
+        imdb_url=resolved.imdb_url,
+    )
 
 
 def perform_add_suggestion(
