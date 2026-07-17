@@ -50,6 +50,89 @@ class ImdbMetadataServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.title, "Arrival")
 
+
+    async def test_resolves_title_from_json_ld_metadata(self) -> None:
+        service = ImdbMetadataService(
+            fetch_html=lambda _: (
+                '<script type="application/ld+json">'
+                '{"@context":"https://schema.org","@type":"Movie",'
+                '"name":"Star Wars: Episode IV - A New Hope"}'
+                '</script>'
+            )
+        )
+
+        result = await service.resolve_title("https://www.imdb.com/title/tt0076759/")
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.title, "Star Wars: Episode IV - A New Hope")
+
+    async def test_resolves_title_from_primary_heading(self) -> None:
+        service = ImdbMetadataService(
+            fetch_html=lambda _: '<h1 class="hero__primary-text">The Odyssey</h1>'
+        )
+
+        result = await service.resolve_title("https://www.imdb.com/title/tt33764258/")
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.title, "The Odyssey")
+
+    async def test_open_graph_attributes_may_appear_in_any_order(self) -> None:
+        service = ImdbMetadataService(
+            fetch_html=lambda _: (
+                '<meta data-testid="title" content="Machete (2010) - IMDb" '
+                'class="metadata" property="og:title">'
+            )
+        )
+
+        result = await service.resolve_title("https://www.imdb.com/title/tt0985694/")
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.title, "Machete")
+
+    async def test_uses_suggestion_data_when_page_has_no_title_metadata(self) -> None:
+        requested_urls = []
+
+        def fetch(url: str) -> str:
+            requested_urls.append(url)
+            if "suggestion" in url:
+                return '{"d":[{"id":"tt0076759","l":"Star Wars: Episode IV - A New Hope"}]}'
+            return "<html><body>IMDb challenge page</body></html>"
+
+        result = await ImdbMetadataService(fetch_html=fetch).resolve_title(
+            "https://www.imdb.com/title/tt0076759/"
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.title, "Star Wars: Episode IV - A New Hope")
+        self.assertEqual(len(requested_urls), 2)
+        self.assertIn("tt0076759.json", requested_urls[1])
+
+    async def test_suggestion_fallback_prefers_matching_imdb_id(self) -> None:
+        def fetch(url: str) -> str:
+            if "suggestion" in url:
+                return (
+                    '{"d":['
+                    '{"id":"tt9999999","l":"Wrong Result"},'
+                    '{"id":"tt0076759","l":"A New Hope (1977)"}'
+                    ']}'
+                )
+            return "<html></html>"
+
+        result = await ImdbMetadataService(fetch_html=fetch).resolve_title(
+            "https://www.imdb.com/title/tt0076759/"
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.title, "A New Hope")
+
+    async def test_reports_missing_title_after_all_fallbacks_fail(self) -> None:
+        service = ImdbMetadataService(fetch_html=lambda _: "<html><body>No metadata</body></html>")
+
+        result = await service.resolve_title("https://www.imdb.com/title/tt0133093/")
+
+        self.assertFalse(result.success)
+        self.assertIn("could not determine", result.error_message)
+
     async def test_reports_invalid_url_without_fetching(self) -> None:
         fetched = False
 
