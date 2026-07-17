@@ -144,6 +144,11 @@ class VoteService:
 
         if candidate_suggestion_ids is not None:
             candidate_ids = list(candidate_suggestion_ids)
+            if any(not isinstance(candidate_id, int) or isinstance(candidate_id, bool) or candidate_id <= 0 for candidate_id in candidate_ids):
+                return VoteRoundResult(
+                    success=False,
+                    message="Nominee IDs must be positive integers.",
+                )
             if len(candidate_ids) < MIN_CANDIDATES_FOR_A_ROUND:
                 return VoteRoundResult(
                     success=False,
@@ -231,6 +236,11 @@ class VoteService:
             rounds are never included, since they have no final nominee
             list or determined outcome that's safe to compare against.
         """
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        if database_id is not None and (not isinstance(database_id, int) or isinstance(database_id, bool) or database_id <= 0):
+            raise ValueError("database_id must be a positive integer when provided")
+
         closed_rounds = [
             vote_round
             for vote_round in self._rounds.values()

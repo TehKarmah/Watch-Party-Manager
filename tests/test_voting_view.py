@@ -65,12 +65,33 @@ class VotingViewTests(unittest.IsolatedAsyncioTestCase):
         suggestion_ids = [button.suggestion_id for button in view.children]
         self.assertEqual(suggestion_ids, [1, 2])
 
-    async def test_respects_the_discord_component_limit(self) -> None:
-        candidates = make_candidates(MAX_NOMINEE_BUTTONS + 5)
+    async def test_rejects_more_than_the_discord_component_limit(self) -> None:
+        candidates = make_candidates(MAX_NOMINEE_BUTTONS + 1)
+
+        with self.assertRaisesRegex(ValueError, "at most"):
+            VotingView(candidates, on_vote=self._noop)
+
+    async def test_accepts_any_sequence_of_candidates(self) -> None:
+        candidates = tuple(make_candidates(3))
 
         view = VotingView(candidates, on_vote=self._noop)
 
-        self.assertEqual(len(view.children), MAX_NOMINEE_BUTTONS)
+        self.assertEqual(len(view.children), 3)
+
+    async def test_rejects_candidate_without_a_persisted_id(self) -> None:
+        candidates = [WatchItem(title="Unpersisted", media_type=MediaType.MOVIE)]
+
+        with self.assertRaisesRegex(ValueError, "positive suggestion ID"):
+            VotingView(candidates, on_vote=self._noop)
+
+    async def test_rejects_duplicate_candidate_ids(self) -> None:
+        candidates = [
+            WatchItem(title="First", media_type=MediaType.MOVIE, id=1),
+            WatchItem(title="Second", media_type=MediaType.MOVIE, id=1),
+        ]
+
+        with self.assertRaisesRegex(ValueError, "unique suggestion IDs"):
+            VotingView(candidates, on_vote=self._noop)
 
     async def test_button_click_calls_on_vote_with_the_correct_suggestion_id(self) -> None:
         candidates = make_candidates(2)

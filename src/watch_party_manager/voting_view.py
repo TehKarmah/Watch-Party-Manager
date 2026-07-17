@@ -9,7 +9,8 @@ presentation layer with zero business logic of its own.
 
 from __future__ import annotations
 
-from typing import Awaitable, Callable, List
+from collections.abc import Sequence
+from typing import Awaitable, Callable
 
 import discord
 
@@ -73,21 +74,33 @@ class NomineeButton(discord.ui.Button):
 class VotingView(discord.ui.View):
     """One button per nominee for an open voting round.
 
-    Capped at MAX_NOMINEE_BUTTONS to respect Discord's 25-component limit
-    per view. The configured WASH nominee limit is lower, so truncation is
-    only a defensive safeguard.
+    Validates the nominee collection against Discord's 25-component limit.
+    The configured WASH nominee limit is lower, so exceeding this limit
+    indicates a programming or data error rather than a normal workflow.
 
     timeout=None and stable custom IDs make this a persistent Discord view.
     bot.py re-registers the view for the stored voting message on startup.
     """
 
-    def __init__(self, candidates: List[WatchItem], on_vote: OnVoteCallback) -> None:
+    def __init__(self, candidates: Sequence[WatchItem], on_vote: OnVoteCallback) -> None:
         """Initialize the view with one button per candidate.
 
         Args:
             candidates: The nominees to create buttons for, in order.
             on_vote: Passed through to each NomineeButton.
         """
+        candidate_list = list(candidates)
+        if len(candidate_list) > MAX_NOMINEE_BUTTONS:
+            raise ValueError(
+                f"VotingView supports at most {MAX_NOMINEE_BUTTONS} nominees."
+            )
+
+        candidate_ids = [candidate.id for candidate in candidate_list]
+        if any(candidate_id is None or candidate_id <= 0 for candidate_id in candidate_ids):
+            raise ValueError("Every voting nominee must have a positive suggestion ID.")
+        if len(candidate_ids) != len(set(candidate_ids)):
+            raise ValueError("Voting nominees must have unique suggestion IDs.")
+
         super().__init__(timeout=None)
-        for candidate in candidates[:MAX_NOMINEE_BUTTONS]:
+        for candidate in candidate_list:
             self.add_item(NomineeButton(candidate.id, candidate.title, on_vote))
