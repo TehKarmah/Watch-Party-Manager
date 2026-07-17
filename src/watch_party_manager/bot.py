@@ -29,6 +29,7 @@ from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.services.about_service import build_about_content
+from watch_party_manager.services.help_service import build_help_response
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_service import SuggestionService
@@ -97,8 +98,15 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="help")
         async def help_command(interaction: discord.Interaction) -> None:
-            show_admin = is_wash_crew_member(interaction.user, self.wash_crew_role_id)
-            await interaction.response.send_message(build_help_text(show_admin=show_admin))
+            show_wash_crew = is_wash_crew_member(
+                interaction.user, self.wash_crew_role_id
+            )
+            message, ephemeral = build_help_response(
+                show_wash_crew=show_wash_crew
+            )
+            await interaction.response.send_message(
+                message, ephemeral=ephemeral
+            )
 
         @self.tree.command(name="stats")
         async def stats(interaction: discord.Interaction) -> None:
@@ -1588,34 +1596,13 @@ def perform_diagnostics(
 
 
 def build_help_text(show_admin: bool = True) -> str:
-    """Build the command guide, optionally including WASH Crew commands."""
-    sections = [
-        "**WASH Commands**",
-        "**General**\n"
-        "`/help` - Show this command guide.\n"
-        "`/ping` - Check WASH latency and uptime.\n"
-        "`/about` - Learn about WASH, its features, roles, version, and project.\n"
-        "`/stats` - Show watch-party activity statistics.",
-        "**Watch Items**\n"
-        "`/add` - Add a watch item by title or IMDb link.\n"
-        "`/list` - List watch items in the relevant suggestion database.\n"
-        "`/remove` - Remove a watch item.",
-        "**Voting**\n"
-        "`/start_vote` - Start a new voting round.\n"
-        "`/vote_status` - View the current voting round.\n"
-        "`/vote` - Cast or update your vote.",
-    ]
+    """Build the complete role-aware help response.
 
-    if show_admin:
-        sections.append(
-            "**WASH Crew: Suggestion Databases**\n"
-            "`/database_add` - Create a database for the current channel or thread.\n"
-            "`/database_list` - List databases configured for this server.\n"
-            "`/database_remove` - Deactivate a suggestion database.\n"
-            "`/diagnostics` - Show WASH runtime diagnostics."
-        )
-
-    return "\n\n".join(sections)
+    This compatibility helper now delegates to :mod:`help_service`, keeping
+    command metadata and glossary content out of the bot composition module.
+    """
+    message, _ = build_help_response(show_wash_crew=show_admin)
+    return message
 
 
 def build_ping_text(latency_ms: float, started_at: datetime, now: datetime) -> str:
