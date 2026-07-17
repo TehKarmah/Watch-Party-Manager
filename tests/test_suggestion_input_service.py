@@ -7,7 +7,12 @@ from watch_party_manager.services.suggestion_input_service import SuggestionInpu
 class SuggestionInputServiceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         metadata_service = ImdbMetadataService(
-            fetch_html=lambda _: '<meta property="og:title" content="The Matrix (1999) - IMDb">'
+            api_key="test-key",
+            fetch_json=lambda _: {
+                "Title": "The Matrix",
+                "Year": "1999",
+                "Response": "True",
+            },
         )
         self.service = SuggestionInputService(metadata_service)
 
@@ -29,7 +34,7 @@ class SuggestionInputServiceTests(unittest.IsolatedAsyncioTestCase):
         result = await self.service.resolve("https://www.imdb.com/title/tt0133093/")
 
         self.assertTrue(result.success)
-        self.assertEqual(result.title, "The Matrix")
+        self.assertEqual(result.title, "The Matrix (1999)")
         self.assertEqual(result.imdb_url, "https://www.imdb.com/title/tt0133093/")
 
     async def test_rejects_empty_input(self) -> None:
@@ -44,15 +49,26 @@ class SuggestionInputServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.success)
         self.assertIn("valid IMDb", result.error_message)
 
-    async def test_relays_imdb_resolution_failure(self) -> None:
+    async def test_relays_omdb_resolution_failure(self) -> None:
         service = SuggestionInputService(
-            ImdbMetadataService(fetch_html=lambda _: "<html>No title</html>")
+            ImdbMetadataService(
+                api_key="test-key",
+                fetch_json=lambda _: {"Response": "False", "Error": "Movie not found!"},
+            )
         )
 
         result = await service.resolve("https://www.imdb.com/title/tt0133093/")
 
         self.assertFalse(result.success)
-        self.assertIn("could not determine", result.error_message)
+        self.assertIn("Movie not found", result.error_message)
+
+    async def test_relays_missing_api_key_error(self) -> None:
+        service = SuggestionInputService(ImdbMetadataService(api_key=""))
+
+        result = await service.resolve("https://www.imdb.com/title/tt0133093/")
+
+        self.assertFalse(result.success)
+        self.assertIn("OMDB_API_KEY", result.error_message)
 
     async def test_rejects_two_different_imdb_links(self) -> None:
         result = await self.service.resolve(

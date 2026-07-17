@@ -1,4 +1,7 @@
+import os
 import unittest
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService
 
@@ -20,55 +23,38 @@ class ImdbMetadataServiceTests(unittest.IsolatedAsyncioTestCase):
             "https://www.imdb.com/title/tt0133093/",
         )
 
-    async def test_resolves_title_from_open_graph_metadata(self) -> None:
+    async def test_resolves_title_and_year_from_omdb(self) -> None:
         service = ImdbMetadataService(
-            fetch_html=lambda _: '<meta property="og:title" content="The Matrix (1999) - IMDb">'
-        )
-
-        result = await service.resolve_title("https://www.imdb.com/title/tt0133093/")
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.title, "The Matrix")
-        self.assertEqual(result.imdb_id, "tt0133093")
-        self.assertEqual(result.imdb_url, "https://www.imdb.com/title/tt0133093/")
-
-    async def test_resolves_title_when_content_attribute_comes_first(self) -> None:
-        service = ImdbMetadataService(
-            fetch_html=lambda _: '<meta content="Alien &amp; Aliens (1979) - IMDb" property="og:title">'
-        )
-
-        result = await service.resolve_title("https://www.imdb.com/title/tt0078748/")
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.title, "Alien & Aliens")
-
-    async def test_falls_back_to_html_title(self) -> None:
-        service = ImdbMetadataService(fetch_html=lambda _: "<title>Arrival (2016) - IMDb</title>")
-
-        result = await service.resolve_title("https://www.imdb.com/title/tt2543164/")
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.title, "Arrival")
-
-
-    async def test_resolves_title_from_json_ld_metadata(self) -> None:
-        service = ImdbMetadataService(
-            fetch_html=lambda _: (
-                '<script type="application/ld+json">'
-                '{"@context":"https://schema.org","@type":"Movie",'
-                '"name":"Star Wars: Episode IV - A New Hope"}'
-                '</script>'
-            )
+            api_key="test-key",
+            fetch_json=lambda _: {
+                "Title": "Star Wars: Episode IV - A New Hope",
+                "Year": "1977",
+                "Response": "True",
+            },
         )
 
         result = await service.resolve_title("https://www.imdb.com/title/tt0076759/")
 
         self.assertTrue(result.success)
-        self.assertEqual(result.title, "Star Wars: Episode IV - A New Hope")
+        self.assertEqual(result.title, "Star Wars: Episode IV - A New Hope (1977)")
+        self.assertEqual(result.imdb_id, "tt0076759")
+        self.assertEqual(result.imdb_url, "https://www.imdb.com/title/tt0076759/")
 
-    async def test_resolves_title_from_primary_heading(self) -> None:
+    async def test_accepts_json_text_from_injected_fetcher(self) -> None:
         service = ImdbMetadataService(
-            fetch_html=lambda _: '<h1 class="hero__primary-text">The Odyssey</h1>'
+            api_key="test-key",
+            fetch_json=lambda _: '{"Title":"Machete","Year":"2010","Response":"True"}',
+        )
+
+        result = await service.resolve_title("https://www.imdb.com/title/tt0985694/")
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.title, "Machete (2010)")
+
+    async def test_omits_year_when_omdb_does_not_supply_one(self) -> None:
+        service = ImdbMetadataService(
+            api_key="test-key",
+            fetch_json=lambda _: {"Title": "The Odyssey", "Year": "N/A", "Response": "True"},
         )
 
         result = await service.resolve_title("https://www.imdb.com/title/tt33764258/")
@@ -76,95 +62,103 @@ class ImdbMetadataServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.title, "The Odyssey")
 
-    async def test_open_graph_attributes_may_appear_in_any_order(self) -> None:
-        service = ImdbMetadataService(
-            fetch_html=lambda _: (
-                '<meta data-testid="title" content="Machete (2010) - IMDb" '
-                'class="metadata" property="og:title">'
-            )
-        )
+    async def test_request_uses_imdb_id_and_api_key(self) -> None:
+        requested_urls: list[str] = []
 
-        result = await service.resolve_title("https://www.imdb.com/title/tt0985694/")
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.title, "Machete")
-
-    async def test_uses_suggestion_data_when_page_has_no_title_metadata(self) -> None:
-        requested_urls = []
-
-        def fetch(url: str) -> str:
+        def fetch(url: str):
             requested_urls.append(url)
-            if "suggestion" in url:
-                return '{"d":[{"id":"tt0076759","l":"Star Wars: Episode IV - A New Hope"}]}'
-            return "<html><body>IMDb challenge page</body></html>"
+            return {"Title": "Alien", "Year": "1979", "Response": "True"}
 
-        result = await ImdbMetadataService(fetch_html=fetch).resolve_title(
-            "https://www.imdb.com/title/tt0076759/"
-        )
+        service = ImdbMetadataService(api_key="secret-key", fetch_json=fetch)
+        await service.resolve_title("https://www.imdb.com/title/tt0078748/")
 
-        self.assertTrue(result.success)
-        self.assertEqual(result.title, "Star Wars: Episode IV - A New Hope")
-        self.assertEqual(len(requested_urls), 2)
-        self.assertIn("tt0076759.json", requested_urls[1])
+        query = parse_qs(urlparse(requested_urls[0]).query)
+        self.assertEqual(query["apikey"], ["secret-key"])
+        self.assertEqual(query["i"], ["tt0078748"])
+        self.assertEqual(query["r"], ["json"])
 
-    async def test_suggestion_fallback_prefers_matching_imdb_id(self) -> None:
-        def fetch(url: str) -> str:
-            if "suggestion" in url:
-                return (
-                    '{"d":['
-                    '{"id":"tt9999999","l":"Wrong Result"},'
-                    '{"id":"tt0076759","l":"A New Hope (1977)"}'
-                    ']}'
-                )
-            return "<html></html>"
+    async def test_reads_api_key_from_environment(self) -> None:
+        with patch.dict(os.environ, {"OMDB_API_KEY": "environment-key"}):
+            service = ImdbMetadataService(
+                fetch_json=lambda _: {"Title": "Arrival", "Year": "2016", "Response": "True"}
+            )
 
-        result = await ImdbMetadataService(fetch_html=fetch).resolve_title(
-            "https://www.imdb.com/title/tt0076759/"
-        )
+        result = await service.resolve_title("https://www.imdb.com/title/tt2543164/")
 
         self.assertTrue(result.success)
-        self.assertEqual(result.title, "A New Hope")
+        self.assertEqual(result.title, "Arrival (2016)")
 
-    async def test_reports_missing_title_after_all_fallbacks_fail(self) -> None:
-        service = ImdbMetadataService(fetch_html=lambda _: "<html><body>No metadata</body></html>")
+    async def test_reports_missing_api_key_without_fetching(self) -> None:
+        fetched = False
 
+        def fetch(_: str):
+            nonlocal fetched
+            fetched = True
+            return {}
+
+        service = ImdbMetadataService(api_key="", fetch_json=fetch)
         result = await service.resolve_title("https://www.imdb.com/title/tt0133093/")
 
         self.assertFalse(result.success)
-        self.assertIn("could not determine", result.error_message)
+        self.assertFalse(fetched)
+        self.assertIn("OMDB_API_KEY", result.error_message)
 
-    async def test_reports_invalid_url_without_fetching(self) -> None:
-        fetched = False
+    async def test_reports_omdb_title_not_found(self) -> None:
+        service = ImdbMetadataService(
+            api_key="test-key",
+            fetch_json=lambda _: {"Response": "False", "Error": "Incorrect IMDb ID."},
+        )
 
-        def fetch(_: str) -> str:
-            nonlocal fetched
-            fetched = True
-            return ""
-
-        result = await ImdbMetadataService(fetch_html=fetch).resolve_title("The Matrix")
+        result = await service.resolve_title("https://www.imdb.com/title/tt0000000/")
 
         self.assertFalse(result.success)
-        self.assertFalse(fetched)
-        self.assertIn("valid IMDb", result.error_message)
+        self.assertIn("Incorrect IMDb ID", result.error_message)
 
     async def test_reports_fetch_failure(self) -> None:
-        def fail(_: str) -> str:
+        def fail(_: str):
             raise OSError("offline")
 
-        result = await ImdbMetadataService(fetch_html=fail).resolve_title(
+        result = await ImdbMetadataService(api_key="test-key", fetch_json=fail).resolve_title(
             "https://www.imdb.com/title/tt0133093/"
         )
 
         self.assertFalse(result.success)
         self.assertIn("could not retrieve", result.error_message)
 
-    async def test_reports_missing_title_metadata(self) -> None:
-        service = ImdbMetadataService(fetch_html=lambda _: "<html><body>No metadata</body></html>")
+    async def test_reports_invalid_json_response(self) -> None:
+        service = ImdbMetadataService(api_key="test-key", fetch_json=lambda _: "not-json")
 
         result = await service.resolve_title("https://www.imdb.com/title/tt0133093/")
 
         self.assertFalse(result.success)
-        self.assertIn("could not determine", result.error_message)
+        self.assertIn("unreadable response", result.error_message)
+
+    async def test_reports_missing_title_in_success_response(self) -> None:
+        service = ImdbMetadataService(
+            api_key="test-key",
+            fetch_json=lambda _: {"Title": "N/A", "Year": "1999", "Response": "True"},
+        )
+
+        result = await service.resolve_title("https://www.imdb.com/title/tt0133093/")
+
+        self.assertFalse(result.success)
+        self.assertIn("usable name", result.error_message)
+
+    async def test_reports_invalid_url_without_fetching(self) -> None:
+        fetched = False
+
+        def fetch(_: str):
+            nonlocal fetched
+            fetched = True
+            return {}
+
+        result = await ImdbMetadataService(api_key="test-key", fetch_json=fetch).resolve_title(
+            "The Matrix"
+        )
+
+        self.assertFalse(result.success)
+        self.assertFalse(fetched)
+        self.assertIn("valid IMDb", result.error_message)
 
 
 if __name__ == "__main__":

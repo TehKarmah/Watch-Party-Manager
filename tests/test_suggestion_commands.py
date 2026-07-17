@@ -303,7 +303,12 @@ class SuggestionInputCommandIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
         )
         metadata_service = ImdbMetadataService(
-            fetch_html=lambda _: '<meta property="og:title" content="Star Wars: Episode IV - A New Hope (1977) - IMDb">'
+            api_key="test-key",
+            fetch_json=lambda _: {
+                "Title": "Star Wars: Episode IV - A New Hope",
+                "Year": "1977",
+                "Response": "True",
+            },
         )
         self.input_service = SuggestionInputService(metadata_service)
 
@@ -322,16 +327,19 @@ class SuggestionInputCommandIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(ephemeral)
         self.assertIsNotNone(watch_item)
-        self.assertEqual(watch_item.title, "Star Wars: Episode IV - A New Hope")
+        self.assertEqual(watch_item.title, "Star Wars: Episode IV - A New Hope (1977)")
         self.assertEqual(
             watch_item.metadata_ids[MetadataProvider.IMDB],
             "https://www.imdb.com/title/tt0076759/",
         )
-        self.assertIn("Star Wars: Episode IV - A New Hope", message)
+        self.assertIn("Star Wars: Episode IV - A New Hope (1977)", message)
 
     async def test_add_does_not_persist_when_imdb_resolution_fails(self) -> None:
         failing_input_service = SuggestionInputService(
-            ImdbMetadataService(fetch_html=lambda _: "<html>No title metadata</html>")
+            ImdbMetadataService(
+                api_key="test-key",
+                fetch_json=lambda _: {"Response": "False", "Error": "Movie not found!"},
+            )
         )
 
         message, ephemeral, watch_item = await perform_add_suggestion_from_input(
@@ -345,7 +353,7 @@ class SuggestionInputCommandIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(ephemeral)
         self.assertIsNone(watch_item)
-        self.assertIn("could not determine", message)
+        self.assertIn("Movie not found", message)
         self.assertEqual(self.suggestion_service.suggestion_count(), 0)
 
     async def test_add_preserves_a_normal_title_and_separate_imdb_link(self) -> None:
