@@ -69,33 +69,44 @@ def build_about_content(
         "",
         f"*{TAGLINE}*",
         "",
-        "**Version & Build**",
+        "# Version & Build",
         f"Version: `{clean_version}`",
         f"Build: `{clean_build}`",
     ]
     if latency_ms is not None and started_at is not None and now is not None:
+        rounded_latency = round(latency_ms)
+        if rounded_latency < 250:
+            latency_indicator = "🟢"
+            latency_status = "Good"
+        elif rounded_latency < 500:
+            latency_indicator = "🟡"
+            latency_status = "Slow"
+        else:
+            latency_indicator = "🔴"
+            latency_status = "Poor"
+
         lines.extend((
             "",
-            "**Status**",
-            "Online",
-            f"Gateway latency: {round(latency_ms)} ms",
+            "# Status",
+            "🟢 Online",
+            f"{latency_indicator} Discord latency: {rounded_latency} ms ({latency_status})",
             f"Uptime: {_format_uptime(started_at, now)}",
         ))
     lines.extend((
         "",
-        "**Features**",
-        "• Watch item suggestions",
-        "• Intelligent nominee selection",
-        "• Interactive voting",
-        "• Suggestion databases",
-        "• Watch history",
-        "• Statistics & diagnostics",
+        "# Features",
+        "- Watch item suggestions",
+        "- Intelligent nominee selection",
+        "- Interactive voting",
+        "- Suggestion databases",
+        "- Watch history",
+        "- Statistics & diagnostics",
         "",
-        "**Roles**",
-        "**Watch Party**: Suggest watch items and participate in voting.",
-        "**WASH Crew**: Manage databases, voting, configuration, and administration.",
+        "# Roles",
+        "- **Watch Party**: Suggest watch items and participate in voting.",
+        "- **WASH Crew**: Manage databases, voting, configuration, and administration.",
         "",
-        "**Project**",
+        "# Project",
         f"Created by **TehKarmah** • [GitHub repository]({PROJECT_REPOSITORY_URL})",
     ))
     return AboutContent(

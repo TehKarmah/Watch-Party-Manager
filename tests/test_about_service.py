@@ -24,12 +24,12 @@ class AboutServiceTests(unittest.TestCase):
     def test_about_content_includes_version_build_features_roles_and_project_in_description(self) -> None:
         content = build_about_content("1.2.3", "2026.07.17")
 
-        self.assertIn("**Version & Build**", content.description)
+        self.assertIn("# Version & Build", content.description)
         self.assertIn("`1.2.3`", content.description)
         self.assertIn("`2026.07.17`", content.description)
-        self.assertIn("**Features**", content.description)
+        self.assertIn("# Features", content.description)
         self.assertIn("Statistics & diagnostics", content.description)
-        self.assertIn("**Roles**", content.description)
+        self.assertIn("# Roles", content.description)
         self.assertIn("Watch Party", content.description)
         self.assertIn("WASH Crew", content.description)
         self.assertIn("TehKarmah", content.description)
@@ -50,9 +50,37 @@ class AboutServiceTests(unittest.TestCase):
             started_at=started,
             now=started + timedelta(hours=2, minutes=3, seconds=4),
         )
-        self.assertIn("**Status**", content.description)
-        self.assertIn("Gateway latency: 43 ms", content.description)
+        self.assertIn("# Status", content.description)
+        self.assertIn("🟢 Discord latency: 43 ms (Good)", content.description)
         self.assertIn("Uptime: 2h 3m 4s", content.description)
+
+    def test_about_latency_status_changes_by_threshold(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        started = datetime(2026, 7, 18, 10, 0, tzinfo=timezone.utc)
+        now = started + timedelta(minutes=1)
+
+        good = build_about_content(
+            "1.0.0", "2026.07.17", latency_ms=249, started_at=started, now=now
+        )
+        slow = build_about_content(
+            "1.0.0", "2026.07.17", latency_ms=250, started_at=started, now=now
+        )
+        poor = build_about_content(
+            "1.0.0", "2026.07.17", latency_ms=500, started_at=started, now=now
+        )
+
+        self.assertIn("🟢 Discord latency: 249 ms (Good)", good.description)
+        self.assertIn("🟡 Discord latency: 250 ms (Slow)", slow.description)
+        self.assertIn("🔴 Discord latency: 500 ms (Poor)", poor.description)
+
+    def test_about_headers_have_no_blank_line_after_them(self) -> None:
+        content = build_about_content("1.0.0", "2026.07.17")
+
+        self.assertIn("# Version & Build\nVersion:", content.description)
+        self.assertIn("# Features\n- Watch item suggestions", content.description)
+        self.assertIn("# Roles\n- **Watch Party**:", content.description)
+        self.assertIn("# Project\nCreated by", content.description)
 
     def test_about_content_includes_embed_presentation_metadata(self) -> None:
         content = build_about_content("1.0.0", "2026.07.17")
