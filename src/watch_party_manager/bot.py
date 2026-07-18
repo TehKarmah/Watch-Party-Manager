@@ -103,8 +103,7 @@ class WatchPartyBot(commands.Bot):
                 title=content.title,
                 description=content.description,
                 url=content.url,
-                color=content.color,
-            )
+                    )
             for field in content.fields:
                 embed.add_field(
                     name=field.name,
