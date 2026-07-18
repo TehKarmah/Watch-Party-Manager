@@ -405,13 +405,22 @@ class SuggestionInputCommandIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.suggestion_service.create_database(
             "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
         )
-        metadata_service = ImdbMetadataService(
-            api_key="test-key",
-            fetch_json=lambda _: {
+        def fetch_metadata(url: str) -> dict[str, str]:
+            if "tt0133093" in url:
+                return {
+                    "Title": "The Matrix",
+                    "Year": "1999",
+                    "Response": "True",
+                }
+            return {
                 "Title": "Star Wars: Episode IV - A New Hope",
                 "Year": "1977",
                 "Response": "True",
-            },
+            }
+
+        metadata_service = ImdbMetadataService(
+            api_key="test-key",
+            fetch_json=fetch_metadata,
         )
         self.input_service = SuggestionInputService(metadata_service)
 
@@ -470,7 +479,7 @@ class SuggestionInputCommandIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(ephemeral)
-        self.assertEqual(watch_item.title, "The Matrix")
+        self.assertEqual(watch_item.title, "The Matrix (1999)")
         self.assertEqual(
             watch_item.metadata_ids[MetadataProvider.IMDB],
             "https://www.imdb.com/title/tt0133093/",

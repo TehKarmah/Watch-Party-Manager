@@ -31,6 +31,7 @@ class HelpRegistryTests(unittest.TestCase):
         commands = [entry.name for _, entries in sections for entry in entries]
         self.assertIn("/help", commands)
         self.assertIn("/about", commands)
+        self.assertNotIn("/ping", commands)
         self.assertNotIn("/version", commands)
         self.assertNotIn("/database_add", commands)
         self.assertNotIn("/diagnostics", commands)

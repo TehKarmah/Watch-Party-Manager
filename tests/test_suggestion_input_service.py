@@ -27,7 +27,7 @@ class SuggestionInputServiceTests(unittest.IsolatedAsyncioTestCase):
         result = await self.service.resolve("The Matrix", "imdb.com/title/TT0133093")
 
         self.assertTrue(result.success)
-        self.assertEqual(result.title, "The Matrix")
+        self.assertEqual(result.title, "The Matrix (1999)")
         self.assertEqual(result.imdb_url, "https://www.imdb.com/title/tt0133093/")
 
     async def test_resolves_imdb_link_entered_as_title(self) -> None:

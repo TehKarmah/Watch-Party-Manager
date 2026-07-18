@@ -93,6 +93,13 @@ class SuggestionService:
         guild_id: Optional[int] = None,
         channel_id: Optional[int] = None,
         message_id: Optional[int] = None,
+        runtime_minutes: Optional[int] = None,
+        genres: tuple[str, ...] = (),
+        description: Optional[str] = None,
+        content_rating: Optional[str] = None,
+        director: Optional[str] = None,
+        imdb_rating: Optional[str] = None,
+        poster_url: Optional[str] = None,
     ) -> SuggestionResult:
         """Add a suggestion to the list.
 
@@ -147,6 +154,13 @@ class SuggestionService:
             guild_id=guild_id,
             channel_id=channel_id,
             message_id=message_id,
+            runtime_minutes=runtime_minutes,
+            genres=genres,
+            description=description,
+            content_rating=content_rating,
+            director=director,
+            imdb_rating=imdb_rating,
+            poster_url=poster_url,
         )
         self._next_id += 1
         self._suggestions[suggestion_key] = watch_item

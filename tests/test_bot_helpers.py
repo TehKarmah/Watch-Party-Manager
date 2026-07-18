@@ -50,7 +50,6 @@ class BotHelperTests(unittest.TestCase):
 
         expected_commands = (
             "/help",
-            "/ping",
             "/about",
             "/stats",
             "/add",

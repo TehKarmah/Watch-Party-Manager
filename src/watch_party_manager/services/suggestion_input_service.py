@@ -15,6 +15,13 @@ class ResolvedSuggestionInput:
     success: bool
     title: Optional[str] = None
     imdb_url: Optional[str] = None
+    runtime_minutes: Optional[int] = None
+    genres: tuple[str, ...] = ()
+    plot: Optional[str] = None
+    content_rating: Optional[str] = None
+    director: Optional[str] = None
+    imdb_rating: Optional[str] = None
+    poster_url: Optional[str] = None
     error_message: Optional[str] = None
 
 
@@ -53,10 +60,22 @@ class SuggestionInputService:
                         error_message="That does not look like a valid IMDb title link.",
                     )
                 cleaned_imdb_url = canonical_url
+            if cleaned_imdb_url is None:
+                return ResolvedSuggestionInput(success=True, title=cleaned_title)
+            resolved = await self._imdb_metadata_service.resolve_title(cleaned_imdb_url)
+            if not resolved.success:
+                return ResolvedSuggestionInput(success=False, error_message=resolved.error_message)
             return ResolvedSuggestionInput(
                 success=True,
-                title=cleaned_title,
-                imdb_url=cleaned_imdb_url,
+                title=resolved.title or cleaned_title,
+                imdb_url=resolved.imdb_url,
+                runtime_minutes=resolved.runtime_minutes,
+                genres=resolved.genres,
+                plot=resolved.plot,
+                content_rating=resolved.content_rating,
+                director=resolved.director,
+                imdb_rating=resolved.imdb_rating,
+                poster_url=resolved.poster_url,
             )
 
         if cleaned_imdb_url is not None and cleaned_imdb_url != cleaned_title:
@@ -79,4 +98,11 @@ class SuggestionInputService:
             success=True,
             title=resolved.title,
             imdb_url=resolved.imdb_url,
+            runtime_minutes=resolved.runtime_minutes,
+            genres=resolved.genres,
+            plot=resolved.plot,
+            content_rating=resolved.content_rating,
+            director=resolved.director,
+            imdb_rating=resolved.imdb_rating,
+            poster_url=resolved.poster_url,
         )

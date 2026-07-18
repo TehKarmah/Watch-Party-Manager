@@ -26,7 +26,7 @@ from watch_party_manager.domain.vote import (
     VoteVisibility,
 )
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
-from watch_party_manager.domain.watch_item import WatchItem
+from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem
 from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.services.about_service import build_about_content
 from watch_party_manager.services.help_service import build_help_response
@@ -90,19 +90,15 @@ class WatchPartyBot(commands.Bot):
         self.interactive_voting_restored = False
 
     async def setup_hook(self) -> None:
-        @self.tree.command(name="ping")
-        async def ping(interaction: discord.Interaction) -> None:
-            await interaction.response.send_message(
-                build_ping_text(
-                    latency_ms=self.latency * 1000,
-                    started_at=self.started_at,
-                    now=datetime.now(timezone.utc),
-                )
-            )
-
         @self.tree.command(name="about")
         async def about(interaction: discord.Interaction) -> None:
-            content = build_about_content(__version__, __build__)
+            content = build_about_content(
+                __version__,
+                __build__,
+                latency_ms=self.latency * 1000,
+                started_at=self.started_at,
+                now=datetime.now(timezone.utc),
+            )
             embed = discord.Embed(
                 title=content.title,
                 description=content.description,
@@ -184,7 +180,19 @@ class WatchPartyBot(commands.Bot):
                 title=title,
                 imdb_url=imdb_url,
             )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
+            if watch_item is None:
+                await interaction.response.send_message(message, ephemeral=ephemeral)
+                return
+            resolution = self.suggestion_service.resolve_database_for_channel(
+                interaction.guild_id, interaction.channel_id
+            )
+            database_name = resolution.database.name if resolution.database is not None else "Suggestion Database"
+            embed = build_suggestion_confirmation_embed(
+                watch_item,
+                database_name=database_name,
+                suggested_by=getattr(interaction.user, "mention", str(interaction.user)),
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
             if watch_item is not None:
                 sent_message = await interaction.original_response()
                 self.suggestion_service.attach_message_reference(watch_item.id, sent_message.id)
@@ -1335,6 +1343,13 @@ async def perform_add_suggestion_from_input(
     channel_id: Optional[int],
     title: str,
     imdb_url: Optional[str],
+    runtime_minutes: Optional[int] = None,
+    genres: tuple[str, ...] = (),
+    description: Optional[str] = None,
+    content_rating: Optional[str] = None,
+    director: Optional[str] = None,
+    imdb_rating: Optional[str] = None,
+    poster_url: Optional[str] = None,
 ) -> tuple[str, bool, Optional[WatchItem]]:
     """Resolve user input before adding a suggestion.
 
@@ -1352,6 +1367,13 @@ async def perform_add_suggestion_from_input(
         channel_id=channel_id,
         title=resolved.title or title,
         imdb_url=resolved.imdb_url,
+        runtime_minutes=resolved.runtime_minutes,
+        genres=resolved.genres,
+        description=resolved.plot,
+        content_rating=resolved.content_rating,
+        director=resolved.director,
+        imdb_rating=resolved.imdb_rating,
+        poster_url=resolved.poster_url,
     )
 
 
@@ -1485,12 +1507,61 @@ async def check_and_announce_expired_vote(
     return True
 
 
+def build_suggestion_confirmation_embed(
+    watch_item: WatchItem,
+    *,
+    database_name: str,
+    suggested_by: str,
+):
+    """Build the public /add confirmation as a compact record-style embed."""
+    imdb_url = watch_item.metadata_ids.get(MetadataProvider.IMDB)
+    description_parts: list[str] = []
+    if watch_item.description:
+        description_parts.append(watch_item.description)
+    if imdb_url:
+        description_parts.append(f"[View on IMDb]({imdb_url})")
+
+    embed = discord.Embed(
+        title=watch_item.title,
+        description="\n\n".join(description_parts) or None,
+        url=imdb_url,
+        color=0xF5C518,
+    )
+    details: list[str] = []
+    if watch_item.genres:
+        details.append(" • ".join(watch_item.genres))
+    if watch_item.runtime_minutes:
+        details.append(f"{watch_item.runtime_minutes} min")
+    if watch_item.content_rating:
+        details.append(f"Rated {watch_item.content_rating}")
+    if details:
+        embed.add_field(name="Details", value=" • ".join(details), inline=False)
+    if watch_item.director:
+        embed.add_field(name="Director", value=watch_item.director, inline=True)
+    if watch_item.imdb_rating:
+        embed.add_field(name="IMDb Rating", value=f"{watch_item.imdb_rating}/10", inline=True)
+    embed.add_field(name="Suggested By", value=suggested_by, inline=True)
+    embed.add_field(name="Database", value=database_name, inline=True)
+    embed.add_field(name="Reference", value=watch_item.reference, inline=True)
+    if watch_item.poster_url:
+        embed.set_thumbnail(url=watch_item.poster_url)
+    embed.set_footer(text="Watch Party Manager • TehKarmah")
+    return embed
+
+
 def perform_add_suggestion(
     suggestion_service: SuggestionService,
     guild_id: Optional[int],
     channel_id: Optional[int],
     title: str,
     imdb_url: Optional[str],
+    runtime_minutes: Optional[int] = None,
+    genres: tuple[str, ...] = (),
+    description: Optional[str] = None,
+    content_rating: Optional[str] = None,
+    director: Optional[str] = None,
+    imdb_rating: Optional[str] = None,
+    poster_url: Optional[str] = None,
 ) -> tuple[str, bool, Optional[WatchItem]]:
     """Core logic for /add, kept free of Discord objects except raw IDs.
 
@@ -1524,6 +1595,13 @@ def perform_add_suggestion(
         database_id=resolution.database.database_id,
         guild_id=guild_id,
         channel_id=channel_id,
+        runtime_minutes=runtime_minutes,
+        genres=genres,
+        description=description,
+        content_rating=content_rating,
+        director=director,
+        imdb_rating=imdb_rating,
+        poster_url=poster_url,
     )
     if not result.success:
         return result.message, False, None

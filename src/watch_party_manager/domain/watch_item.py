@@ -44,6 +44,10 @@ class WatchItem:
     metadata_ids: Dict[MetadataProvider, str] = field(default_factory=dict)
     status: WatchItemStatus = WatchItemStatus.SUGGESTED
     description: Optional[str] = None
+    content_rating: Optional[str] = None
+    director: Optional[str] = None
+    imdb_rating: Optional[str] = None
+    poster_url: Optional[str] = None
     id: Optional[int] = None
     database_id: Optional[int] = None
     guild_id: Optional[int] = None

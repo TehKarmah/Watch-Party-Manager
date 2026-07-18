@@ -21,31 +21,38 @@ class AboutServiceTests(unittest.TestCase):
         self.assertIn("Watch Party Administration & Scheduling Helper", content.description)
         self.assertIn(TAGLINE, content.description)
 
-    def test_about_content_includes_version_and_build(self) -> None:
+    def test_about_content_includes_version_build_features_roles_and_project_in_description(self) -> None:
         content = build_about_content("1.2.3", "2026.07.17")
-        version_field = content.fields[0]
 
-        self.assertEqual(version_field.name, "📦 Version & Build")
-        self.assertIn("`1.2.3`", version_field.value)
-        self.assertIn("`2026.07.17`", version_field.value)
+        self.assertIn("**Version & Build**", content.description)
+        self.assertIn("`1.2.3`", content.description)
+        self.assertIn("`2026.07.17`", content.description)
+        self.assertIn("**Features**", content.description)
+        self.assertIn("Statistics & diagnostics", content.description)
+        self.assertIn("**Roles**", content.description)
+        self.assertIn("Watch Party", content.description)
+        self.assertIn("WASH Crew", content.description)
+        self.assertIn("TehKarmah", content.description)
+        self.assertIn(PROJECT_REPOSITORY_URL, content.description)
 
-    def test_about_content_includes_features_roles_and_project(self) -> None:
+    def test_about_uses_no_embed_fields(self) -> None:
         content = build_about_content("1.0.0", "2026.07.17")
-        fields = {field.name: field.value for field in content.fields}
+        self.assertEqual(content.fields, ())
 
-        self.assertIn("🎬 Features", fields)
-        self.assertIn("👥 Roles", fields)
-        self.assertIn("📁 Project", fields)
-        self.assertIn("Statistics & diagnostics", fields["🎬 Features"])
-        self.assertIn("Watch Party", fields["👥 Roles"])
-        self.assertIn("WASH Crew", fields["👥 Roles"])
-        self.assertIn("TehKarmah", fields["📁 Project"])
-        self.assertIn(PROJECT_REPOSITORY_URL, fields["📁 Project"])
+    def test_about_can_include_latency_and_uptime(self) -> None:
+        from datetime import datetime, timedelta, timezone
 
-    def test_about_fields_are_not_inline(self) -> None:
-        content = build_about_content("1.0.0", "2026.07.17")
-        self.assertTrue(all(not field.inline for field in content.fields))
-
+        started = datetime(2026, 7, 18, 10, 0, tzinfo=timezone.utc)
+        content = build_about_content(
+            "1.0.0",
+            "2026.07.17",
+            latency_ms=42.6,
+            started_at=started,
+            now=started + timedelta(hours=2, minutes=3, seconds=4),
+        )
+        self.assertIn("**Status**", content.description)
+        self.assertIn("Gateway latency: 43 ms", content.description)
+        self.assertIn("Uptime: 2h 3m 4s", content.description)
 
     def test_about_content_includes_embed_presentation_metadata(self) -> None:
         content = build_about_content("1.0.0", "2026.07.17")

@@ -138,6 +138,13 @@ class JsonSuggestionRepository:
             "guild_id": watch_item.guild_id,
             "channel_id": watch_item.channel_id,
             "message_id": watch_item.message_id,
+            "runtime_minutes": watch_item.runtime_minutes,
+            "genres": list(watch_item.genres),
+            "description": watch_item.description,
+            "content_rating": watch_item.content_rating,
+            "director": watch_item.director,
+            "imdb_rating": watch_item.imdb_rating,
+            "poster_url": watch_item.poster_url,
             "journey": JsonSuggestionRepository._serialize_journey(watch_item.journey),
         }
 
@@ -182,6 +189,13 @@ class JsonSuggestionRepository:
             guild_id=entry.get("guild_id"),
             channel_id=entry.get("channel_id"),
             message_id=entry.get("message_id"),
+            runtime_minutes=entry.get("runtime_minutes"),
+            genres=tuple(entry.get("genres", ())),
+            description=entry.get("description"),
+            content_rating=entry.get("content_rating"),
+            director=entry.get("director"),
+            imdb_rating=entry.get("imdb_rating"),
+            poster_url=entry.get("poster_url"),
             journey=JsonSuggestionRepository._deserialize_journey(entry.get("journey")),
         )
 

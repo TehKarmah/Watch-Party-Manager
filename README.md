@@ -32,7 +32,6 @@ Automatic vote completion, winner announcements, and watch-history updates are t
 
 ### Community commands
 
-- `/ping`
 - `/version`
 - `/help`
 - `/add`

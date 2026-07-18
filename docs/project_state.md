@@ -42,7 +42,6 @@ Approximately **45% of the planned Version 1 scope** is implemented. Core sugges
 
 ### Community
 
-- `/ping`
 - `/version`
 - `/help`
 - `/add`

@@ -26,6 +26,13 @@ class ImdbTitleResult:
     imdb_url: Optional[str] = None
     imdb_id: Optional[str] = None
     title: Optional[str] = None
+    runtime_minutes: Optional[int] = None
+    genres: tuple[str, ...] = ()
+    plot: Optional[str] = None
+    content_rating: Optional[str] = None
+    director: Optional[str] = None
+    imdb_rating: Optional[str] = None
+    poster_url: Optional[str] = None
     error_message: Optional[str] = None
 
 
@@ -132,6 +139,13 @@ class ImdbMetadataService:
             imdb_url=canonical_url,
             imdb_id=imdb_id,
             title=title,
+            runtime_minutes=self._parse_runtime(parsed.get("Runtime")),
+            genres=self._parse_genres(parsed.get("Genre")),
+            plot=self._clean_optional(parsed.get("Plot")),
+            content_rating=self._clean_optional(parsed.get("Rated")),
+            director=self._clean_optional(parsed.get("Director")),
+            imdb_rating=self._clean_optional(parsed.get("imdbRating")),
+            poster_url=self._clean_poster(parsed.get("Poster")),
         )
 
     def _build_request_url(self, imdb_id: str) -> str:
@@ -164,6 +178,36 @@ class ImdbMetadataService:
         if clean_year and clean_year.lower() != "n/a":
             return f"{clean_title} ({clean_year})"
         return clean_title
+
+
+    @staticmethod
+    def _clean_optional(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        cleaned = re.sub(r"\s+", " ", value).strip()
+        return None if not cleaned or cleaned.lower() == "n/a" else cleaned
+
+    @classmethod
+    def _parse_runtime(cls, value: Any) -> Optional[int]:
+        cleaned = cls._clean_optional(value)
+        if cleaned is None:
+            return None
+        match = re.search(r"(\d+)", cleaned)
+        return int(match.group(1)) if match else None
+
+    @classmethod
+    def _parse_genres(cls, value: Any) -> tuple[str, ...]:
+        cleaned = cls._clean_optional(value)
+        if cleaned is None:
+            return ()
+        return tuple(part.strip() for part in cleaned.split(",") if part.strip())
+
+    @classmethod
+    def _clean_poster(cls, value: Any) -> Optional[str]:
+        cleaned = cls._clean_optional(value)
+        if cleaned is None or not cleaned.lower().startswith(("http://", "https://")):
+            return None
+        return cleaned
 
     def _fetch_json_from_web(self, url: str) -> dict[str, Any]:
         request = Request(

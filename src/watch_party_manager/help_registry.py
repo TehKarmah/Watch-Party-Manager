@@ -53,9 +53,8 @@ class GlossaryEntry:
 
 COMMAND_HELP: tuple[CommandHelp, ...] = (
     CommandHelp("/help", "Show the WASH command guide and key definitions.", "General"),
-    CommandHelp("/ping", "Check WASH latency and uptime.", "General"),
     CommandHelp(
-        "/about", "Learn about WASH, its features, roles, version, and project.", "General"
+        "/about", "View WASH information, version, latency, uptime, features, and project.", "General"
     ),
     CommandHelp("/stats", "Show watch-party activity statistics.", "General"),
     CommandHelp("/add", "Add a watch item by title or IMDb link.", "Watch Items"),
