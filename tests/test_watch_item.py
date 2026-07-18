@@ -78,6 +78,21 @@ class WatchItemModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             WatchItem(title="Arrival", media_type=MediaType.MOVIE, id=0)
 
+    def test_watch_item_formats_a_stable_padded_reference(self) -> None:
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE, id=7)
+
+        self.assertEqual(item.reference, "#0007")
+
+    def test_watch_item_reference_expands_beyond_four_digits(self) -> None:
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE, id=12345)
+
+        self.assertEqual(item.reference, "#12345")
+
+    def test_watch_item_without_id_has_unassigned_reference(self) -> None:
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE)
+
+        self.assertEqual(item.reference, "Unassigned")
+
     def test_watch_item_database_location_fields_default_to_none(self) -> None:
         item = WatchItem(title="Arrival", media_type=MediaType.MOVIE)
 

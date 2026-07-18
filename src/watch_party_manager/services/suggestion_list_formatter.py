@@ -68,7 +68,7 @@ class SuggestionListFormatter:
         return f"- {item.title} | [Original suggestion]({message_url})"
 
     def _format_crew_item(self, item: WatchItem) -> str:
-        reference = f"#{item.id}" if item.id is not None else "Unassigned"
+        reference = item.reference
         details = [
             f"**{reference} · {item.title}**",
             f"Status: {item.status.value.replace('_', ' ').title()}",

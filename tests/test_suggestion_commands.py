@@ -310,7 +310,7 @@ class SuggestionCommandTests(unittest.TestCase):
         )
 
         self.assertTrue(ephemeral)
-        self.assertIn(f"#{result.watch_item.id}", message)
+        self.assertIn(result.watch_item.reference, message)
         self.assertIn("Status: Suggested", message)
         self.assertIn("IMDb:", message)
 

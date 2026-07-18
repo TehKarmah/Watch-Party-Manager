@@ -60,6 +60,17 @@ class WatchItem:
         self.genres = self._normalize_genres(self.genres)
         self.metadata_ids = self._normalize_metadata_ids(self.metadata_ids)
 
+    @property
+    def reference(self) -> str:
+        """Return the stable user-facing reference for this watch item.
+
+        References are zero-padded to at least four digits for readability,
+        while the underlying persisted ID remains a plain integer.
+        """
+        if self.id is None:
+            return "Unassigned"
+        return f"#{self.id:04d}"
+
     def _validate_title(self) -> None:
         if not self.title:
             raise ValueError("title must not be empty")

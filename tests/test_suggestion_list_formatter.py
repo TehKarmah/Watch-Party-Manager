@@ -70,7 +70,7 @@ class SuggestionListFormatterTests(unittest.TestCase):
 
         message = self.formatter.format([item], self.database, SuggestionListView.CREW)
 
-        self.assertIn("**#12 · Alien (1979)**", message)
+        self.assertIn("**#0012 · Alien (1979)**", message)
         self.assertIn("Status: Suggested", message)
         self.assertIn("Media type: Movie", message)
         self.assertIn("IMDb: https://www.imdb.com/title/tt0078748/", message)
