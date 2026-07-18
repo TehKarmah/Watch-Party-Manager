@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from watch_party_manager.domain.vote import (
@@ -40,6 +40,7 @@ from watch_party_manager.services.suggestion_list_formatter import (
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.suggestion_repair_service import SuggestionRepairService
 from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
+from watch_party_manager.services.vote_completion_service import VoteCompletionService
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
 from watch_party_manager.start_vote_view import (
     CustomizeVoteModal,
@@ -49,6 +50,8 @@ from watch_party_manager.version import __build__, __version__
 from watch_party_manager.voting_view import VotingView
 
 logger = logging.getLogger(__name__)
+
+VOTE_EXPIRATION_CHECK_INTERVAL_SECONDS = 60
 
 
 class WatchPartyBot(commands.Bot):
@@ -83,6 +86,7 @@ class WatchPartyBot(commands.Bot):
         self.vote_service = VoteService(self.suggestion_service)
         self.nominee_selection_service = NomineeSelectionService(self.suggestion_service, self.vote_service)
         self.statistics_service = StatisticsService(self.suggestion_service)
+        self.vote_completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
         self.interactive_voting_restored = False
 
     async def setup_hook(self) -> None:
@@ -341,12 +345,24 @@ class WatchPartyBot(commands.Bot):
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
 
+        # Complete a round that expired while WASH was offline before
+        # attempting to restore its interactive voting controls.
+        try:
+            await check_and_announce_expired_vote(
+                self, self.vote_completion_service, self.suggestion_service
+            )
+        except Exception:
+            logger.exception("Error while checking for an expired voting round during startup")
+
         self.interactive_voting_restored = restore_persistent_voting_view(
             bot=self,
             vote_service=self.vote_service,
             suggestion_service=self.suggestion_service,
             permission_service=self.permission_service,
         )
+
+        if not self.check_expired_votes_task.is_running():
+            self.check_expired_votes_task.start()
 
         if self.guild_id:
             logger.info(f"Synchronizing slash commands to development guild {self.guild_id}...")
@@ -374,6 +390,20 @@ class WatchPartyBot(commands.Bot):
         )
         logger.info("Nominee selector initialized")
         logger.info("Ready")
+
+    @tasks.loop(seconds=VOTE_EXPIRATION_CHECK_INTERVAL_SECONDS)
+    async def check_expired_votes_task(self) -> None:
+        """Periodically close and announce an expired voting round."""
+        try:
+            await check_and_announce_expired_vote(
+                self, self.vote_completion_service, self.suggestion_service
+            )
+        except Exception:
+            logger.exception("Error while checking for expired voting rounds")
+
+    @check_expired_votes_task.before_loop
+    async def before_check_expired_votes_task(self) -> None:
+        await self.wait_until_ready()
 
     async def start_bot(self) -> None:
         if not self.token:
@@ -1323,6 +1353,136 @@ async def perform_add_suggestion_from_input(
         title=resolved.title or title,
         imdb_url=resolved.imdb_url,
     )
+
+
+def build_vote_completion_announcement(
+    vote_round: VoteRound,
+    winning_titles: List[str],
+    standings: List[StandingsEntry],
+    total_votes_cast: int,
+) -> str:
+    """Build the public announcement for a just-completed voting round.
+
+    By the time this is called the round is already closed, so standings
+    are always safe to reveal here -- including for a round that was
+    blind while open. That's the entire mechanism behind "reveal standings
+    only after voting has closed" for blind rounds: this function is only
+    ever invoked post-closure, so there's no separate blind-vs-visible
+    branch needed here the way build_voting_post_text has one for the
+    still-open case.
+
+    Args:
+        vote_round: The round that just completed.
+        winning_titles: The winning suggestion(s)' titles, in the same
+            order as vote_round's winner calculation. Empty if nobody
+            voted.
+        standings: The final vote tally, reused from
+            VoteService.calculate_standings() via format_standings_lines
+            rather than reformatted here.
+        total_votes_cast: How many members voted in this round.
+
+    Returns:
+        The announcement text.
+    """
+    lines = [f"Voting round {vote_round.id} has closed!"]
+
+    if not winning_titles:
+        lines.append("No votes were cast, so no winner could be determined.")
+    elif len(winning_titles) == 1:
+        lines.append(f"Winner: {winning_titles[0]}")
+    else:
+        lines.append("It's a tie! Winners: " + ", ".join(winning_titles))
+
+    lines.append(f"Total votes cast: {total_votes_cast}")
+    lines.extend(format_standings_lines(standings, None))
+
+    return "\n".join(lines)
+
+
+def perform_vote_completion_check(
+    vote_completion_service: VoteCompletionService,
+    suggestion_service: SuggestionService,
+    now: Optional[datetime] = None,
+) -> Optional[tuple[VoteRound, str]]:
+    """Check for and complete an expired voting round, building its announcement.
+
+    This is the Discord-free core reused by both the periodic background
+    check and the one-time startup check (see check_and_announce_expired_vote),
+    so neither duplicates the other's logic.
+
+    Args:
+        vote_completion_service: Used to detect and complete an expired round.
+        suggestion_service: Used to resolve winning suggestion IDs to titles.
+        now: Passed through to VoteCompletionService for deterministic testing.
+
+    Returns:
+        (vote_round, announcement_text) if a round was just completed, or
+        None if there was nothing to do.
+    """
+    result = vote_completion_service.check_and_complete_expired_round(now=now)
+    if result is None:
+        return None
+
+    winning_titles = []
+    for suggestion_id in result.winning_suggestion_ids:
+        watch_item = suggestion_service.get_suggestion(suggestion_id)
+        if watch_item is not None:
+            winning_titles.append(watch_item.title)
+
+    announcement = build_vote_completion_announcement(
+        result.vote_round, winning_titles, result.standings, result.total_votes_cast
+    )
+    return result.vote_round, announcement
+
+
+async def check_and_announce_expired_vote(
+    bot: object,
+    vote_completion_service: VoteCompletionService,
+    suggestion_service: SuggestionService,
+    now: Optional[datetime] = None,
+) -> bool:
+    """Complete an expired round, if any, and post its announcement to Discord.
+
+    Used both by the periodic background task and once during startup
+    (restart safety), so the two paths share this single implementation
+    rather than duplicating the "fetch the channel and send" step.
+
+    Safe to call when nothing is due: perform_vote_completion_check()
+    returns None whenever there's no open round, no deadline, the
+    deadline hasn't passed, or the round was already completed -- in all
+    of those cases this coroutine does nothing and returns False.
+
+    Args:
+        bot: Anything with get_channel(channel_id)/fetch_channel(channel_id)
+            coroutine-or-sync methods returning an object with a
+            send(content) coroutine -- a real discord.Client/Bot satisfies
+            this, and tests can supply a lightweight fake.
+        vote_completion_service: Used to detect and complete an expired round.
+        suggestion_service: Used to resolve winning suggestion IDs to titles.
+        now: Passed through for deterministic testing.
+
+    Returns:
+        True if a round was completed and its announcement was sent,
+        False if there was nothing to do.
+    """
+    outcome = perform_vote_completion_check(vote_completion_service, suggestion_service, now=now)
+    if outcome is None:
+        return False
+
+    vote_round, announcement = outcome
+    if vote_round.channel_id is None:
+        logger.warning(
+            "Voting round %s completed but has no channel reference; announcement not sent",
+            vote_round.id,
+        )
+        return True
+
+    channel = bot.get_channel(vote_round.channel_id)
+    if channel is None:
+        channel = await bot.fetch_channel(vote_round.channel_id)
+    await channel.send(announcement)
+    logger.info("Announced completion of voting round %s", vote_round.id)
+    return True
 
 
 def perform_add_suggestion(

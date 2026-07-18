@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional, Tuple
 
+from watch_party_manager.domain.watch_item_journey import WatchItemJourney
+
 
 class MediaType(str, Enum):
     """Supported media types for the first implementation pass."""
@@ -47,6 +49,7 @@ class WatchItem:
     guild_id: Optional[int] = None
     channel_id: Optional[int] = None
     message_id: Optional[int] = None
+    journey: WatchItemJourney = field(default_factory=WatchItemJourney)
 
     def __post_init__(self) -> None:
         self.title = self.title.strip()

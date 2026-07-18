@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -897,3 +898,65 @@ class SuggestionDatabaseScopingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SuggestionServiceJourneyMethodsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    # --- get_suggestion ---------------------------------------------------
+
+    def test_get_suggestion_returns_the_matching_watch_item(self) -> None:
+        found = self.suggestion_service.get_suggestion(self.matrix.id)
+
+        self.assertIsNotNone(found)
+        self.assertEqual(found.title, "The Matrix")
+
+    def test_get_suggestion_returns_none_for_an_unknown_id(self) -> None:
+        self.assertIsNone(self.suggestion_service.get_suggestion(999))
+
+    # --- record_vote_win ----------------------------------------------------
+
+    def test_record_vote_win_returns_true_and_updates_the_journey(self) -> None:
+        updated = self.suggestion_service.record_vote_win(self.matrix.id, date(2026, 7, 1))
+
+        self.assertTrue(updated)
+        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
+        self.assertEqual(journey.times_won, 1)
+        self.assertEqual(journey.last_won_date, date(2026, 7, 1))
+        self.assertEqual(journey.voting_appearances, 1)
+        self.assertEqual(journey.last_nominated_date, date(2026, 7, 1))
+        self.assertEqual(journey.winning_vote, "The Matrix")
+
+    def test_record_vote_win_returns_false_for_an_unknown_id(self) -> None:
+        updated = self.suggestion_service.record_vote_win(999, date(2026, 7, 1))
+        self.assertFalse(updated)
+
+    def test_record_vote_win_persists_the_update(self) -> None:
+        self.suggestion_service.record_vote_win(self.matrix.id, date(2026, 7, 1))
+
+        root = Path(self._temp_dir.name)
+        reloaded_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        reloaded_journey = reloaded_service.get_suggestion(self.matrix.id).journey
+        self.assertEqual(reloaded_journey.times_won, 1)
+
+    def test_repeated_wins_accumulate(self) -> None:
+        self.suggestion_service.record_vote_win(self.matrix.id, date(2026, 6, 1))
+        self.suggestion_service.record_vote_win(self.matrix.id, date(2026, 7, 1))
+
+        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
+        self.assertEqual(journey.times_won, 2)
+        self.assertEqual(journey.last_won_date, date(2026, 7, 1))
+        self.assertEqual(journey.voting_appearances, 2)

@@ -1,10 +1,12 @@
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 
@@ -210,3 +212,81 @@ class JsonSuggestionRepositoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SuggestionRepositoryJourneyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.file_path = Path(self._temp_dir.name) / "suggestions.json"
+        self.repository = JsonSuggestionRepository(self.file_path)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_journey_round_trips_through_save_and_load(self) -> None:
+        journey = WatchItemJourney(
+            voting_appearances=2,
+            winning_vote="The Matrix",
+            times_won=1,
+            last_nominated_date=date(2026, 7, 1),
+            last_won_date=date(2026, 6, 15),
+        )
+        watch_item = WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=1, journey=journey)
+        self.repository.save([watch_item], next_id=2)
+
+        result = self.repository.load()
+
+        loaded_journey = result.watch_items[0].journey
+        self.assertEqual(loaded_journey.voting_appearances, 2)
+        self.assertEqual(loaded_journey.winning_vote, "The Matrix")
+        self.assertEqual(loaded_journey.times_won, 1)
+        self.assertEqual(loaded_journey.last_nominated_date, date(2026, 7, 1))
+        self.assertEqual(loaded_journey.last_won_date, date(2026, 6, 15))
+
+    def test_a_journey_with_no_wins_or_nominations_round_trips_cleanly(self) -> None:
+        watch_item = WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=1)
+        self.repository.save([watch_item], next_id=2)
+
+        result = self.repository.load()
+
+        loaded_journey = result.watch_items[0].journey
+        self.assertEqual(loaded_journey.times_won, 0)
+        self.assertIsNone(loaded_journey.last_nominated_date)
+        self.assertIsNone(loaded_journey.last_won_date)
+
+    def test_a_suggestion_file_saved_before_journeys_existed_still_loads(self) -> None:
+        # Simulates a suggestions.json written before this milestone,
+        # which has no "journey" key on any entry at all.
+        legacy_json = """
+        {
+          "next_id": 2,
+          "suggestions": [
+            {"id": 1, "title": "The Matrix", "media_type": "movie", "metadata_ids": {}}
+          ]
+        }
+        """
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+
+        loaded_journey = result.watch_items[0].journey
+        self.assertEqual(loaded_journey.voting_appearances, 0)
+        self.assertEqual(loaded_journey.times_won, 0)
+        self.assertIsNone(loaded_journey.last_nominated_date)
+        self.assertIsNone(loaded_journey.last_won_date)
+
+    def test_watch_dates_and_rotation_history_also_round_trip(self) -> None:
+        journey = WatchItemJourney(
+            rotation_history=(1, 2, 3),
+            watch_dates=(date(2026, 1, 1), date(2026, 2, 1)),
+            rewatch_count=1,
+        )
+        watch_item = WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=1, journey=journey)
+        self.repository.save([watch_item], next_id=2)
+
+        result = self.repository.load()
+
+        loaded_journey = result.watch_items[0].journey
+        self.assertEqual(loaded_journey.rotation_history, (1, 2, 3))
+        self.assertEqual(loaded_journey.watch_dates, (date(2026, 1, 1), date(2026, 2, 1)))
+        self.assertEqual(loaded_journey.rewatch_count, 1)

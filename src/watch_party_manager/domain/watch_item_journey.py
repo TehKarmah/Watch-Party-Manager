@@ -16,6 +16,9 @@ class WatchItemJourney:
     winning_vote: Optional[str] = None
     watch_dates: Tuple[date, ...] = field(default_factory=tuple)
     rewatch_count: int = 0
+    times_won: int = 0
+    last_nominated_date: Optional[date] = None
+    last_won_date: Optional[date] = None
 
     def __post_init__(self) -> None:
         self.original_suggester = self._normalize_optional_text(self.original_suggester)
@@ -23,12 +26,18 @@ class WatchItemJourney:
         self._validate_non_negative_counts()
         self.rotation_history = self._normalize_rotations(self.rotation_history)
         self.watch_dates = self._normalize_watch_dates(self.watch_dates)
+        if self.last_nominated_date is not None:
+            self._validate_watch_date(self.last_nominated_date)
+        if self.last_won_date is not None:
+            self._validate_watch_date(self.last_won_date)
 
     def _validate_non_negative_counts(self) -> None:
         if self.voting_appearances < 0:
             raise ValueError("voting_appearances must be greater than or equal to zero")
         if self.rewatch_count < 0:
             raise ValueError("rewatch_count must be greater than or equal to zero")
+        if self.times_won < 0:
+            raise ValueError("times_won must be greater than or equal to zero")
 
     @staticmethod
     def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
@@ -81,11 +90,38 @@ class WatchItemJourney:
         self._validate_rotation_number(rotation_number)
         self.rotation_history = (*self.rotation_history, int(rotation_number))
 
-    def record_vote_appearance(self) -> None:
-        self.voting_appearances += 1
+    def record_vote_appearance(self, nominated_date: Optional[date] = None) -> None:
+        """Record that this item was nominated in a voting round.
 
-    def record_winning_vote(self, winning_vote: str) -> None:
+        Args:
+            nominated_date: The date this nomination happened. Optional so
+                existing callers that only care about the count (not the
+                date) keep working unchanged; last_nominated_date simply
+                stays at its previous value when omitted.
+        """
+        self.voting_appearances += 1
+        if nominated_date is not None:
+            self._validate_watch_date(nominated_date)
+            self.last_nominated_date = nominated_date
+
+    def record_winning_vote(self, winning_vote: str, won_date: Optional[date] = None) -> None:
+        """Record that this item won a voting round.
+
+        Args:
+            winning_vote: Preserved for backward compatibility -- see the
+                field's existing docstring/behavior. Unchanged by this
+                milestone.
+            won_date: The date this win happened. Optional for the same
+                backward-compatibility reason as record_vote_appearance:
+                existing callers that only set winning_vote keep working
+                unchanged, and times_won/last_won_date simply aren't
+                touched when omitted.
+        """
         self.winning_vote = self._normalize_optional_text(winning_vote)
+        if won_date is not None:
+            self._validate_watch_date(won_date)
+            self.times_won += 1
+            self.last_won_date = won_date
 
     def record_watch_date(self, watch_date: date) -> None:
         self._validate_watch_date(watch_date)

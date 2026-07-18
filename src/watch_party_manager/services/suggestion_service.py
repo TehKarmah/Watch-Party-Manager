@@ -187,6 +187,23 @@ class SuggestionService:
         """
         return list(self._suggestions.values())
 
+    def get_suggestion(self, suggestion_id: int) -> Optional[WatchItem]:
+        """Return one suggestion by its stable ID, or None when not found."""
+        for watch_item in self._suggestions.values():
+            if watch_item.id == suggestion_id:
+                return watch_item
+        return None
+
+    def record_vote_win(self, suggestion_id: int, won_date) -> bool:
+        """Record a nomination and win for a winning suggestion, then persist."""
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return False
+        watch_item.journey.record_vote_appearance(won_date)
+        watch_item.journey.record_winning_vote(watch_item.title, won_date)
+        self._save()
+        return True
+
     def get_suggestions_for_database(self, database_id: int) -> list[WatchItem]:
         """Return suggestions belonging to one database, in insertion order."""
         return [

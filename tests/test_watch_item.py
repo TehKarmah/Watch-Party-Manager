@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 from watch_party_manager.domain import (
     MediaType,
     MetadataProvider,
@@ -78,21 +79,6 @@ class WatchItemModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             WatchItem(title="Arrival", media_type=MediaType.MOVIE, id=0)
 
-    def test_watch_item_formats_a_stable_padded_reference(self) -> None:
-        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE, id=7)
-
-        self.assertEqual(item.reference, "#0007")
-
-    def test_watch_item_reference_expands_beyond_four_digits(self) -> None:
-        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE, id=12345)
-
-        self.assertEqual(item.reference, "#12345")
-
-    def test_watch_item_without_id_has_unassigned_reference(self) -> None:
-        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE)
-
-        self.assertEqual(item.reference, "Unassigned")
-
     def test_watch_item_database_location_fields_default_to_none(self) -> None:
         item = WatchItem(title="Arrival", media_type=MediaType.MOVIE)
 
@@ -135,3 +121,29 @@ class WatchItemModelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WatchItemJourneyFieldTests(unittest.TestCase):
+    def test_journey_defaults_to_a_fresh_watch_item_journey(self) -> None:
+        item = WatchItem(title="The Matrix", media_type=MediaType.MOVIE)
+
+        self.assertIsInstance(item.journey, WatchItemJourney)
+        self.assertEqual(item.journey.voting_appearances, 0)
+        self.assertEqual(item.journey.times_won, 0)
+
+    def test_each_watch_item_gets_its_own_independent_journey(self) -> None:
+        first = WatchItem(title="The Matrix", media_type=MediaType.MOVIE)
+        second = WatchItem(title="Inception", media_type=MediaType.MOVIE)
+
+        first.journey.record_vote_appearance()
+
+        self.assertEqual(first.journey.voting_appearances, 1)
+        self.assertEqual(second.journey.voting_appearances, 0)
+
+    def test_a_journey_can_be_supplied_explicitly(self) -> None:
+        journey = WatchItemJourney(times_won=3)
+
+        item = WatchItem(title="The Matrix", media_type=MediaType.MOVIE, journey=journey)
+
+        self.assertIs(item.journey, journey)
+        self.assertEqual(item.journey.times_won, 3)

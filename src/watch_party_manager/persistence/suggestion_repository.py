@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
-from typing import Iterable, Union
+from typing import Iterable, Optional, Union
 
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem
+from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +138,22 @@ class JsonSuggestionRepository:
             "guild_id": watch_item.guild_id,
             "channel_id": watch_item.channel_id,
             "message_id": watch_item.message_id,
+            "journey": JsonSuggestionRepository._serialize_journey(watch_item.journey),
+        }
+
+    @staticmethod
+    def _serialize_journey(journey: WatchItemJourney) -> dict:
+        return {
+            "original_suggester": journey.original_suggester,
+            "suggestion_date": journey.suggestion_date.isoformat() if journey.suggestion_date else None,
+            "rotation_history": list(journey.rotation_history),
+            "voting_appearances": journey.voting_appearances,
+            "winning_vote": journey.winning_vote,
+            "watch_dates": [watch_date.isoformat() for watch_date in journey.watch_dates],
+            "rewatch_count": journey.rewatch_count,
+            "times_won": journey.times_won,
+            "last_nominated_date": journey.last_nominated_date.isoformat() if journey.last_nominated_date else None,
+            "last_won_date": journey.last_won_date.isoformat() if journey.last_won_date else None,
         }
 
     @staticmethod
@@ -164,4 +182,29 @@ class JsonSuggestionRepository:
             guild_id=entry.get("guild_id"),
             channel_id=entry.get("channel_id"),
             message_id=entry.get("message_id"),
+            journey=JsonSuggestionRepository._deserialize_journey(entry.get("journey")),
         )
+
+
+# Journey deserialization is attached as a static method below to preserve
+# compatibility with repositories created before journey metadata existed.
+def _deserialize_journey(entry: Optional[dict]) -> WatchItemJourney:
+    if not entry:
+        return WatchItemJourney()
+    suggestion_date_raw = entry.get("suggestion_date")
+    last_nominated_date_raw = entry.get("last_nominated_date")
+    last_won_date_raw = entry.get("last_won_date")
+    return WatchItemJourney(
+        original_suggester=entry.get("original_suggester"),
+        suggestion_date=date.fromisoformat(suggestion_date_raw) if suggestion_date_raw else None,
+        rotation_history=tuple(entry.get("rotation_history", ())),
+        voting_appearances=entry.get("voting_appearances", 0),
+        winning_vote=entry.get("winning_vote"),
+        watch_dates=tuple(date.fromisoformat(value) for value in entry.get("watch_dates", ())),
+        rewatch_count=entry.get("rewatch_count", 0),
+        times_won=entry.get("times_won", 0),
+        last_nominated_date=date.fromisoformat(last_nominated_date_raw) if last_nominated_date_raw else None,
+        last_won_date=date.fromisoformat(last_won_date_raw) if last_won_date_raw else None,
+    )
+
+JsonSuggestionRepository._deserialize_journey = staticmethod(_deserialize_journey)
