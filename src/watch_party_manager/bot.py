@@ -99,19 +99,12 @@ class WatchPartyBot(commands.Bot):
                 started_at=self.started_at,
                 now=datetime.now(timezone.utc),
             )
-            embed = discord.Embed(
-                title=content.title,
-                description=content.description,
-                url=content.url,
-                    )
-            for field in content.fields:
-                embed.add_field(
-                    name=field.name,
-                    value=field.value,
-                    inline=field.inline,
-                )
-            embed.set_footer(text=content.footer)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            message = (
+                f"**{content.title}**\n\n"
+                f"{content.description}\n\n"
+                f"*{content.footer}*"
+            )
+            await interaction.response.send_message(message, ephemeral=True)
 
         @self.tree.command(name="help")
         async def help_command(interaction: discord.Interaction) -> None:
