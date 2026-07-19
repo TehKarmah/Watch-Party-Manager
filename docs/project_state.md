@@ -138,3 +138,10 @@ PowerShell:
 - Source of truth: GitHub repository
 - Development environment: VS Code
 - Current package version: `0.1.0`
+
+
+### Planning Updates
+
+- Configuration architecture finalized.
+- Guild configuration specification initiated.
+- Implementation pending.

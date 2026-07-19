@@ -214,3 +214,16 @@ Communities should never become dependent upon a hosting provider or implementat
 ### Expected Benefit
 
 Long-term data portability and user trust.
+
+
+## ADR-00X: Configuration Separation
+
+Status: Accepted (Planning)
+
+WASH will separate configuration into:
+- Application Configuration
+- Guild Configuration
+- Member Configuration (future)
+- Runtime Configuration
+
+Only secrets such as `DISCORD_TOKEN` and `OMDB_API_KEY` remain outside persisted configuration.

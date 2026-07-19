@@ -196,3 +196,15 @@ Database      Metadata Services
       │
  Scheduler
 ```
+
+
+## Configuration Architecture
+
+WASH separates configuration into four layers:
+
+- **Application Configuration**: installation-wide settings (authentication, logging, storage, development).
+- **Guild Configuration**: one persisted configuration per Discord server.
+- **Member Configuration (future)**: per-guild member preferences such as birthdays and notification preferences.
+- **Runtime Configuration**: read-only configuration assembled at startup from application configuration, guild configuration, environment variables, and Discord state.
+
+Guild-specific settings must not be stored in `.env`. Secrets remain external to persisted configuration.
