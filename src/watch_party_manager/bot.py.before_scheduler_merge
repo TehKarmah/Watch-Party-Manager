@@ -29,7 +29,6 @@ from watch_party_manager.domain.vote import (
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem
 from watch_party_manager.logger_config import configure_logging
-from watch_party_manager.scheduler import SchedulerHost
 from watch_party_manager.services.about_service import build_about_content
 from watch_party_manager.services.backup_service import (
     BackupError,
@@ -97,9 +96,6 @@ class WatchPartyBot(commands.Bot):
         self.vote_completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
         self.backup_service = BackupService()
         self.interactive_voting_restored = False
-        self.scheduler_host = SchedulerHost.from_json_file(
-            Path("data") / "scheduled_jobs.json"
-        )
 
     async def setup_hook(self) -> None:
         @self.tree.command(name="about")
@@ -422,12 +418,6 @@ class WatchPartyBot(commands.Bot):
             logger.info("Synchronizing slash commands globally...")
             synced = await self.tree.sync()
             logger.info(f"Synchronized {len(synced)} command(s) globally")
-
-        await self.scheduler_host.start()
-
-    async def close(self) -> None:
-        await self.scheduler_host.stop()
-        await super().close()
 
     async def on_ready(self) -> None:
         logger.info(f"Logged in as {self.user}")
