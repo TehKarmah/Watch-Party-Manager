@@ -90,6 +90,18 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
+        "/backup",
+        "Create an immediate backup of WASH's data.",
+        "WASH Crew: Maintenance",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
+        "/restore",
+        "Restore WASH's data from a selected backup.",
+        "WASH Crew: Maintenance",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
         "/diagnostics",
         "Show WASH runtime diagnostics.",
         "WASH Crew: Diagnostics",

@@ -1,3 +1,4 @@
+
 # Guild Configuration Specification
 
 ## Purpose
@@ -26,15 +27,15 @@ configuration_version: 1
 
 ## Field Descriptions
 
-| Field                 | Description                                            |
+| Field | Description |
 | --------------------- | ------------------------------------------------------ |
-| schema_version        | Configuration schema version used for migration.       |
-| guild_id              | Discord Guild ID. Primary key.                         |
-| guild_name            | Cached guild name for diagnostics.                     |
-| setup_completed       | Indicates whether `/setup` has completed successfully. |
-| created_at            | UTC timestamp when configuration was created.          |
-| updated_at            | UTC timestamp of last modification.                    |
-| configuration_version | Incremented whenever configuration changes.            |
+| schema_version | Configuration schema version used for migration. |
+| guild_id | Discord Guild ID. Primary key. |
+| guild_name | Cached guild name for diagnostics. |
+| setup_completed | Indicates whether `/setup` has completed successfully. |
+| created_at | UTC timestamp when configuration was created. |
+| updated_at | UTC timestamp of last modification. |
+| configuration_version | Incremented whenever configuration changes. |
 
 ---
 
@@ -76,38 +77,19 @@ watch_party_role:
 
 #### manual
 
-Membership is managed manually by:
-
-- Server Owner
-- Discord Administrators
-- WASH Crew
+Membership is managed manually by Server Owner, Discord Administrators, or WASH Crew.
 
 #### self_service
 
-Members manage their own membership using:
-
-- `/join`
-- `/leave`
+Members manage their own membership using `/join` and `/leave`.
 
 #### approval
 
-Members request membership.
-
-WASH Crew reviews and approves or denies requests.
-
-Members may still leave if self-leave is enabled.
+Members request membership. WASH Crew reviews and approves or denies requests.
 
 #### discord_managed
 
-Discord manages role assignment using native features such as:
-
-- Server Onboarding
-- Role Links
-- Other Discord role management
-
-WASH validates membership but does not assign the role.
-
----
+Discord manages role assignment. WASH validates membership but does not assign the role.
 
 ## Self Leave
 
@@ -116,8 +98,6 @@ allow_self_leave: true
 ```
 
 Default: **true**
-
-Members should always be able to voluntarily leave the Watch Party without requiring approval.
 
 ---
 
@@ -131,32 +111,71 @@ Permission evaluation order:
 4. Watch Party
 5. Everyone
 
-Each command specifies the minimum permission tier required.
+| Command | Minimum Permission |
+|---|---|
+| `/about` | Everyone |
+| `/help` | Everyone |
+| `/status` | Everyone |
+| `/list` | Everyone |
+| `/join` | Everyone |
+| `/add` | Watch Party |
+| `/vote` | Watch Party |
+| `/leave` | Watch Party |
+| `/start_vote` | WASH Crew |
+| `/config` | WASH Crew |
+| `/setup` | WASH Crew |
 
-Example:
+---
 
-| Command       | Minimum Permission |
-| ------------- | ------------------ |
-| `/about`      | Everyone           |
-| `/help`       | Everyone           |
-| `/status`     | Everyone           |
-| `/list`       | Everyone           |
-| `/join`       | Everyone           |
-| `/add`        | Watch Party        |
-| `/vote`       | Watch Party        |
-| `/leave`      | Watch Party        |
-| `/start_vote` | WASH Crew          |
-| `/config`     | WASH Crew          |
-| `/setup`      | WASH Crew          |
+# Suggestion Databases
+
+Suggestion Databases organize independent collections of watch suggestions.
+
+Each database maintains its own settings while Guild Configuration stores the list of available databases.
+
+```yaml
+suggestion_databases:
+  movies:
+    id: "movies"
+    display_name: "Movies"
+    active: true
+```
+
+Each database has a permanent unique identifier. Display names may change. Inactive databases preserve history but cannot accept suggestions or start voting.
+
+Future database-owned configuration includes:
+
+- Suggestion Channel
+- Voting Channel
+- Watch History
+- Archive Settings
+- Voting Defaults
+- Recommendation Engine Settings
+- Statistics
+- Moderators
+- Genre Preferences
+- Scheduling Defaults
+
+---
+
+# Channels
+
+Guild Configuration stores guild-wide Discord channels that are not owned by an individual suggestion database.
+
+```yaml
+channels:
+  announcements_channel_id: "<discord channel id>"
+  log_channel_id: "<discord channel id>"
+```
+
+Channels dedicated to a specific suggestion database are configured with that database, not here.
+
+Unconfigured optional channels are stored as null.
 
 ---
 
 # Future Sections
 
-The following sections will be added as the design progresses.
-
-- Channels
-- Suggestion Databases
 - Voting Defaults
 - Notifications
 - Feature Flags

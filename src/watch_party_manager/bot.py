@@ -5,6 +5,7 @@ import logging
 import os
 import platform
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import List, Optional
 
 import discord
@@ -29,7 +30,12 @@ from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem
 from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.services.about_service import build_about_content
-from watch_party_manager.services.help_service import build_help_response
+from watch_party_manager.services.backup_service import (
+    BackupError,
+    BackupKind,
+    BackupService,
+)
+from watch_party_manager.services.help_service import HelpResponse, build_help_response
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
@@ -42,6 +48,7 @@ from watch_party_manager.services.suggestion_repair_service import SuggestionRep
 from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
 from watch_party_manager.services.vote_completion_service import VoteCompletionService
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
+from watch_party_manager.restore_confirmation_view import RestoreConfirmationView
 from watch_party_manager.start_vote_view import (
     CustomizeVoteModal,
     StartVoteChoiceView,
@@ -87,6 +94,7 @@ class WatchPartyBot(commands.Bot):
         self.nominee_selection_service = NomineeSelectionService(self.suggestion_service, self.vote_service)
         self.statistics_service = StatisticsService(self.suggestion_service)
         self.vote_completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
+        self.backup_service = BackupService()
         self.interactive_voting_restored = False
 
     async def setup_hook(self) -> None:
@@ -111,12 +119,8 @@ class WatchPartyBot(commands.Bot):
             show_wash_crew = is_wash_crew_member(
                 interaction.user, self.wash_crew_role_id
             )
-            message, ephemeral = build_help_response(
-                show_wash_crew=show_wash_crew
-            )
-            await interaction.response.send_message(
-                message, ephemeral=ephemeral
-            )
+            response = build_help_response(show_wash_crew=show_wash_crew)
+            await send_help_response(interaction, response)
 
         @self.tree.command(name="stats")
         async def stats(interaction: discord.Interaction) -> None:
@@ -236,6 +240,46 @@ class WatchPartyBot(commands.Bot):
                 wash_crew_role_id=self.wash_crew_role_id,
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
+
+        @self.tree.command(name="backup")
+        async def backup(interaction: discord.Interaction) -> None:
+            message, ephemeral = perform_backup(
+                backup_service=self.backup_service,
+                user=interaction.user,
+                wash_crew_role_id=self.wash_crew_role_id,
+            )
+            await interaction.response.send_message(message, ephemeral=ephemeral)
+
+        @self.tree.command(name="restore")
+        async def restore(interaction: discord.Interaction, backup_filename: str) -> None:
+            message, ephemeral, prompt = perform_restore(
+                backup_service=self.backup_service,
+                user=interaction.user,
+                wash_crew_role_id=self.wash_crew_role_id,
+                backup_filename=backup_filename,
+            )
+            if not prompt:
+                await interaction.response.send_message(message, ephemeral=ephemeral)
+                return
+
+            async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+                result_message, result_ephemeral = perform_confirmed_restore(
+                    backup_service=self.backup_service,
+                    user=confirm_interaction.user,
+                    wash_crew_role_id=self.wash_crew_role_id,
+                    backup_filename=backup_filename,
+                )
+                await confirm_interaction.response.send_message(
+                    result_message, ephemeral=result_ephemeral
+                )
+
+            async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+                await cancel_interaction.response.send_message(
+                    "Restore cancelled. No data was changed.", ephemeral=True
+                )
+
+            view = RestoreConfirmationView(on_confirm, on_cancel)
+            await interaction.response.send_message(message, view=view, ephemeral=True)
 
         @self.tree.command(name="remove")
         async def remove_suggestion(interaction: discord.Interaction, title: str) -> None:
@@ -1499,6 +1543,180 @@ async def check_and_announce_expired_vote(
     return True
 
 
+def find_backup_by_filename(backup_service: BackupService, backup_filename: str) -> Optional[Path]:
+    """Find a known backup archive by exact filename, across all backup kinds.
+
+    Args:
+        backup_service: The backup service to list known archives from.
+        backup_filename: The archive's filename (not a full path), as
+            reported by /backup or a prior /restore attempt.
+
+    Returns:
+        The archive's full path if a backup with that filename exists,
+        otherwise None.
+    """
+    for archive_path in backup_service.list_backups():
+        if archive_path.name == backup_filename:
+            return archive_path
+    return None
+
+
+def build_backup_not_found_message(backup_service: BackupService, backup_filename: str) -> str:
+    """Build a clear error message listing valid backup filenames.
+
+    Args:
+        backup_service: The backup service to list known archives from.
+        backup_filename: The filename that couldn't be found.
+
+    Returns:
+        An error message. Lists every currently known backup filename so
+        the member can retry with a valid one, or explains that none
+        exist yet.
+    """
+    available = [archive_path.name for archive_path in backup_service.list_backups()]
+    if not available:
+        return f"No backups are available to restore. (Requested: `{backup_filename}`)"
+    listed = "\n".join(f"- `{name}`" for name in available)
+    return f"No backup named `{backup_filename}` was found. Available backups:\n{listed}"
+
+
+def perform_backup(
+    backup_service: BackupService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+) -> tuple[str, bool]:
+    """Create an immediate manual backup for the WASH Crew-only /backup command.
+
+    Args:
+        backup_service: The backup service to create the archive through.
+        user: The member invoking the command.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if
+            unconfigured.
+
+    Returns:
+        A (message, ephemeral) tuple. Every /backup response is ephemeral
+        -- this is an admin maintenance command. On success, the message
+        includes the created archive's filename.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+        )
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to create a backup.", True
+
+    try:
+        result = backup_service.create_backup(BackupKind.MANUAL)
+    except BackupError as exc:
+        return f"Backup failed: {exc}", True
+
+    return f"Backup created: `{result.archive_path.name}`", True
+
+
+def perform_restore(
+    backup_service: BackupService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    backup_filename: str,
+) -> tuple[str, bool, bool]:
+    """Validate a requested /restore target and build its confirmation prompt.
+
+    This function never restores anything -- it only checks permissions
+    and validates the requested backup, then hands back a message for
+    bot.py to show alongside a confirmation view. The actual restore only
+    happens if that confirmation is accepted (see perform_confirmed_restore).
+
+    Args:
+        backup_service: The backup service to look up and validate the
+            requested archive through.
+        user: The member invoking the command.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if
+            unconfigured.
+        backup_filename: The archive's filename, as reported by /backup or
+            a previous /restore attempt's error message.
+
+    Returns:
+        A (message, ephemeral, needs_confirmation) tuple. needs_confirmation
+        is False whenever there's nothing left to confirm -- a permission
+        failure, an unknown filename, or a backup that fails validation --
+        and True only when a valid backup was found and the member should
+        be shown the confirm/cancel prompt.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+            False,
+        )
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to restore a backup.", True, False
+
+    archive_path = find_backup_by_filename(backup_service, backup_filename)
+    if archive_path is None:
+        return build_backup_not_found_message(backup_service, backup_filename), True, False
+
+    validation = backup_service.validate_backup(archive_path)
+    if not validation.is_valid:
+        detail = "; ".join(validation.errors) or "unknown validation error"
+        return f"That backup failed validation and cannot be restored: {detail}", True, False
+
+    return (
+        f"Restoring from `{archive_path.name}` will overwrite WASH's current data with "
+        "this backup's contents. A safety backup of the current data will be made "
+        "first, but this action cannot be undone from within Discord. Proceed?",
+        True,
+        True,
+    )
+
+
+def perform_confirmed_restore(
+    backup_service: BackupService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    backup_filename: str,
+) -> tuple[str, bool]:
+    """Perform the actual restore after the member has confirmed.
+
+    Re-checks the WASH Crew permission and re-resolves the requested
+    backup rather than trusting anything carried over from the initial
+    /restore call -- the confirmation button click is a separate
+    interaction, and re-validating here keeps this function's own
+    behavior correct regardless of how it's invoked.
+
+    Args:
+        backup_service: The backup service to restore through.
+        user: The member who clicked "Confirm Restore".
+        wash_crew_role_id: The configured WASH Crew role ID, or None if
+            unconfigured.
+        backup_filename: The archive's filename to restore from.
+
+    Returns:
+        A (message, ephemeral) tuple reporting success or any error.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+        )
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to restore a backup.", True
+
+    archive_path = find_backup_by_filename(backup_service, backup_filename)
+    if archive_path is None:
+        return build_backup_not_found_message(backup_service, backup_filename), True
+
+    try:
+        result = backup_service.restore_backup(archive_path)
+    except BackupError as exc:
+        return f"Restore failed: {exc}", True
+
+    return f"Restored {len(result.restored_files)} file(s) from `{archive_path.name}`.", True
+
+
 def build_suggestion_confirmation_embed(
     watch_item: WatchItem,
     *,
@@ -1967,13 +2185,23 @@ def perform_diagnostics(
 
 
 def build_help_text(show_admin: bool = True) -> str:
-    """Build the complete role-aware help response.
+    """Build the complete role-aware help response as a single string.
 
-    This compatibility helper now delegates to :mod:`help_service`, keeping
-    command metadata and glossary content out of the bot composition module.
+    This compatibility helper delegates to :mod:`help_service`. WASH Crew
+    help is sent as two Discord messages, but this helper preserves its
+    original single-string contract for existing callers.
     """
-    message, _ = build_help_response(show_wash_crew=show_admin)
-    return message
+    response = build_help_response(show_wash_crew=show_admin)
+    return "\n\n".join(response.messages)
+
+
+async def send_help_response(interaction: discord.Interaction, response: HelpResponse) -> None:
+    """Send the initial help message followed by any additional messages."""
+    await interaction.response.send_message(
+        response.messages[0], ephemeral=response.ephemeral
+    )
+    for message in response.messages[1:]:
+        await interaction.followup.send(message, ephemeral=response.ephemeral)
 
 
 def build_ping_text(latency_ms: float, started_at: datetime, now: datetime) -> str:
