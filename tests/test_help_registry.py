@@ -6,14 +6,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.help_registry import (
     COMMAND_HELP,
-    GLOSSARY,
     CommandHelp,
-    GlossaryEntry,
     HelpAudience,
     build_command_help_text,
-    build_glossary_text,
     command_sections,
-    find_glossary_entry,
 )
 
 
@@ -67,50 +63,6 @@ class HelpRegistryTests(unittest.TestCase):
         text = build_command_help_text(show_wash_crew=False)
         self.assertNotIn("WASH Crew", text)
         self.assertNotIn("/diagnostics", text)
-
-    def test_glossary_has_unique_terms(self) -> None:
-        terms = [entry.term.casefold() for entry in GLOSSARY]
-        self.assertEqual(len(terms), len(set(terms)))
-
-    def test_glossary_entry_validates_required_values(self) -> None:
-        with self.assertRaisesRegex(ValueError, "term is required"):
-            GlossaryEntry(" ", "Definition")
-        with self.assertRaisesRegex(ValueError, "definition is required"):
-            GlossaryEntry("Term", " ")
-
-    def test_glossary_lookup_matches_term_case_insensitively(self) -> None:
-        entry = find_glossary_entry("  watch ITEM ")
-        self.assertIsNotNone(entry)
-        self.assertEqual(entry.term, "Watch Item")
-
-    def test_glossary_lookup_matches_alias(self) -> None:
-        entry = find_glossary_entry("admin")
-        self.assertIsNotNone(entry)
-        self.assertEqual(entry.term, "WASH Crew")
-
-    def test_glossary_lookup_returns_none_for_unknown_or_blank_term(self) -> None:
-        self.assertIsNone(find_glossary_entry("not a real term"))
-        self.assertIsNone(find_glossary_entry("  "))
-
-    def test_glossary_text_contains_all_terms_and_definitions(self) -> None:
-        text = build_glossary_text()
-        for entry in GLOSSARY:
-            self.assertIn(entry.term, text)
-            self.assertIn(entry.definition, text)
-
-    def test_expected_core_definitions_are_present(self) -> None:
-        terms = {entry.term for entry in GLOSSARY}
-        self.assertTrue(
-            {
-                "Watch Item",
-                "Suggestion Database",
-                "WASH Crew",
-                "Blind Vote",
-                "Visible Vote",
-                "Journey",
-                "Rotation",
-            }.issubset(terms)
-        )
 
     def test_all_crew_commands_use_crew_audience(self) -> None:
         crew_commands = [entry for entry in COMMAND_HELP if entry.name.startswith("/database_")]

@@ -38,8 +38,9 @@ These documents describe intended behavior, information managed by the applicati
 
 These documents distinguish currently available administration from planned Version 1 capabilities and explain how the application is developed and tested.
 
-## Reference
+## Help & Reference
 
+- [Expanded Help](08-Expanded-Help.md)
 - [Glossary](98-Glossary.md)
 - [Decision Log](99-Decision-Log.md)
 - [Future Ideas](Future-Ideas.md)

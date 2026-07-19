@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from watch_party_manager.help_registry import build_command_help_text
 
 
-GITHUB_DOCS_BASE_URL = (
-    "https://github.com/TehKarmah/Watch-Party-Manager/blob/main/docs"
+EXPANDED_HELP_URL = (
+    "https://github.com/TehKarmah/Watch-Party-Manager/blob/main/docs/08-Expanded-Help.md"
 )
 
 
@@ -24,14 +24,12 @@ class HelpResponse:
             raise ValueError("messages must contain at least one message")
 
 
-def build_reference_links_text() -> str:
-    """Return links for reference material that does not belong in /help."""
+def build_expanded_help_link_text() -> str:
+    """Return the single link to WASH expanded help documentation."""
     return "\n".join(
         (
-            "**Documentation & Reference**",
-            f"[Definitions & terminology]({GITHUB_DOCS_BASE_URL}/98-Glossary.md)",
-            f"[Administration guide]({GITHUB_DOCS_BASE_URL}/05-Administration.md)",
-            f"[Complete documentation]({GITHUB_DOCS_BASE_URL}/00-Table-of-Contents.md)",
+            "**Expanded Help Documentation**",
+            f"[Open the WASH help guide on GitHub]({EXPANDED_HELP_URL})",
         )
     )
 
@@ -44,7 +42,7 @@ def build_help_response(*, show_wash_crew: bool) -> HelpResponse:
     the GitHub documentation, which is the single source of truth.
     """
     command_text = build_command_help_text(show_wash_crew=show_wash_crew)
-    reference_text = build_reference_links_text()
+    reference_text = build_expanded_help_link_text()
 
     if show_wash_crew:
         return HelpResponse(

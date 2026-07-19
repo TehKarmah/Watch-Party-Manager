@@ -87,8 +87,8 @@ class SendHelpResponseTests(unittest.IsolatedAsyncioTestCase):
         await send_help_response(interaction, response)
 
         self.assertIn("**WASH Commands**", interaction.response.sent_messages[0])
-        self.assertIn("**Documentation & Reference**", interaction.followup.sent_messages[0])
-        self.assertIn("98-Glossary.md", interaction.followup.sent_messages[0])
+        self.assertIn("**Expanded Help Documentation**", interaction.followup.sent_messages[0])
+        self.assertIn("08-Expanded-Help.md", interaction.followup.sent_messages[0])
 
     async def test_all_messages_are_ephemeral(self) -> None:
         interaction = FakeInteraction()

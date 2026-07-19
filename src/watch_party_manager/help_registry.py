@@ -36,21 +36,6 @@ class CommandHelp:
             raise ValueError("command section is required")
 
 
-@dataclass(frozen=True, slots=True)
-class GlossaryEntry:
-    """A plain-language definition used by the in-app help system."""
-
-    term: str
-    definition: str
-    aliases: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not self.term.strip():
-            raise ValueError("glossary term is required")
-        if not self.definition.strip():
-            raise ValueError("glossary definition is required")
-
-
 COMMAND_HELP: tuple[CommandHelp, ...] = (
     CommandHelp("/help", "Show the WASH command guide and documentation links.", "General"),
     CommandHelp(
@@ -110,50 +95,6 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
 )
 
 
-GLOSSARY: tuple[GlossaryEntry, ...] = (
-    GlossaryEntry(
-        "Watch Item",
-        "A movie, episode, special, or other title tracked by WASH as a suggestion, nominee, winner, or watched selection.",
-        ("item", "title"),
-    ),
-    GlossaryEntry(
-        "Suggestion Database",
-        "A named collection of watch items associated with a Discord server, channel, or thread.",
-        ("database", "suggestion list"),
-    ),
-    GlossaryEntry(
-        "WASH Crew",
-        "The configurable Discord role allowed to manage suggestion databases, start votes, and use administrative tools.",
-        ("crew", "admin", "administrator"),
-    ),
-    GlossaryEntry(
-        "Blind Vote",
-        "A voting round where current standings and individual selections stay hidden until voting closes.",
-        ("blind voting",),
-    ),
-    GlossaryEntry(
-        "Visible Vote",
-        "A voting round where current standings may be shown while the round is open.",
-        ("visible voting", "open vote"),
-    ),
-    GlossaryEntry(
-        "Journey",
-        "The lifetime history of a watch item, including nominations, wins, watched dates, and other accumulated activity.",
-        ("watch item journey", "history"),
-    ),
-    GlossaryEntry(
-        "Rotation",
-        "A managed group or cycle of watch items used to organize future selections and prevent the same items from dominating repeatedly.",
-        ("current rotation",),
-    ),
-    GlossaryEntry(
-        "Voting Round",
-        "A time-limited contest between selected watch items in which eligible members cast or update a vote.",
-        ("vote", "round"),
-    ),
-)
-
-
 def command_sections(*, show_wash_crew: bool) -> tuple[tuple[str, tuple[CommandHelp, ...]], ...]:
     """Return visible command entries grouped in their declared order."""
     grouped: dict[str, list[CommandHelp]] = {}
@@ -172,22 +113,3 @@ def build_command_help_text(*, show_wash_crew: bool = True) -> str:
         lines.extend(f"`{entry.name}` - {entry.summary}" for entry in entries)
         sections.append("\n".join(lines))
     return "\n\n".join(sections)
-
-
-def find_glossary_entry(term: str) -> GlossaryEntry | None:
-    """Find a glossary entry by term or alias, ignoring case and whitespace."""
-    normalized = term.strip().casefold()
-    if not normalized:
-        return None
-    for entry in GLOSSARY:
-        names = (entry.term, *entry.aliases)
-        if any(normalized == name.casefold() for name in names):
-            return entry
-    return None
-
-
-def build_glossary_text() -> str:
-    """Render all glossary entries as compact Discord-friendly text."""
-    lines = ["**WASH Definitions**"]
-    lines.extend(f"**{entry.term}** - {entry.definition}" for entry in GLOSSARY)
-    return "\n\n".join(lines)

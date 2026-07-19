@@ -1,10 +1,10 @@
 import unittest
 
 from watch_party_manager.services.help_service import (
-    GITHUB_DOCS_BASE_URL,
+    EXPANDED_HELP_URL,
     HelpResponse,
     build_help_response,
-    build_reference_links_text,
+    build_expanded_help_link_text,
 )
 
 
@@ -35,22 +35,17 @@ class HelpServiceTests(unittest.TestCase):
         self.assertNotIn("`/backup`", message)
         self.assertNotIn("`/restore`", message)
 
-    def test_member_help_links_to_reference_documentation(self) -> None:
+    def test_member_help_links_to_expanded_documentation(self) -> None:
         message = build_help_response(show_wash_crew=False).messages[0]
 
-        self.assertIn("**Documentation & Reference**", message)
+        self.assertIn("**Expanded Help Documentation**", message)
         self.assertIn(
-            f"[Definitions & terminology]({GITHUB_DOCS_BASE_URL}/98-Glossary.md)",
+            f"[Open the WASH help guide on GitHub]({EXPANDED_HELP_URL})",
             message,
         )
-        self.assertIn(
-            f"[Administration guide]({GITHUB_DOCS_BASE_URL}/05-Administration.md)",
-            message,
-        )
-        self.assertIn(
-            f"[Complete documentation]({GITHUB_DOCS_BASE_URL}/00-Table-of-Contents.md)",
-            message,
-        )
+        self.assertNotIn("Definitions & terminology", message)
+        self.assertNotIn("Administration guide", message)
+        self.assertNotIn("Complete documentation", message)
 
     def test_member_help_does_not_embed_glossary_definitions(self) -> None:
         message = build_help_response(show_wash_crew=False).messages[0]
@@ -64,7 +59,7 @@ class HelpServiceTests(unittest.TestCase):
 
         self.assertEqual(len(response.messages), 2)
         self.assertIn("**WASH Commands**", response.messages[0])
-        self.assertIn("**Documentation & Reference**", response.messages[1])
+        self.assertIn("**Expanded Help Documentation**", response.messages[1])
 
     def test_wash_crew_help_includes_administrative_commands(self) -> None:
         message = build_help_response(show_wash_crew=True).messages[0]
@@ -74,15 +69,16 @@ class HelpServiceTests(unittest.TestCase):
         self.assertIn("`/backup`", message)
         self.assertIn("`/restore`", message)
 
-    def test_wash_crew_help_links_to_reference_documentation(self) -> None:
+    def test_wash_crew_help_links_to_expanded_documentation(self) -> None:
         message = build_help_response(show_wash_crew=True).messages[1]
 
-        self.assertIn("**Documentation & Reference**", message)
-        self.assertIn("98-Glossary.md", message)
-        self.assertIn("05-Administration.md", message)
+        self.assertIn("**Expanded Help Documentation**", message)
+        self.assertIn(EXPANDED_HELP_URL, message)
+        self.assertNotIn("98-Glossary.md", message)
+        self.assertNotIn("05-Administration.md", message)
 
-    def test_reference_links_text_does_not_duplicate_commands(self) -> None:
-        text = build_reference_links_text()
+    def test_expanded_help_link_text_does_not_duplicate_commands(self) -> None:
+        text = build_expanded_help_link_text()
 
         self.assertNotIn("`/help`", text)
         self.assertNotIn("`/database_add`", text)
