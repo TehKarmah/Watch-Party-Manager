@@ -52,7 +52,7 @@ class GlossaryEntry:
 
 
 COMMAND_HELP: tuple[CommandHelp, ...] = (
-    CommandHelp("/help", "Show the WASH command guide and key definitions.", "General"),
+    CommandHelp("/help", "Show the WASH command guide and documentation links.", "General"),
     CommandHelp(
         "/about", "View WASH information, version, latency, uptime, features, and project.", "General"
     ),

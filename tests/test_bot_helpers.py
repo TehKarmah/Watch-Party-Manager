@@ -73,12 +73,14 @@ class BotHelperTests(unittest.TestCase):
             help_text.index("**WASH Crew: Suggestion Databases**"),
         )
 
-    def test_help_text_includes_structured_glossary(self) -> None:
+    def test_help_text_links_to_reference_documentation(self) -> None:
         help_text = build_help_text(show_admin=False)
 
-        self.assertIn("**WASH Definitions**", help_text)
-        self.assertIn("**Watch Item**", help_text)
-        self.assertIn("**Blind Vote**", help_text)
+        self.assertIn("**Documentation & Reference**", help_text)
+        self.assertIn("98-Glossary.md", help_text)
+        self.assertNotIn("**WASH Definitions**", help_text)
+        self.assertNotIn("**Watch Item** -", help_text)
+        self.assertNotIn("**Blind Vote** -", help_text)
 
     def test_help_text_hides_wash_crew_commands_for_regular_members(self) -> None:
         help_text = build_help_text(show_admin=False)
