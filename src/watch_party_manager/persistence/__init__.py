@@ -1,5 +1,12 @@
 """Persistence layer for Watch Party Manager."""
 
+from watch_party_manager.persistence.guild_configuration_repository import (
+    CURRENT_SCHEMA_VERSION,
+    DEFAULT_GUILD_CONFIGURATIONS_PATH,
+    FutureSchemaVersionError,
+    GuildConfigurationRepository,
+)
+
 from watch_party_manager.persistence.suggestion_repository import (
     DEFAULT_SUGGESTIONS_PATH,
     JsonSuggestionRepository,
@@ -26,4 +33,8 @@ __all__ = [
     "DEFAULT_SUGGESTION_DATABASES_PATH",
     "JsonSuggestionDatabaseRepository",
     "SuggestionDatabaseLoadResult",
+    "GuildConfigurationRepository",
+    "FutureSchemaVersionError",
+    "DEFAULT_GUILD_CONFIGURATIONS_PATH",
+    "CURRENT_SCHEMA_VERSION",
 ]
