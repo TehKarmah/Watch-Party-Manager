@@ -134,6 +134,15 @@ class VoteReminderJobHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("/vote", self.channel.sent_messages[0])
 
+    async def test_reminder_includes_the_original_vote_link(self) -> None:
+        # _open_round() always attaches a message reference, so the link
+        # is expected here.
+        vote_round = self._open_round(guild_id=100, channel_id=200)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        self.assertIn("https://discord.com/channels/100/200/999", self.channel.sent_messages[0])
+
     async def test_falls_back_to_fetch_channel_when_get_channel_returns_none(self) -> None:
         vote_round = self._open_round()
 
@@ -266,6 +275,26 @@ class BuildVoteReminderTextTests(unittest.TestCase):
         text = build_vote_reminder_text(self._round())
 
         self.assertIn("/vote", text)
+
+    def test_includes_the_original_vote_link_when_available(self) -> None:
+        from watch_party_manager.domain.vote import VoteRound
+
+        vote_round = VoteRound(
+            id=1,
+            closes_at=datetime(2026, 7, 20, 18, 0, tzinfo=timezone.utc),
+            guild_id=100,
+            channel_id=200,
+            message_id=300,
+        )
+
+        text = build_vote_reminder_text(vote_round)
+
+        self.assertIn("https://discord.com/channels/100/200/300", text)
+
+    def test_omits_the_link_for_a_legacy_round_without_message_metadata(self) -> None:
+        text = build_vote_reminder_text(self._round())
+
+        self.assertNotIn("discord.com", text)
 
 
 class VoteReminderJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTestCase):

@@ -209,6 +209,36 @@ class JsonSuggestionRepositoryTests(unittest.TestCase):
         self.assertIsNone(loaded.channel_id)
         self.assertIsNone(loaded.message_id)
 
+    def test_save_then_load_round_trips_the_archived_status(self) -> None:
+        from watch_party_manager.domain.watch_item import WatchItemStatus
+
+        watch_item = WatchItem(
+            title="The Matrix", media_type=MediaType.MOVIE, id=1, status=WatchItemStatus.ARCHIVED
+        )
+        self.repository.save([watch_item], next_id=2)
+
+        result = self.repository.load()
+
+        self.assertEqual(result.watch_items[0].status, WatchItemStatus.ARCHIVED)
+
+    def test_a_file_without_a_status_field_defaults_to_suggested(self) -> None:
+        from watch_party_manager.domain.watch_item import WatchItemStatus
+
+        legacy_json = """
+        {
+          "next_id": 2,
+          "suggestions": [
+            {"id": 1, "title": "The Matrix", "media_type": "movie", "metadata_ids": {}}
+          ]
+        }
+        """
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+
+        self.assertEqual(result.watch_items[0].status, WatchItemStatus.SUGGESTED)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -290,3 +320,34 @@ class SuggestionRepositoryJourneyTests(unittest.TestCase):
         self.assertEqual(loaded_journey.rotation_history, (1, 2, 3))
         self.assertEqual(loaded_journey.watch_dates, (date(2026, 1, 1), date(2026, 2, 1)))
         self.assertEqual(loaded_journey.rewatch_count, 1)
+
+    def test_rejection_history_round_trips_through_save_and_load(self) -> None:
+        journey = WatchItemJourney(rejected_by_discord_user_ids=(111, 222))
+        watch_item = WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=1, journey=journey)
+        self.repository.save([watch_item], next_id=2)
+
+        result = self.repository.load()
+
+        self.assertEqual(result.watch_items[0].journey.rejected_by_discord_user_ids, (111, 222))
+
+    def test_a_journey_saved_before_rejections_existed_still_loads(self) -> None:
+        legacy_json = """
+        {
+          "next_id": 2,
+          "suggestions": [
+            {
+              "id": 1,
+              "title": "The Matrix",
+              "media_type": "movie",
+              "metadata_ids": {},
+              "journey": {"original_suggester": "Ada"}
+            }
+          ]
+        }
+        """
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+
+        self.assertEqual(result.watch_items[0].journey.rejected_by_discord_user_ids, ())

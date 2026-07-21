@@ -33,6 +33,9 @@ from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.persistence.guild_configuration_repository import (
     GuildConfigurationRepository,
 )
+from watch_party_manager.persistence.suggestion_database_configuration_repository import (
+    SuggestionDatabaseConfigurationRepository,
+)
 from watch_party_manager.scheduler import (
     CLOSE_VOTE_JOB_TYPE,
     CloseVoteJobHandler,
@@ -42,7 +45,9 @@ from watch_party_manager.scheduler import (
     VoteReminderJobHandler,
     WATCH_PARTY_REMINDER_JOB_TYPE,
     WatchPartyReminderJobHandler,
+    cancel_vote_jobs,
     cancel_watch_party_reminder,
+    reschedule_vote_jobs,
     reschedule_watch_party_reminder,
     schedule_vote_jobs,
     schedule_watch_party_reminder,
@@ -64,13 +69,30 @@ from watch_party_manager.services.suggestion_list_formatter import (
     SuggestionListFormatter,
     SuggestionListView,
 )
-from watch_party_manager.services.suggestion_service import SuggestionService
+from watch_party_manager.services.suggestion_service import (
+    DEFAULT_REJECTION_THRESHOLD,
+    SuggestionService,
+)
 from watch_party_manager.services.suggestion_repair_service import SuggestionRepairService
 from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
-from watch_party_manager.services.vote_announcement_formatter import format_standings_lines
-from watch_party_manager.services.vote_completion_service import VoteCompletionService
+from watch_party_manager.services.vote_announcement_formatter import (
+    build_vote_cancellation_notice,
+    build_vote_completion_announcement,
+    build_vote_deadline_change_notice,
+    build_vote_link,
+    format_standings_lines,
+)
+from watch_party_manager.services.vote_completion_service import (
+    VoteCompletionResult,
+    VoteCompletionService,
+)
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
 from watch_party_manager.services.watch_party_service import WatchPartyService
+from watch_party_manager.edit_vote_view import (
+    EditVoteConfirmationView,
+    EditVoteEndTimeModal,
+    EditVoteManagementView,
+)
 from watch_party_manager.restore_confirmation_view import RestoreConfirmationView
 from watch_party_manager.start_vote_view import (
     CustomizeVoteModal,
@@ -116,6 +138,7 @@ class WatchPartyBot(commands.Bot):
         self.statistics_service = StatisticsService(self.suggestion_service)
         self.vote_completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
         self.watch_party_service = WatchPartyService(self.suggestion_service)
+        self.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository()
         self.backup_service = BackupService()
         self.interactive_voting_restored = False
         self.scheduler_host = SchedulerHost.from_json_file(
@@ -382,7 +405,7 @@ class WatchPartyBot(commands.Bot):
                 vote_service=self.vote_service,
                 suggestion_service=self.suggestion_service,
             )
-            await interaction.response.send_message(message)
+            await interaction.response.send_message(message, ephemeral=True)
 
         @self.tree.command(name="vote")
         async def vote(interaction: discord.Interaction, suggestion_id: int) -> None:
@@ -393,6 +416,121 @@ class WatchPartyBot(commands.Bot):
             message, ephemeral = perform_vote(
                 vote_service=self.vote_service,
                 user_id=interaction.user.id,
+                suggestion_id=suggestion_id,
+            )
+            await interaction.response.send_message(message, ephemeral=ephemeral)
+
+        @self.tree.command(name="edit_vote")
+        async def edit_vote(interaction: discord.Interaction) -> None:
+            message, ephemeral, vote_round = perform_edit_vote_open(
+                vote_service=self.vote_service,
+                suggestion_service=self.suggestion_service,
+                user=interaction.user,
+                wash_crew_role_id=self.wash_crew_role_id,
+            )
+            if vote_round is None:
+                await interaction.response.send_message(message, ephemeral=ephemeral)
+                return
+
+            round_id = vote_round.id
+
+            async def on_change_end_time(button_interaction: discord.Interaction) -> None:
+                async def on_modal_submit(
+                    modal_interaction: discord.Interaction, when_text: str
+                ) -> None:
+                    await handle_change_vote_end_time_completion(
+                        modal_interaction,
+                        vote_service=self.vote_service,
+                        suggestion_service=self.suggestion_service,
+                        wash_crew_role_id=self.wash_crew_role_id,
+                        round_id=round_id,
+                        when=when_text,
+                        bot=self,
+                        scheduler_service=self.scheduler_host.scheduler_service,
+                        guild_configuration_repository=self.guild_configuration_repository,
+                    )
+
+                await button_interaction.response.send_modal(
+                    EditVoteEndTimeModal(
+                        on_modal_submit,
+                        current_value=format_datetime_for_display(vote_round.closes_at),
+                    )
+                )
+
+            async def on_end_now(button_interaction: discord.Interaction) -> None:
+                async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+                    await handle_end_vote_now_completion(
+                        confirm_interaction,
+                        vote_completion_service=self.vote_completion_service,
+                        suggestion_service=self.suggestion_service,
+                        wash_crew_role_id=self.wash_crew_role_id,
+                        round_id=round_id,
+                        bot=self,
+                        scheduler_service=self.scheduler_host.scheduler_service,
+                    )
+
+                async def on_abort(abort_interaction: discord.Interaction) -> None:
+                    await abort_interaction.response.send_message(
+                        "No changes were made.", ephemeral=True
+                    )
+
+                confirmation_view = EditVoteConfirmationView(
+                    confirm_label="End Now", on_confirm=on_confirm, on_abort=on_abort
+                )
+                await button_interaction.response.send_message(
+                    f"Are you sure you want to end voting round {round_id} now? "
+                    "This cannot be undone.",
+                    view=confirmation_view,
+                    ephemeral=True,
+                )
+
+            async def on_cancel_vote(button_interaction: discord.Interaction) -> None:
+                async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+                    await handle_cancel_vote_now_completion(
+                        confirm_interaction,
+                        vote_service=self.vote_service,
+                        wash_crew_role_id=self.wash_crew_role_id,
+                        round_id=round_id,
+                        bot=self,
+                        scheduler_service=self.scheduler_host.scheduler_service,
+                    )
+
+                async def on_abort(abort_interaction: discord.Interaction) -> None:
+                    await abort_interaction.response.send_message(
+                        "No changes were made.", ephemeral=True
+                    )
+
+                confirmation_view = EditVoteConfirmationView(
+                    confirm_label="Cancel Vote", on_confirm=on_confirm, on_abort=on_abort
+                )
+                await button_interaction.response.send_message(
+                    f"Are you sure you want to cancel voting round {round_id}? "
+                    "This cannot be undone.",
+                    view=confirmation_view,
+                    ephemeral=True,
+                )
+
+            view = EditVoteManagementView(on_change_end_time, on_end_now, on_cancel_vote)
+            await interaction.response.send_message(message, view=view, ephemeral=ephemeral)
+
+        @self.tree.command(name="reject")
+        async def reject(interaction: discord.Interaction, suggestion_id: int) -> None:
+            message, ephemeral = perform_reject_suggestion(
+                suggestion_service=self.suggestion_service,
+                suggestion_database_configuration_repository=self.suggestion_database_configuration_repository,
+                permission_service=self.permission_service,
+                user=interaction.user,
+                guild_id=interaction.guild_id,
+                suggestion_id=suggestion_id,
+            )
+            await interaction.response.send_message(message, ephemeral=ephemeral)
+
+        @self.tree.command(name="unreject")
+        async def unreject(interaction: discord.Interaction, suggestion_id: int) -> None:
+            message, ephemeral = perform_remove_rejection(
+                suggestion_service=self.suggestion_service,
+                permission_service=self.permission_service,
+                user=interaction.user,
                 suggestion_id=suggestion_id,
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
@@ -829,7 +967,9 @@ def build_vote_status_text(
     Returns:
         The formatted status text. Total votes cast is always shown,
         regardless of visibility — only per-suggestion standings are ever
-        withheld.
+        withheld. Includes a link to the original voting post when the
+        round has enough Discord message metadata to build one (see
+        build_vote_link); omitted entirely for legacy rounds that don't.
     """
     lines = [
         f"Voting round {vote_round.id}",
@@ -840,6 +980,9 @@ def build_vote_status_text(
         f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
         f"Vote changes allowed: {format_vote_changes_setting()}",
     ]
+    link = build_vote_link(vote_round)
+    if link:
+        lines.append(f"Original post: {link}")
     lines.extend(format_standings_lines(standings, standings_error))
 
     return "\n".join(lines)
@@ -1171,26 +1314,38 @@ def perform_vote_status(vote_service: VoteService, suggestion_service: Suggestio
     return build_vote_status_text(vote_round, candidate_count, standings, standings_error)
 
 
-def build_vote_confirmation(vote_record: VoteRecord, is_first_vote: bool, remaining_changes: int) -> str:
+def build_vote_confirmation(
+    vote_record: VoteRecord, is_first_vote: bool, remaining_changes: int, vote_round: Optional[VoteRound] = None
+) -> str:
     """Build the /vote confirmation message.
 
     Args:
         vote_record: The member's own vote record after casting.
         is_first_vote: True if this was the member's first vote this round.
         remaining_changes: How many vote changes the member has left.
+        vote_round: The round voted in, used to include a link to the
+            original voting post when available. Optional so existing
+            callers that don't have it keep working unchanged; None
+            simply omits the link.
 
     Returns:
         A confirmation message. Never mentions any other member's vote.
     """
     if is_first_vote:
-        return f"Your vote for suggestion #{vote_record.suggestion_id} has been recorded."
-
-    lines = [f"Your vote has been updated to suggestion #{vote_record.suggestion_id}."]
-    if remaining_changes > 0:
-        change_word = "change" if remaining_changes == 1 else "changes"
-        lines.append(f"You have {remaining_changes} vote {change_word} remaining.")
+        lines = [f"Your vote for suggestion #{vote_record.suggestion_id} has been recorded."]
     else:
-        lines.append("You have no vote changes remaining.")
+        lines = [f"Your vote has been updated to suggestion #{vote_record.suggestion_id}."]
+        if remaining_changes > 0:
+            change_word = "change" if remaining_changes == 1 else "changes"
+            lines.append(f"You have {remaining_changes} vote {change_word} remaining.")
+        else:
+            lines.append("You have no vote changes remaining.")
+
+    if vote_round is not None:
+        link = build_vote_link(vote_round)
+        if link:
+            lines.append(f"Original post: {link}")
+
     return "\n".join(lines)
 
 
@@ -1227,7 +1382,7 @@ def perform_vote(vote_service: VoteService, user_id: int, suggestion_id: int) ->
     is_first_vote = not had_existing_vote
     remaining_changes = MAX_VOTE_CHANGES - vote_record.changes_used
 
-    lines = [build_vote_confirmation(vote_record, is_first_vote, remaining_changes)]
+    lines = [build_vote_confirmation(vote_record, is_first_vote, remaining_changes, vote_round)]
 
     if vote_round.visibility == VoteVisibility.VISIBLE:
         standings_result = vote_service.calculate_standings(vote_round.id)
@@ -1371,6 +1526,31 @@ def build_voting_post_text(
     return "\n".join(lines)
 
 
+def build_current_voting_post_text(
+    vote_service: VoteService, suggestion_service: SuggestionService, vote_round: VoteRound
+) -> str:
+    """Recompute and build a round's voting post text from its current state.
+
+    Shared by refresh_voting_post (called after each vote) and
+    handle_change_vote_end_time_completion (called after WASH Crew edits
+    the deadline via /edit_vote), so recomputing standings/candidates for
+    the post is never duplicated between the two.
+
+    Args:
+        vote_service: Used to recompute standings.
+        suggestion_service: Used to re-list the current nominees.
+        vote_round: The round to build the post text for.
+
+    Returns:
+        The formatted post text (see build_voting_post_text).
+    """
+    candidates = get_round_candidates(suggestion_service, vote_round)
+    standings_result = vote_service.calculate_standings(vote_round.id)
+    standings = standings_result.standings if standings_result.success else None
+    standings_error = None if standings_result.success else standings_result.message
+    return build_voting_post_text(vote_round, candidates, standings, standings_error)
+
+
 async def refresh_voting_post(
     interaction: discord.Interaction,
     vote_service: VoteService,
@@ -1386,12 +1566,7 @@ async def refresh_voting_post(
         suggestion_service: Used to re-list the current nominees.
         vote_round: The round being voted in.
     """
-    candidates = get_round_candidates(suggestion_service, vote_round)
-    standings_result = vote_service.calculate_standings(vote_round.id)
-    standings = standings_result.standings if standings_result.success else None
-    standings_error = None if standings_result.success else standings_result.message
-
-    text = build_voting_post_text(vote_round, candidates, standings, standings_error)
+    text = build_current_voting_post_text(vote_service, suggestion_service, vote_round)
     await interaction.message.edit(content=text)
 
 
@@ -1427,6 +1602,396 @@ async def handle_nominee_vote(
     vote_round = vote_service.get_open_round()
     if vote_round is not None and vote_round.visibility == VoteVisibility.VISIBLE:
         await refresh_voting_post(interaction, vote_service, suggestion_service, vote_round)
+
+
+# --- FR-023: /edit_vote -- WASH Crew administrative vote management -------------
+
+
+async def update_voting_message(
+    bot: object,
+    vote_round: VoteRound,
+    content: str,
+    *,
+    clear_view: bool = False,
+) -> None:
+    """Best-effort update of a round's original voting post.
+
+    Used by /edit_vote's change-end-time, end-now, and cancel actions to
+    keep the original post's displayed state accurate. Does nothing if
+    the round has no channel/message reference (a legacy round, or one
+    whose reference was never attached) -- "when supported" in FR-023's
+    requirements. Also swallows any Discord-side failure (e.g. the
+    message was deleted) rather than raising, matching the project's
+    existing "graceful when Discord state is stale" convention (see
+    check_and_announce_expired_vote's handling of a missing channel).
+
+    Args:
+        bot: Anything with get_channel(channel_id)/fetch_channel(channel_id)
+            coroutine-or-sync methods returning an object with a
+            fetch_message(message_id) coroutine, itself returning an
+            object with an edit(...) coroutine -- a real discord.Client/Bot
+            satisfies this, and tests can supply a lightweight fake.
+        vote_round: The round whose original post should be updated.
+        content: The new message content.
+        clear_view: When True, removes the message's interactive
+            components (the persistent voting buttons) -- used once
+            voting is no longer possible (ended or cancelled). Left False
+            for a still-open round whose deadline just changed, so its
+            voting buttons keep working.
+    """
+    if vote_round.channel_id is None or vote_round.message_id is None:
+        return
+
+    try:
+        channel = bot.get_channel(vote_round.channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(vote_round.channel_id)
+        message = await channel.fetch_message(vote_round.message_id)
+        if clear_view:
+            await message.edit(content=content, view=None)
+        else:
+            await message.edit(content=content)
+    except Exception:
+        logger.exception(
+            "Could not update the original voting message for round %s", vote_round.id
+        )
+
+
+def build_edit_vote_management_text(vote_round: VoteRound, candidate_count: int) -> str:
+    """Build the ephemeral /edit_vote management response for the active vote.
+
+    Shows enough identifying information for WASH Crew to confirm they're
+    about to manage the right round before choosing an action.
+    """
+    lines = [
+        f"Managing voting round {vote_round.id}",
+        f"Visibility: {vote_round.visibility.value.capitalize()}",
+        f"Candidates: {candidate_count}",
+        f"Votes cast: {len(vote_round.votes)}",
+        f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
+    ]
+    link = build_vote_link(vote_round)
+    if link:
+        lines.append(f"Original post: {link}")
+    return "\n".join(lines)
+
+
+def perform_edit_vote_open(
+    vote_service: VoteService,
+    suggestion_service: SuggestionService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+) -> tuple[str, bool, Optional[VoteRound]]:
+    """Core logic for /edit_vote, kept free of Discord objects except `user`.
+
+    Args:
+        vote_service: Used to look up the currently open round.
+        suggestion_service: Used to report the candidate count when the
+            round has no fixed candidate list (a legacy round).
+        user: The member invoking the command.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if
+            unconfigured.
+
+    Returns:
+        A (message, ephemeral, vote_round) tuple. vote_round is set only
+        on success, so the caller can build the management view's button
+        callbacks around the specific round being managed. Always ephemeral.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+            None,
+        )
+
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to manage voting rounds.", True, None
+
+    vote_round = vote_service.get_open_round()
+    if vote_round is None:
+        return "There's no active voting round to manage.", True, None
+
+    candidate_count = (
+        len(vote_round.candidate_suggestion_ids)
+        if vote_round.candidate_suggestion_ids
+        else suggestion_service.suggestion_count()
+    )
+    return build_edit_vote_management_text(vote_round, candidate_count), True, vote_round
+
+
+def perform_change_vote_end_time(
+    vote_service: VoteService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    round_id: int,
+    when: str,
+    *,
+    now: Optional[datetime] = None,
+) -> tuple[str, bool, Optional[VoteRound]]:
+    """Core logic for /edit_vote's "Change End Time" action.
+
+    Args:
+        vote_service: Used to reschedule the round.
+        user: The member invoking the action.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if unconfigured.
+        round_id: The round to reschedule.
+        when: The raw new end-time text from the modal.
+        now: Passed through to parse_vote_end_time for deterministic testing.
+
+    Returns:
+        A (message, ephemeral, vote_round) tuple. vote_round (the
+        updated round) is set only on success, so the caller can replace
+        its scheduler jobs, refresh its public post, and post the
+        deadline-change notice without a redundant lookup. Always
+        ephemeral -- this is WASH Crew's own confirmation; the separate
+        public notice is what the community sees.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+            None,
+        )
+
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to manage voting rounds.", True, None
+
+    try:
+        new_closes_at = parse_vote_end_time(when, now=now)
+    except ValueError as exc:
+        return str(exc), True, None
+
+    result = vote_service.reschedule_round(round_id, new_closes_at)
+    if not result.success:
+        return result.message, True, None
+
+    return (
+        f"Voting round {round_id} rescheduled. New deadline: "
+        f"{format_datetime_for_display(result.vote_round.closes_at)}",
+        True,
+        result.vote_round,
+    )
+
+
+async def handle_change_vote_end_time_completion(
+    interaction: discord.Interaction,
+    vote_service: VoteService,
+    suggestion_service: SuggestionService,
+    wash_crew_role_id: Optional[int],
+    round_id: int,
+    when: str,
+    bot: object,
+    scheduler_service: Optional[SchedulerService] = None,
+    guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
+) -> None:
+    """Change a round's deadline, replace its scheduler jobs, and notify the community.
+
+    scheduler_service/guild_configuration_repository default to None so
+    callers/tests that don't pass them keep working unchanged; passing
+    None simply skips scheduling (see reschedule_vote_jobs).
+    """
+    message, ephemeral, vote_round = perform_change_vote_end_time(
+        vote_service, interaction.user, wash_crew_role_id, round_id, when
+    )
+    await interaction.response.send_message(message, ephemeral=ephemeral)
+    if vote_round is None:
+        return
+
+    # FR-023: replace this round's close_vote/vote_reminder jobs to
+    # reflect the new deadline before any further Discord I/O, mirroring
+    # handle_start_vote_completion's existing "schedule before anything
+    # that could fail" ordering rationale.
+    if vote_round.guild_id is not None:
+        await reschedule_vote_jobs(
+            scheduler_service,
+            vote_round,
+            vote_round.guild_id,
+            guild_configuration_repository=guild_configuration_repository,
+        )
+
+    if vote_round.channel_id is not None:
+        notice = build_vote_deadline_change_notice(vote_round)
+        channel = bot.get_channel(vote_round.channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(vote_round.channel_id)
+        await channel.send(notice)
+
+    text = build_current_voting_post_text(vote_service, suggestion_service, vote_round)
+    await update_voting_message(bot, vote_round, text)
+
+
+def perform_end_vote_now(
+    vote_completion_service: VoteCompletionService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    round_id: int,
+) -> tuple[str, bool, Optional[VoteCompletionResult]]:
+    """Core logic for /edit_vote's "End Now" action.
+
+    Reuses VoteCompletionService.complete_round() -- the exact same
+    authoritative completion logic a scheduled close_vote job uses (see
+    CloseVoteJobHandler) -- so ending a vote early never duplicates or
+    diverges from normal completion: closing, winner calculation, Watch
+    Item Journey updates, and standings all happen exactly as they
+    otherwise would.
+
+    Args:
+        vote_completion_service: Used to complete the round.
+        user: The member invoking the action.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if unconfigured.
+        round_id: The round to end.
+
+    Returns:
+        A (message, ephemeral, result) tuple. result is set only on
+        success, so the caller can build and post the standard completion
+        announcement (build_vote_completion_announcement) without a
+        redundant lookup. Always ephemeral -- the separate public
+        announcement is what the community sees.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+            None,
+        )
+
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to manage voting rounds.", True, None
+
+    result = vote_completion_service.complete_round(round_id)
+    if result is None:
+        return (
+            "That voting round no longer exists or has already been completed or cancelled.",
+            True,
+            None,
+        )
+
+    return f"Voting round {round_id} has been ended.", True, result
+
+
+async def handle_end_vote_now_completion(
+    interaction: discord.Interaction,
+    vote_completion_service: VoteCompletionService,
+    suggestion_service: SuggestionService,
+    wash_crew_role_id: Optional[int],
+    round_id: int,
+    bot: object,
+    scheduler_service: Optional[SchedulerService] = None,
+) -> None:
+    """End a round immediately, using the normal completion and announcement path.
+
+    scheduler_service defaults to None so callers/tests that don't pass
+    one keep working unchanged; passing None simply skips job cancellation.
+    """
+    message, ephemeral, result = perform_end_vote_now(
+        vote_completion_service, interaction.user, wash_crew_role_id, round_id
+    )
+    await interaction.response.send_message(message, ephemeral=ephemeral)
+    if result is None:
+        return
+
+    # FR-023: remove any pending close_vote/vote_reminder jobs now that
+    # the round is already completed -- a no-op if none is active (e.g.
+    # the close_vote job is the one that raced us here, or reminders were
+    # disabled).
+    await cancel_vote_jobs(scheduler_service, round_id)
+
+    winning_items: List[WatchItem] = []
+    for suggestion_id in result.winning_suggestion_ids:
+        watch_item = suggestion_service.get_suggestion(suggestion_id)
+        if watch_item is not None:
+            winning_items.append(watch_item)
+
+    announcement = build_vote_completion_announcement(
+        result.vote_round, winning_items, result.standings, result.total_votes_cast
+    )
+    if result.vote_round.channel_id is not None:
+        channel = bot.get_channel(result.vote_round.channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(result.vote_round.channel_id)
+        await channel.send(announcement)
+
+    await update_voting_message(
+        bot, result.vote_round, "Voting has closed. See the announcement below.", clear_view=True
+    )
+
+
+def perform_cancel_vote_now(
+    vote_service: VoteService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    round_id: int,
+) -> tuple[str, bool, Optional[VoteRound]]:
+    """Core logic for /edit_vote's "Cancel Vote" action.
+
+    Args:
+        vote_service: Used to cancel the round.
+        user: The member invoking the action.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if unconfigured.
+        round_id: The round to cancel.
+
+    Returns:
+        A (message, ephemeral, vote_round) tuple. vote_round (the
+        now-cancelled round) is set only on success, so the caller can
+        post the public cancellation notice and update the original post
+        without a redundant lookup. Always ephemeral -- the separate
+        public notice is what the community sees.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+            None,
+        )
+
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to manage voting rounds.", True, None
+
+    result = vote_service.cancel_round(round_id)
+    if not result.success:
+        return result.message, True, None
+
+    return f"Voting round {round_id} has been cancelled.", True, result.vote_round
+
+
+async def handle_cancel_vote_now_completion(
+    interaction: discord.Interaction,
+    vote_service: VoteService,
+    wash_crew_role_id: Optional[int],
+    round_id: int,
+    bot: object,
+    scheduler_service: Optional[SchedulerService] = None,
+) -> None:
+    """Cancel a round, notify the community, and disable its original controls.
+
+    scheduler_service defaults to None so callers/tests that don't pass
+    one keep working unchanged; passing None simply skips job cancellation.
+    """
+    message, ephemeral, vote_round = perform_cancel_vote_now(
+        vote_service, interaction.user, wash_crew_role_id, round_id
+    )
+    await interaction.response.send_message(message, ephemeral=ephemeral)
+    if vote_round is None:
+        return
+
+    # FR-023: remove any pending close_vote/vote_reminder jobs now that
+    # the round is cancelled -- a no-op if none is active.
+    await cancel_vote_jobs(scheduler_service, round_id)
+
+    if vote_round.channel_id is not None:
+        notice = build_vote_cancellation_notice(vote_round)
+        channel = bot.get_channel(vote_round.channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(vote_round.channel_id)
+        await channel.send(notice)
+
+    await update_voting_message(
+        bot, vote_round, "This voting round was cancelled by WASH Crew.", clear_view=True
+    )
 
 
 async def perform_add_suggestion_from_input(
@@ -1792,7 +2357,12 @@ def perform_list_suggestions_response(
     if resolution.database is None:
         return resolution.error_message or "No suggestion database is available here.", True
 
-    items = suggestion_service.get_suggestions_for_database(resolution.database.database_id)
+    # The Crew view is WASH's administrative view (already gated above),
+    # so it continues to show archived suggestions -- e.g. those rejected
+    # via /reject -- while the standard view excludes them.
+    items = suggestion_service.get_suggestions_for_database(
+        resolution.database.database_id, include_archived=parsed_view is SuggestionListView.CREW
+    )
     message = SuggestionListFormatter().format(items, resolution.database, parsed_view)
     return message, not public
 
@@ -1809,6 +2379,111 @@ def perform_list_suggestions(
         channel_id=channel_id,
     )
     return message
+
+
+def resolve_rejection_threshold(
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository],
+    guild_id: Optional[int],
+    database_id: Optional[int],
+) -> int:
+    """Look up the configured rejection threshold for a suggestion database.
+
+    Mirrors the resolve_*_settings pattern already established for guild
+    configuration (see scheduler/vote_scheduling.py's
+    resolve_vote_reminder_settings): falls back to
+    SuggestionRulesConfig's own documented default (2) when no
+    repository, guild_id, or database_id is available, or no
+    configuration has been saved for this database yet -- there is
+    currently no way for WASH Crew to configure this (no /setup or
+    /config command exists yet), so an unconfigured database is the
+    common case today, not an error condition.
+
+    Args:
+        suggestion_database_configuration_repository: Where to look up
+            the database's configuration, or None to always use the default.
+        guild_id: The Discord guild the suggestion belongs to.
+        database_id: The suggestion database the suggestion belongs to.
+
+    Returns:
+        The configured rejection threshold, or the documented default.
+    """
+    if (
+        suggestion_database_configuration_repository is None
+        or guild_id is None
+        or database_id is None
+    ):
+        return DEFAULT_REJECTION_THRESHOLD
+
+    configuration = suggestion_database_configuration_repository.get(guild_id, database_id)
+    if configuration is None:
+        return DEFAULT_REJECTION_THRESHOLD
+
+    return configuration.suggestion_rules.rejection_threshold
+
+
+def perform_reject_suggestion(
+    suggestion_service: SuggestionService,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository],
+    permission_service: PermissionService,
+    user: object,
+    guild_id: Optional[int],
+    suggestion_id: int,
+) -> tuple[str, bool]:
+    """Core logic for /reject, kept free of Discord objects except `user`.
+
+    Args:
+        suggestion_service: The suggestion service to record the rejection through.
+        suggestion_database_configuration_repository: Used to resolve the
+            configured rejection threshold for the suggestion's database.
+        permission_service: Used to require Watch Party member permission.
+        user: The member invoking the command.
+        guild_id: The Discord guild the command was run in.
+        suggestion_id: The suggestion being rejected.
+
+    Returns:
+        A (message, ephemeral) tuple. Always ephemeral -- like /vote, a
+        member's own rejection is for their eyes only.
+    """
+    permission = permission_service.require_watch_party_member(user)
+    if not permission.allowed:
+        return permission.message, True
+
+    watch_item = suggestion_service.get_suggestion(suggestion_id)
+    if watch_item is None:
+        return "That suggestion doesn't exist.", True
+
+    threshold = resolve_rejection_threshold(
+        suggestion_database_configuration_repository, guild_id, watch_item.database_id
+    )
+    result = suggestion_service.reject_suggestion(
+        suggestion_id, user.id, rejection_threshold=threshold
+    )
+    return result.message, True
+
+
+def perform_remove_rejection(
+    suggestion_service: SuggestionService,
+    permission_service: PermissionService,
+    user: object,
+    suggestion_id: int,
+) -> tuple[str, bool]:
+    """Core logic for /unreject, kept free of Discord objects except `user`.
+
+    Args:
+        suggestion_service: The suggestion service to remove the rejection through.
+        permission_service: Used to require Watch Party member permission.
+        user: The member invoking the command.
+        suggestion_id: The suggestion to remove the member's rejection from.
+
+    Returns:
+        A (message, ephemeral) tuple. Always ephemeral, matching /reject.
+    """
+    permission = permission_service.require_watch_party_member(user)
+    if not permission.allowed:
+        return permission.message, True
+
+    result = suggestion_service.remove_rejection(suggestion_id, user.id)
+    return result.message, True
 
 
 def build_database_add_confirmation(database: SuggestionDatabase) -> str:
@@ -2023,6 +2698,33 @@ def parse_watch_party_schedule_time(value: str) -> datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def parse_vote_end_time(value: str, *, now: Optional[datetime] = None) -> datetime:
+    """Parse and validate a new closing date/time for /edit_vote.
+
+    Reuses parse_watch_party_schedule_time's exact ISO 8601 parsing and
+    UTC-assumption convention rather than duplicating it, then layers on
+    the one extra constraint specific to editing an *active* vote's
+    deadline: it must not already be in the past.
+
+    Args:
+        value: The raw end-time text from the modal.
+        now: The current time to validate against. Defaults to the real
+            current UTC time; tests supply a fixed value for determinism.
+
+    Returns:
+        A timezone-aware datetime in UTC, strictly after `now`.
+
+    Raises:
+        ValueError: If value is blank, not a parseable date/time, or not
+            in the future.
+    """
+    parsed = parse_watch_party_schedule_time(value)
+    current_time = now if now is not None else datetime.now(timezone.utc)
+    if parsed <= current_time:
+        raise ValueError("The new closing time must be in the future.")
+    return parsed
 
 
 def build_schedule_watch_party_confirmation(

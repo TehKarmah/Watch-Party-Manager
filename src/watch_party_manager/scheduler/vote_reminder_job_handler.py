@@ -19,6 +19,7 @@ from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus
 from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
 )
+from watch_party_manager.services.vote_announcement_formatter import build_vote_link
 from watch_party_manager.services.vote_service import VoteService
 
 from .job_handler import DiscordChannelMessenger, JobExecutionResult
@@ -27,13 +28,15 @@ from .scheduled_job import JobResult, ScheduledJob
 
 def build_vote_reminder_text(vote_round: VoteRound) -> str:
     """Build the reminder message posted to a voting round's channel."""
-    return "\n".join(
-        (
-            f"Reminder: Voting round {vote_round.id} is still open.",
-            f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
-            "Cast your vote with /vote before it closes!",
-        )
-    )
+    lines = [
+        f"Reminder: Voting round {vote_round.id} is still open.",
+        f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
+        "Cast your vote with /vote before it closes!",
+    ]
+    link = build_vote_link(vote_round)
+    if link:
+        lines.append(f"Original post: {link}")
+    return "\n".join(lines)
 
 
 class VoteReminderJobHandler:
@@ -101,9 +104,11 @@ class VoteReminderJobHandler:
             )
             return JobExecutionResult(result=JobResult.SKIPPED_NOT_APPLICABLE)
 
-        if vote_round.status == VoteRoundStatus.CLOSED:
+        if vote_round.status != VoteRoundStatus.OPEN:
             self._logger.info(
-                "vote_reminder job for vote %s skipped: already closed", vote_id
+                "vote_reminder job for vote %s skipped: round is %s, not open",
+                vote_id,
+                vote_round.status.value,
             )
             return JobExecutionResult(result=JobResult.SKIPPED_NOT_APPLICABLE)
 

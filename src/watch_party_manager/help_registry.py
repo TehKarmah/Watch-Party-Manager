@@ -47,9 +47,19 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         "/list", "List watch items in the relevant suggestion database.", "Watch Items"
     ),
     CommandHelp("/remove", "Remove a watch item.", "Watch Items"),
+    CommandHelp(
+        "/reject", 'Indicate you will not watch a suggestion ("I will not watch").', "Watch Items"
+    ),
+    CommandHelp("/unreject", "Remove your earlier rejection of a suggestion.", "Watch Items"),
     CommandHelp("/start_vote", "Start a new voting round.", "Voting"),
     CommandHelp("/vote_status", "View the current voting round.", "Voting"),
     CommandHelp("/vote", "Cast or update your vote.", "Voting"),
+    CommandHelp(
+        "/edit_vote",
+        "Change the active vote's end time, end it now, or cancel it.",
+        "WASH Crew: Voting",
+        HelpAudience.WASH_CREW,
+    ),
     CommandHelp(
         "/database_add",
         "Create a suggestion database for the current channel or thread.",

@@ -19,6 +19,7 @@ class WatchItemJourney:
     times_won: int = 0
     last_nominated_date: Optional[date] = None
     last_won_date: Optional[date] = None
+    rejected_by_discord_user_ids: Tuple[int, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         self.original_suggester = self._normalize_optional_text(self.original_suggester)
@@ -30,6 +31,9 @@ class WatchItemJourney:
             self._validate_watch_date(self.last_nominated_date)
         if self.last_won_date is not None:
             self._validate_watch_date(self.last_won_date)
+        self.rejected_by_discord_user_ids = self._normalize_discord_user_ids(
+            self.rejected_by_discord_user_ids
+        )
 
     def _validate_non_negative_counts(self) -> None:
         if self.voting_appearances < 0:
@@ -86,6 +90,32 @@ class WatchItemJourney:
 
         return tuple(normalized)
 
+    @staticmethod
+    def _validate_discord_user_id(discord_user_id: int) -> None:
+        if (
+            isinstance(discord_user_id, bool)
+            or not isinstance(discord_user_id, int)
+            or discord_user_id <= 0
+        ):
+            raise ValueError("discord_user_id must be a positive integer")
+
+    @staticmethod
+    def _normalize_discord_user_ids(
+        discord_user_ids: Tuple[int, ...] | list[int] | None,
+    ) -> Tuple[int, ...]:
+        if not discord_user_ids:
+            return ()
+
+        normalized: list[int] = []
+        for discord_user_id in discord_user_ids:
+            if discord_user_id is None:
+                continue
+            WatchItemJourney._validate_discord_user_id(discord_user_id)
+            if discord_user_id not in normalized:
+                normalized.append(discord_user_id)
+
+        return tuple(normalized)
+
     def record_rotation_entry(self, rotation_number: int) -> None:
         self._validate_rotation_number(rotation_number)
         self.rotation_history = (*self.rotation_history, int(rotation_number))
@@ -129,3 +159,40 @@ class WatchItemJourney:
 
     def record_rewatch(self) -> None:
         self.rewatch_count += 1
+
+    def record_rejection(self, discord_user_id: int) -> bool:
+        """Record a member's "I will not watch" rejection.
+
+        Args:
+            discord_user_id: The rejecting member's Discord user ID.
+
+        Returns:
+            True if this rejection was newly recorded. False if this
+            member had already rejected this item -- a no-op, since a
+            member can only count once toward the rejection threshold
+            regardless of how many times they reject it.
+        """
+        self._validate_discord_user_id(discord_user_id)
+        if discord_user_id in self.rejected_by_discord_user_ids:
+            return False
+        self.rejected_by_discord_user_ids = (*self.rejected_by_discord_user_ids, discord_user_id)
+        return True
+
+    def remove_rejection(self, discord_user_id: int) -> bool:
+        """Remove a member's earlier rejection.
+
+        Args:
+            discord_user_id: The member whose rejection should be removed.
+
+        Returns:
+            True if a rejection was removed. False if this member hadn't
+            rejected this item -- a no-op.
+        """
+        if discord_user_id not in self.rejected_by_discord_user_ids:
+            return False
+        self.rejected_by_discord_user_ids = tuple(
+            existing_id
+            for existing_id in self.rejected_by_discord_user_ids
+            if existing_id != discord_user_id
+        )
+        return True

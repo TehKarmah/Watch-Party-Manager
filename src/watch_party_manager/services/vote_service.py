@@ -358,18 +358,99 @@ class VoteService:
             round_id: The round to close.
 
         Returns:
-            VoteResult indicating success or failure.
+            VoteResult indicating success or failure. Fails for a round
+            that is already CLOSED or has been CANCELLED -- only an OPEN
+            round can be closed, so a cancelled round (see cancel_round)
+            can never be resurrected into a normal completion with a
+            winner by a late-firing close_vote job or a repeated "End
+            Now" click.
         """
         vote_round = self._rounds.get(round_id)
         if vote_round is None:
             return VoteResult(success=False, message="That voting round doesn't exist.")
 
-        if vote_round.status == VoteRoundStatus.CLOSED:
-            return VoteResult(success=False, message="That voting round is already closed.")
+        if vote_round.status != VoteRoundStatus.OPEN:
+            return VoteResult(
+                success=False, message=f"That voting round is already {vote_round.status.value}."
+            )
 
         vote_round.status = VoteRoundStatus.CLOSED
         self._save()
         return VoteResult(success=True, message=f"Voting round {round_id} is now closed.")
+
+    def reschedule_round(self, round_id: int, new_closes_at: datetime) -> VoteRoundResult:
+        """Change when an open voting round closes.
+
+        Preserves the round's identity and every submitted vote -- only
+        closes_at is updated. Existing scheduler jobs are not this
+        service's concern (see scheduler.vote_scheduling.reschedule_vote_jobs,
+        called by the caller after this succeeds).
+
+        Args:
+            round_id: The round to reschedule.
+            new_closes_at: The new closing time. Must be timezone-aware
+                (enforced by VoteRound itself); "must be in the future"
+                is a command-layer concern (see bot.py's
+                parse_vote_end_time), not re-validated here.
+
+        Returns:
+            VoteRoundResult indicating success or failure. Fails if the
+            round doesn't exist or is not currently open.
+        """
+        vote_round = self._rounds.get(round_id)
+        if vote_round is None:
+            return VoteRoundResult(success=False, message="That voting round doesn't exist.")
+
+        if vote_round.status != VoteRoundStatus.OPEN:
+            return VoteRoundResult(
+                success=False,
+                message=f"That voting round is already {vote_round.status.value} and cannot be rescheduled.",
+            )
+
+        vote_round.closes_at = new_closes_at
+        self._save()
+        return VoteRoundResult(
+            success=True,
+            message=f"Voting round {round_id} has been rescheduled.",
+            vote_round=vote_round,
+        )
+
+    def cancel_round(self, round_id: int) -> VoteRoundResult:
+        """Cancel an open voting round without determining a winner.
+
+        Preserves the round and every submitted ballot -- only status
+        changes to CANCELLED. A cancelled round is excluded from
+        get_open_round() (same mechanism CLOSED already relies on), so
+        cast_vote() naturally rejects further votes with no extra check
+        needed here.
+
+        Args:
+            round_id: The round to cancel.
+
+        Returns:
+            VoteRoundResult indicating success or failure. Fails if the
+            round doesn't exist or is not currently open -- repeated
+            cancellation of the same round is therefore a safe, idempotent
+            no-op from the caller's perspective (see bot.py's
+            handle_cancel_vote_now_completion).
+        """
+        vote_round = self._rounds.get(round_id)
+        if vote_round is None:
+            return VoteRoundResult(success=False, message="That voting round doesn't exist.")
+
+        if vote_round.status != VoteRoundStatus.OPEN:
+            return VoteRoundResult(
+                success=False,
+                message=f"That voting round is already {vote_round.status.value}.",
+            )
+
+        vote_round.status = VoteRoundStatus.CANCELLED
+        self._save()
+        return VoteRoundResult(
+            success=True,
+            message=f"Voting round {round_id} has been cancelled.",
+            vote_round=vote_round,
+        )
 
     def remove_member_vote(self, round_id: int, discord_user_id: int) -> VoteResult:
         """Remove a member's vote entirely, letting them cast a fresh vote.

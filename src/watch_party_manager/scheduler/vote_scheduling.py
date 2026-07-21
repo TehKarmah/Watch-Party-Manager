@@ -239,3 +239,68 @@ async def schedule_vote_jobs(
     for job in jobs:
         scheduled.append(await scheduler_service.schedule(job))
     return scheduled
+
+
+async def cancel_vote_jobs(scheduler_service: Optional[SchedulerService], round_id: int) -> None:
+    """Remove a round's scheduled close_vote and vote_reminder jobs, if any.
+
+    Used by FR-023's /edit_vote when a round is ended early or cancelled,
+    so no stale job later fires for a round that's no longer open. Safe
+    to call unconditionally: each cancellation is independently a no-op
+    if no active job exists under that logical key (e.g. reminders were
+    disabled, or a job already fired) -- mirrors
+    cancel_watch_party_reminder's same contract for watch parties.
+
+    Args:
+        scheduler_service: The scheduler to cancel jobs through. If None,
+            this is a no-op.
+        round_id: The voting round whose jobs should be removed.
+    """
+    if scheduler_service is None:
+        return
+    await scheduler_service.cancel_by_logical_key(close_vote_logical_key(round_id))
+    await scheduler_service.cancel_by_logical_key(vote_reminder_logical_key(round_id))
+
+
+async def reschedule_vote_jobs(
+    scheduler_service: Optional[SchedulerService],
+    vote_round: VoteRound,
+    guild_id: int,
+    *,
+    guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
+) -> list[ScheduledJob]:
+    """Replace a round's close_vote/vote_reminder jobs after its deadline changed.
+
+    Cancels whatever close_vote and vote_reminder jobs are currently
+    active for this round (see cancel_vote_jobs -- a no-op for either if
+    none is active) and schedules fresh ones against the round's current
+    closes_at. This is the same "cancel the obsolete pending job and
+    create the replacement" rescheduling policy already applied for
+    watch parties (see watch_party_scheduling.reschedule_watch_party_reminder),
+    applied here rather than reimplemented.
+
+    Must only be called after vote_round.closes_at has already been
+    updated and persisted (see VoteService.reschedule_round()).
+
+    Args:
+        scheduler_service: The scheduler to cancel/schedule through. If
+            None, this is a no-op.
+        vote_round: The round, already updated to its new closes_at.
+        guild_id: The Discord guild this round belongs to.
+        guild_configuration_repository: Used to resolve reminder timing
+            for this guild; see resolve_vote_reminder_settings.
+
+    Returns:
+        The newly scheduled jobs (see schedule_vote_jobs), or an empty
+        list if scheduler_service was None.
+    """
+    if scheduler_service is None:
+        return []
+
+    await cancel_vote_jobs(scheduler_service, vote_round.id)
+    return await schedule_vote_jobs(
+        scheduler_service,
+        vote_round,
+        guild_id,
+        guild_configuration_repository=guild_configuration_repository,
+    )

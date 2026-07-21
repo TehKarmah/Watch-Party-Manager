@@ -47,6 +47,7 @@ class HelpRegistryTests(unittest.TestCase):
                 "General",
                 "Watch Items",
                 "Voting",
+                "WASH Crew: Voting",
                 "WASH Crew: Suggestion Databases",
                 "WASH Crew: Maintenance",
                 "WASH Crew: Diagnostics",

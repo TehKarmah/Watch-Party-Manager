@@ -9,7 +9,7 @@ from datetime import date
 from pathlib import Path
 from typing import Iterable, Optional, Union
 
-from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem
+from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 
 logger = logging.getLogger(__name__)
@@ -123,13 +123,14 @@ class JsonSuggestionRepository:
     def _serialize(watch_item: WatchItem) -> dict:
         """Convert a WatchItem into a JSON-friendly dict.
 
-        id, title, media_type, metadata_ids, database_id, guild_id,
-        channel_id, and message_id are persisted.
+        id, title, media_type, status, metadata_ids, database_id,
+        guild_id, channel_id, and message_id are persisted.
         """
         return {
             "id": watch_item.id,
             "title": watch_item.title,
             "media_type": watch_item.media_type.value,
+            "status": watch_item.status.value,
             "metadata_ids": {
                 provider.value: identifier
                 for provider, identifier in watch_item.metadata_ids.items()
@@ -161,6 +162,7 @@ class JsonSuggestionRepository:
             "times_won": journey.times_won,
             "last_nominated_date": journey.last_nominated_date.isoformat() if journey.last_nominated_date else None,
             "last_won_date": journey.last_won_date.isoformat() if journey.last_won_date else None,
+            "rejected_by_discord_user_ids": list(journey.rejected_by_discord_user_ids),
         }
 
     @staticmethod
@@ -183,6 +185,7 @@ class JsonSuggestionRepository:
         return WatchItem(
             title=entry["title"],
             media_type=MediaType(entry["media_type"]),
+            status=WatchItemStatus(entry.get("status", WatchItemStatus.SUGGESTED.value)),
             metadata_ids=metadata_ids,
             id=entry_id,
             database_id=entry.get("database_id"),
@@ -219,6 +222,7 @@ def _deserialize_journey(entry: Optional[dict]) -> WatchItemJourney:
         times_won=entry.get("times_won", 0),
         last_nominated_date=date.fromisoformat(last_nominated_date_raw) if last_nominated_date_raw else None,
         last_won_date=date.fromisoformat(last_won_date_raw) if last_won_date_raw else None,
+        rejected_by_discord_user_ids=tuple(entry.get("rejected_by_discord_user_ids", ())),
     )
 
 JsonSuggestionRepository._deserialize_journey = staticmethod(_deserialize_journey)

@@ -12,6 +12,8 @@ from typing import List, Optional
 
 from watch_party_manager.domain.vote import VoteRound
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem
+from watch_party_manager.services.discord_message_link import build_discord_message_link
+from watch_party_manager.services.discord_timestamp_formatter import format_datetime_for_display
 from watch_party_manager.services.vote_service import StandingsEntry
 
 
@@ -47,6 +49,64 @@ def format_standings_lines(
         return lines
 
     return []
+
+
+def build_vote_link(vote_round: VoteRound) -> Optional[str]:
+    """Build a jump link to a round's original voting post, when known.
+
+    Returns None for a round missing one or more of guild_id/channel_id/
+    message_id -- e.g. a legacy round created before message references
+    existed, or one whose reference was never attached. Every caller that
+    shows this link (/vote_status, /vote confirmations, vote reminders,
+    and the deadline-change/cancellation notices below) treats None the
+    same way: omit the link entirely rather than showing a broken one.
+    """
+    if vote_round.guild_id is None or vote_round.channel_id is None or vote_round.message_id is None:
+        return None
+    return build_discord_message_link(vote_round.guild_id, vote_round.channel_id, vote_round.message_id)
+
+
+def build_vote_deadline_change_notice(vote_round: VoteRound) -> str:
+    """Build the public notice announcing a round's deadline changed.
+
+    Posted by /edit_vote's "Change End Time" action, after
+    VoteService.reschedule_round() has already updated and persisted the
+    round's new closes_at.
+
+    Args:
+        vote_round: The round, already updated to its new closes_at.
+
+    Returns:
+        The notice text, including a link to the original post when available.
+    """
+    lines = [
+        f"Voting round {vote_round.id}'s deadline has changed.",
+        f"Voting now ends: {format_datetime_for_display(vote_round.closes_at)}",
+    ]
+    link = build_vote_link(vote_round)
+    if link:
+        lines.append(f"Original post: {link}")
+    return "\n".join(lines)
+
+
+def build_vote_cancellation_notice(vote_round: VoteRound) -> str:
+    """Build the public notice announcing a round was cancelled.
+
+    Posted by /edit_vote's "Cancel Vote" action, after
+    VoteService.cancel_round() has already marked the round CANCELLED.
+    Never mentions a winner -- cancelling a vote never determines one.
+
+    Args:
+        vote_round: The now-cancelled round.
+
+    Returns:
+        The notice text, including a link to the original post when available.
+    """
+    lines = [f"Voting round {vote_round.id} has been cancelled by WASH Crew."]
+    link = build_vote_link(vote_round)
+    if link:
+        lines.append(f"Original post: {link}")
+    return "\n".join(lines)
 
 
 def _format_winner_display(watch_item: WatchItem) -> str:

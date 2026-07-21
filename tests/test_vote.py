@@ -266,3 +266,27 @@ class VoteRoundDatabaseTests(unittest.TestCase):
     def test_rejects_non_positive_database_id(self) -> None:
         with self.assertRaises(ValueError):
             VoteRound(id=1, database_id=0)
+
+
+class VoteRoundCancelledStatusTests(unittest.TestCase):
+    """FR-023: VoteRoundStatus.CANCELLED."""
+
+    def test_supports_cancelled_status(self) -> None:
+        vote_round = VoteRound(id=1, status=VoteRoundStatus.CANCELLED)
+        self.assertEqual(vote_round.status, VoteRoundStatus.CANCELLED)
+
+    def test_cancelled_is_distinct_from_closed(self) -> None:
+        self.assertNotEqual(VoteRoundStatus.CANCELLED, VoteRoundStatus.CLOSED)
+
+    def test_cancelled_round_still_preserves_its_votes(self) -> None:
+        now = utc_now()
+        vote_round = VoteRound(id=1, status=VoteRoundStatus.CANCELLED)
+        vote_round.votes[111] = VoteRecord(
+            discord_user_id=111,
+            suggestion_id=1,
+            original_suggestion_id=1,
+            first_voted_at=now,
+            last_voted_at=now,
+        )
+
+        self.assertEqual(vote_round.votes[111].suggestion_id, 1)

@@ -6,7 +6,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus, VoteVisibility
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem
-from watch_party_manager.services.vote_announcement_formatter import build_vote_completion_announcement
+from watch_party_manager.services.vote_announcement_formatter import (
+    build_vote_cancellation_notice,
+    build_vote_completion_announcement,
+    build_vote_deadline_change_notice,
+    build_vote_link,
+)
 from watch_party_manager.services.vote_service import StandingsEntry
 
 
@@ -106,6 +111,93 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
         self.assertIn("The Matrix ([View on IMDb](https://www.imdb.com/title/tt0133093/))", text)
         self.assertIn("Inception", text)
         self.assertNotIn("Inception ([View on IMDb]", text)
+
+
+class BuildVoteLinkTests(unittest.TestCase):
+    """FR-023: build_vote_link's jump-link helper."""
+
+    def test_builds_a_link_when_all_metadata_is_present(self) -> None:
+        vote_round = VoteRound(id=1, guild_id=100, channel_id=200, message_id=300)
+
+        link = build_vote_link(vote_round)
+
+        self.assertEqual(link, "https://discord.com/channels/100/200/300")
+
+    def test_returns_none_when_guild_id_is_missing(self) -> None:
+        vote_round = VoteRound(id=1, channel_id=200, message_id=300)
+
+        self.assertIsNone(build_vote_link(vote_round))
+
+    def test_returns_none_when_channel_id_is_missing(self) -> None:
+        vote_round = VoteRound(id=1, guild_id=100, message_id=300)
+
+        self.assertIsNone(build_vote_link(vote_round))
+
+    def test_returns_none_when_message_id_is_missing(self) -> None:
+        vote_round = VoteRound(id=1, guild_id=100, channel_id=200)
+
+        self.assertIsNone(build_vote_link(vote_round))
+
+
+class BuildVoteDeadlineChangeNoticeTests(unittest.TestCase):
+    """FR-023: the public notice posted when /edit_vote changes a deadline."""
+
+    def test_mentions_the_round_id(self) -> None:
+        vote_round = VoteRound(id=42)
+
+        text = build_vote_deadline_change_notice(vote_round)
+
+        self.assertIn("42", text)
+        self.assertIn("deadline has changed", text)
+
+    def test_includes_the_link_when_available(self) -> None:
+        vote_round = VoteRound(id=1, guild_id=100, channel_id=200, message_id=300)
+
+        text = build_vote_deadline_change_notice(vote_round)
+
+        self.assertIn("https://discord.com/channels/100/200/300", text)
+
+    def test_omits_the_link_when_unavailable(self) -> None:
+        vote_round = VoteRound(id=1)
+
+        text = build_vote_deadline_change_notice(vote_round)
+
+        self.assertNotIn("discord.com", text)
+
+
+class BuildVoteCancellationNoticeTests(unittest.TestCase):
+    """FR-023: the public notice posted when /edit_vote cancels a round."""
+
+    def test_mentions_the_round_id_and_cancellation(self) -> None:
+        vote_round = VoteRound(id=42, status=VoteRoundStatus.CANCELLED)
+
+        text = build_vote_cancellation_notice(vote_round)
+
+        self.assertIn("42", text)
+        self.assertIn("cancelled", text.lower())
+
+    def test_never_mentions_a_winner(self) -> None:
+        vote_round = VoteRound(id=1, status=VoteRoundStatus.CANCELLED)
+
+        text = build_vote_cancellation_notice(vote_round)
+
+        self.assertNotIn("Winner", text)
+
+    def test_includes_the_link_when_available(self) -> None:
+        vote_round = VoteRound(
+            id=1, status=VoteRoundStatus.CANCELLED, guild_id=100, channel_id=200, message_id=300
+        )
+
+        text = build_vote_cancellation_notice(vote_round)
+
+        self.assertIn("https://discord.com/channels/100/200/300", text)
+
+    def test_omits_the_link_when_unavailable(self) -> None:
+        vote_round = VoteRound(id=1, status=VoteRoundStatus.CANCELLED)
+
+        text = build_vote_cancellation_notice(vote_round)
+
+        self.assertNotIn("discord.com", text)
 
 
 if __name__ == "__main__":

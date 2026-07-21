@@ -81,6 +81,83 @@ class WatchItemJourneyModelTests(unittest.TestCase):
 
         self.assertEqual(journey.winning_vote, "The Matrix")
 
+    def test_rejected_by_discord_user_ids_defaults_to_empty(self) -> None:
+        journey = WatchItemJourney()
+
+        self.assertEqual(journey.rejected_by_discord_user_ids, ())
+
+    def test_rejected_by_discord_user_ids_deduplicates_on_init(self) -> None:
+        journey = WatchItemJourney(rejected_by_discord_user_ids=(1, 2, 1))
+
+        self.assertEqual(journey.rejected_by_discord_user_ids, (1, 2))
+
+    def test_rejected_by_discord_user_ids_validates_positive_integers(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchItemJourney(rejected_by_discord_user_ids=(0,))
+
+        with self.assertRaises(ValueError):
+            WatchItemJourney(rejected_by_discord_user_ids=(-1,))
+
+
+class RecordRejectionTests(unittest.TestCase):
+    def test_records_a_new_rejection(self) -> None:
+        journey = WatchItemJourney()
+
+        recorded = journey.record_rejection(1)
+
+        self.assertTrue(recorded)
+        self.assertEqual(journey.rejected_by_discord_user_ids, (1,))
+
+    def test_records_multiple_distinct_rejections(self) -> None:
+        journey = WatchItemJourney()
+
+        journey.record_rejection(1)
+        journey.record_rejection(2)
+
+        self.assertEqual(journey.rejected_by_discord_user_ids, (1, 2))
+
+    def test_duplicate_rejection_from_the_same_member_is_a_no_op(self) -> None:
+        journey = WatchItemJourney()
+        journey.record_rejection(1)
+
+        recorded_again = journey.record_rejection(1)
+
+        self.assertFalse(recorded_again)
+        self.assertEqual(journey.rejected_by_discord_user_ids, (1,))
+
+    def test_rejects_a_non_positive_discord_user_id(self) -> None:
+        journey = WatchItemJourney()
+
+        with self.assertRaises(ValueError):
+            journey.record_rejection(0)
+
+
+class RemoveRejectionTests(unittest.TestCase):
+    def test_removes_an_existing_rejection(self) -> None:
+        journey = WatchItemJourney()
+        journey.record_rejection(1)
+
+        removed = journey.remove_rejection(1)
+
+        self.assertTrue(removed)
+        self.assertEqual(journey.rejected_by_discord_user_ids, ())
+
+    def test_removing_a_rejection_that_does_not_exist_is_a_no_op(self) -> None:
+        journey = WatchItemJourney()
+
+        removed = journey.remove_rejection(1)
+
+        self.assertFalse(removed)
+
+    def test_removing_one_rejection_preserves_others(self) -> None:
+        journey = WatchItemJourney()
+        journey.record_rejection(1)
+        journey.record_rejection(2)
+
+        journey.remove_rejection(1)
+
+        self.assertEqual(journey.rejected_by_discord_user_ids, (2,))
+
 
 if __name__ == "__main__":
     unittest.main()

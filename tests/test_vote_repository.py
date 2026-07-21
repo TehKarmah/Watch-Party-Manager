@@ -337,3 +337,63 @@ class VoteRepositoryDatabaseTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertIsNone(self.repository.load().rounds[0].database_id)
+
+
+class VoteRepositoryCancelledStatusTests(unittest.TestCase):
+    """FR-023: VoteRoundStatus.CANCELLED persists and loads like any other status."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.file_path = Path(self._temp_dir.name) / "voting_cancelled.json"
+        self.repository = JsonVoteRepository(self.file_path)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_save_then_load_round_trips_cancelled_status(self) -> None:
+        self.repository.save([VoteRound(id=1, status=VoteRoundStatus.CANCELLED)], next_round_id=2)
+
+        result = self.repository.load()
+        self.assertEqual(result.rounds[0].status, VoteRoundStatus.CANCELLED)
+
+    def test_a_cancelled_rounds_votes_are_preserved_across_a_reload(self) -> None:
+        now = utc_now()
+        vote_round = VoteRound(id=1, status=VoteRoundStatus.CANCELLED)
+        vote_round.votes[111] = VoteRecord(
+            discord_user_id=111,
+            suggestion_id=1,
+            original_suggestion_id=1,
+            first_voted_at=now,
+            last_voted_at=now,
+        )
+        self.repository.save([vote_round], next_round_id=2)
+
+        result = self.repository.load()
+        self.assertEqual(result.rounds[0].votes[111].suggestion_id, 1)
+
+    def test_legacy_records_saved_before_cancelled_existed_remain_readable(self) -> None:
+        # A legacy round's status is always "open" or "closed" -- this
+        # documents that loading one is unaffected by CANCELLED existing
+        # as a possible value now.
+        now = utc_now()
+        legacy_json = f"""
+        {{
+          "next_round_id": 2,
+          "rounds": [
+            {{
+              "id": 1,
+              "status": "closed",
+              "visibility": "visible",
+              "created_at": "{now.isoformat()}",
+              "closes_at": null,
+              "winning_suggestion_id": null,
+              "votes": []
+            }}
+          ]
+        }}
+        """
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+        self.assertEqual(result.rounds[0].status, VoteRoundStatus.CLOSED)

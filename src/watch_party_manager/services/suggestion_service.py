@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from typing import Optional
 
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
-from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem
+from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
+
+# Used when a caller doesn't resolve a guild/database-specific
+# configuration value -- matches SuggestionRulesConfig.rejection_threshold's
+# own documented default (see domain/suggestion_database_configuration.py).
+DEFAULT_REJECTION_THRESHOLD = 2
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
@@ -218,12 +223,119 @@ class SuggestionService:
         self._save()
         return True
 
-    def get_suggestions_for_database(self, database_id: int) -> list[WatchItem]:
-        """Return suggestions belonging to one database, in insertion order."""
-        return [
-            item for item in self._suggestions.values()
-            if item.database_id == database_id
-        ]
+    def reject_suggestion(
+        self,
+        suggestion_id: int,
+        discord_user_id: int,
+        rejection_threshold: int = DEFAULT_REJECTION_THRESHOLD,
+    ) -> SuggestionResult:
+        """Record a Watch Party member's "I will not watch" rejection.
+
+        Automatically archives the suggestion once rejection_threshold
+        distinct members have rejected it: its status becomes ARCHIVED,
+        which excludes it from get_suggestions_for_database()'s default
+        (active) results -- used by /list's standard view and nominee
+        selection -- without ever removing the suggestion or its
+        rejection history.
+
+        Args:
+            suggestion_id: The suggestion being rejected.
+            discord_user_id: The rejecting member's Discord user ID.
+            rejection_threshold: How many distinct rejections trigger
+                automatic archiving. Callers should resolve the guild's
+                configured value when available (see
+                SuggestionRulesConfig.rejection_threshold) and pass it
+                here; defaults to this project's documented default of 2.
+
+        Returns:
+            SuggestionResult indicating success or failure. Fails if the
+            suggestion doesn't exist, has already been archived, or this
+            member has already rejected it.
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return SuggestionResult(success=False, message="That suggestion doesn't exist.")
+
+        if watch_item.status == WatchItemStatus.ARCHIVED:
+            return SuggestionResult(
+                success=False,
+                message="That suggestion has already been archived and can no longer be rejected.",
+            )
+
+        if not watch_item.journey.record_rejection(discord_user_id):
+            return SuggestionResult(
+                success=False,
+                message="You've already indicated you will not watch this.",
+            )
+
+        archived = len(watch_item.journey.rejected_by_discord_user_ids) >= rejection_threshold
+        if archived:
+            watch_item.status = WatchItemStatus.ARCHIVED
+
+        self._save()
+
+        if archived:
+            return SuggestionResult(
+                success=True,
+                message=(
+                    f'Your rejection was recorded. "{watch_item.title}" has been archived '
+                    "after reaching the rejection threshold."
+                ),
+                watch_item=watch_item,
+            )
+        return SuggestionResult(
+            success=True,
+            message=f'Your rejection of "{watch_item.title}" has been recorded.',
+            watch_item=watch_item,
+        )
+
+    def remove_rejection(self, suggestion_id: int, discord_user_id: int) -> SuggestionResult:
+        """Remove a Watch Party member's earlier "I will not watch" rejection.
+
+        Args:
+            suggestion_id: The suggestion to remove the rejection from.
+            discord_user_id: The member whose rejection should be removed.
+
+        Returns:
+            SuggestionResult indicating success or failure. Fails if the
+            suggestion doesn't exist, has already been archived (its
+            rejection history is preserved and no longer editable), or
+            this member had not rejected it.
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return SuggestionResult(success=False, message="That suggestion doesn't exist.")
+
+        if watch_item.status == WatchItemStatus.ARCHIVED:
+            return SuggestionResult(
+                success=False,
+                message="That suggestion has already been archived; its rejections can no longer be changed.",
+            )
+
+        if not watch_item.journey.remove_rejection(discord_user_id):
+            return SuggestionResult(success=False, message="You haven't rejected this suggestion.")
+
+        self._save()
+        return SuggestionResult(
+            success=True,
+            message=f'Your rejection of "{watch_item.title}" has been removed.',
+            watch_item=watch_item,
+        )
+
+    def get_suggestions_for_database(
+        self, database_id: int, *, include_archived: bool = False
+    ) -> list[WatchItem]:
+        """Return suggestions belonging to one database, in insertion order.
+
+        Archived suggestions (see reject_suggestion) are excluded by
+        default, since they've been removed from the active suggestion
+        pool -- pass include_archived=True for administrative views that
+        still need to see them (e.g. the WASH Crew /list view).
+        """
+        items = [item for item in self._suggestions.values() if item.database_id == database_id]
+        if include_archived:
+            return items
+        return [item for item in items if item.status != WatchItemStatus.ARCHIVED]
 
     def clear_suggestions(self) -> None:
         """Clear all suggestions. Used for testing or bot reset."""

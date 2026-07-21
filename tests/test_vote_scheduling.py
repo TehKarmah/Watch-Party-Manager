@@ -31,7 +31,9 @@ from watch_party_manager.scheduler.vote_scheduling import (
     build_close_vote_job,
     build_vote_reminder_job,
     build_vote_scheduled_jobs,
+    cancel_vote_jobs,
     close_vote_logical_key,
+    reschedule_vote_jobs,
     resolve_vote_reminder_settings,
     schedule_vote_jobs,
     vote_reminder_logical_key,
@@ -384,6 +386,95 @@ class ScheduleVoteJobsTests(unittest.IsolatedAsyncioTestCase):
         # calling it (as bot.py's handle_start_vote_completion does when
         # perform_start_vote() reports failure) results in zero jobs.
         self.assertEqual(len(self.repository.jobs), 0)
+
+
+class CancelVoteJobsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.repository = MemorySchedulerRepository()
+        self.scheduler_service = SchedulerService(self.repository)
+
+    async def test_cancels_both_the_close_and_reminder_jobs(self) -> None:
+        vote_round = make_vote_round(vote_id=7)
+        await schedule_vote_jobs(self.scheduler_service, vote_round, guild_id=100)
+
+        await cancel_vote_jobs(self.scheduler_service, round_id=7)
+
+        active_statuses = {job.logical_key: job.status for job in self.repository.jobs.values()}
+        self.assertEqual(active_statuses["vote:7:close"], JobStatus.CANCELLED)
+        self.assertEqual(active_statuses["vote:7:reminder"], JobStatus.CANCELLED)
+
+    async def test_is_a_no_op_when_no_scheduler_service_is_given(self) -> None:
+        # Should simply not raise.
+        await cancel_vote_jobs(None, round_id=7)
+
+    async def test_is_a_no_op_when_no_job_is_active_for_the_round(self) -> None:
+        # Should simply not raise -- there is nothing scheduled for round 7.
+        await cancel_vote_jobs(self.scheduler_service, round_id=7)
+
+        self.assertEqual(len(self.repository.jobs), 0)
+
+    async def test_calling_it_twice_is_safe(self) -> None:
+        vote_round = make_vote_round(vote_id=7)
+        await schedule_vote_jobs(self.scheduler_service, vote_round, guild_id=100)
+
+        await cancel_vote_jobs(self.scheduler_service, round_id=7)
+        await cancel_vote_jobs(self.scheduler_service, round_id=7)
+
+        active_statuses = {job.logical_key: job.status for job in self.repository.jobs.values()}
+        self.assertEqual(active_statuses["vote:7:close"], JobStatus.CANCELLED)
+        self.assertEqual(active_statuses["vote:7:reminder"], JobStatus.CANCELLED)
+
+
+class RescheduleVoteJobsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.repository = MemorySchedulerRepository()
+        self.scheduler_service = SchedulerService(self.repository)
+
+    async def test_cancels_the_old_jobs_and_creates_new_ones(self) -> None:
+        vote_round = make_vote_round(vote_id=7)
+        await schedule_vote_jobs(self.scheduler_service, vote_round, guild_id=100)
+        old_job_ids = {job.job_id for job in self.repository.jobs.values()}
+
+        new_closes_at = vote_round.closes_at + timedelta(days=3)
+        vote_round.closes_at = new_closes_at
+        scheduled = await reschedule_vote_jobs(self.scheduler_service, vote_round, guild_id=100)
+
+        self.assertEqual(len(scheduled), 2)
+        for job in scheduled:
+            self.assertNotIn(job.job_id, old_job_ids)
+
+        old_statuses = {
+            job.status for job_id, job in self.repository.jobs.items() if job_id in old_job_ids
+        }
+        self.assertEqual(old_statuses, {JobStatus.CANCELLED})
+
+    async def test_new_close_job_run_at_reflects_the_new_deadline(self) -> None:
+        vote_round = make_vote_round(vote_id=7)
+        await schedule_vote_jobs(self.scheduler_service, vote_round, guild_id=100)
+
+        new_closes_at = datetime(2027, 1, 1, tzinfo=timezone.utc)
+        vote_round.closes_at = new_closes_at
+        scheduled = await reschedule_vote_jobs(self.scheduler_service, vote_round, guild_id=100)
+
+        close_job = next(job for job in scheduled if job.job_type == CLOSE_VOTE_JOB_TYPE)
+        self.assertEqual(close_job.run_at, new_closes_at)
+
+    async def test_returns_an_empty_list_when_no_scheduler_service_is_given(self) -> None:
+        vote_round = make_vote_round(vote_id=7)
+
+        scheduled = await reschedule_vote_jobs(None, vote_round, guild_id=100)
+
+        self.assertEqual(scheduled, [])
+
+    async def test_rescheduling_does_not_duplicate_jobs(self) -> None:
+        vote_round = make_vote_round(vote_id=7)
+        await schedule_vote_jobs(self.scheduler_service, vote_round, guild_id=100)
+
+        vote_round.closes_at = vote_round.closes_at + timedelta(days=1)
+        await reschedule_vote_jobs(self.scheduler_service, vote_round, guild_id=100)
+
+        active_jobs = [job for job in self.repository.jobs.values() if job.is_active]
+        self.assertEqual(len(active_jobs), 2)
 
 
 if __name__ == "__main__":

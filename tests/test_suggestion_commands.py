@@ -10,15 +10,21 @@ from watch_party_manager.bot import (
     perform_add_suggestion_from_input,
     perform_list_suggestions,
     perform_list_suggestions_response,
+    perform_reject_suggestion,
+    perform_remove_rejection,
 )
 from watch_party_manager.domain.watch_item import MetadataProvider
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
+from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService
 from watch_party_manager.services.suggestion_service import SuggestionService
+
+WASH_CREW_ROLE_ID = 999
+WATCH_PARTY_MEMBER_ROLE_ID = 555
 
 GUILD_ID = 100
 CONFIGURED_CHANNEL_ID = 200
@@ -32,8 +38,9 @@ class FakeRole:
 
 
 class FakeMember:
-    def __init__(self, role_ids=()) -> None:
+    def __init__(self, role_ids=(), *, user_id: int = 1) -> None:
         self.roles = [FakeRole(role_id) for role_id in role_ids]
+        self.id = user_id
 
 
 class SuggestionCommandTests(unittest.TestCase):
@@ -352,6 +359,44 @@ class SuggestionCommandTests(unittest.TestCase):
         self.assertTrue(ephemeral)
         self.assertIn("standard, crew", message)
 
+    # --- FR-022: archived suggestions and /list visibility -----------------------
+
+    def test_standard_list_excludes_an_archived_suggestion(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        matrix = self.suggestion_service.suggest(
+            "The Matrix", database_id=created.database.database_id
+        ).watch_item
+        self.suggestion_service.suggest("Inception", database_id=created.database.database_id)
+        self.suggestion_service.reject_suggestion(matrix.id, discord_user_id=1, rejection_threshold=1)
+
+        message = perform_list_suggestions(self.suggestion_service, GUILD_ID, CONFIGURED_CHANNEL_ID)
+
+        self.assertNotIn("The Matrix", message)
+        self.assertIn("Inception", message)
+
+    def test_crew_list_still_shows_an_archived_suggestion(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        matrix = self.suggestion_service.suggest(
+            "The Matrix", database_id=created.database.database_id
+        ).watch_item
+        self.suggestion_service.reject_suggestion(matrix.id, discord_user_id=1, rejection_threshold=1)
+
+        message, ephemeral = perform_list_suggestions_response(
+            self.suggestion_service,
+            GUILD_ID,
+            CONFIGURED_CHANNEL_ID,
+            user=FakeMember([777]),
+            wash_crew_role_id=777,
+            view="crew",
+        )
+
+        self.assertIn("The Matrix", message)
+        self.assertIn("Status: Archived", message)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -484,4 +529,204 @@ class SuggestionInputCommandIntegrationTests(unittest.IsolatedAsyncioTestCase):
             watch_item.metadata_ids[MetadataProvider.IMDB],
             "https://www.imdb.com/title/tt0133093/",
         )
+
+
+class RejectionCommandTests(unittest.TestCase):
+    """FR-022: /reject and /unreject."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.permission_service = PermissionService(
+            watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID,
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+        )
+        self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _watch_party_member(self, user_id: int = 1) -> FakeMember:
+        return FakeMember([WATCH_PARTY_MEMBER_ROLE_ID], user_id=user_id)
+
+    def _non_member(self, user_id: int = 1) -> FakeMember:
+        return FakeMember([], user_id=user_id)
+
+    # --- /reject: permission enforcement -----------------------------------------
+
+    def test_reject_requires_watch_party_member_role(self) -> None:
+        message, ephemeral = perform_reject_suggestion(
+            self.suggestion_service,
+            None,
+            self.permission_service,
+            self._non_member(),
+            GUILD_ID,
+            self.matrix.id,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("Watch Party member", message)
+        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
+        self.assertEqual(journey.rejected_by_discord_user_ids, ())
+
+    def test_reject_allows_a_watch_party_member(self) -> None:
+        message, ephemeral = perform_reject_suggestion(
+            self.suggestion_service,
+            None,
+            self.permission_service,
+            self._watch_party_member(),
+            GUILD_ID,
+            self.matrix.id,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("recorded", message)
+
+    def test_reject_allows_wash_crew_too(self) -> None:
+        # WASH Crew inherits Watch Party member permissions (see PermissionService).
+        crew_member = FakeMember([WASH_CREW_ROLE_ID], user_id=1)
+
+        message, ephemeral = perform_reject_suggestion(
+            self.suggestion_service, None, self.permission_service, crew_member, GUILD_ID, self.matrix.id
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("recorded", message)
+
+    # --- /reject: happy path + graceful failures ---------------------------------
+
+    def test_reject_records_the_rejection(self) -> None:
+        perform_reject_suggestion(
+            self.suggestion_service,
+            None,
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            self.matrix.id,
+        )
+
+        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
+        self.assertEqual(journey.rejected_by_discord_user_ids, (1,))
+
+    def test_reject_is_graceful_for_a_nonexistent_suggestion(self) -> None:
+        message, ephemeral = perform_reject_suggestion(
+            self.suggestion_service,
+            None,
+            self.permission_service,
+            self._watch_party_member(),
+            GUILD_ID,
+            999,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("doesn't exist", message)
+
+    def test_reject_uses_the_configured_threshold_when_available(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        inception = self.suggestion_service.suggest(
+            "Inception", database_id=created.database.database_id
+        ).watch_item
+        self.assertIsNotNone(inception)
+
+        class FakeConfig:
+            class suggestion_rules:
+                rejection_threshold = 1
+
+        class FakeConfigRepository:
+            def get(self, guild_id, database_id):
+                return FakeConfig()
+
+        message, ephemeral = perform_reject_suggestion(
+            self.suggestion_service,
+            FakeConfigRepository(),
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            inception.id,
+        )
+
+        self.assertIn("archived", message)
+        self.assertEqual(
+            self.suggestion_service.get_suggestion(inception.id).status.value, "archived"
+        )
+
+    def test_reject_falls_back_to_default_threshold_when_unconfigured(self) -> None:
+        message, ephemeral = perform_reject_suggestion(
+            self.suggestion_service,
+            None,
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            self.matrix.id,
+        )
+
+        self.assertNotIn("archived", message)
+
+    # --- /unreject: permission enforcement ---------------------------------------
+
+    def test_unreject_requires_watch_party_member_role(self) -> None:
+        perform_reject_suggestion(
+            self.suggestion_service,
+            None,
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            self.matrix.id,
+        )
+
+        message, ephemeral = perform_remove_rejection(
+            self.suggestion_service, self.permission_service, self._non_member(1), self.matrix.id
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("Watch Party member", message)
+        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
+        self.assertEqual(journey.rejected_by_discord_user_ids, (1,))
+
+    # --- /unreject: happy path + graceful failures -------------------------------
+
+    def test_unreject_removes_the_rejection(self) -> None:
+        perform_reject_suggestion(
+            self.suggestion_service,
+            None,
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            self.matrix.id,
+        )
+
+        message, ephemeral = perform_remove_rejection(
+            self.suggestion_service, self.permission_service, self._watch_party_member(1), self.matrix.id
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("removed", message)
+        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
+        self.assertEqual(journey.rejected_by_discord_user_ids, ())
+
+    def test_unreject_is_graceful_when_the_member_never_rejected_it(self) -> None:
+        message, ephemeral = perform_remove_rejection(
+            self.suggestion_service, self.permission_service, self._watch_party_member(1), self.matrix.id
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("haven't rejected", message)
+
+    def test_unreject_is_graceful_for_a_nonexistent_suggestion(self) -> None:
+        message, ephemeral = perform_remove_rejection(
+            self.suggestion_service, self.permission_service, self._watch_party_member(), 999
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("doesn't exist", message)
+
+
+if __name__ == "__main__":
+    unittest.main()
 

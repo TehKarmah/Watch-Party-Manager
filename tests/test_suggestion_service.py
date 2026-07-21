@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from watch_party_manager.domain.watch_item import MetadataProvider
+from watch_party_manager.domain.watch_item import MetadataProvider, WatchItemStatus
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
@@ -960,3 +960,220 @@ class SuggestionServiceJourneyMethodsTests(unittest.TestCase):
         self.assertEqual(journey.times_won, 2)
         self.assertEqual(journey.last_won_date, date(2026, 7, 1))
         self.assertEqual(journey.voting_appearances, 2)
+
+
+class RejectSuggestionTests(unittest.TestCase):
+    """FR-022: the "I will not watch" rejection workflow."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    # --- Adding a rejection --------------------------------------------------
+
+    def test_records_a_rejection(self) -> None:
+        result = self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1)
+
+        self.assertTrue(result.success)
+        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
+        self.assertEqual(journey.rejected_by_discord_user_ids, (1,))
+
+    def test_reject_fails_for_a_nonexistent_suggestion(self) -> None:
+        result = self.suggestion_service.reject_suggestion(999, discord_user_id=1)
+
+        self.assertFalse(result.success)
+        self.assertIn("doesn't exist", result.message)
+
+    def test_reject_persists_the_rejection(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1)
+
+        root = Path(self._temp_dir.name)
+        reloaded = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.assertEqual(
+            reloaded.get_suggestion(self.matrix.id).journey.rejected_by_discord_user_ids, (1,)
+        )
+
+    # --- Duplicate rejection prevention ---------------------------------------
+
+    def test_duplicate_rejection_from_the_same_member_fails(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1)
+
+        result = self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1)
+
+        self.assertFalse(result.success)
+        self.assertIn("already indicated", result.message)
+
+    def test_duplicate_rejection_does_not_count_again_toward_the_threshold(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+
+        watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(watch_item.status, WatchItemStatus.SUGGESTED)
+
+    # --- Removing a rejection --------------------------------------------------
+
+    def test_removes_a_rejection(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1)
+
+        result = self.suggestion_service.remove_rejection(self.matrix.id, discord_user_id=1)
+
+        self.assertTrue(result.success)
+        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
+        self.assertEqual(journey.rejected_by_discord_user_ids, ())
+
+    def test_remove_rejection_fails_for_a_nonexistent_suggestion(self) -> None:
+        result = self.suggestion_service.remove_rejection(999, discord_user_id=1)
+
+        self.assertFalse(result.success)
+        self.assertIn("doesn't exist", result.message)
+
+    def test_remove_rejection_fails_when_the_member_never_rejected_it(self) -> None:
+        result = self.suggestion_service.remove_rejection(self.matrix.id, discord_user_id=1)
+
+        self.assertFalse(result.success)
+        self.assertIn("haven't rejected", result.message)
+
+    def test_remove_rejection_persists_the_change(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1)
+        self.suggestion_service.remove_rejection(self.matrix.id, discord_user_id=1)
+
+        root = Path(self._temp_dir.name)
+        reloaded = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.assertEqual(
+            reloaded.get_suggestion(self.matrix.id).journey.rejected_by_discord_user_ids, ()
+        )
+
+    # --- Rejection threshold reached / automatic archive ------------------------
+
+    def test_reaching_the_threshold_archives_the_suggestion(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+
+        result = self.suggestion_service.reject_suggestion(
+            self.matrix.id, discord_user_id=2, rejection_threshold=2
+        )
+
+        self.assertTrue(result.success)
+        self.assertIn("archived", result.message)
+        watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(watch_item.status, WatchItemStatus.ARCHIVED)
+
+    def test_below_the_threshold_does_not_archive(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+
+        watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(watch_item.status, WatchItemStatus.SUGGESTED)
+
+    def test_default_threshold_is_two(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1)
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2)
+
+        watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(watch_item.status, WatchItemStatus.ARCHIVED)
+
+    def test_archiving_preserves_the_rejection_history(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2, rejection_threshold=2)
+
+        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
+        self.assertEqual(journey.rejected_by_discord_user_ids, (1, 2))
+
+    def test_custom_threshold_is_honored(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=3)
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2, rejection_threshold=3)
+
+        watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(watch_item.status, WatchItemStatus.SUGGESTED)
+
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=3, rejection_threshold=3)
+        self.assertEqual(
+            self.suggestion_service.get_suggestion(self.matrix.id).status, WatchItemStatus.ARCHIVED
+        )
+
+    # --- Archived suggestions reject additional rejections/removals -------------
+
+    def test_archived_suggestions_reject_additional_rejections(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2, rejection_threshold=2)
+
+        result = self.suggestion_service.reject_suggestion(
+            self.matrix.id, discord_user_id=3, rejection_threshold=2
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("already been archived", result.message)
+
+    def test_archived_suggestions_reject_removal_of_a_rejection(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2, rejection_threshold=2)
+
+        result = self.suggestion_service.remove_rejection(self.matrix.id, discord_user_id=1)
+
+        self.assertFalse(result.success)
+        self.assertIn("already been archived", result.message)
+        # The rejection history is untouched, exactly as it was when archived.
+        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
+        self.assertEqual(journey.rejected_by_discord_user_ids, (1, 2))
+
+
+class GetSuggestionsForDatabaseArchivingTests(unittest.TestCase):
+    """FR-022: archived suggestions are excluded from the active pool by default."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.database = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=1, channel_id=100
+        ).database
+        self.matrix = self.suggestion_service.suggest(
+            "The Matrix", database_id=self.database.database_id
+        ).watch_item
+        self.inception = self.suggestion_service.suggest(
+            "Inception", database_id=self.database.database_id
+        ).watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_archived_suggestions_are_excluded_by_default(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=1)
+
+        items = self.suggestion_service.get_suggestions_for_database(self.database.database_id)
+
+        titles = {item.title for item in items}
+        self.assertNotIn("The Matrix", titles)
+        self.assertIn("Inception", titles)
+
+    def test_include_archived_true_still_returns_them(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=1)
+
+        items = self.suggestion_service.get_suggestions_for_database(
+            self.database.database_id, include_archived=True
+        )
+
+        titles = {item.title for item in items}
+        self.assertIn("The Matrix", titles)
+        self.assertIn("Inception", titles)
+
+    def test_non_archived_suggestions_are_unaffected(self) -> None:
+        items = self.suggestion_service.get_suggestions_for_database(self.database.database_id)
+
+        self.assertEqual(len(items), 2)

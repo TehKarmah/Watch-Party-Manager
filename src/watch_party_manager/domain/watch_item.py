@@ -31,6 +31,7 @@ class WatchItemStatus(str, Enum):
     SCHEDULED = "scheduled"
     WATCHED = "watched"
     REWATCH_ELIGIBLE = "rewatch_eligible"
+    ARCHIVED = "archived"
 
 
 @dataclass(slots=True)

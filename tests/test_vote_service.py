@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -352,6 +353,142 @@ class VoteServiceTests(unittest.TestCase):
 
         result = self.service.reset_member_vote_changes(created.vote_round.id, 111)
         self.assertFalse(result.success)
+
+
+class VoteServiceRescheduleAndCancelTests(unittest.TestCase):
+    """FR-023: VoteService.reschedule_round()/cancel_round()."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.repository = JsonVoteRepository(Path(self._temp_dir.name) / "voting.json")
+        self.suggestion_lookup = FakeSuggestionLookup(existing_ids=[1, 2, 3])
+        self.service = VoteService(self.suggestion_lookup, repository=self.repository)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    # --- reschedule_round ---------------------------------------------
+
+    def test_reschedule_round_updates_the_closing_time(self) -> None:
+        created = self.service.create_round()
+        new_closes_at = datetime(2027, 1, 1, tzinfo=timezone.utc)
+
+        result = self.service.reschedule_round(created.vote_round.id, new_closes_at)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.vote_round.closes_at, new_closes_at)
+        self.assertEqual(self.service.get_round(created.vote_round.id).closes_at, new_closes_at)
+
+    def test_reschedule_round_preserves_the_round_identity(self) -> None:
+        created = self.service.create_round()
+
+        result = self.service.reschedule_round(
+            created.vote_round.id, datetime(2027, 1, 1, tzinfo=timezone.utc)
+        )
+
+        self.assertEqual(result.vote_round.id, created.vote_round.id)
+
+    def test_reschedule_round_preserves_submitted_votes(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        self.service.reschedule_round(
+            created.vote_round.id, datetime(2027, 1, 1, tzinfo=timezone.utc)
+        )
+
+        vote_round = self.service.get_round(created.vote_round.id)
+        self.assertEqual(vote_round.votes[111].suggestion_id, 1)
+
+    def test_reschedule_round_of_an_unknown_round_is_rejected(self) -> None:
+        result = self.service.reschedule_round(999, datetime(2027, 1, 1, tzinfo=timezone.utc))
+
+        self.assertFalse(result.success)
+        self.assertIn("doesn't exist", result.message)
+
+    def test_reschedule_round_of_a_closed_round_is_rejected(self) -> None:
+        created = self.service.create_round()
+        self.service.close_round(created.vote_round.id)
+
+        result = self.service.reschedule_round(
+            created.vote_round.id, datetime(2027, 1, 1, tzinfo=timezone.utc)
+        )
+
+        self.assertFalse(result.success)
+
+    def test_reschedule_round_of_a_cancelled_round_is_rejected(self) -> None:
+        created = self.service.create_round()
+        self.service.cancel_round(created.vote_round.id)
+
+        result = self.service.reschedule_round(
+            created.vote_round.id, datetime(2027, 1, 1, tzinfo=timezone.utc)
+        )
+
+        self.assertFalse(result.success)
+
+    # --- cancel_round ----------------------------------------------------
+
+    def test_cancel_round_marks_it_cancelled(self) -> None:
+        created = self.service.create_round()
+
+        result = self.service.cancel_round(created.vote_round.id)
+
+        self.assertTrue(result.success)
+        self.assertEqual(
+            self.service.get_round(created.vote_round.id).status, VoteRoundStatus.CANCELLED
+        )
+
+    def test_cancel_round_preserves_submitted_votes(self) -> None:
+        created = self.service.create_round()
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        self.service.cancel_round(created.vote_round.id)
+
+        vote_round = self.service.get_round(created.vote_round.id)
+        self.assertEqual(vote_round.votes[111].suggestion_id, 1)
+
+    def test_cancel_round_prevents_further_voting(self) -> None:
+        created = self.service.create_round()
+        self.service.cancel_round(created.vote_round.id)
+
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+
+        self.assertFalse(result.success)
+        self.assertIsNone(self.service.get_open_round())
+
+    def test_cancel_round_of_an_unknown_round_is_rejected(self) -> None:
+        result = self.service.cancel_round(999)
+
+        self.assertFalse(result.success)
+        self.assertIn("doesn't exist", result.message)
+
+    def test_cancelling_an_already_cancelled_round_is_rejected(self) -> None:
+        created = self.service.create_round()
+        self.service.cancel_round(created.vote_round.id)
+
+        result = self.service.cancel_round(created.vote_round.id)
+
+        self.assertFalse(result.success)
+
+    def test_cancelling_a_closed_round_is_rejected(self) -> None:
+        created = self.service.create_round()
+        self.service.close_round(created.vote_round.id)
+
+        result = self.service.cancel_round(created.vote_round.id)
+
+        self.assertFalse(result.success)
+
+    def test_closing_a_cancelled_round_is_rejected(self) -> None:
+        # FR-023: a cancelled round must never be resurrected into a
+        # normal completion with a winner by a late-firing close_vote job.
+        created = self.service.create_round()
+        self.service.cancel_round(created.vote_round.id)
+
+        result = self.service.close_round(created.vote_round.id)
+
+        self.assertFalse(result.success)
+        self.assertEqual(
+            self.service.get_round(created.vote_round.id).status, VoteRoundStatus.CANCELLED
+        )
 
 
 class VoteServiceStandingsAndWinnersTests(unittest.TestCase):

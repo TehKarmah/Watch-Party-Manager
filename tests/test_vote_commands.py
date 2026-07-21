@@ -474,6 +474,42 @@ class VoteCommandTests(unittest.TestCase):
         self.assertEqual(vote_round.votes[111].suggestion_id, 1)
         self.assertEqual(vote_round.votes[222].suggestion_id, 2)
 
+    # --- FR-023: original vote links -----------------------------------
+
+    def test_vote_status_includes_the_original_vote_link_when_available(self) -> None:
+        created = self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+        self.vote_service.attach_message_reference(
+            created.vote_round.id, guild_id=100, channel_id=200, message_id=300
+        )
+
+        message = perform_vote_status(self.vote_service, self.suggestion_service)
+
+        self.assertIn("https://discord.com/channels/100/200/300", message)
+
+    def test_vote_status_omits_the_link_for_a_legacy_round_without_message_metadata(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
+        message = perform_vote_status(self.vote_service, self.suggestion_service)
+
+        self.assertNotIn("discord.com", message)
+
+    def test_vote_confirmation_includes_the_original_vote_link_when_available(self) -> None:
+        created = self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+        self.vote_service.attach_message_reference(
+            created.vote_round.id, guild_id=100, channel_id=200, message_id=300
+        )
+
+        message, _ = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertIn("https://discord.com/channels/100/200/300", message)
+
+    def test_vote_confirmation_omits_the_link_for_a_legacy_round_without_message_metadata(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
+        message, _ = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
+
+        self.assertNotIn("discord.com", message)
+
 
 if __name__ == "__main__":
     unittest.main()

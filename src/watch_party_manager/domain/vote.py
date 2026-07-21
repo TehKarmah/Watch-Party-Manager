@@ -39,6 +39,7 @@ class VoteRoundStatus(str, Enum):
 
     OPEN = "open"
     CLOSED = "closed"
+    CANCELLED = "cancelled"
 
 
 @dataclass(slots=True)
