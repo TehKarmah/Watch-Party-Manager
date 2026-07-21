@@ -32,7 +32,13 @@ from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.persistence.guild_configuration_repository import (
     GuildConfigurationRepository,
 )
-from watch_party_manager.scheduler import SchedulerHost, SchedulerService, schedule_vote_jobs
+from watch_party_manager.scheduler import (
+    CLOSE_VOTE_JOB_TYPE,
+    CloseVoteJobHandler,
+    SchedulerHost,
+    SchedulerService,
+    schedule_vote_jobs,
+)
 from watch_party_manager.services.about_service import build_about_content
 from watch_party_manager.services.backup_service import (
     BackupError,
@@ -102,6 +108,9 @@ class WatchPartyBot(commands.Bot):
         self.interactive_voting_restored = False
         self.scheduler_host = SchedulerHost.from_json_file(
             Path("data") / "scheduled_jobs.json"
+        )
+        self.scheduler_host.scheduler_service.register_handler(
+            CLOSE_VOTE_JOB_TYPE, CloseVoteJobHandler(self.vote_service)
         )
         self.guild_configuration_repository = GuildConfigurationRepository()
 
