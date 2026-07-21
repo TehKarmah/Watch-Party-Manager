@@ -74,6 +74,26 @@ class HelpRegistryTests(unittest.TestCase):
             all(entry.audience is HelpAudience.WASH_CREW for entry in crew_commands)
         )
 
+    # --- FR-024: /reject and /unreject no longer appear in /help -----------------
+
+    def test_registry_no_longer_lists_reject(self) -> None:
+        names = [entry.name for entry in COMMAND_HELP]
+        self.assertNotIn("/reject", names)
+
+    def test_registry_no_longer_lists_unreject(self) -> None:
+        names = [entry.name for entry in COMMAND_HELP]
+        self.assertNotIn("/unreject", names)
+
+    def test_member_command_text_does_not_advertise_reject(self) -> None:
+        text = build_command_help_text(show_wash_crew=False)
+        self.assertNotIn("/reject", text)
+        self.assertNotIn("/unreject", text)
+
+    def test_crew_command_text_does_not_advertise_reject(self) -> None:
+        text = build_command_help_text(show_wash_crew=True)
+        self.assertNotIn("/reject", text)
+        self.assertNotIn("/unreject", text)
+
 
 if __name__ == "__main__":
     unittest.main()

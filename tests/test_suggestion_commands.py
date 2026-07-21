@@ -6,14 +6,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import (
+    build_suggestion_view,
+    handle_suggestion_rejection_toggle,
     perform_add_suggestion,
     perform_add_suggestion_from_input,
     perform_list_suggestions,
     perform_list_suggestions_response,
     perform_reject_suggestion,
     perform_remove_rejection,
+    perform_toggle_suggestion_rejection,
 )
-from watch_party_manager.domain.watch_item import MetadataProvider
+from watch_party_manager.domain.watch_item import MetadataProvider, WatchItemStatus
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
@@ -22,6 +25,7 @@ from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService
 from watch_party_manager.services.suggestion_service import SuggestionService
+from watch_party_manager.suggestion_view import SuggestionView
 
 WASH_CREW_ROLE_ID = 999
 WATCH_PARTY_MEMBER_ROLE_ID = 555
@@ -725,6 +729,337 @@ class RejectionCommandTests(unittest.TestCase):
 
         self.assertTrue(ephemeral)
         self.assertIn("doesn't exist", message)
+
+
+class FakeResponse:
+    def __init__(self) -> None:
+        self.sent_message = None
+        self.sent_ephemeral = None
+
+    async def send_message(self, content, ephemeral=False, view=None) -> None:
+        self.sent_message = content
+        self.sent_ephemeral = ephemeral
+
+
+class FakeSuggestionMessage:
+    def __init__(self) -> None:
+        self.edited_view = "not-edited"
+
+    async def edit(self, view="not-edited") -> None:
+        self.edited_view = view
+
+
+class FakeSuggestionInteraction:
+    def __init__(self, user, guild_id=GUILD_ID) -> None:
+        self.user = user
+        self.guild_id = guild_id
+        self.response = FakeResponse()
+        self.message = FakeSuggestionMessage()
+
+
+class SuggestionRejectionToggleTests(unittest.TestCase):
+    """FR-024: perform_toggle_suggestion_rejection -- the "I WILL NOT WATCH" button's core logic."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.permission_service = PermissionService(
+            watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID,
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+        )
+        self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _watch_party_member(self, user_id: int = 1) -> FakeMember:
+        return FakeMember([WATCH_PARTY_MEMBER_ROLE_ID], user_id=user_id)
+
+    def _non_member(self, user_id: int = 1) -> FakeMember:
+        return FakeMember([], user_id=user_id)
+
+    # --- Permission enforcement ---------------------------------------------------
+
+    def test_requires_watch_party_member_role(self) -> None:
+        message, ephemeral, watch_item = perform_toggle_suggestion_rejection(
+            self.suggestion_service, None, self.permission_service, self._non_member(), GUILD_ID, self.matrix.id
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("Watch Party member", message)
+        self.assertIsNone(watch_item)
+        self.assertEqual(
+            self.suggestion_service.get_suggestion(self.matrix.id).journey.rejected_by_discord_user_ids, ()
+        )
+
+    # --- Toggle: reject then remove ------------------------------------------------
+
+    def test_first_click_records_a_rejection(self) -> None:
+        message, ephemeral, watch_item = perform_toggle_suggestion_rejection(
+            self.suggestion_service, None, self.permission_service, self._watch_party_member(1), GUILD_ID, self.matrix.id
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("recorded", message)
+        self.assertEqual(watch_item.journey.rejected_by_discord_user_ids, (1,))
+
+    def test_second_click_by_the_same_member_removes_the_rejection(self) -> None:
+        perform_toggle_suggestion_rejection(
+            self.suggestion_service, None, self.permission_service, self._watch_party_member(1), GUILD_ID, self.matrix.id
+        )
+
+        message, ephemeral, watch_item = perform_toggle_suggestion_rejection(
+            self.suggestion_service, None, self.permission_service, self._watch_party_member(1), GUILD_ID, self.matrix.id
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("removed", message)
+        self.assertEqual(watch_item.journey.rejected_by_discord_user_ids, ())
+
+    def test_toggling_twice_never_duplicates_a_members_rejection(self) -> None:
+        # The button intelligently toggles rather than allowing a second
+        # identical rejection -- this is how "duplicate rejection
+        # prevention" is enforced at the button layer.
+        perform_toggle_suggestion_rejection(
+            self.suggestion_service, None, self.permission_service, self._watch_party_member(1), GUILD_ID, self.matrix.id
+        )
+        perform_toggle_suggestion_rejection(
+            self.suggestion_service, None, self.permission_service, self._watch_party_member(1), GUILD_ID, self.matrix.id
+        )
+        _, _, watch_item = perform_toggle_suggestion_rejection(
+            self.suggestion_service, None, self.permission_service, self._watch_party_member(1), GUILD_ID, self.matrix.id
+        )
+
+        # Odd number of toggles (3) => currently rejected, exactly once.
+        self.assertEqual(watch_item.journey.rejected_by_discord_user_ids, (1,))
+
+    def test_different_members_toggle_independently(self) -> None:
+        perform_toggle_suggestion_rejection(
+            self.suggestion_service, None, self.permission_service, self._watch_party_member(1), GUILD_ID, self.matrix.id
+        )
+        _, _, watch_item = perform_toggle_suggestion_rejection(
+            self.suggestion_service, None, self.permission_service, self._watch_party_member(2), GUILD_ID, self.matrix.id
+        )
+
+        self.assertEqual(set(watch_item.journey.rejected_by_discord_user_ids), {1, 2})
+
+    # --- Threshold + automatic archive ----------------------------------------------
+
+    def test_threshold_reached_archives_the_suggestion(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        inception = self.suggestion_service.suggest(
+            "Inception", database_id=created.database.database_id
+        ).watch_item
+
+        class FakeConfig:
+            class suggestion_rules:
+                rejection_threshold = 1
+
+        class FakeConfigRepository:
+            def get(self, guild_id, database_id):
+                return FakeConfig()
+
+        message, ephemeral, watch_item = perform_toggle_suggestion_rejection(
+            self.suggestion_service,
+            FakeConfigRepository(),
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            inception.id,
+        )
+
+        self.assertIn("archived", message)
+        self.assertEqual(watch_item.status, WatchItemStatus.ARCHIVED)
+
+    def test_archived_suggestion_can_no_longer_be_toggled(self) -> None:
+        self.matrix.status = WatchItemStatus.ARCHIVED
+
+        message, ephemeral, watch_item = perform_toggle_suggestion_rejection(
+            self.suggestion_service, None, self.permission_service, self._watch_party_member(1), GUILD_ID, self.matrix.id
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("archived", message.lower())
+        self.assertEqual(watch_item.journey.rejected_by_discord_user_ids, ())
+
+    def test_is_graceful_for_a_nonexistent_suggestion(self) -> None:
+        message, ephemeral, watch_item = perform_toggle_suggestion_rejection(
+            self.suggestion_service, None, self.permission_service, self._watch_party_member(1), GUILD_ID, 999
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("doesn't exist", message)
+        self.assertIsNone(watch_item)
+
+
+class HandleSuggestionRejectionToggleTests(unittest.IsolatedAsyncioTestCase):
+    """FR-024: handle_suggestion_rejection_toggle -- ephemeral confirmation + message refresh."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.permission_service = PermissionService(
+            watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID,
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+        )
+        self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _watch_party_member(self, user_id: int = 1) -> FakeMember:
+        return FakeMember([WATCH_PARTY_MEMBER_ROLE_ID], user_id=user_id)
+
+    def _non_member(self, user_id: int = 1) -> FakeMember:
+        return FakeMember([], user_id=user_id)
+
+    async def test_sends_an_ephemeral_confirmation(self) -> None:
+        interaction = FakeSuggestionInteraction(self._watch_party_member(1))
+
+        await handle_suggestion_rejection_toggle(
+            interaction, self.suggestion_service, None, self.matrix.id, permission_service=self.permission_service
+        )
+
+        self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertIn("recorded", interaction.response.sent_message)
+
+    async def test_refreshes_the_original_message_button_after_a_rejection(self) -> None:
+        interaction = FakeSuggestionInteraction(self._watch_party_member(1))
+
+        await handle_suggestion_rejection_toggle(
+            interaction, self.suggestion_service, None, self.matrix.id, permission_service=self.permission_service
+        )
+
+        self.assertIsInstance(interaction.message.edited_view, SuggestionView)
+        self.assertEqual(interaction.message.edited_view.children[0].label, "I WILL NOT WATCH: 1 / 2")
+
+    async def test_refreshes_the_button_back_to_zero_after_removing_a_rejection(self) -> None:
+        first_interaction = FakeSuggestionInteraction(self._watch_party_member(1))
+        await handle_suggestion_rejection_toggle(
+            first_interaction, self.suggestion_service, None, self.matrix.id, permission_service=self.permission_service
+        )
+
+        second_interaction = FakeSuggestionInteraction(self._watch_party_member(1))
+        await handle_suggestion_rejection_toggle(
+            second_interaction, self.suggestion_service, None, self.matrix.id, permission_service=self.permission_service
+        )
+
+        self.assertEqual(second_interaction.message.edited_view.children[0].label, "I WILL NOT WATCH: 0 / 2")
+
+    async def test_button_is_disabled_once_the_threshold_is_reached(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        inception = self.suggestion_service.suggest(
+            "Inception", database_id=created.database.database_id
+        ).watch_item
+
+        class FakeConfig:
+            class suggestion_rules:
+                rejection_threshold = 1
+
+        class FakeConfigRepository:
+            def get(self, guild_id, database_id):
+                return FakeConfig()
+
+        interaction = FakeSuggestionInteraction(self._watch_party_member(1))
+
+        await handle_suggestion_rejection_toggle(
+            interaction, self.suggestion_service, FakeConfigRepository(), inception.id, permission_service=self.permission_service
+        )
+
+        view = interaction.message.edited_view
+        self.assertIsInstance(view, SuggestionView)
+        self.assertTrue(view.children[0].disabled)
+        self.assertIn("Archived", view.children[0].label)
+
+    async def test_no_message_refresh_when_permission_is_denied(self) -> None:
+        interaction = FakeSuggestionInteraction(self._non_member(1))
+
+        await handle_suggestion_rejection_toggle(
+            interaction, self.suggestion_service, None, self.matrix.id, permission_service=self.permission_service
+        )
+
+        self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertIn("Watch Party member", interaction.response.sent_message)
+        self.assertEqual(interaction.message.edited_view, "not-edited")
+
+    async def test_reports_not_configured_when_no_permission_service_is_given(self) -> None:
+        interaction = FakeSuggestionInteraction(self._watch_party_member(1))
+
+        await handle_suggestion_rejection_toggle(
+            interaction, self.suggestion_service, None, self.matrix.id, permission_service=None
+        )
+
+        self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertIn("not been configured", interaction.response.sent_message)
+        self.assertEqual(interaction.message.edited_view, "not-edited")
+        self.assertEqual(
+            self.suggestion_service.get_suggestion(self.matrix.id).journey.rejected_by_discord_user_ids, ()
+        )
+
+    async def test_never_sends_a_second_public_message(self) -> None:
+        # handle_suggestion_rejection_toggle must only ever send exactly one
+        # ephemeral response plus (optionally) one edit to the existing
+        # message -- never an additional public message.
+        interaction = FakeSuggestionInteraction(self._watch_party_member(1))
+
+        await handle_suggestion_rejection_toggle(
+            interaction, self.suggestion_service, None, self.matrix.id, permission_service=self.permission_service
+        )
+
+        self.assertTrue(interaction.response.sent_ephemeral)
+
+
+class BuildSuggestionViewTests(unittest.TestCase):
+    """FR-024: build_suggestion_view resolves the configured threshold for the button label."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_uses_the_default_threshold_when_unconfigured(self) -> None:
+        view = build_suggestion_view(self.suggestion_service, None, self.matrix, GUILD_ID)
+
+        self.assertEqual(view.children[0].label, "I WILL NOT WATCH: 0 / 2")
+
+    def test_uses_the_configured_threshold_when_available(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        inception = self.suggestion_service.suggest(
+            "Inception", database_id=created.database.database_id
+        ).watch_item
+
+        class FakeConfig:
+            class suggestion_rules:
+                rejection_threshold = 5
+
+        class FakeConfigRepository:
+            def get(self, guild_id, database_id):
+                return FakeConfig()
+
+        view = build_suggestion_view(self.suggestion_service, FakeConfigRepository(), inception, GUILD_ID)
+
+        self.assertEqual(view.children[0].label, "I WILL NOT WATCH: 0 / 5")
 
 
 if __name__ == "__main__":

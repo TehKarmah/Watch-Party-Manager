@@ -27,7 +27,7 @@ from watch_party_manager.domain.vote import (
     VoteVisibility,
 )
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
-from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem
+from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_party import WatchParty
 from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.persistence.guild_configuration_repository import (
@@ -98,6 +98,7 @@ from watch_party_manager.start_vote_view import (
     CustomizeVoteModal,
     StartVoteChoiceView,
 )
+from watch_party_manager.suggestion_view import SuggestionView, build_reject_button_custom_id
 from watch_party_manager.version import __build__, __version__
 from watch_party_manager.voting_view import VotingView
 
@@ -141,6 +142,7 @@ class WatchPartyBot(commands.Bot):
         self.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository()
         self.backup_service = BackupService()
         self.interactive_voting_restored = False
+        self.suggestion_views_restored = 0
         self.scheduler_host = SchedulerHost.from_json_file(
             Path("data") / "scheduled_jobs.json"
         )
@@ -248,7 +250,14 @@ class WatchPartyBot(commands.Bot):
                 database_name=database_name,
                 suggested_by=getattr(interaction.user, "mention", str(interaction.user)),
             )
-            await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+            view = build_suggestion_view(
+                self.suggestion_service,
+                self.suggestion_database_configuration_repository,
+                watch_item,
+                interaction.guild_id,
+                permission_service=self.permission_service,
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=ephemeral, view=view)
             if watch_item is not None:
                 sent_message = await interaction.original_response()
                 self.suggestion_service.attach_message_reference(watch_item.id, sent_message.id)
@@ -639,6 +648,13 @@ class WatchPartyBot(commands.Bot):
             permission_service=self.permission_service,
         )
 
+        self.suggestion_views_restored = await restore_persistent_suggestion_views(
+            bot=self,
+            suggestion_service=self.suggestion_service,
+            suggestion_database_configuration_repository=self.suggestion_database_configuration_repository,
+            permission_service=self.permission_service,
+        )
+
         if self.guild_id:
             logger.info(f"Synchronizing slash commands to development guild {self.guild_id}...")
             guild = discord.Object(id=self.guild_id)
@@ -661,13 +677,15 @@ class WatchPartyBot(commands.Bot):
         snapshot = self.statistics_service.snapshot()
         logger.info(
             "Startup summary: %s database(s) (%s active), %s watch item(s), "
-            "%s active suggestion(s), open voting round: %s, interactive controls restored: %s",
+            "%s active suggestion(s), open voting round: %s, interactive controls restored: %s, "
+            "%s suggestion view(s) restored",
             snapshot.total_databases,
             snapshot.active_databases,
             snapshot.total_watch_items,
             snapshot.active_suggestions,
             "yes" if snapshot.open_vote_rounds else "no",
             "yes" if self.interactive_voting_restored else "no",
+            self.suggestion_views_restored,
         )
         logger.info("Nominee selector initialized")
         logger.info("Ready")
@@ -1464,6 +1482,171 @@ def restore_persistent_voting_view(
         vote_round.message_id,
     )
     return True
+
+
+def build_suggestion_view(
+    suggestion_service: SuggestionService,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository],
+    watch_item: WatchItem,
+    guild_id: Optional[int],
+    permission_service: Optional[PermissionService] = None,
+) -> SuggestionView:
+    """Build a suggestion's "I WILL NOT WATCH" view whose button uses the shared toggle handler.
+
+    Args:
+        suggestion_service: Used by the button's toggle callback.
+        suggestion_database_configuration_repository: Used to resolve the
+            suggestion's configured rejection threshold, both for the
+            button's displayed count and for the toggle callback.
+        watch_item: The suggestion this view belongs to.
+        guild_id: The Discord guild the suggestion belongs to, used to
+            resolve its configured rejection threshold. Falls back to the
+            documented default threshold if unavailable (see
+            resolve_rejection_threshold).
+        permission_service: Passed through to the toggle callback.
+    """
+    threshold = resolve_rejection_threshold(
+        suggestion_database_configuration_repository, guild_id, watch_item.database_id
+    )
+
+    async def on_toggle(interaction: discord.Interaction, suggestion_id: int) -> None:
+        await handle_suggestion_rejection_toggle(
+            interaction,
+            suggestion_service,
+            suggestion_database_configuration_repository,
+            suggestion_id,
+            permission_service=permission_service,
+        )
+
+    return SuggestionView(watch_item, threshold, on_toggle)
+
+
+def _suggestion_message_has_reject_button(message: object, custom_id: str) -> bool:
+    """Check whether a fetched suggestion message already carries this button.
+
+    A real discord.py Message's components are a list of top-level
+    ActionRows, each holding the actual Button/SelectMenu children -- so
+    both the top-level components and one level of nested children are
+    checked. Used by restore_persistent_suggestion_views() to decide
+    whether a legacy message (posted before this feature existed) needs
+    to be edited to attach the button, or already has it.
+    """
+    for component in getattr(message, "components", []):
+        if getattr(component, "custom_id", None) == custom_id:
+            return True
+        for child in getattr(component, "children", []):
+            if getattr(child, "custom_id", None) == custom_id:
+                return True
+    return False
+
+
+async def restore_persistent_suggestion_views(
+    bot: object,
+    suggestion_service: SuggestionService,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
+    permission_service: Optional[PermissionService] = None,
+) -> int:
+    """Restore, and where needed migrate, the "I WILL NOT WATCH" button for every active suggestion post.
+
+    Discord persistent views must be re-registered each time the bot
+    starts. bot.add_view(view, message_id=...) alone only re-establishes
+    callback routing for a button that's *already present* on the
+    message -- it does not add a button to a message that has none.
+    Suggestion posts created before this feature existed have no button
+    at all, so restoring callback routing for them would silently leave
+    members unable to reject them.
+
+    For each active (non-archived) suggestion with a known message ID,
+    this function fetches the stored message and checks whether a
+    matching button is already attached:
+
+    - If it is, only callback routing is (re-)registered via
+      bot.add_view(), exactly as before -- the normal persistent-view
+      restoration path.
+    - If it isn't (a legacy message with no button, or one whose
+      components are otherwise missing), the message is edited to
+      attach the current SuggestionView. discord.py's Message.edit()
+      registers the view for callback routing as a side effect of being
+      passed a dispatchable view, so no separate add_view() call is
+      needed for that branch -- this never results in two views bound
+      to the same message.
+
+    A suggestion missing channel_id (metadata from before that field
+    existed) cannot be fetched at all, so it falls back to best-effort
+    callback-only registration exactly as this function always did.
+    Any other failure to fetch or edit the message (deleted message,
+    missing or inaccessible channel, insufficient permissions, or any
+    other Discord-side error) is logged and that suggestion is skipped
+    -- one bad reference never blocks startup or any other suggestion.
+
+    Archived suggestions are skipped entirely: their button is already
+    disabled and permanently so (see SuggestionService.reject_suggestion/
+    remove_rejection, which both refuse to touch an archived suggestion),
+    so there's nothing to restore or migrate for them.
+
+    Returns:
+        The number of suggestion views restored or migrated.
+    """
+    restored = 0
+    for watch_item in suggestion_service.get_suggestions():
+        if watch_item.status == WatchItemStatus.ARCHIVED:
+            continue
+        if watch_item.message_id is None:
+            continue
+
+        view = build_suggestion_view(
+            suggestion_service,
+            suggestion_database_configuration_repository,
+            watch_item,
+            watch_item.guild_id,
+            permission_service=permission_service,
+        )
+
+        if watch_item.channel_id is None:
+            bot.add_view(view, message_id=watch_item.message_id)
+            restored += 1
+            continue
+
+        try:
+            channel = bot.get_channel(watch_item.channel_id)
+            if channel is None:
+                channel = await bot.fetch_channel(watch_item.channel_id)
+            message = await channel.fetch_message(watch_item.message_id)
+        except Exception:
+            logger.warning(
+                "Could not fetch suggestion %s's message %s for persistent view "
+                "restoration; skipping",
+                watch_item.id,
+                watch_item.message_id,
+                exc_info=True,
+            )
+            continue
+
+        custom_id = build_reject_button_custom_id(watch_item.id)
+        if _suggestion_message_has_reject_button(message, custom_id):
+            bot.add_view(view, message_id=watch_item.message_id)
+        else:
+            try:
+                await message.edit(view=view)
+            except Exception:
+                logger.warning(
+                    "Could not attach the rejection button to suggestion %s's "
+                    "legacy message %s; skipping",
+                    watch_item.id,
+                    watch_item.message_id,
+                    exc_info=True,
+                )
+                continue
+            logger.info(
+                "Attached a new rejection button to legacy suggestion %s's message %s",
+                watch_item.id,
+                watch_item.message_id,
+            )
+
+        restored += 1
+
+    logger.info("Restored %s persistent suggestion view(s)", restored)
+    return restored
 
 
 def get_round_candidates(
@@ -2484,6 +2667,120 @@ def perform_remove_rejection(
 
     result = suggestion_service.remove_rejection(suggestion_id, user.id)
     return result.message, True
+
+
+def perform_toggle_suggestion_rejection(
+    suggestion_service: SuggestionService,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository],
+    permission_service: PermissionService,
+    user: object,
+    guild_id: Optional[int],
+    suggestion_id: int,
+) -> tuple[str, bool, Optional[WatchItem]]:
+    """Core logic for the suggestion message's "I WILL NOT WATCH" button.
+
+    Toggles between SuggestionService.reject_suggestion() and
+    remove_rejection() depending on whether `user` has already rejected
+    this suggestion, reusing both service methods and
+    resolve_rejection_threshold() unchanged rather than introducing a
+    second rejection code path -- /reject and /unreject
+    (perform_reject_suggestion/perform_remove_rejection) remain available
+    as fallback commands and share this exact same underlying logic.
+
+    Args:
+        suggestion_service: The suggestion service to toggle the rejection through.
+        suggestion_database_configuration_repository: Used to resolve the
+            configured rejection threshold for the suggestion's database.
+        permission_service: Used to require Watch Party member permission.
+        user: The member who clicked the button.
+        guild_id: The Discord guild the interaction happened in.
+        suggestion_id: The suggestion the button belongs to.
+
+    Returns:
+        A (message, ephemeral, watch_item) tuple. Always ephemeral, like
+        /reject and /unreject. watch_item is the suggestion's current
+        state when the original message should be refreshed to reflect
+        it (a successful toggle, or a conflict against another member's
+        concurrent click), or None when nothing changed and no refresh is
+        needed (permission denied, or the suggestion no longer exists).
+    """
+    permission = permission_service.require_watch_party_member(user)
+    if not permission.allowed:
+        return permission.message, True, None
+
+    watch_item = suggestion_service.get_suggestion(suggestion_id)
+    if watch_item is None:
+        return "That suggestion doesn't exist.", True, None
+
+    already_rejected = user.id in watch_item.journey.rejected_by_discord_user_ids
+    if already_rejected:
+        result = suggestion_service.remove_rejection(suggestion_id, user.id)
+    else:
+        threshold = resolve_rejection_threshold(
+            suggestion_database_configuration_repository, guild_id, watch_item.database_id
+        )
+        result = suggestion_service.reject_suggestion(
+            suggestion_id, user.id, rejection_threshold=threshold
+        )
+
+    refreshed_watch_item = result.watch_item if result.watch_item is not None else watch_item
+    return result.message, True, refreshed_watch_item
+
+
+async def handle_suggestion_rejection_toggle(
+    interaction: discord.Interaction,
+    suggestion_service: SuggestionService,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository],
+    suggestion_id: int,
+    permission_service: Optional[PermissionService] = None,
+) -> None:
+    """Handle a click on a suggestion's "I WILL NOT WATCH" button.
+
+    Reuses perform_toggle_suggestion_rejection() for all rejection logic,
+    then refreshes the original suggestion message's button so its
+    displayed count/threshold and archived state stay accurate --
+    mirroring handle_nominee_vote's "respond ephemerally, then refresh
+    the original post" pattern. Never posts an additional public message.
+
+    Args:
+        interaction: The button-click interaction.
+        suggestion_service: The suggestion service to toggle the rejection through.
+        suggestion_database_configuration_repository: Used to resolve the
+            configured rejection threshold.
+        suggestion_id: The suggestion this button belongs to.
+        permission_service: Used to require Watch Party member permission.
+            Optional so this stays usable in a context with none
+            configured; if omitted, the button reports a clear
+            "not configured" message rather than allowing the click
+            through, matching PermissionService's own fail-closed convention.
+    """
+    if permission_service is None:
+        await interaction.response.send_message(
+            "Watch Party member permissions have not been configured.", ephemeral=True
+        )
+        return
+
+    message, ephemeral, watch_item = perform_toggle_suggestion_rejection(
+        suggestion_service,
+        suggestion_database_configuration_repository,
+        permission_service,
+        interaction.user,
+        interaction.guild_id,
+        suggestion_id,
+    )
+    await interaction.response.send_message(message, ephemeral=ephemeral)
+
+    if watch_item is None:
+        return
+
+    view = build_suggestion_view(
+        suggestion_service,
+        suggestion_database_configuration_repository,
+        watch_item,
+        interaction.guild_id,
+        permission_service=permission_service,
+    )
+    await interaction.message.edit(view=view)
 
 
 def build_database_add_confirmation(database: SuggestionDatabase) -> str:
