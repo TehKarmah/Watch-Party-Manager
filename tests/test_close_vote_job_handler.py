@@ -1,11 +1,13 @@
-"""Tests for FR-016 (Automatic Vote Close Handler) and FR-018 (Automatic
-Vote Completion Announcement).
+"""Tests for FR-016 (Automatic Vote Close Handler), FR-018 (Automatic Vote
+Completion Announcement), and FR-026 (Vote Results Announcement Polish).
 
 Covers the close_vote job handler: locating a vote by the job's payload,
 closing it and determining its winner(s) via VoteCompletionService (never
-duplicating winner calculation), and posting the completion announcement
-to the round's channel -- including ties, no-votes-cast, and IMDb link
-reuse when a winner already has one on file.
+duplicating winner calculation), and delegating the completion
+presentation (original post update + single results announcement) to
+vote_completion_announcer.finalize_vote_completion() -- the same function
+/edit_vote's "End Now" action uses, so both paths are covered identically
+here and in test_edit_vote_command.py.
 """
 
 from __future__ import annotations
@@ -41,12 +43,34 @@ def make_job(vote_id: int, run_at: datetime | None = None) -> ScheduledJob:
     )
 
 
-class FakeChannel:
+class FakeMessage:
     def __init__(self) -> None:
-        self.sent_messages = []
+        self.edits: list[tuple[str, object]] = []
 
-    async def send(self, content) -> None:
+    async def edit(self, *, content=None, view="not-set") -> None:
+        self.edits.append((content, view))
+
+
+class FakeChannel:
+    def __init__(self, message: FakeMessage | None = None) -> None:
+        self.message = message if message is not None else FakeMessage()
+        self.sent_messages: list[str] = []
+        self.sent_embeds: list[list] = []
+        self._next_message_id = 9000
+
+    async def fetch_message(self, message_id):
+        return self.message
+
+    async def send(self, *, content=None, embeds=None):
+        self._next_message_id += 1
         self.sent_messages.append(content)
+        self.sent_embeds.append(embeds or [])
+        return FakeSentMessage(self._next_message_id)
+
+
+class FakeSentMessage:
+    def __init__(self, message_id: int) -> None:
+        self.id = message_id
 
 
 class FakeBot:
@@ -78,7 +102,9 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
         self.channel = FakeChannel()
         self.bot = FakeBot(self.channel)
-        self.handler = CloseVoteJobHandler(self.completion_service, self.suggestion_service, self.bot)
+        self.handler = CloseVoteJobHandler(
+            self.completion_service, self.vote_service, self.suggestion_service, self.bot
+        )
 
         self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
         self.inception = self.suggestion_service.suggest("Inception").watch_item
@@ -116,7 +142,7 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.result, JobResult.EXECUTED)
 
-    async def test_posts_the_completion_announcement_to_the_rounds_channel(self) -> None:
+    async def test_posts_exactly_one_completion_announcement_to_the_rounds_channel(self) -> None:
         vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
@@ -163,19 +189,19 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(winners.winning_suggestion_ids, [])
         self.assertIn("No votes were cast", self.channel.sent_messages[0])
 
-    async def test_announcement_includes_an_imdb_link_when_the_winner_has_one(self) -> None:
+    async def test_announcement_links_the_winner_to_its_original_suggestion_not_imdb(self) -> None:
         self.suggestion_service.update_suggestion_identity(
             self.matrix.id, "The Matrix", "https://www.imdb.com/title/tt0133093/"
         )
+        self.suggestion_service.attach_message_reference(self.matrix.id, message_id=500)
         vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
         await self.handler.execute(make_job(vote_round.id))
 
-        self.assertIn(
-            "Winner: The Matrix ([View on IMDb](https://www.imdb.com/title/tt0133093/))",
-            self.channel.sent_messages[0],
-        )
+        announcement = self.channel.sent_messages[0]
+        self.assertNotIn("imdb.com", announcement)
+        self.assertIn("The Matrix", announcement)
 
     async def test_falls_back_to_fetch_channel_when_get_channel_returns_none(self) -> None:
         vote_round = self._open_round()
@@ -191,7 +217,7 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
                 return self._channel
 
         handler = CloseVoteJobHandler(
-            self.completion_service, self.suggestion_service, FetchOnlyBot(self.channel)
+            self.completion_service, self.vote_service, self.suggestion_service, FetchOnlyBot(self.channel)
         )
 
         result = await handler.execute(make_job(vote_round.id))
@@ -231,6 +257,61 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         winner = self.suggestion_service.get_suggestion(self.matrix.id)
         self.assertEqual(winner.journey.times_won, 1)
+
+    # --- FR-026: original post + results linking -------------------------------
+
+    async def test_original_voting_post_is_closed_with_disabled_buttons(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        first_content, first_view = self.channel.message.edits[0]
+        self.assertIn("Voting Closed", first_content)
+        self.assertIsNone(first_view)
+
+    async def test_original_voting_post_is_later_linked_to_the_results_announcement(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        self.assertEqual(len(self.channel.message.edits), 2)
+        second_content, _ = self.channel.message.edits[1]
+        self.assertIn("Results announcement:", second_content)
+
+    async def test_results_message_reference_is_persisted(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        self.assertIsNotNone(self.vote_service.get_round(vote_round.id).results_message_id)
+
+    async def test_single_winner_announcement_includes_a_thumbnail(self) -> None:
+        self.matrix.poster_url = "https://example.com/poster.jpg"
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        embeds = self.channel.sent_embeds[0]
+        self.assertEqual(len(embeds), 1)
+        self.assertEqual(embeds[0].thumbnail.url, "https://example.com/poster.jpg")
+
+    async def test_tie_announcement_has_no_thumbnails(self) -> None:
+        self.matrix.poster_url = "https://example.com/a.jpg"
+        self.inception.poster_url = "https://example.com/b.jpg"
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+        self.vote_service.cast_vote(discord_user_id=2, suggestion_id=self.inception.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        embeds = self.channel.sent_embeds[0]
+        self.assertEqual(len(embeds), 2)
+        for embed in embeds:
+            self.assertIsNone(embed.thumbnail.url)
 
     # --- Already closed manually: successful no-op ----------------------------
 
@@ -371,7 +452,7 @@ class CloseVoteJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTestC
         channel = FakeChannel()
         scheduler_service.register_handler(
             "close_vote",
-            CloseVoteJobHandler(self.completion_service, self.suggestion_service, FakeBot(channel)),
+            CloseVoteJobHandler(self.completion_service, self.vote_service, self.suggestion_service, FakeBot(channel)),
         )
 
         past = datetime.now(timezone.utc) - timedelta(minutes=1)
@@ -403,7 +484,7 @@ class CloseVoteJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTestC
         channel = FakeChannel()
         scheduler_service.register_handler(
             "close_vote",
-            CloseVoteJobHandler(self.completion_service, self.suggestion_service, FakeBot(channel)),
+            CloseVoteJobHandler(self.completion_service, self.vote_service, self.suggestion_service, FakeBot(channel)),
         )
 
         past = datetime.now(timezone.utc) - timedelta(minutes=1)

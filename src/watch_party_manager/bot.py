@@ -77,12 +77,13 @@ from watch_party_manager.services.suggestion_service import (
 from watch_party_manager.services.suggestion_repair_service import SuggestionRepairService
 from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
 from watch_party_manager.services.vote_announcement_formatter import (
+    build_suggestion_link,
     build_vote_cancellation_notice,
-    build_vote_completion_announcement,
     build_vote_deadline_change_notice,
     build_vote_link,
     format_standings_lines,
 )
+from watch_party_manager.services.vote_completion_announcer import finalize_vote_completion
 from watch_party_manager.services.vote_completion_service import (
     VoteCompletionResult,
     VoteCompletionService,
@@ -149,7 +150,7 @@ class WatchPartyBot(commands.Bot):
         )
         self.scheduler_host.scheduler_service.register_handler(
             CLOSE_VOTE_JOB_TYPE,
-            CloseVoteJobHandler(self.vote_completion_service, self.suggestion_service, self),
+            CloseVoteJobHandler(self.vote_completion_service, self.vote_service, self.suggestion_service, self),
         )
         self.scheduler_host.scheduler_service.register_handler(
             VOTE_REMINDER_JOB_TYPE, VoteReminderJobHandler(self.vote_service, self)
@@ -472,6 +473,7 @@ class WatchPartyBot(commands.Bot):
                     await handle_end_vote_now_completion(
                         confirm_interaction,
                         vote_completion_service=self.vote_completion_service,
+                        vote_service=self.vote_service,
                         suggestion_service=self.suggestion_service,
                         wash_crew_role_id=self.wash_crew_role_id,
                         round_id=round_id,
@@ -1669,20 +1671,6 @@ VOTE_PROGRESS_BAR_FILLED_CHAR = "█"
 VOTE_PROGRESS_BAR_EMPTY_CHAR = "░"
 
 
-def build_suggestion_link(watch_item: WatchItem) -> Optional[str]:
-    """Build a jump link to a suggestion's original post, when known.
-
-    Mirrors vote_announcement_formatter.build_vote_link's exact "omit
-    gracefully" contract, applied to a suggestion's own guild_id/
-    channel_id/message_id (see FR-024) rather than a vote round's.
-    Returns None for a legacy suggestion missing one or more of those
-    fields, so callers can fall back to plain (unlinked) text.
-    """
-    if watch_item.guild_id is None or watch_item.channel_id is None or watch_item.message_id is None:
-        return None
-    return build_discord_message_link(watch_item.guild_id, watch_item.channel_id, watch_item.message_id)
-
-
 def build_vote_progress_bar(vote_count: int, total_votes: int, *, length: int = VOTE_PROGRESS_BAR_LENGTH) -> str:
     """Build a filled/empty block bar representing one candidate's share of the vote.
 
@@ -2139,9 +2127,9 @@ def perform_end_vote_now(
 
     Returns:
         A (message, ephemeral, result) tuple. result is set only on
-        success, so the caller can build and post the standard completion
-        announcement (build_vote_completion_announcement) without a
-        redundant lookup. Always ephemeral -- the separate public
+        success, so the caller can finalize the completion presentation
+        (see vote_completion_announcer.finalize_vote_completion) without
+        a redundant lookup. Always ephemeral -- the separate public
         announcement is what the community sees.
     """
     if wash_crew_role_id is None:
@@ -2169,6 +2157,7 @@ def perform_end_vote_now(
 async def handle_end_vote_now_completion(
     interaction: discord.Interaction,
     vote_completion_service: VoteCompletionService,
+    vote_service: VoteService,
     suggestion_service: SuggestionService,
     wash_crew_role_id: Optional[int],
     round_id: int,
@@ -2179,6 +2168,12 @@ async def handle_end_vote_now_completion(
 
     scheduler_service defaults to None so callers/tests that don't pass
     one keep working unchanged; passing None simply skips job cancellation.
+
+    FR-026: the original voting post update and results announcement are
+    delegated to vote_completion_announcer.finalize_vote_completion() --
+    the exact same function CloseVoteJobHandler calls for an automatic
+    completion -- so ending a vote early produces an identical
+    presentation to letting it expire naturally.
     """
     message, ephemeral, result = perform_end_vote_now(
         vote_completion_service, interaction.user, wash_crew_role_id, round_id
@@ -2193,24 +2188,7 @@ async def handle_end_vote_now_completion(
     # disabled).
     await cancel_vote_jobs(scheduler_service, round_id)
 
-    winning_items: List[WatchItem] = []
-    for suggestion_id in result.winning_suggestion_ids:
-        watch_item = suggestion_service.get_suggestion(suggestion_id)
-        if watch_item is not None:
-            winning_items.append(watch_item)
-
-    announcement = build_vote_completion_announcement(
-        result.vote_round, winning_items, result.standings, result.total_votes_cast
-    )
-    if result.vote_round.channel_id is not None:
-        channel = bot.get_channel(result.vote_round.channel_id)
-        if channel is None:
-            channel = await bot.fetch_channel(result.vote_round.channel_id)
-        await channel.send(announcement)
-
-    await update_voting_message(
-        bot, result.vote_round, "Voting has closed. See the announcement below.", clear_view=True
-    )
+    await finalize_vote_completion(vote_service, suggestion_service, bot, result)
 
 
 def perform_cancel_vote_now(

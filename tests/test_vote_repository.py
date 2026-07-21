@@ -254,6 +254,40 @@ class JsonVoteRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.channel_id, 200)
         self.assertEqual(loaded.message_id, 300)
 
+    def test_save_then_load_round_trips_results_message_id(self) -> None:
+        vote_round = VoteRound(id=1, guild_id=100, channel_id=200, message_id=300, results_message_id=400)
+        self.repository.save([vote_round], next_round_id=2)
+
+        result = self.repository.load()
+        self.assertEqual(result.rounds[0].results_message_id, 400)
+
+    def test_loading_a_file_without_results_message_id_defaults_to_none(self) -> None:
+        now = utc_now()
+        legacy_json = f"""
+        {{
+          "next_round_id": 2,
+          "rounds": [
+            {{
+              "id": 1,
+              "status": "closed",
+              "visibility": "visible",
+              "created_at": "{now.isoformat()}",
+              "closes_at": null,
+              "winning_suggestion_id": null,
+              "guild_id": 100,
+              "channel_id": 200,
+              "message_id": 300,
+              "votes": []
+            }}
+          ]
+        }}
+        """
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+        self.assertIsNone(result.rounds[0].results_message_id)
+
     def test_loading_a_file_without_discord_location_fields_defaults_them_to_none(self) -> None:
         now = utc_now()
         legacy_json = f"""

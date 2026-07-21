@@ -217,6 +217,7 @@ class VoteRoundModelTests(unittest.TestCase):
         self.assertIsNone(vote_round.guild_id)
         self.assertIsNone(vote_round.channel_id)
         self.assertIsNone(vote_round.message_id)
+        self.assertIsNone(vote_round.results_message_id)
 
     def test_accepts_discord_location_fields(self) -> None:
         vote_round = VoteRound(id=1, guild_id=100, channel_id=200, message_id=300)
@@ -236,6 +237,14 @@ class VoteRoundModelTests(unittest.TestCase):
     def test_rejects_a_non_positive_message_id(self) -> None:
         with self.assertRaises(ValueError):
             VoteRound(id=1, message_id=0)
+
+    def test_accepts_a_results_message_id(self) -> None:
+        vote_round = VoteRound(id=1, results_message_id=400)
+        self.assertEqual(vote_round.results_message_id, 400)
+
+    def test_rejects_a_non_positive_results_message_id(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, results_message_id=0)
 
 
 if __name__ == "__main__":

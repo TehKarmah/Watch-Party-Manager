@@ -92,13 +92,23 @@ class FakeMessage:
 class FakeChannel:
     def __init__(self, message: FakeMessage) -> None:
         self.sent_messages = []
+        self.sent_embeds = []
         self._message = message
+        self._next_message_id = 9000
 
-    async def send(self, content) -> None:
+    async def send(self, content=None, *, embeds=None):
         self.sent_messages.append(content)
+        self.sent_embeds.append(embeds or [])
+        self._next_message_id += 1
+        return FakeSentMessage(self._next_message_id)
 
     async def fetch_message(self, message_id):
         return self._message
+
+
+class FakeSentMessage:
+    def __init__(self, message_id: int) -> None:
+        self.id = message_id
 
 
 class FakeBot:
@@ -605,6 +615,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
         await handle_end_vote_now_completion(
             interaction,
             self.vote_completion_service,
+            self.vote_service,
             self.suggestion_service,
             WASH_CREW_ROLE_ID,
             vote_round.id,
@@ -625,7 +636,13 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
         interaction = FakeInteraction(self._authorized_user())
 
         await handle_end_vote_now_completion(
-            interaction, self.vote_completion_service, self.suggestion_service, WASH_CREW_ROLE_ID, vote_round.id, bot
+            interaction,
+            self.vote_completion_service,
+            self.vote_service,
+            self.suggestion_service,
+            WASH_CREW_ROLE_ID,
+            vote_round.id,
+            bot,
         )
 
         self.assertEqual(len(channel.sent_messages), 1)
@@ -640,11 +657,77 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
         interaction = FakeInteraction(self._authorized_user())
 
         await handle_end_vote_now_completion(
-            interaction, self.vote_completion_service, self.suggestion_service, WASH_CREW_ROLE_ID, vote_round.id, bot
+            interaction,
+            self.vote_completion_service,
+            self.vote_service,
+            self.suggestion_service,
+            WASH_CREW_ROLE_ID,
+            vote_round.id,
+            bot,
         )
 
         self.assertIsNone(message.edited_view)
         self.assertIsNotNone(message.edited_content)
+
+    async def test_original_post_shows_closed_winner_and_standings(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=111, suggestion_id=self.matrix.id)
+
+        message = FakeMessage(message_id=999)
+        bot = FakeBot(FakeChannel(message))
+        interaction = FakeInteraction(self._authorized_user())
+
+        await handle_end_vote_now_completion(
+            interaction,
+            self.vote_completion_service,
+            self.vote_service,
+            self.suggestion_service,
+            WASH_CREW_ROLE_ID,
+            vote_round.id,
+            bot,
+        )
+
+        self.assertIn("Voting Closed", message.edited_content)
+        self.assertIn("Winner: The Matrix", message.edited_content)
+        self.assertIn("Final Standings:", message.edited_content)
+
+    async def test_original_post_is_linked_to_the_results_announcement(self) -> None:
+        vote_round = self._open_round()
+
+        message = FakeMessage(message_id=999)
+        bot = FakeBot(FakeChannel(message))
+        interaction = FakeInteraction(self._authorized_user())
+
+        await handle_end_vote_now_completion(
+            interaction,
+            self.vote_completion_service,
+            self.vote_service,
+            self.suggestion_service,
+            WASH_CREW_ROLE_ID,
+            vote_round.id,
+            bot,
+        )
+
+        self.assertIn("Results announcement:", message.edited_content)
+
+    async def test_results_message_reference_is_persisted(self) -> None:
+        vote_round = self._open_round()
+
+        message = FakeMessage(message_id=999)
+        bot = FakeBot(FakeChannel(message))
+        interaction = FakeInteraction(self._authorized_user())
+
+        await handle_end_vote_now_completion(
+            interaction,
+            self.vote_completion_service,
+            self.vote_service,
+            self.suggestion_service,
+            WASH_CREW_ROLE_ID,
+            vote_round.id,
+            bot,
+        )
+
+        self.assertIsNotNone(self.vote_service.get_round(vote_round.id).results_message_id)
 
     async def test_repeated_invocation_does_not_duplicate_the_announcement(self) -> None:
         vote_round = self._open_round()
@@ -656,6 +739,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
         await handle_end_vote_now_completion(
             FakeInteraction(self._authorized_user()),
             self.vote_completion_service,
+            self.vote_service,
             self.suggestion_service,
             WASH_CREW_ROLE_ID,
             vote_round.id,
@@ -664,6 +748,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
         await handle_end_vote_now_completion(
             FakeInteraction(self._authorized_user()),
             self.vote_completion_service,
+            self.vote_service,
             self.suggestion_service,
             WASH_CREW_ROLE_ID,
             vote_round.id,

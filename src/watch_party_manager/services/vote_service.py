@@ -291,6 +291,29 @@ class VoteService:
         self._save()
         return True
 
+    def attach_results_message_reference(self, round_id: int, message_id: int) -> bool:
+        """Record where a round's results announcement lives.
+
+        Posted to the same guild/channel already stored on the round
+        (see attach_message_reference), so only the announcement's own
+        message ID needs recording here.
+
+        Args:
+            round_id: The round to update.
+            message_id: The Discord message ID of the results announcement.
+
+        Returns:
+            True if a matching round was found and updated, False if no
+            round has that ID.
+        """
+        vote_round = self._rounds.get(round_id)
+        if vote_round is None:
+            return False
+
+        vote_round.results_message_id = message_id
+        self._save()
+        return True
+
     def cast_vote(self, discord_user_id: int, suggestion_id: int) -> VoteResult:
         """Cast or change a member's vote in the currently open round.
 

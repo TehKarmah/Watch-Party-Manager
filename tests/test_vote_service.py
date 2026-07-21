@@ -286,6 +286,39 @@ class VoteServiceTests(unittest.TestCase):
         updated = self.service.attach_message_reference(999, guild_id=100, channel_id=200, message_id=300)
         self.assertFalse(updated)
 
+    def test_attach_results_message_reference_updates_the_round(self) -> None:
+        created = self.service.create_round()
+
+        updated = self.service.attach_results_message_reference(created.vote_round.id, message_id=400)
+
+        self.assertTrue(updated)
+        vote_round = self.service.get_round(created.vote_round.id)
+        self.assertEqual(vote_round.results_message_id, 400)
+
+    def test_attach_results_message_reference_persists_the_update(self) -> None:
+        created = self.service.create_round()
+
+        self.service.attach_results_message_reference(created.vote_round.id, message_id=400)
+
+        reloaded = self.repository.load()
+        self.assertEqual(reloaded.rounds[0].results_message_id, 400)
+
+    def test_attach_results_message_reference_returns_false_for_an_unknown_round(self) -> None:
+        updated = self.service.attach_results_message_reference(999, message_id=400)
+        self.assertFalse(updated)
+
+    def test_attach_results_message_reference_does_not_disturb_the_original_message_reference(self) -> None:
+        created = self.service.create_round()
+        self.service.attach_message_reference(created.vote_round.id, guild_id=100, channel_id=200, message_id=300)
+
+        self.service.attach_results_message_reference(created.vote_round.id, message_id=400)
+
+        vote_round = self.service.get_round(created.vote_round.id)
+        self.assertEqual(vote_round.guild_id, 100)
+        self.assertEqual(vote_round.channel_id, 200)
+        self.assertEqual(vote_round.message_id, 300)
+        self.assertEqual(vote_round.results_message_id, 400)
+
     # --- Reset behaviors --------------------------------------------------
 
     def test_remove_member_vote_deletes_the_vote_entirely(self) -> None:
