@@ -39,6 +39,8 @@ from watch_party_manager.scheduler import (
     SchedulerService,
     VOTE_REMINDER_JOB_TYPE,
     VoteReminderJobHandler,
+    WATCH_PARTY_REMINDER_JOB_TYPE,
+    WatchPartyReminderJobHandler,
     schedule_vote_jobs,
 )
 from watch_party_manager.services.about_service import build_about_content
@@ -64,6 +66,7 @@ from watch_party_manager.services.statistics_service import StatisticsService, S
 from watch_party_manager.services.vote_announcement_formatter import format_standings_lines
 from watch_party_manager.services.vote_completion_service import VoteCompletionService
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
+from watch_party_manager.services.watch_party_service import WatchPartyService
 from watch_party_manager.restore_confirmation_view import RestoreConfirmationView
 from watch_party_manager.start_vote_view import (
     CustomizeVoteModal,
@@ -108,6 +111,7 @@ class WatchPartyBot(commands.Bot):
         self.nominee_selection_service = NomineeSelectionService(self.suggestion_service, self.vote_service)
         self.statistics_service = StatisticsService(self.suggestion_service)
         self.vote_completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
+        self.watch_party_service = WatchPartyService(self.suggestion_service)
         self.backup_service = BackupService()
         self.interactive_voting_restored = False
         self.scheduler_host = SchedulerHost.from_json_file(
@@ -119,6 +123,10 @@ class WatchPartyBot(commands.Bot):
         )
         self.scheduler_host.scheduler_service.register_handler(
             VOTE_REMINDER_JOB_TYPE, VoteReminderJobHandler(self.vote_service, self)
+        )
+        self.scheduler_host.scheduler_service.register_handler(
+            WATCH_PARTY_REMINDER_JOB_TYPE,
+            WatchPartyReminderJobHandler(self.watch_party_service, self.suggestion_service, self),
         )
         self.guild_configuration_repository = GuildConfigurationRepository()
 

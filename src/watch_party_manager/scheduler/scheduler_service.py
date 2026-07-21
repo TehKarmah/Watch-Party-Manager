@@ -57,6 +57,25 @@ class SchedulerService:
             return existing
         return await self._repository.add(job)
 
+    async def cancel_by_logical_key(self, logical_key: str) -> ScheduledJob | None:
+        """Cancel the active job under a logical key, if any.
+
+        Used to remove or replace a job tied to a piece of state that
+        changed (e.g. a watch party being rescheduled or cancelled) --
+        see watch_party_scheduling.py. A no-op (returns None) when no
+        active job exists for that key, whether because none was ever
+        scheduled, reminders were disabled at schedule time, or it
+        already fired -- callers can call this unconditionally without
+        checking first.
+
+        Returns:
+            The cancelled job, or None if no active job exists for that key.
+        """
+        existing = await self._repository.find_active_by_logical_key(logical_key)
+        if existing is None:
+            return None
+        return await self._repository.cancel(existing.job_id, self._clock())
+
     async def run_once(self, *, limit: int = 100) -> int:
         now = self._clock()
         due_jobs = await self._repository.get_due(now, limit=limit)

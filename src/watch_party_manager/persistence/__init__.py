@@ -27,6 +27,11 @@ from watch_party_manager.persistence.suggestion_database_configuration_repositor
     DEFAULT_SUGGESTION_DATABASE_CONFIGURATIONS_PATH,
     SuggestionDatabaseConfigurationRepository,
 )
+from watch_party_manager.persistence.watch_party_repository import (
+    DEFAULT_WATCH_PARTIES_PATH,
+    JsonWatchPartyRepository,
+    WatchPartyLoadResult,
+)
 
 __all__ = [
     "DEFAULT_SUGGESTIONS_PATH",
@@ -45,4 +50,7 @@ __all__ = [
     "SuggestionDatabaseConfigurationRepository",
     "DEFAULT_SUGGESTION_DATABASE_CONFIGURATIONS_PATH",
     "SUGGESTION_DATABASE_CONFIGURATION_SCHEMA_VERSION",
+    "DEFAULT_WATCH_PARTIES_PATH",
+    "JsonWatchPartyRepository",
+    "WatchPartyLoadResult",
 ]

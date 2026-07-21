@@ -140,6 +140,37 @@ class SchedulerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(duplicate.job_id, first.job_id)
         self.assertEqual(len(repository.jobs), 1)
 
+    async def test_cancel_by_logical_key_cancels_the_active_job(self) -> None:
+        repository = MemoryRepository()
+        service = SchedulerService(repository, clock=lambda: NOW)
+        job = await service.schedule(self.make_job())
+
+        cancelled = await service.cancel_by_logical_key(job.logical_key)
+
+        self.assertIsNotNone(cancelled)
+        self.assertEqual(cancelled.job_id, job.job_id)
+        self.assertEqual(repository.jobs[job.job_id].status, JobStatus.CANCELLED)
+        self.assertEqual(repository.jobs[job.job_id].result, JobResult.CANCELLED)
+
+    async def test_cancel_by_logical_key_is_a_no_op_when_nothing_is_active(self) -> None:
+        repository = MemoryRepository()
+        service = SchedulerService(repository, clock=lambda: NOW)
+
+        cancelled = await service.cancel_by_logical_key("close_vote:999")
+
+        self.assertIsNone(cancelled)
+
+    async def test_cancel_by_logical_key_lets_a_new_job_reuse_the_key(self) -> None:
+        repository = MemoryRepository()
+        service = SchedulerService(repository, clock=lambda: NOW)
+        first = await service.schedule(self.make_job())
+
+        await service.cancel_by_logical_key(first.logical_key)
+        second = await service.schedule(self.make_job())
+
+        self.assertNotEqual(second.job_id, first.job_id)
+        self.assertEqual(repository.jobs[second.job_id].status, JobStatus.PENDING)
+
     async def test_run_once_executes_and_completes_due_job(self) -> None:
         repository = MemoryRepository()
         service = SchedulerService(repository, clock=lambda: NOW)

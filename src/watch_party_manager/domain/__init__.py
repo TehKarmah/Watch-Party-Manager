@@ -1,5 +1,6 @@
 from .watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
 from .watch_item_journey import WatchItemJourney
+from .watch_party import WatchParty, WatchPartyStatus
 from .vote import VoteRecord, VoteRound, VoteRoundStatus, VoteVisibility
 from .suggestion_database import SuggestionDatabase
 from .guild_configuration import (
@@ -38,6 +39,8 @@ __all__ = [
     "WatchItem",
     "WatchItemStatus",
     "WatchItemJourney",
+    "WatchParty",
+    "WatchPartyStatus",
     "VoteRecord",
     "VoteRound",
     "VoteRoundStatus",

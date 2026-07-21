@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock
 
 import watch_party_manager.bot as bot_module
 from watch_party_manager.bot import WatchPartyBot
-from watch_party_manager.scheduler import CLOSE_VOTE_JOB_TYPE, VOTE_REMINDER_JOB_TYPE
+from watch_party_manager.scheduler import (
+    CLOSE_VOTE_JOB_TYPE,
+    VOTE_REMINDER_JOB_TYPE,
+    WATCH_PARTY_REMINDER_JOB_TYPE,
+)
 
 
 class WatchPartyBotSchedulerLifecycleTests(unittest.IsolatedAsyncioTestCase):
@@ -32,6 +36,17 @@ class WatchPartyBotSchedulerLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(ValueError):
             bot.scheduler_host.scheduler_service.register_handler(VOTE_REMINDER_JOB_TYPE, object())
+
+    def test_registers_a_watch_party_reminder_handler_during_construction(self) -> None:
+        bot = WatchPartyBot(token="test-token")
+
+        with self.assertRaises(ValueError):
+            bot.scheduler_host.scheduler_service.register_handler(WATCH_PARTY_REMINDER_JOB_TYPE, object())
+
+    def test_constructs_a_watch_party_service(self) -> None:
+        bot = WatchPartyBot(token="test-token")
+
+        self.assertTrue(hasattr(bot, "watch_party_service"))
 
 
 class LegacyPollingWorkflowRetiredTests(unittest.TestCase):

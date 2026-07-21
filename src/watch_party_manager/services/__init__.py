@@ -45,6 +45,11 @@ from watch_party_manager.services.vote_completion_service import (
     VoteCompletionResult,
     VoteCompletionService,
 )
+from watch_party_manager.services.watch_party_service import (
+    WatchItemLookup,
+    WatchPartyResult,
+    WatchPartyService,
+)
 
 __all__ = [
     "SuggestionResult",
@@ -77,4 +82,7 @@ __all__ = [
     "StatisticsSnapshot",
     "VoteCompletionResult",
     "VoteCompletionService",
+    "WatchItemLookup",
+    "WatchPartyResult",
+    "WatchPartyService",
 ]
