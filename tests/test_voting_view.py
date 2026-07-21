@@ -23,19 +23,40 @@ def make_candidates(count: int) -> list[WatchItem]:
 
 class ButtonLabelTests(unittest.TestCase):
     def test_short_titles_are_kept_intact(self) -> None:
-        self.assertEqual(build_nominee_button_label("The Matrix"), "The Matrix")
+        self.assertEqual(build_nominee_button_label(1, "The Matrix"), "1 The Matrix")
+
+    def test_label_leads_with_the_position_number(self) -> None:
+        # FR-025: "[1 Brazil]" -- number, space, title, no punctuation.
+        self.assertEqual(build_nominee_button_label(1, "Brazil (1985)"), "1 Brazil (1985)")
+        self.assertEqual(build_nominee_button_label(2, "Big (1988)"), "2 Big (1988)")
+        self.assertEqual(build_nominee_button_label(3, "Rango (2011)"), "3 Rango (2011)")
 
     def test_titles_at_exactly_the_limit_are_kept_intact(self) -> None:
-        title = "A" * BUTTON_LABEL_MAX_LENGTH
-        self.assertEqual(build_nominee_button_label(title), title)
+        prefix = "1 "
+        title = "A" * (BUTTON_LABEL_MAX_LENGTH - len(prefix))
+
+        label = build_nominee_button_label(1, title)
+
+        self.assertEqual(label, prefix + title)
+        self.assertEqual(len(label), BUTTON_LABEL_MAX_LENGTH)
 
     def test_titles_over_the_limit_are_truncated(self) -> None:
         title = "A" * (BUTTON_LABEL_MAX_LENGTH + 20)
 
-        label = build_nominee_button_label(title)
+        label = build_nominee_button_label(1, title)
 
         self.assertLessEqual(len(label), BUTTON_LABEL_MAX_LENGTH)
+        self.assertTrue(label.startswith("1 "))
         self.assertTrue(label.endswith("…"))
+
+    def test_a_larger_position_number_still_fits_within_the_limit(self) -> None:
+        prefix = "10 "
+        title = "A" * (BUTTON_LABEL_MAX_LENGTH - len(prefix) + 20)
+
+        label = build_nominee_button_label(10, title)
+
+        self.assertLessEqual(len(label), BUTTON_LABEL_MAX_LENGTH)
+        self.assertTrue(label.startswith("10 "))
 
 
 class VotingViewTests(unittest.IsolatedAsyncioTestCase):
@@ -49,13 +70,13 @@ class VotingViewTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(view.children), 3)
 
-    async def test_button_labels_match_candidate_titles(self) -> None:
+    async def test_button_labels_include_the_position_and_the_candidate_title(self) -> None:
         candidates = make_candidates(2)
 
         view = VotingView(candidates, on_vote=self._noop)
 
         labels = [button.label for button in view.children]
-        self.assertEqual(labels, ["Movie 1", "Movie 2"])
+        self.assertEqual(labels, ["1 Movie 1", "2 Movie 2"])
 
     async def test_buttons_are_keyed_to_the_correct_suggestion_id(self) -> None:
         candidates = make_candidates(2)
@@ -64,6 +85,20 @@ class VotingViewTests(unittest.IsolatedAsyncioTestCase):
 
         suggestion_ids = [button.suggestion_id for button in view.children]
         self.assertEqual(suggestion_ids, [1, 2])
+
+    async def test_button_numbering_follows_candidate_order_not_suggestion_id(self) -> None:
+        # Candidate order (and therefore button numbering) is independent
+        # of the underlying suggestion IDs -- e.g. nominees selected out
+        # of ID order must still be numbered 1, 2, 3 in display order.
+        candidates = [
+            WatchItem(title="Third Suggested", media_type=MediaType.MOVIE, id=30),
+            WatchItem(title="First Suggested", media_type=MediaType.MOVIE, id=5),
+        ]
+
+        view = VotingView(candidates, on_vote=self._noop)
+
+        labels = [button.label for button in view.children]
+        self.assertEqual(labels, ["1 Third Suggested", "2 First Suggested"])
 
     async def test_rejects_more_than_the_discord_component_limit(self) -> None:
         candidates = make_candidates(MAX_NOMINEE_BUTTONS + 1)
@@ -126,8 +161,13 @@ class NomineeButtonTests(unittest.TestCase):
         pass
 
     def test_custom_id_encodes_the_suggestion_id(self) -> None:
-        button = NomineeButton(suggestion_id=42, title="The Matrix", on_vote=self._noop)
+        button = NomineeButton(position=1, suggestion_id=42, title="The Matrix", on_vote=self._noop)
         self.assertIn("42", button.custom_id)
+
+    def test_label_encodes_the_position_not_the_suggestion_id(self) -> None:
+        button = NomineeButton(position=1, suggestion_id=42, title="The Matrix", on_vote=self._noop)
+        self.assertEqual(button.label, "1 The Matrix")
+        self.assertNotIn("42", button.label)
 
 
 if __name__ == "__main__":

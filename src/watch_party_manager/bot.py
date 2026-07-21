@@ -58,6 +58,7 @@ from watch_party_manager.services.backup_service import (
     BackupKind,
     BackupService,
 )
+from watch_party_manager.services.discord_message_link import build_discord_message_link
 from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
 )
@@ -1663,6 +1664,120 @@ def get_round_candidates(
     ]
 
 
+VOTE_PROGRESS_BAR_LENGTH = 10
+VOTE_PROGRESS_BAR_FILLED_CHAR = "█"
+VOTE_PROGRESS_BAR_EMPTY_CHAR = "░"
+
+
+def build_suggestion_link(watch_item: WatchItem) -> Optional[str]:
+    """Build a jump link to a suggestion's original post, when known.
+
+    Mirrors vote_announcement_formatter.build_vote_link's exact "omit
+    gracefully" contract, applied to a suggestion's own guild_id/
+    channel_id/message_id (see FR-024) rather than a vote round's.
+    Returns None for a legacy suggestion missing one or more of those
+    fields, so callers can fall back to plain (unlinked) text.
+    """
+    if watch_item.guild_id is None or watch_item.channel_id is None or watch_item.message_id is None:
+        return None
+    return build_discord_message_link(watch_item.guild_id, watch_item.channel_id, watch_item.message_id)
+
+
+def build_vote_progress_bar(vote_count: int, total_votes: int, *, length: int = VOTE_PROGRESS_BAR_LENGTH) -> str:
+    """Build a filled/empty block bar representing one candidate's share of the vote.
+
+    Args:
+        vote_count: This candidate's current vote count.
+        total_votes: Total votes cast across every candidate in the round.
+        length: How many block characters make up the bar.
+
+    Returns:
+        A string of exactly `length` block characters, e.g. "██████░░░░"
+        for 6/10 votes. Entirely empty when total_votes is zero -- there
+        is no share of nothing to depict.
+    """
+    if total_votes <= 0:
+        filled = 0
+    else:
+        filled = max(0, min(length, round((vote_count / total_votes) * length)))
+    return (VOTE_PROGRESS_BAR_FILLED_CHAR * filled) + (VOTE_PROGRESS_BAR_EMPTY_CHAR * (length - filled))
+
+
+def build_candidate_standings_line(vote_count: int, total_votes: int) -> str:
+    """Build one candidate's progress-bar line: bar, vote count, and percentage.
+
+    Example: "██████░░░░ 6 votes • 60%". Only ever used for a visible
+    round with standings successfully computed -- blind rounds and
+    standings failures never call this (see build_candidate_standings_lines).
+    """
+    bar = build_vote_progress_bar(vote_count, total_votes)
+    percentage = round((vote_count / total_votes) * 100) if total_votes > 0 else 0
+    vote_word = "vote" if vote_count == 1 else "votes"
+    return f"{bar} {vote_count} {vote_word} • {percentage}%"
+
+
+def build_candidate_standings_lines(
+    candidates: List[WatchItem],
+    vote_round: VoteRound,
+    standings: Optional[List[StandingsEntry]],
+    standings_error: Optional[str],
+) -> List[str]:
+    """Build the voting post's single per-candidate presentation block.
+
+    FR-025: replaces the old duplicate "Nominees:" list plus a
+    separately vote-sorted "Standings:" section with one combined list,
+    kept in the same order as each candidate's vote button (not sorted
+    by vote count) so the displayed numbering always matches the
+    buttons below. Each candidate is its own paragraph: a numbered,
+    linked title, followed for a visible round by its progress bar,
+    vote count, and share. A blind round never reveals any of that.
+
+    Args:
+        candidates: The round's nominees, in button order.
+        vote_round: The round, used for its visibility and total votes cast.
+        standings: Per-suggestion vote tallies, or None if not available
+            (a still-open blind round, or none computed yet).
+        standings_error: A message to show instead of a standings line if
+            calculating them failed, or None.
+
+    Returns:
+        The lines to display: one candidate paragraph after another
+        separated by a blank line, followed by a trailing note for a
+        blind round or a standings failure.
+    """
+    is_visible = vote_round.visibility == VoteVisibility.VISIBLE
+    show_counts = is_visible and standings_error is None
+    total_votes = len(vote_round.votes)
+    vote_counts_by_suggestion_id = (
+        {entry.suggestion_id: entry.vote_count for entry in standings} if standings is not None else {}
+    )
+
+    blocks: List[List[str]] = []
+    for position, candidate in enumerate(candidates, start=1):
+        link = build_suggestion_link(candidate)
+        title_display = f"[{candidate.title}]({link})" if link else candidate.title
+        block = [f"{position}. {title_display}"]
+        if show_counts:
+            vote_count = vote_counts_by_suggestion_id.get(candidate.id, 0)
+            block.append(build_candidate_standings_line(vote_count, total_votes))
+        blocks.append(block)
+
+    lines: List[str] = []
+    for index, block in enumerate(blocks):
+        if index > 0:
+            lines.append("")
+        lines.extend(block)
+
+    if is_visible and standings_error is not None:
+        lines.append("")
+        lines.append(f"Standings unavailable: {standings_error}")
+    elif not is_visible:
+        lines.append("")
+        lines.append("Votes hidden until voting closes.")
+
+    return lines
+
+
 def build_voting_post_text(
     vote_round: VoteRound,
     candidates: List[WatchItem],
@@ -1672,8 +1787,8 @@ def build_voting_post_text(
     """Build the public voting post message for a round.
 
     Used both for the initial post created by /start_vote and to refresh
-    it after each vote in a visible round. Reuses format_datetime_for_display
-    and format_standings_lines rather than reformatting either here.
+    it after each vote. Reuses format_datetime_for_display and
+    build_candidate_standings_lines rather than reformatting either here.
 
     Args:
         vote_round: The round this post is for.
@@ -1688,23 +1803,19 @@ def build_voting_post_text(
 
     Returns:
         The formatted post text. Total votes cast is always shown -- for a
-        blind round that's the only vote information revealed; standings
-        are additionally shown for a visible round.
+        blind round that's the only vote information revealed; per-candidate
+        counts, percentages, and progress bars are additionally shown for
+        a visible round.
     """
     lines = [
         f"Voting round {vote_round.id} is open!",
         f"Visibility: {vote_round.visibility.value.capitalize()}",
         f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
         "",
-        "Nominees:",
     ]
-    for candidate in candidates:
-        lines.append(f"[{candidate.id}] {candidate.title}")
+    lines.extend(build_candidate_standings_lines(candidates, vote_round, standings, standings_error))
     lines.append("")
     lines.append(f"Votes cast: {len(vote_round.votes)}")
-
-    if vote_round.visibility == VoteVisibility.VISIBLE:
-        lines.extend(format_standings_lines(standings, standings_error))
 
     return "\n".join(lines)
 

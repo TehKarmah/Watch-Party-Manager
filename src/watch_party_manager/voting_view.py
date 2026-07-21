@@ -27,19 +27,26 @@ MAX_NOMINEE_BUTTONS = 25
 OnVoteCallback = Callable[[discord.Interaction, int], Awaitable[None]]
 
 
-def build_nominee_button_label(title: str) -> str:
+def build_nominee_button_label(position: int, title: str) -> str:
     """Build a concise, Discord-safe button label for a nominee.
 
+    FR-025: the label leads with the nominee's position (e.g. "1 Brazil")
+    so each button visibly matches the same numbered candidate shown in
+    the voting post's standings list above it.
+
     Args:
+        position: The nominee's 1-based position among this round's candidates.
         title: The nominee's full title.
 
     Returns:
-        The title as-is if it fits Discord's label length limit, otherwise
-        a truncated version ending in an ellipsis.
+        The numbered title as-is if it fits Discord's label length limit,
+        otherwise a truncated version ending in an ellipsis.
     """
-    if len(title) <= BUTTON_LABEL_MAX_LENGTH:
-        return title
-    return title[: BUTTON_LABEL_MAX_LENGTH - 1].rstrip() + "…"
+    prefix = f"{position} "
+    max_title_length = BUTTON_LABEL_MAX_LENGTH - len(prefix)
+    if len(title) <= max_title_length:
+        return f"{prefix}{title}"
+    return f"{prefix}{title[: max_title_length - 1].rstrip()}…"
 
 
 class NomineeButton(discord.ui.Button):
@@ -51,16 +58,19 @@ class NomineeButton(discord.ui.Button):
     references of its own.
     """
 
-    def __init__(self, suggestion_id: int, title: str, on_vote: OnVoteCallback) -> None:
+    def __init__(self, position: int, suggestion_id: int, title: str, on_vote: OnVoteCallback) -> None:
         """Initialize the button.
 
         Args:
+            position: The nominee's 1-based position among this round's
+                candidates, used to build the button label so it matches
+                the numbered candidate list shown in the voting post.
             suggestion_id: The suggestion this button represents.
             title: The nominee's title, used to build the button label.
             on_vote: Called with (interaction, suggestion_id) when clicked.
         """
         super().__init__(
-            label=build_nominee_button_label(title),
+            label=build_nominee_button_label(position, title),
             style=discord.ButtonStyle.primary,
             custom_id=f"wpm_vote_suggestion_{suggestion_id}",
         )
@@ -102,5 +112,5 @@ class VotingView(discord.ui.View):
             raise ValueError("Voting nominees must have unique suggestion IDs.")
 
         super().__init__(timeout=None)
-        for candidate in candidate_list:
-            self.add_item(NomineeButton(candidate.id, candidate.title, on_vote))
+        for position, candidate in enumerate(candidate_list, start=1):
+            self.add_item(NomineeButton(position, candidate.id, candidate.title, on_vote))

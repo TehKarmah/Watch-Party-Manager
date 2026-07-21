@@ -97,8 +97,20 @@ class BuildVotingPostTextTests(unittest.TestCase):
 
         text = build_voting_post_text(created.vote_round, candidates, standings=None, standings_error=None)
 
-        self.assertIn("[1] The Matrix", text)
-        self.assertIn("[2] Inception", text)
+        self.assertIn("1. The Matrix", text)
+        self.assertIn("2. Inception", text)
+
+    def test_does_not_duplicate_the_candidate_list(self) -> None:
+        # FR-025: the old separate "Nominees:" list is gone -- each
+        # candidate title appears exactly once in the post.
+        created = self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+        candidates = self.suggestion_service.get_suggestions()
+
+        text = build_voting_post_text(created.vote_round, candidates, standings=None, standings_error=None)
+
+        self.assertNotIn("Nominees:", text)
+        self.assertEqual(text.count("The Matrix"), 1)
+        self.assertEqual(text.count("Inception"), 1)
 
     def test_shows_the_voting_deadline(self) -> None:
         created = self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
@@ -151,8 +163,8 @@ class BuildVotingPostTextTests(unittest.TestCase):
             created.vote_round, candidates, standings=standings_result.standings, standings_error=None
         )
 
-        self.assertIn("Standings:", text)
-        self.assertIn("Suggestion #1", text)
+        self.assertIn("1 vote", text)
+        self.assertIn("100%", text)
 
     def test_shows_visibility_mode(self) -> None:
         created = self.vote_service.create_round(visibility=VoteVisibility.BLIND)
@@ -243,7 +255,7 @@ class HandleNomineeVoteTests(unittest.IsolatedAsyncioTestCase):
         await handle_nominee_vote(interaction, self.vote_service, self.suggestion_service, suggestion_id=1)
 
         self.assertEqual(message.edit_call_count, 1)
-        self.assertIn("Standings", message.edited_content)
+        self.assertIn("1 vote • 100%", message.edited_content)
         self.assertIn("Votes cast: 1", message.edited_content)
 
     async def test_blind_round_does_not_refresh_the_post(self) -> None:
@@ -338,7 +350,7 @@ class StartVoteCreatesAVotingPostTests(unittest.IsolatedAsyncioTestCase):
 
         post_text = build_voting_post_text(vote_round, candidates, standings=None, standings_error=None)
         self.assertIn(f"Voting round {vote_round.id} is open!", post_text)
-        self.assertIn("[1] The Matrix", post_text)
+        self.assertIn("1. The Matrix", post_text)
 
     async def test_message_ids_are_stored_after_the_post_is_sent(self) -> None:
         perform_start_vote(

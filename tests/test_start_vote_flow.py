@@ -147,7 +147,7 @@ class UseDefaultsTests(StartVoteFlowTestCase):
         )
 
         self.assertFalse(interaction.response.sent_ephemeral)
-        self.assertIn("Nominees:", interaction.response.sent_message)
+        self.assertIn("1. ", interaction.response.sent_message)
 
     async def test_use_defaults_still_enforces_wash_crew_permission(self) -> None:
         interaction = FakeInteraction(user_id=1)
