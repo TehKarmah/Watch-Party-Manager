@@ -1,3 +1,14 @@
+"""Tests for VoteCompletionService.complete_round().
+
+FR-019 retired check_and_complete_expired_round() (the legacy "find the
+open round and due-check it" entry point used by bot.py's old polling
+task) -- complete_round(round_id) is now the service's only public
+completion method, called by CloseVoteJobHandler once SchedulerService has
+already determined a specific round is due. These tests cover the same
+winner/tie/no-votes/journey/standings/idempotency scenarios the old
+due-time-based tests did, adapted to call complete_round() directly by ID.
+"""
+
 import sys
 import tempfile
 import unittest
@@ -20,7 +31,17 @@ from watch_party_manager.services.vote_completion_service import (
 from watch_party_manager.services.vote_service import VoteService
 
 
-class VoteCompletionServiceTests(unittest.TestCase):
+class LegacyDueCheckRemovedTests(unittest.TestCase):
+    """FR-019: check_and_complete_expired_round() (the "find the open
+    round and due-check it" entry point the old polling task called) is
+    gone -- complete_round(round_id) is the only public completion method.
+    """
+
+    def test_check_and_complete_expired_round_no_longer_exists(self) -> None:
+        self.assertFalse(hasattr(VoteCompletionService, "check_and_complete_expired_round"))
+
+
+class CompleteRoundTests(unittest.TestCase):
     def setUp(self) -> None:
         """Real SuggestionService and VoteService, both backed by temp files --
         mirrors the fixture pattern already used in test_persistent_voting.py.
@@ -44,6 +65,8 @@ class VoteCompletionServiceTests(unittest.TestCase):
         self._temp_dir.cleanup()
 
     def _open_round(self, visibility=VoteVisibility.VISIBLE, closes_at=None):
+        if closes_at is None:
+            closes_at = datetime.now(timezone.utc) + timedelta(days=1)
         return self.vote_service.create_round(
             visibility=visibility,
             closes_at=closes_at,
@@ -52,61 +75,41 @@ class VoteCompletionServiceTests(unittest.TestCase):
 
     # --- No-op / safety cases -------------------------------------------------
 
-    def test_returns_none_when_no_round_is_open(self) -> None:
-        result = self.completion_service.check_and_complete_expired_round()
-        self.assertIsNone(result)
+    def test_returns_none_for_a_nonexistent_round(self) -> None:
+        self.assertIsNone(self.completion_service.complete_round(999))
 
-    def test_returns_none_when_the_open_round_has_no_deadline(self) -> None:
-        self._open_round(closes_at=None)
-
-        result = self.completion_service.check_and_complete_expired_round()
-
-        self.assertIsNone(result)
-        self.assertEqual(self.vote_service.get_open_round().status, VoteRoundStatus.OPEN)
-
-    def test_returns_none_when_the_deadline_has_not_passed_yet(self) -> None:
-        future = datetime.now(timezone.utc) + timedelta(days=1)
-        self._open_round(closes_at=future)
-
-        result = self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
-
-        self.assertIsNone(result)
-        self.assertEqual(self.vote_service.get_open_round().status, VoteRoundStatus.OPEN)
-
-    def test_is_safe_to_call_repeatedly_with_nothing_active(self) -> None:
+    def test_is_safe_to_call_repeatedly_for_a_nonexistent_round(self) -> None:
         for _ in range(3):
-            self.assertIsNone(self.completion_service.check_and_complete_expired_round())
+            self.assertIsNone(self.completion_service.complete_round(999))
 
-    # --- Normal winner --------------------------------------------------------
+    # --- Normal winner ----------------------------------------------------------
 
-    def test_closes_the_round_when_expired(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        vote_round = self._open_round(closes_at=past)
-        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+    def test_closes_the_round_regardless_of_deadline(self) -> None:
+        # No due-time check here -- the caller (a scheduler job claimed
+        # specifically for this round) has already established it's due.
+        vote_round = self._open_round(closes_at=datetime.now(timezone.utc) + timedelta(days=1))
 
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        self.completion_service.complete_round(vote_round.id)
 
         self.assertEqual(self.vote_service.get_round(vote_round.id).status, VoteRoundStatus.CLOSED)
 
     def test_reports_a_single_normal_winner(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
         self.vote_service.cast_vote(discord_user_id=2, suggestion_id=self.matrix.id)
         self.vote_service.cast_vote(discord_user_id=3, suggestion_id=self.inception.id)
 
-        result = self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        result = self.completion_service.complete_round(vote_round.id)
 
         self.assertIsInstance(result, VoteCompletionResult)
         self.assertEqual(result.winning_suggestion_ids, [self.matrix.id])
         self.assertEqual(result.total_votes_cast, 3)
 
     def test_prevents_additional_votes_after_completion(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        self.completion_service.complete_round(vote_round.id)
 
         late_vote = self.vote_service.cast_vote(discord_user_id=2, suggestion_id=self.inception.id)
         self.assertFalse(late_vote.success)
@@ -115,132 +118,122 @@ class VoteCompletionServiceTests(unittest.TestCase):
         # If VoteService's own winner calculation were bypassed or
         # duplicated, this scenario (a vote changed after being cast)
         # would be exactly where the two could disagree.
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.inception.id)
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)  # changed vote
 
-        result = self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        result = self.completion_service.complete_round(vote_round.id)
 
         self.assertEqual(result.winning_suggestion_ids, [self.matrix.id])
 
     # --- Tie -------------------------------------------------------------------
 
     def test_reports_a_tie_with_every_tied_winner(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
         self.vote_service.cast_vote(discord_user_id=2, suggestion_id=self.inception.id)
 
-        result = self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        result = self.completion_service.complete_round(vote_round.id)
 
         self.assertEqual(sorted(result.winning_suggestion_ids), sorted([self.matrix.id, self.inception.id]))
 
     def test_a_three_way_tie_reports_all_three(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
         self.vote_service.cast_vote(discord_user_id=2, suggestion_id=self.inception.id)
         self.vote_service.cast_vote(discord_user_id=3, suggestion_id=self.interstellar.id)
 
-        result = self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        result = self.completion_service.complete_round(vote_round.id)
 
         self.assertEqual(
             sorted(result.winning_suggestion_ids),
             sorted([self.matrix.id, self.inception.id, self.interstellar.id]),
         )
 
+    def test_a_tie_updates_every_winners_journey(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+        self.vote_service.cast_vote(discord_user_id=2, suggestion_id=self.inception.id)
+
+        self.completion_service.complete_round(vote_round.id)
+
+        self.assertEqual(self.suggestion_service.get_suggestion(self.matrix.id).journey.times_won, 1)
+        self.assertEqual(self.suggestion_service.get_suggestion(self.inception.id).journey.times_won, 1)
+
     # --- No votes cast -----------------------------------------------------------
 
     def test_no_votes_cast_produces_no_winners(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        vote_round = self._open_round(closes_at=past)
+        vote_round = self._open_round()
 
-        result = self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        result = self.completion_service.complete_round(vote_round.id)
 
         self.assertEqual(result.winning_suggestion_ids, [])
         self.assertEqual(result.total_votes_cast, 0)
         self.assertEqual(self.vote_service.get_round(vote_round.id).status, VoteRoundStatus.CLOSED)
 
     def test_no_votes_cast_does_not_update_any_watch_history(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        self._open_round()
 
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        self.completion_service.complete_round(self.vote_service.get_open_round().id)
 
         self.assertEqual(self.suggestion_service.get_suggestion(self.matrix.id).journey.times_won, 0)
 
     # --- Watch history updated -------------------------------------------------
 
     def test_winner_journey_gets_times_won_incremented(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        self.completion_service.complete_round(vote_round.id)
 
         winner = self.suggestion_service.get_suggestion(self.matrix.id)
         self.assertEqual(winner.journey.times_won, 1)
 
     def test_winner_journey_gets_last_won_date_set_to_the_rounds_deadline(self) -> None:
         deadline = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
-        self._open_round(closes_at=deadline)
+        vote_round = self._open_round(closes_at=deadline)
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
-        self.completion_service.check_and_complete_expired_round(now=deadline + timedelta(hours=3))
+        self.completion_service.complete_round(vote_round.id)
 
         winner = self.suggestion_service.get_suggestion(self.matrix.id)
         self.assertEqual(winner.journey.last_won_date, deadline.date())
 
     def test_winner_journey_gets_voting_appearances_and_last_nominated_date_updated_too(self) -> None:
         deadline = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
-        self._open_round(closes_at=deadline)
+        vote_round = self._open_round(closes_at=deadline)
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
-        self.completion_service.check_and_complete_expired_round(now=deadline)
+        self.completion_service.complete_round(vote_round.id)
 
         winner = self.suggestion_service.get_suggestion(self.matrix.id)
         self.assertEqual(winner.journey.voting_appearances, 1)
         self.assertEqual(winner.journey.last_nominated_date, deadline.date())
 
     def test_winner_journey_preserves_the_winning_vote_field(self) -> None:
-        deadline = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
-        self._open_round(closes_at=deadline)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
-        self.completion_service.check_and_complete_expired_round(now=deadline)
+        self.completion_service.complete_round(vote_round.id)
 
         winner = self.suggestion_service.get_suggestion(self.matrix.id)
         self.assertEqual(winner.journey.winning_vote, "The Matrix")
 
     def test_non_winning_nominees_do_not_get_times_won_incremented(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        self.completion_service.complete_round(vote_round.id)
 
         loser = self.suggestion_service.get_suggestion(self.inception.id)
         self.assertEqual(loser.journey.times_won, 0)
         self.assertIsNone(loser.journey.last_won_date)
 
-    def test_a_tie_updates_every_winners_journey(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
-        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
-        self.vote_service.cast_vote(discord_user_id=2, suggestion_id=self.inception.id)
-
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
-
-        self.assertEqual(self.suggestion_service.get_suggestion(self.matrix.id).journey.times_won, 1)
-        self.assertEqual(self.suggestion_service.get_suggestion(self.inception.id).journey.times_won, 1)
-
     def test_watch_history_updates_are_persisted(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        self.completion_service.complete_round(vote_round.id)
 
         reloaded_service = SuggestionService(
             repository=JsonSuggestionRepository(Path(self._temp_dir.name) / "suggestions.json"),
@@ -251,26 +244,30 @@ class VoteCompletionServiceTests(unittest.TestCase):
         reloaded_winner = reloaded_service.get_suggestion(self.matrix.id)
         self.assertEqual(reloaded_winner.journey.times_won, 1)
 
-    # --- Restart safety / idempotency -------------------------------------------
+    # --- Idempotency ---------------------------------------------------------------
+
+    def test_returns_none_for_an_already_closed_round(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.close_round(vote_round.id)
+
+        self.assertIsNone(self.completion_service.complete_round(vote_round.id))
 
     def test_repeated_calls_after_completion_are_a_no_op(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
-        first = self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
-        second = self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        first = self.completion_service.complete_round(vote_round.id)
+        second = self.completion_service.complete_round(vote_round.id)
 
         self.assertIsNotNone(first)
         self.assertIsNone(second)
 
     def test_repeated_calls_do_not_double_count_watch_history(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        self.completion_service.complete_round(vote_round.id)
+        self.completion_service.complete_round(vote_round.id)
 
         winner = self.suggestion_service.get_suggestion(self.matrix.id)
         self.assertEqual(winner.journey.times_won, 1)
@@ -278,10 +275,10 @@ class VoteCompletionServiceTests(unittest.TestCase):
     def test_simulated_restart_after_expiration_still_completes_the_round(self) -> None:
         # Simulates the bot being offline well past the deadline: a fresh
         # VoteCompletionService (as if freshly constructed after a
-        # restart) built on services reloaded from disk still detects
-        # and completes the stale round correctly.
+        # restart) built on services reloaded from disk still completes
+        # the stale round correctly once told its ID.
         past_deadline = datetime.now(timezone.utc) - timedelta(days=1)
-        self._open_round(closes_at=past_deadline)
+        vote_round = self._open_round(closes_at=past_deadline)
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
         root = Path(self._temp_dir.name)
@@ -296,7 +293,7 @@ class VoteCompletionServiceTests(unittest.TestCase):
             restarted_vote_service, restarted_suggestion_service
         )
 
-        result = restarted_completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        result = restarted_completion_service.complete_round(vote_round.id)
 
         self.assertIsNotNone(result)
         self.assertEqual(result.winning_suggestion_ids, [self.matrix.id])
@@ -307,21 +304,22 @@ class VoteCompletionServiceTests(unittest.TestCase):
     # --- Archive: closed rounds remain accessible -------------------------------
 
     def test_archived_round_remains_accessible_after_completion(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        vote_round = self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
 
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        self.completion_service.complete_round(vote_round.id)
 
         self.assertIsNotNone(self.vote_service.get_round(vote_round.id))
         self.assertEqual(self.vote_service.get_round(vote_round.id).status, VoteRoundStatus.CLOSED)
 
     def test_newest_open_round_is_still_returned_after_a_prior_round_completes(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        first_round = self._open_round(closes_at=past)
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        first_round = self._open_round()
+        self.completion_service.complete_round(first_round.id)
 
-        second_round = self._open_round(closes_at=None)
+        second_round = self.vote_service.create_round(
+            visibility=VoteVisibility.VISIBLE,
+            candidate_suggestion_ids=[self.matrix.id, self.inception.id, self.interstellar.id],
+        ).vote_round
 
         self.assertEqual(self.vote_service.get_open_round().id, second_round.id)
         self.assertNotEqual(second_round.id, first_round.id)
@@ -329,10 +327,9 @@ class VoteCompletionServiceTests(unittest.TestCase):
         self.assertEqual(self.vote_service.get_round(first_round.id).status, VoteRoundStatus.CLOSED)
 
     def test_get_latest_round_returns_the_completed_round_when_no_new_round_exists(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        vote_round = self._open_round(closes_at=past)
+        vote_round = self._open_round()
 
-        self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        self.completion_service.complete_round(vote_round.id)
 
         self.assertEqual(self.vote_service.get_latest_round().id, vote_round.id)
         self.assertEqual(self.vote_service.get_latest_round().status, VoteRoundStatus.CLOSED)
@@ -340,133 +337,16 @@ class VoteCompletionServiceTests(unittest.TestCase):
     # --- Standings reuse ---------------------------------------------------------
 
     def test_standings_are_included_via_the_existing_standings_calculation(self) -> None:
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        self._open_round(closes_at=past)
+        vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
         self.vote_service.cast_vote(discord_user_id=2, suggestion_id=self.matrix.id)
         self.vote_service.cast_vote(discord_user_id=3, suggestion_id=self.inception.id)
 
-        result = self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
+        result = self.completion_service.complete_round(vote_round.id)
 
         standings_by_id = {entry.suggestion_id: entry.vote_count for entry in result.standings}
         self.assertEqual(standings_by_id[self.matrix.id], 2)
         self.assertEqual(standings_by_id[self.inception.id], 1)
-
-
-class CompleteRoundTests(unittest.TestCase):
-    """FR-018: complete_round() is the round-ID-specific counterpart used
-    by CloseVoteJobHandler (which already knows which round is due via its
-    job payload, unlike check_and_complete_expired_round()'s "find and
-    due-check the open round" flow). Covers the same close/winner/journey/
-    standings behavior directly by ID, without needing a deadline.
-    """
-
-    def setUp(self) -> None:
-        self._temp_dir = tempfile.TemporaryDirectory()
-        root = Path(self._temp_dir.name)
-        self.suggestion_service = SuggestionService(
-            repository=JsonSuggestionRepository(root / "suggestions.json"),
-            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
-        )
-        self.vote_service = VoteService(
-            self.suggestion_service, repository=JsonVoteRepository(root / "voting.json")
-        )
-        self.completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
-
-        self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
-        self.inception = self.suggestion_service.suggest("Inception").watch_item
-
-    def tearDown(self) -> None:
-        self._temp_dir.cleanup()
-
-    def _open_round(self, closes_at=None):
-        return self.vote_service.create_round(
-            visibility=VoteVisibility.VISIBLE,
-            closes_at=closes_at,
-            candidate_suggestion_ids=[self.matrix.id, self.inception.id],
-        ).vote_round
-
-    def test_closes_the_round_regardless_of_deadline(self) -> None:
-        # No due-time check here -- the caller (a scheduler job claimed
-        # specifically for this round) has already established it's due.
-        vote_round = self._open_round(closes_at=datetime.now(timezone.utc) + timedelta(days=1))
-
-        result = self.completion_service.complete_round(vote_round.id)
-
-        self.assertIsNotNone(result)
-        self.assertEqual(self.vote_service.get_round(vote_round.id).status, VoteRoundStatus.CLOSED)
-
-    def test_reports_a_single_winner(self) -> None:
-        vote_round = self._open_round()
-        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
-
-        result = self.completion_service.complete_round(vote_round.id)
-
-        self.assertEqual(result.winning_suggestion_ids, [self.matrix.id])
-        self.assertEqual(result.total_votes_cast, 1)
-
-    def test_reports_a_tie(self) -> None:
-        vote_round = self._open_round()
-        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
-        self.vote_service.cast_vote(discord_user_id=2, suggestion_id=self.inception.id)
-
-        result = self.completion_service.complete_round(vote_round.id)
-
-        self.assertEqual(sorted(result.winning_suggestion_ids), sorted([self.matrix.id, self.inception.id]))
-
-    def test_no_votes_cast_produces_no_winners(self) -> None:
-        vote_round = self._open_round()
-
-        result = self.completion_service.complete_round(vote_round.id)
-
-        self.assertEqual(result.winning_suggestion_ids, [])
-        self.assertEqual(result.total_votes_cast, 0)
-
-    def test_updates_the_winners_journey(self) -> None:
-        vote_round = self._open_round()
-        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
-
-        self.completion_service.complete_round(vote_round.id)
-
-        winner = self.suggestion_service.get_suggestion(self.matrix.id)
-        self.assertEqual(winner.journey.times_won, 1)
-
-    def test_returns_none_for_a_nonexistent_round(self) -> None:
-        result = self.completion_service.complete_round(999)
-
-        self.assertIsNone(result)
-
-    def test_returns_none_for_an_already_closed_round(self) -> None:
-        vote_round = self._open_round()
-        self.vote_service.close_round(vote_round.id)
-
-        result = self.completion_service.complete_round(vote_round.id)
-
-        self.assertIsNone(result)
-
-    def test_repeated_calls_are_idempotent(self) -> None:
-        vote_round = self._open_round()
-        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
-
-        first = self.completion_service.complete_round(vote_round.id)
-        second = self.completion_service.complete_round(vote_round.id)
-
-        self.assertIsNotNone(first)
-        self.assertIsNone(second)
-        self.assertEqual(self.suggestion_service.get_suggestion(self.matrix.id).journey.times_won, 1)
-
-    def test_check_and_complete_expired_round_delegates_here_without_duplicating_logic(self) -> None:
-        # Both entry points must agree on the outcome for the same round,
-        # since check_and_complete_expired_round() delegates to
-        # complete_round() rather than reimplementing close+winner+journey.
-        past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        vote_round = self._open_round(closes_at=past)
-        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
-
-        result = self.completion_service.check_and_complete_expired_round(now=datetime.now(timezone.utc))
-
-        self.assertEqual(result.vote_round.id, vote_round.id)
-        self.assertEqual(result.winning_suggestion_ids, [self.matrix.id])
 
 
 if __name__ == "__main__":

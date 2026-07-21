@@ -9,6 +9,10 @@ VoteService.close_round()/get_current_winners() directly -- see that
 method's docstring for why this is the single place a scheduler-driven
 close is fully finalized, instead of splitting "close + determine winner"
 and "record history + announce" across two divergent implementations.
+
+FR-019 retired the older polling-based mechanism (a bot.py background
+task that independently closed and announced expired rounds), making
+this handler the sole automatic path for completing a voting round.
 """
 
 from __future__ import annotations
@@ -91,9 +95,7 @@ class CloseVoteJobHandler:
             JobExecutionResult(EXECUTED) if the round was closed by this
             call. This still applies even if the round has no channel
             reference to announce to -- the close itself succeeded, only
-            the announcement was skipped (logged as a warning), mirroring
-            bot.py's existing check_and_announce_expired_vote() behavior
-            for the same edge case.
+            the announcement was skipped (logged as a warning).
             JobExecutionResult(SKIPPED_NOT_APPLICABLE) if the round no
             longer exists or was already closed before this call.
 

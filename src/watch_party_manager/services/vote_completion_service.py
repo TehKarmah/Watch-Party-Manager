@@ -1,13 +1,18 @@
-"""Service that detects and completes expired voting rounds.
+"""Service that completes a voting round's lifecycle by ID.
 
 This is a dedicated completion service rather than logic living inside
-VoteService, SuggestionService, or bot.py: completing a round genuinely
-needs both worlds -- closing the round and computing winners (VoteService)
-and updating the winning Watch Item(s)' history (SuggestionService).
-Combining them here keeps that cross-cutting concern out of both
-individual services and out of the Discord layer entirely, mirroring the
-same reasoning NomineeSelectionService already established in this
-project for the same kind of two-service concern.
+VoteService, SuggestionService, or a scheduler job handler: completing a
+round genuinely needs both worlds -- closing the round and computing
+winners (VoteService) and updating the winning Watch Item(s)' history
+(SuggestionService). Combining them here keeps that cross-cutting concern
+out of both individual services and out of the Discord layer entirely,
+mirroring the same reasoning NomineeSelectionService already established
+in this project for the same kind of two-service concern.
+
+Detecting *when* a round is due is the scheduler's responsibility (see
+CloseVoteJobHandler and the close_vote job type) -- as of FR-019, this
+service only completes a round it's told to, by ID; it no longer
+searches for or due-checks the open round itself.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ class VoteCompletionResult:
 
 
 class VoteCompletionService:
-    """Detects expired voting rounds and completes their lifecycle.
+    """Completes a voting round's lifecycle, given its round ID.
 
     Completing a round means:
       1. Closing it via VoteService.close_round(), which blocks any
@@ -55,10 +60,10 @@ class VoteCompletionService:
       3. Updating each winning suggestion's WatchItemJourney via
          SuggestionService.record_vote_win().
 
-    This service never sends any Discord messages. bot.py is responsible
-    for turning a VoteCompletionResult into an announcement and delivering
-    it -- see build_vote_completion_announcement() and
-    check_and_announce_expired_vote() there.
+    This service never sends any Discord messages. CloseVoteJobHandler
+    (the sole caller as of FR-019) is responsible for turning a
+    VoteCompletionResult into an announcement and delivering it -- see
+    build_vote_completion_announcement() in vote_announcement_formatter.py.
     """
 
     def __init__(self, vote_service: VoteService, journey_recorder: JourneyRecorder) -> None:
@@ -73,75 +78,25 @@ class VoteCompletionService:
         self._vote_service = vote_service
         self._journey_recorder = journey_recorder
 
-    def check_and_complete_expired_round(
-        self, now: Optional[datetime] = None
-    ) -> Optional[VoteCompletionResult]:
-        """Close and finalize the open round if its deadline has passed.
-
-        Safe to call at any time, repeatedly, including:
-          - when no round is open (returns None immediately),
-          - when the open round has no deadline set (returns None --
-            such a round never auto-expires),
-          - when the deadline hasn't passed yet (returns None),
-          - and after the round has already been completed, whether by an
-            earlier call in this same process or a previous run before a
-            restart. VoteService.close_round() rejects a round that's
-            already closed, and that rejection is what makes this method
-            naturally idempotent, without needing any separate "already
-            announced" flag: if closing fails, there is nothing left to
-            do, so this returns None rather than re-running winner
-            calculation or re-updating watch history for a round already
-            fully processed.
-
-        This is also what "Safe if multiple guilds exist" means for this
-        service specifically: only one round can be open at a time across
-        the whole bot (an existing, unchanged VoteService rule), so there
-        is only ever at most one round to check regardless of how many
-        guilds the bot is in. The round's own guild_id/channel_id/
-        message_id (already persisted) are what let bot.py deliver the
-        announcement to the correct place.
-
-        Args:
-            now: The current time to compare against the round's
-                deadline. Defaults to the real current UTC time; tests
-                supply a fixed value for determinism.
-
-        Returns:
-            A VoteCompletionResult if a round was completed by this call,
-            or None if there was nothing to do.
-        """
-        vote_round = self._vote_service.get_open_round()
-        if vote_round is None or vote_round.closes_at is None:
-            return None
-
-        current_time = now if now is not None else datetime.now(timezone.utc)
-        if current_time < vote_round.closes_at:
-            return None
-
-        return self.complete_round(vote_round.id)
-
     def complete_round(self, round_id: int) -> Optional[VoteCompletionResult]:
         """Close and finalize one specific round by ID, if it's still open.
 
-        Unlike check_and_complete_expired_round() -- which finds and
-        due-checks the single currently-open round -- this acts on
-        exactly the round identified by round_id and never consults
-        closes_at. It's the method a caller that already knows which
-        round is due uses directly: CloseVoteJobHandler, whose scheduled
-        job carries the vote_id and whose due time is already enforced by
-        SchedulerService before the job is ever claimed.
+        The caller is expected to already know round_id is due -- for
+        CloseVoteJobHandler, that's enforced by SchedulerService before
+        the close_vote job is ever claimed, so this never consults
+        closes_at itself. This is the single place "close, determine
+        winner(s), update Watch Item Journey, and calculate standings" is
+        implemented; callers never duplicate it.
 
-        check_and_complete_expired_round() delegates here once it has
-        confirmed the open round is due, so this is the single place
-        "close, determine winner(s), update Watch Item Journey, and
-        calculate standings" is implemented -- neither caller duplicates
-        it.
-
-        Idempotent for the same reason check_and_complete_expired_round()
-        already is: VoteService.close_round() rejects a round that's
-        already closed (or that doesn't exist), so a later call for a
-        round this already completed returns None rather than redoing
-        any work.
+        Safe to call at any time, repeatedly, including after the round
+        has already been completed -- whether by an earlier call in this
+        same process or a previous run before a restart.
+        VoteService.close_round() rejects a round that's already closed,
+        and that rejection is what makes this method naturally
+        idempotent, without needing any separate "already announced"
+        flag: if closing fails, there is nothing left to do, so this
+        returns None rather than re-running winner calculation or
+        re-updating watch history for a round already fully processed.
 
         Args:
             round_id: The round to close and finalize.
@@ -166,9 +121,9 @@ class VoteCompletionService:
         # concluded, not whenever the bot happened to notice -- these can
         # differ if the bot was offline past the deadline (see restart
         # safety), and using the deadline keeps the result deterministic
-        # and testable. Rounds always have closes_at by the time they
-        # reach here in practice (neither caller above ever completes one
-        # without a deadline), but a direct complete_round() call is
+        # and testable. A close_vote job's round always has closes_at set
+        # (build_close_vote_job() never schedules one otherwise), but a
+        # direct complete_round() call for a round without one is
         # defended with a "now" fallback rather than raising.
         completion_date = (
             vote_round.closes_at.date()
