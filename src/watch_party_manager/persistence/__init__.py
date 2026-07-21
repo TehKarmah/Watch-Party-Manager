@@ -22,6 +22,11 @@ from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
     SuggestionDatabaseLoadResult,
 )
+from watch_party_manager.persistence.suggestion_database_configuration_repository import (
+    CURRENT_SCHEMA_VERSION as SUGGESTION_DATABASE_CONFIGURATION_SCHEMA_VERSION,
+    DEFAULT_SUGGESTION_DATABASE_CONFIGURATIONS_PATH,
+    SuggestionDatabaseConfigurationRepository,
+)
 
 __all__ = [
     "DEFAULT_SUGGESTIONS_PATH",
@@ -37,4 +42,7 @@ __all__ = [
     "FutureSchemaVersionError",
     "DEFAULT_GUILD_CONFIGURATIONS_PATH",
     "CURRENT_SCHEMA_VERSION",
+    "SuggestionDatabaseConfigurationRepository",
+    "DEFAULT_SUGGESTION_DATABASE_CONFIGURATIONS_PATH",
+    "SUGGESTION_DATABASE_CONFIGURATION_SCHEMA_VERSION",
 ]

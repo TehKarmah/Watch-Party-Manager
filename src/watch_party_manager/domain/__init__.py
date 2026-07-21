@@ -20,6 +20,17 @@ from .guild_configuration import (
     WatchNotificationsConfig,
     WatchPartyRoleConfig,
 )
+from .suggestion_database_configuration import (
+    CandidateSelectionMode,
+    SuggestionDatabaseArchiveConfig,
+    SuggestionDatabaseChannelsConfig,
+    SuggestionDatabaseConfiguration,
+    SuggestionDatabaseNotificationOverridesConfig,
+    SuggestionDatabasePermissionsConfig,
+    SuggestionDatabaseWatchHistoryConfig,
+    SuggestionRulesConfig,
+    VotingOverridesConfig,
+)
 
 __all__ = [
     "MediaType",
@@ -48,4 +59,13 @@ __all__ = [
     "FeatureFlagsConfig",
     "BackupConfig",
     "AdministrativeNotificationsConfig",
+    "CandidateSelectionMode",
+    "SuggestionDatabaseArchiveConfig",
+    "SuggestionDatabaseChannelsConfig",
+    "SuggestionDatabaseConfiguration",
+    "SuggestionDatabaseNotificationOverridesConfig",
+    "SuggestionDatabasePermissionsConfig",
+    "SuggestionDatabaseWatchHistoryConfig",
+    "SuggestionRulesConfig",
+    "VotingOverridesConfig",
 ]
