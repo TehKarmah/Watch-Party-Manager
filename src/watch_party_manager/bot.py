@@ -28,6 +28,7 @@ from watch_party_manager.domain.vote import (
 )
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem
+from watch_party_manager.domain.watch_party import WatchParty
 from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.persistence.guild_configuration_repository import (
     GuildConfigurationRepository,
@@ -41,7 +42,10 @@ from watch_party_manager.scheduler import (
     VoteReminderJobHandler,
     WATCH_PARTY_REMINDER_JOB_TYPE,
     WatchPartyReminderJobHandler,
+    cancel_watch_party_reminder,
+    reschedule_watch_party_reminder,
     schedule_vote_jobs,
+    schedule_watch_party_reminder,
 )
 from watch_party_manager.services.about_service import build_about_content
 from watch_party_manager.services.backup_service import (
@@ -425,6 +429,57 @@ class WatchPartyBot(commands.Bot):
                 database_id=database_id,
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
+
+        @self.tree.command(name="schedule_watch_party")
+        async def schedule_watch_party(
+            interaction: discord.Interaction, watch_item_id: int, when: str
+        ) -> None:
+            await handle_schedule_watch_party_completion(
+                interaction,
+                watch_party_service=self.watch_party_service,
+                suggestion_service=self.suggestion_service,
+                wash_crew_role_id=self.wash_crew_role_id,
+                watch_item_id=watch_item_id,
+                when=when,
+                scheduler_service=self.scheduler_host.scheduler_service,
+                guild_configuration_repository=self.guild_configuration_repository,
+            )
+
+        @self.tree.command(name="reschedule_watch_party")
+        async def reschedule_watch_party(
+            interaction: discord.Interaction, watch_party_id: int, when: str
+        ) -> None:
+            await handle_reschedule_watch_party_completion(
+                interaction,
+                watch_party_service=self.watch_party_service,
+                wash_crew_role_id=self.wash_crew_role_id,
+                watch_party_id=watch_party_id,
+                when=when,
+                scheduler_service=self.scheduler_host.scheduler_service,
+                guild_configuration_repository=self.guild_configuration_repository,
+            )
+
+        @self.tree.command(name="cancel_watch_party")
+        async def cancel_watch_party(interaction: discord.Interaction, watch_party_id: int) -> None:
+            await handle_cancel_watch_party_completion(
+                interaction,
+                watch_party_service=self.watch_party_service,
+                wash_crew_role_id=self.wash_crew_role_id,
+                watch_party_id=watch_party_id,
+                scheduler_service=self.scheduler_host.scheduler_service,
+            )
+
+        @self.tree.command(name="watch_party_status")
+        async def watch_party_status(interaction: discord.Interaction) -> None:
+            permission = self.permission_service.require_watch_party_member(interaction.user)
+            if not permission.allowed:
+                await interaction.response.send_message(permission.message, ephemeral=True)
+                return
+            message = perform_watch_party_status(
+                watch_party_service=self.watch_party_service,
+                suggestion_service=self.suggestion_service,
+            )
+            await interaction.response.send_message(message)
 
         # Complete any round that expired while WASH was offline before
         # attempting to restore its interactive voting controls. This is
@@ -1934,6 +1989,360 @@ def perform_database_remove(
 
     result = suggestion_service.deactivate_database(database_id, guild_id)
     return result.message, True
+
+
+def parse_watch_party_schedule_time(value: str) -> datetime:
+    """Parse a watch party's scheduled date/time into a UTC-aware datetime.
+
+    Accepts ISO 8601-style date/time text (e.g. "2026-08-01 20:00" or
+    "2026-08-01T20:00:00"). A value with no UTC offset is interpreted as
+    UTC, matching how every other scheduled time in WASH (e.g.
+    VoteRound.closes_at) is stored and compared internally -- there is no
+    per-guild scheduling timezone configured yet.
+
+    Args:
+        value: The raw "when" command option text.
+
+    Returns:
+        A timezone-aware datetime in UTC.
+
+    Raises:
+        ValueError: If value is blank or not a parseable date/time.
+    """
+    cleaned = (value or "").strip()
+    if not cleaned:
+        raise ValueError("A scheduled date and time is required, e.g. '2026-08-01 20:00'.")
+
+    try:
+        parsed = datetime.fromisoformat(cleaned)
+    except ValueError as exc:
+        raise ValueError(
+            f"'{cleaned}' isn't a valid date/time. Use a format like '2026-08-01 20:00'."
+        ) from exc
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def build_schedule_watch_party_confirmation(
+    watch_party: WatchParty, watch_item: Optional[WatchItem]
+) -> str:
+    """Build the public confirmation for a newly scheduled watch party."""
+    title = watch_item.title if watch_item is not None else f"watch item #{watch_party.watch_item_id}"
+    return (
+        f'Watch party #{watch_party.id} scheduled for "{title}".\n'
+        f"Starts: {format_datetime_for_display(watch_party.scheduled_at)}"
+    )
+
+
+def build_reschedule_watch_party_confirmation(watch_party: WatchParty) -> str:
+    """Build the public confirmation for a rescheduled watch party."""
+    return (
+        f"Watch party #{watch_party.id} rescheduled.\n"
+        f"Starts: {format_datetime_for_display(watch_party.scheduled_at)}"
+    )
+
+
+def build_watch_party_status_text(watch_party: WatchParty, watch_item: Optional[WatchItem]) -> str:
+    """Build the /watch_party_status response for one watch party.
+
+    Args:
+        watch_party: The watch party to report on.
+        watch_item: The Watch Item being watched, if it could still be
+            resolved. None if it was removed after being scheduled -- the
+            watch party is still identified by its own ID rather than
+            failing to report status at all.
+
+    Returns:
+        Movie title, current status, Discord-formatted scheduled time,
+        and an IMDb link when one is on file.
+    """
+    title = watch_item.title if watch_item is not None else f"Watch item #{watch_party.watch_item_id}"
+    lines = [
+        f"Watch Party #{watch_party.id}",
+        f"Movie: {title}",
+        f"Status: {watch_party.status.value.capitalize()}",
+        f"Scheduled for: {format_datetime_for_display(watch_party.scheduled_at)}",
+    ]
+
+    if watch_item is not None:
+        imdb_url = watch_item.metadata_ids.get(MetadataProvider.IMDB)
+        if imdb_url:
+            lines.append(f"IMDb: {imdb_url}")
+
+    return "\n".join(lines)
+
+
+def perform_schedule_watch_party(
+    watch_party_service: WatchPartyService,
+    suggestion_service: SuggestionService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    guild_id: Optional[int],
+    channel_id: Optional[int],
+    watch_item_id: int,
+    when: str,
+) -> tuple[str, bool, Optional[WatchParty]]:
+    """Core logic for /schedule_watch_party, kept free of Discord objects except `user`.
+
+    Args:
+        watch_party_service: The service to schedule the watch party through.
+        suggestion_service: Used to resolve the watch item for the confirmation text.
+        user: The member invoking the command.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if unconfigured.
+        guild_id: The Discord guild the command was run in, or None outside a guild.
+        channel_id: The Discord channel or thread the command was run in --
+            used as the watch party's reminder channel.
+        watch_item_id: The watch item to schedule a watch party for.
+        when: The raw "when" option text; parsed via parse_watch_party_schedule_time.
+
+    Returns:
+        A (message, ephemeral, watch_party) tuple. watch_party is set only
+        on success, so the caller can schedule its reminder job without a
+        redundant lookup. The confirmation is public (not ephemeral) --
+        scheduling a watch party is community-relevant, matching
+        /start_vote's equivalent announcement.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+            None,
+        )
+
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to schedule a watch party.", True, None
+
+    if guild_id is None:
+        return "This command can only be used in a Discord server.", True, None
+
+    try:
+        scheduled_at = parse_watch_party_schedule_time(when)
+    except ValueError as exc:
+        return str(exc), True, None
+
+    result = watch_party_service.schedule_watch_party(
+        watch_item_id=watch_item_id,
+        scheduled_at=scheduled_at,
+        guild_id=guild_id,
+        channel_id=channel_id,
+    )
+    if not result.success:
+        return result.message, True, None
+
+    watch_item = suggestion_service.get_suggestion(watch_item_id)
+    return (
+        build_schedule_watch_party_confirmation(result.watch_party, watch_item),
+        False,
+        result.watch_party,
+    )
+
+
+async def handle_schedule_watch_party_completion(
+    interaction: discord.Interaction,
+    watch_party_service: WatchPartyService,
+    suggestion_service: SuggestionService,
+    wash_crew_role_id: Optional[int],
+    watch_item_id: int,
+    when: str,
+    scheduler_service: Optional[SchedulerService] = None,
+    guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
+) -> None:
+    """Schedule a watch party and its reminder job.
+
+    scheduler_service/guild_configuration_repository default to None so
+    callers/tests that don't pass them keep working unchanged; passing
+    None simply skips scheduling (see schedule_watch_party_reminder).
+    """
+    message, ephemeral, watch_party = perform_schedule_watch_party(
+        watch_party_service=watch_party_service,
+        suggestion_service=suggestion_service,
+        user=interaction.user,
+        wash_crew_role_id=wash_crew_role_id,
+        guild_id=interaction.guild_id,
+        channel_id=interaction.channel_id,
+        watch_item_id=watch_item_id,
+        when=when,
+    )
+    await interaction.response.send_message(message, ephemeral=ephemeral)
+    if ephemeral or watch_party is None:
+        return
+
+    # FR-021: schedule this watch party's reminder job now that it's
+    # confirmed created and persisted, mirroring
+    # handle_start_vote_completion's equivalent step for voting rounds.
+    await schedule_watch_party_reminder(
+        scheduler_service,
+        watch_party,
+        watch_party.guild_id,
+        guild_configuration_repository=guild_configuration_repository,
+    )
+
+
+def perform_reschedule_watch_party(
+    watch_party_service: WatchPartyService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    watch_party_id: int,
+    when: str,
+) -> tuple[str, bool, Optional[WatchParty]]:
+    """Core logic for /reschedule_watch_party, kept free of Discord objects except `user`.
+
+    Args:
+        watch_party_service: The service to reschedule the watch party through.
+        user: The member invoking the command.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if unconfigured.
+        watch_party_id: The watch party to reschedule.
+        when: The raw new "when" option text; parsed via parse_watch_party_schedule_time.
+
+    Returns:
+        A (message, ephemeral, watch_party) tuple. watch_party is set only
+        on success, so the caller can replace its reminder job without a
+        redundant lookup.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+            None,
+        )
+
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to reschedule a watch party.", True, None
+
+    try:
+        new_scheduled_at = parse_watch_party_schedule_time(when)
+    except ValueError as exc:
+        return str(exc), True, None
+
+    result = watch_party_service.reschedule_watch_party(watch_party_id, new_scheduled_at)
+    if not result.success:
+        return result.message, True, None
+
+    return build_reschedule_watch_party_confirmation(result.watch_party), False, result.watch_party
+
+
+async def handle_reschedule_watch_party_completion(
+    interaction: discord.Interaction,
+    watch_party_service: WatchPartyService,
+    wash_crew_role_id: Optional[int],
+    watch_party_id: int,
+    when: str,
+    scheduler_service: Optional[SchedulerService] = None,
+    guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
+) -> None:
+    """Reschedule a watch party and replace its reminder job.
+
+    scheduler_service/guild_configuration_repository default to None so
+    callers/tests that don't pass them keep working unchanged.
+    """
+    message, ephemeral, watch_party = perform_reschedule_watch_party(
+        watch_party_service=watch_party_service,
+        user=interaction.user,
+        wash_crew_role_id=wash_crew_role_id,
+        watch_party_id=watch_party_id,
+        when=when,
+    )
+    await interaction.response.send_message(message, ephemeral=ephemeral)
+    if ephemeral or watch_party is None:
+        return
+
+    # FR-021: replace the reminder job to reflect the new scheduled_at --
+    # reschedule_watch_party_reminder cancels whatever job is currently
+    # active for this watch party and schedules a fresh one, mirroring the
+    # scheduler's documented rescheduling policy (see
+    # docs/architecture/scheduler.md, "Cancellation & Rescheduling").
+    await reschedule_watch_party_reminder(
+        scheduler_service,
+        watch_party,
+        watch_party.guild_id,
+        guild_configuration_repository=guild_configuration_repository,
+    )
+
+
+def perform_cancel_watch_party(
+    watch_party_service: WatchPartyService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    watch_party_id: int,
+) -> tuple[str, bool]:
+    """Core logic for /cancel_watch_party, kept free of Discord objects except `user`.
+
+    Args:
+        watch_party_service: The service to cancel the watch party through.
+        user: The member invoking the command.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if unconfigured.
+        watch_party_id: The watch party to cancel.
+
+    Returns:
+        A (message, ephemeral) tuple. The confirmation is public (not
+        ephemeral) on success -- a cancellation is community-relevant.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+        )
+
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to cancel a watch party.", True
+
+    result = watch_party_service.cancel_watch_party(watch_party_id)
+    return result.message, not result.success
+
+
+async def handle_cancel_watch_party_completion(
+    interaction: discord.Interaction,
+    watch_party_service: WatchPartyService,
+    wash_crew_role_id: Optional[int],
+    watch_party_id: int,
+    scheduler_service: Optional[SchedulerService] = None,
+) -> None:
+    """Cancel a watch party and remove its pending reminder job.
+
+    scheduler_service defaults to None so callers/tests that don't pass
+    one keep working unchanged; passing None simply skips cancellation
+    (see cancel_watch_party_reminder).
+    """
+    message, ephemeral = perform_cancel_watch_party(
+        watch_party_service=watch_party_service,
+        user=interaction.user,
+        wash_crew_role_id=wash_crew_role_id,
+        watch_party_id=watch_party_id,
+    )
+    await interaction.response.send_message(message, ephemeral=ephemeral)
+    if ephemeral:
+        return
+
+    # FR-021: remove any pending reminder job now that the watch party is
+    # cancelled -- a no-op if none is active (e.g. reminders were
+    # disabled, or it already fired).
+    await cancel_watch_party_reminder(scheduler_service, watch_party_id)
+
+
+def perform_watch_party_status(
+    watch_party_service: WatchPartyService, suggestion_service: SuggestionService
+) -> str:
+    """Core logic for /watch_party_status, kept free of Discord objects entirely.
+
+    Args:
+        watch_party_service: Used to look up the currently scheduled watch party.
+        suggestion_service: Used to resolve the watch item's title and IMDb link.
+
+    Returns:
+        The status text for the soonest-scheduled watch party, or a clear
+        "nothing scheduled" message.
+    """
+    watch_party = watch_party_service.get_current_watch_party()
+    if watch_party is None:
+        return "No watch party is currently scheduled."
+
+    watch_item = suggestion_service.get_suggestion(watch_party.watch_item_id)
+    return build_watch_party_status_text(watch_party, watch_item)
 
 
 def format_count(count: int, singular: str, plural: Optional[str] = None) -> str:

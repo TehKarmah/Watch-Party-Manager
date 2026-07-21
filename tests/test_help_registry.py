@@ -50,6 +50,8 @@ class HelpRegistryTests(unittest.TestCase):
                 "WASH Crew: Suggestion Databases",
                 "WASH Crew: Maintenance",
                 "WASH Crew: Diagnostics",
+                "Watch Parties",
+                "WASH Crew: Watch Parties",
             ],
         )
 

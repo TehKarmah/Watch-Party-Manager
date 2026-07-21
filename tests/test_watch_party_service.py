@@ -96,6 +96,32 @@ class WatchPartyServiceTests(unittest.TestCase):
     def test_get_watch_party_returns_none_for_unknown_id(self) -> None:
         self.assertIsNone(self.watch_party_service.get_watch_party(999))
 
+    # --- get_current_watch_party ----------------------------------------------------
+
+    def test_get_current_watch_party_returns_none_when_nothing_is_scheduled(self) -> None:
+        self.assertIsNone(self.watch_party_service.get_current_watch_party())
+
+    def test_get_current_watch_party_returns_the_soonest_upcoming(self) -> None:
+        later = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=10), guild_id=100
+        ).watch_party
+        sooner = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=1), guild_id=100
+        ).watch_party
+
+        current = self.watch_party_service.get_current_watch_party()
+
+        self.assertEqual(current.id, sooner.id)
+        self.assertNotEqual(current.id, later.id)
+
+    def test_get_current_watch_party_ignores_cancelled_watch_parties(self) -> None:
+        watch_party = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=1), guild_id=100
+        ).watch_party
+        self.watch_party_service.cancel_watch_party(watch_party.id)
+
+        self.assertIsNone(self.watch_party_service.get_current_watch_party())
+
     # --- reschedule_watch_party ------------------------------------------------------
 
     def test_reschedules_a_watch_party(self) -> None:

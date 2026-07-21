@@ -126,6 +126,29 @@ class WatchPartyService:
         """
         return self._watch_parties.get(watch_party_id)
 
+    def get_current_watch_party(self) -> Optional[WatchParty]:
+        """Get the soonest-upcoming scheduled watch party, if any.
+
+        WatchPartyService does not enforce only one scheduled watch party
+        at a time (unlike VoteService's single-open-round rule), so this
+        is a display convenience for "/watch_party_status" rather than an
+        invariant: it's a deterministic pick (the closest scheduled_at
+        among non-cancelled watch parties), not proof that only one exists.
+
+        Returns:
+            The scheduled watch party with the earliest scheduled_at, or
+            None if none are currently scheduled (none exist, or all have
+            been cancelled).
+        """
+        scheduled = [
+            watch_party
+            for watch_party in self._watch_parties.values()
+            if watch_party.status == WatchPartyStatus.SCHEDULED
+        ]
+        if not scheduled:
+            return None
+        return min(scheduled, key=lambda watch_party: watch_party.scheduled_at)
+
     def reschedule_watch_party(
         self, watch_party_id: int, new_scheduled_at: datetime
     ) -> WatchPartyResult:

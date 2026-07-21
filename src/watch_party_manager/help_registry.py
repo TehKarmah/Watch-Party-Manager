@@ -92,6 +92,25 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         "WASH Crew: Diagnostics",
         HelpAudience.WASH_CREW,
     ),
+    CommandHelp("/watch_party_status", "View the currently scheduled watch party.", "Watch Parties"),
+    CommandHelp(
+        "/schedule_watch_party",
+        "Schedule a watch party for a watch item.",
+        "WASH Crew: Watch Parties",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
+        "/reschedule_watch_party",
+        "Change when a scheduled watch party starts.",
+        "WASH Crew: Watch Parties",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
+        "/cancel_watch_party",
+        "Cancel a scheduled watch party.",
+        "WASH Crew: Watch Parties",
+        HelpAudience.WASH_CREW,
+    ),
 )
 
 
