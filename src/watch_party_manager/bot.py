@@ -29,7 +29,10 @@ from watch_party_manager.domain.vote import (
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem
 from watch_party_manager.logger_config import configure_logging
-from watch_party_manager.scheduler import SchedulerHost
+from watch_party_manager.persistence.guild_configuration_repository import (
+    GuildConfigurationRepository,
+)
+from watch_party_manager.scheduler import SchedulerHost, SchedulerService, schedule_vote_jobs
 from watch_party_manager.services.about_service import build_about_content
 from watch_party_manager.services.backup_service import (
     BackupError,
@@ -100,6 +103,7 @@ class WatchPartyBot(commands.Bot):
         self.scheduler_host = SchedulerHost.from_json_file(
             Path("data") / "scheduled_jobs.json"
         )
+        self.guild_configuration_repository = GuildConfigurationRepository()
 
     async def setup_hook(self) -> None:
         @self.tree.command(name="about")
@@ -307,6 +311,8 @@ class WatchPartyBot(commands.Bot):
                     nominee_selection_service=self.nominee_selection_service,
                     wash_crew_role_id=self.wash_crew_role_id,
                     default_nominee_count=self.default_nominee_count,
+                    scheduler_service=self.scheduler_host.scheduler_service,
+                    guild_configuration_repository=self.guild_configuration_repository,
                 )
 
             async def on_customize(choice_interaction: discord.Interaction) -> None:
@@ -326,6 +332,8 @@ class WatchPartyBot(commands.Bot):
                         nominee_count_text=nominee_count_text,
                         duration_days_text=duration_days_text,
                         visibility_text=visibility_text,
+                        scheduler_service=self.scheduler_host.scheduler_service,
+                        guild_configuration_repository=self.guild_configuration_repository,
                     )
 
                 await choice_interaction.response.send_modal(CustomizeVoteModal(on_modal_submit))
@@ -979,8 +987,15 @@ async def handle_start_vote_completion(
     duration_days: Optional[int],
     nominee_count: Optional[int],
     default_nominee_count: int,
+    scheduler_service: Optional[SchedulerService] = None,
+    guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
 ) -> None:
-    """Create a round and publish its interactive voting post."""
+    """Create a round and publish its interactive voting post.
+
+    scheduler_service/guild_configuration_repository default to None so
+    existing callers that don't pass them keep working unchanged; passing
+    None simply skips scheduling (see schedule_vote_jobs).
+    """
     message, ephemeral = perform_start_vote(
         vote_service=vote_service,
         suggestion_service=suggestion_service,
@@ -999,6 +1014,22 @@ async def handle_start_vote_completion(
         return
 
     vote_round = vote_service.get_open_round()
+
+    # FR-015: schedule this round's future jobs (close_vote, and a
+    # vote_reminder if enabled) now that it's confirmed created and
+    # persisted -- before any further Discord I/O, so a failure sending
+    # the voting post below can never prevent scheduling, and a vote that
+    # failed to create (handled above via the `if ephemeral: return`)
+    # never reaches this point at all, so no orphaned job is ever created
+    # for it.
+    if interaction.guild_id is not None:
+        await schedule_vote_jobs(
+            scheduler_service,
+            vote_round,
+            interaction.guild_id,
+            guild_configuration_repository=guild_configuration_repository,
+        )
+
     candidates = get_round_candidates(suggestion_service, vote_round)
     view = build_voting_view(
         vote_service=vote_service,
@@ -1038,6 +1069,8 @@ async def handle_start_vote_use_defaults(
     nominee_selection_service: Optional[NomineeSelectionService],
     wash_crew_role_id: Optional[int],
     default_nominee_count: int,
+    scheduler_service: Optional[SchedulerService] = None,
+    guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
 ) -> None:
     """Start a visible round using the configured defaults."""
     await handle_start_vote_completion(
@@ -1050,6 +1083,8 @@ async def handle_start_vote_use_defaults(
         duration_days=None,
         nominee_count=None,
         default_nominee_count=default_nominee_count,
+        scheduler_service=scheduler_service,
+        guild_configuration_repository=guild_configuration_repository,
     )
 
 
@@ -1063,6 +1098,8 @@ async def handle_customize_vote_submit(
     nominee_count_text: Optional[str],
     duration_days_text: Optional[str],
     visibility_text: Optional[str],
+    scheduler_service: Optional[SchedulerService] = None,
+    guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
 ) -> None:
     """Start a round using optional one-time modal overrides."""
     try:
@@ -1083,6 +1120,8 @@ async def handle_customize_vote_submit(
         duration_days=duration_days,
         nominee_count=nominee_count,
         default_nominee_count=default_nominee_count,
+        scheduler_service=scheduler_service,
+        guild_configuration_repository=guild_configuration_repository,
     )
 
 
