@@ -1,10 +1,11 @@
-"""Tests for FR-016: Automatic Vote Close Handler.
+"""Tests for FR-016 (Automatic Vote Close Handler) and FR-018 (Automatic
+Vote Completion Announcement).
 
-Covers only the close_vote job handler this milestone adds -- locating a
-vote by the job's payload, closing it, and determining its winner(s) by
-reusing VoteService directly. No reminder execution, Discord
-announcements, or new scheduler infrastructure are exercised here, since
-none of that is implemented by this milestone.
+Covers the close_vote job handler: locating a vote by the job's payload,
+closing it and determining its winner(s) via VoteCompletionService (never
+duplicating winner calculation), and posting the completion announcement
+to the round's channel -- including ties, no-votes-cast, and IMDb link
+reuse when a winner already has one on file.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from watch_party_manager.scheduler.close_vote_job_handler import CloseVoteJobHan
 from watch_party_manager.scheduler.job_handler import JobExecutionResult
 from watch_party_manager.scheduler.scheduled_job import JobResult, ScheduledJob
 from watch_party_manager.services.suggestion_service import SuggestionService
+from watch_party_manager.services.vote_completion_service import VoteCompletionService
 from watch_party_manager.services.vote_service import VoteService
 
 
@@ -39,6 +41,29 @@ def make_job(vote_id: int, run_at: datetime | None = None) -> ScheduledJob:
     )
 
 
+class FakeChannel:
+    def __init__(self) -> None:
+        self.sent_messages = []
+
+    async def send(self, content) -> None:
+        self.sent_messages.append(content)
+
+
+class FakeBot:
+    """Duck-typed stand-in for a discord.Client/Bot, matching
+    DiscordChannelMessenger's minimal interface requirement.
+    """
+
+    def __init__(self, channel: FakeChannel | None = None) -> None:
+        self._channel = channel
+
+    def get_channel(self, channel_id):
+        return self._channel
+
+    async def fetch_channel(self, channel_id):
+        return self._channel
+
+
 class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
@@ -50,7 +75,10 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.vote_service = VoteService(
             self.suggestion_service, repository=JsonVoteRepository(root / "voting.json")
         )
-        self.handler = CloseVoteJobHandler(self.vote_service)
+        self.completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
+        self.channel = FakeChannel()
+        self.bot = FakeBot(self.channel)
+        self.handler = CloseVoteJobHandler(self.completion_service, self.suggestion_service, self.bot)
 
         self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
         self.inception = self.suggestion_service.suggest("Inception").watch_item
@@ -58,16 +86,20 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
 
-    def _open_round(self, closes_at=None):
+    def _open_round(self, closes_at=None, guild_id=100, channel_id=200):
         if closes_at is None:
             closes_at = datetime.now(timezone.utc) + timedelta(days=1)
-        return self.vote_service.create_round(
+        vote_round = self.vote_service.create_round(
             visibility=VoteVisibility.VISIBLE,
             closes_at=closes_at,
             candidate_suggestion_ids=[self.matrix.id, self.inception.id],
         ).vote_round
+        self.vote_service.attach_message_reference(
+            vote_round.id, guild_id=guild_id, channel_id=channel_id, message_id=999
+        )
+        return self.vote_service.get_round(vote_round.id)
 
-    # --- Happy path: locate, verify, close, determine winner(s) --------------
+    # --- Happy path: locate, verify, close, determine winner(s), announce ----
 
     async def test_closes_an_open_round(self) -> None:
         vote_round = self._open_round()
@@ -84,6 +116,15 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.result, JobResult.EXECUTED)
 
+    async def test_posts_the_completion_announcement_to_the_rounds_channel(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        self.assertEqual(len(self.channel.sent_messages), 1)
+        self.assertIn(f"Voting round {vote_round.id} has closed!", self.channel.sent_messages[0])
+
     async def test_determines_a_single_winner(self) -> None:
         vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
@@ -94,6 +135,7 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         winners = self.vote_service.get_current_winners(vote_round.id)
         self.assertEqual(winners.winning_suggestion_ids, [self.matrix.id])
+        self.assertIn("Winner: The Matrix", self.channel.sent_messages[0])
 
     async def test_supports_a_tie(self) -> None:
         vote_round = self._open_round()
@@ -106,8 +148,12 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             sorted(winners.winning_suggestion_ids), sorted([self.matrix.id, self.inception.id])
         )
+        announcement = self.channel.sent_messages[0]
+        self.assertIn("tie", announcement.lower())
+        self.assertIn("The Matrix", announcement)
+        self.assertIn("Inception", announcement)
 
-    async def test_no_votes_cast_produces_no_winners_without_erroring(self) -> None:
+    async def test_no_votes_cast_produces_no_winners_and_says_so_in_the_announcement(self) -> None:
         vote_round = self._open_round()
 
         result = await self.handler.execute(make_job(vote_round.id))
@@ -115,6 +161,56 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.result, JobResult.EXECUTED)
         winners = self.vote_service.get_current_winners(vote_round.id)
         self.assertEqual(winners.winning_suggestion_ids, [])
+        self.assertIn("No votes were cast", self.channel.sent_messages[0])
+
+    async def test_announcement_includes_an_imdb_link_when_the_winner_has_one(self) -> None:
+        self.suggestion_service.update_suggestion_identity(
+            self.matrix.id, "The Matrix", "https://www.imdb.com/title/tt0133093/"
+        )
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        self.assertIn(
+            "Winner: The Matrix ([View on IMDb](https://www.imdb.com/title/tt0133093/))",
+            self.channel.sent_messages[0],
+        )
+
+    async def test_falls_back_to_fetch_channel_when_get_channel_returns_none(self) -> None:
+        vote_round = self._open_round()
+
+        class FetchOnlyBot:
+            def __init__(self, channel) -> None:
+                self._channel = channel
+
+            def get_channel(self, channel_id):
+                return None
+
+            async def fetch_channel(self, channel_id):
+                return self._channel
+
+        handler = CloseVoteJobHandler(
+            self.completion_service, self.suggestion_service, FetchOnlyBot(self.channel)
+        )
+
+        result = await handler.execute(make_job(vote_round.id))
+
+        self.assertEqual(result.result, JobResult.EXECUTED)
+        self.assertEqual(len(self.channel.sent_messages), 1)
+
+    async def test_missing_channel_reference_still_closes_without_erroring(self) -> None:
+        vote_round = self.vote_service.create_round(
+            visibility=VoteVisibility.VISIBLE,
+            closes_at=datetime.now(timezone.utc) + timedelta(days=1),
+            candidate_suggestion_ids=[self.matrix.id, self.inception.id],
+        ).vote_round
+
+        result = await self.handler.execute(make_job(vote_round.id))
+
+        self.assertEqual(result.result, JobResult.EXECUTED)
+        self.assertEqual(self.vote_service.get_round(vote_round.id).status, VoteRoundStatus.CLOSED)
+        self.assertEqual(self.channel.sent_messages, [])
 
     async def test_closing_persists_the_updated_round(self) -> None:
         vote_round = self._open_round()
@@ -127,6 +223,15 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(reloaded_vote_service.get_round(vote_round.id).status, VoteRoundStatus.CLOSED)
 
+    async def test_closing_updates_the_winners_watch_item_journey(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        winner = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(winner.journey.times_won, 1)
+
     # --- Already closed manually: successful no-op ----------------------------
 
     async def test_an_already_closed_round_is_a_successful_no_op(self) -> None:
@@ -136,6 +241,7 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         result = await self.handler.execute(make_job(vote_round.id))
 
         self.assertEqual(result, JobExecutionResult(result=JobResult.SKIPPED_NOT_APPLICABLE))
+        self.assertEqual(self.channel.sent_messages, [])
 
     async def test_already_closed_round_does_not_raise(self) -> None:
         vote_round = self._open_round()
@@ -150,6 +256,7 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         result = await self.handler.execute(make_job(vote_id=999))
 
         self.assertEqual(result, JobExecutionResult(result=JobResult.SKIPPED_NOT_APPLICABLE))
+        self.assertEqual(self.channel.sent_messages, [])
 
     # --- Idempotency: running twice is safe -------------------------------------
 
@@ -172,6 +279,25 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         winners = self.vote_service.get_current_winners(vote_round.id)
         self.assertEqual(winners.winning_suggestion_ids, [self.matrix.id])
+
+    async def test_running_the_job_twice_only_sends_one_announcement(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+        await self.handler.execute(make_job(vote_round.id))
+
+        self.assertEqual(len(self.channel.sent_messages), 1)
+
+    async def test_running_the_job_twice_does_not_double_count_watch_history(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+        await self.handler.execute(make_job(vote_round.id))
+
+        winner = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(winner.journey.times_won, 1)
 
     # --- Multiple rounds don't interfere -----------------------------------------
 
@@ -212,7 +338,10 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
 class CloseVoteJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTestCase):
     """Confirms the handler works when driven through the real
     SchedulerService.register_handler()/run_once() path, not just called
-    directly -- i.e. that FR-016's registration actually takes effect.
+    directly -- i.e. that FR-016/FR-018's registration actually takes
+    effect, and that the scheduler's own job lifecycle (a completed job is
+    never re-claimed) is what keeps repeated polling from sending
+    duplicate announcements.
     """
 
     def setUp(self) -> None:
@@ -225,6 +354,7 @@ class CloseVoteJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTestC
         self.vote_service = VoteService(
             self.suggestion_service, repository=JsonVoteRepository(root / "voting.json")
         )
+        self.completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
         self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
         self.inception = self.suggestion_service.suggest("Inception").watch_item
 
@@ -234,11 +364,15 @@ class CloseVoteJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTestC
     async def test_scheduler_run_once_executes_the_registered_handler(self) -> None:
         from watch_party_manager.scheduler.json_scheduler_repository import JsonSchedulerRepository
         from watch_party_manager.scheduler.scheduler_service import SchedulerService
-        from watch_party_manager.scheduler.vote_scheduling import schedule_vote_jobs
+        from watch_party_manager.scheduler.vote_scheduling import build_close_vote_job
 
         scheduler_repository = JsonSchedulerRepository(Path(self._temp_dir.name) / "scheduled_jobs.json")
         scheduler_service = SchedulerService(scheduler_repository)
-        scheduler_service.register_handler("close_vote", CloseVoteJobHandler(self.vote_service))
+        channel = FakeChannel()
+        scheduler_service.register_handler(
+            "close_vote",
+            CloseVoteJobHandler(self.completion_service, self.suggestion_service, FakeBot(channel)),
+        )
 
         past = datetime.now(timezone.utc) - timedelta(minutes=1)
         vote_round = self.vote_service.create_round(
@@ -246,12 +380,49 @@ class CloseVoteJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTestC
             closes_at=past,
             candidate_suggestion_ids=[self.matrix.id, self.inception.id],
         ).vote_round
-        await schedule_vote_jobs(scheduler_service, vote_round, guild_id=100)
+        self.vote_service.attach_message_reference(
+            vote_round.id, guild_id=100, channel_id=200, message_id=999
+        )
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+        await scheduler_service.schedule(build_close_vote_job(vote_round, guild_id=100))
 
         processed = await scheduler_service.run_once()
 
-        self.assertGreaterEqual(processed, 1)
+        self.assertEqual(processed, 1)
         self.assertEqual(self.vote_service.get_round(vote_round.id).status, VoteRoundStatus.CLOSED)
+        self.assertEqual(len(channel.sent_messages), 1)
+        self.assertIn("Winner: The Matrix", channel.sent_messages[0])
+
+    async def test_repeated_polling_only_sends_one_announcement(self) -> None:
+        from watch_party_manager.scheduler.json_scheduler_repository import JsonSchedulerRepository
+        from watch_party_manager.scheduler.scheduler_service import SchedulerService
+        from watch_party_manager.scheduler.vote_scheduling import build_close_vote_job
+
+        scheduler_repository = JsonSchedulerRepository(Path(self._temp_dir.name) / "scheduled_jobs.json")
+        scheduler_service = SchedulerService(scheduler_repository)
+        channel = FakeChannel()
+        scheduler_service.register_handler(
+            "close_vote",
+            CloseVoteJobHandler(self.completion_service, self.suggestion_service, FakeBot(channel)),
+        )
+
+        past = datetime.now(timezone.utc) - timedelta(minutes=1)
+        vote_round = self.vote_service.create_round(
+            visibility=VoteVisibility.VISIBLE,
+            closes_at=past,
+            candidate_suggestion_ids=[self.matrix.id, self.inception.id],
+        ).vote_round
+        self.vote_service.attach_message_reference(
+            vote_round.id, guild_id=100, channel_id=200, message_id=999
+        )
+        await scheduler_service.schedule(build_close_vote_job(vote_round, guild_id=100))
+
+        first_processed = await scheduler_service.run_once()
+        second_processed = await scheduler_service.run_once()
+
+        self.assertEqual(first_processed, 1)
+        self.assertEqual(second_processed, 0)
+        self.assertEqual(len(channel.sent_messages), 1)
 
 
 if __name__ == "__main__":

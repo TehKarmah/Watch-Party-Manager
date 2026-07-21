@@ -12,6 +12,7 @@ from watch_party_manager.bot import (
     perform_vote_completion_check,
 )
 from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus, VoteVisibility
+from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
@@ -20,6 +21,11 @@ from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_completion_service import VoteCompletionService
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
+
+
+def make_watch_item(title: str, imdb_url: str | None = None) -> WatchItem:
+    metadata_ids = {MetadataProvider.IMDB: imdb_url} if imdb_url else {}
+    return WatchItem(title=title, media_type=MediaType.MOVIE, metadata_ids=metadata_ids)
 
 
 class FakeChannel:
@@ -50,12 +56,14 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
         return VoteRound(id=round_id, status=VoteRoundStatus.CLOSED, visibility=visibility)
 
     def test_announces_a_single_winner(self) -> None:
-        text = build_vote_completion_announcement(self._round(), ["The Matrix"], [], 3)
+        text = build_vote_completion_announcement(self._round(), [make_watch_item("The Matrix")], [], 3)
 
         self.assertIn("Winner: The Matrix", text)
 
     def test_announces_a_tie_with_all_winning_titles(self) -> None:
-        text = build_vote_completion_announcement(self._round(), ["The Matrix", "Inception"], [], 2)
+        text = build_vote_completion_announcement(
+            self._round(), [make_watch_item("The Matrix"), make_watch_item("Inception")], [], 2
+        )
 
         self.assertIn("tie", text.lower())
         self.assertIn("The Matrix", text)
@@ -68,7 +76,7 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
         self.assertNotIn("Winner:", text)
 
     def test_shows_total_votes_cast(self) -> None:
-        text = build_vote_completion_announcement(self._round(), ["The Matrix"], [], 7)
+        text = build_vote_completion_announcement(self._round(), [make_watch_item("The Matrix")], [], 7)
 
         self.assertIn("Total votes cast: 7", text)
 
@@ -80,7 +88,7 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
         standings = [StandingsEntry(suggestion_id=1, vote_count=2)]
 
         text = build_vote_completion_announcement(
-            self._round(visibility=VoteVisibility.BLIND), ["The Matrix"], standings, 2
+            self._round(visibility=VoteVisibility.BLIND), [make_watch_item("The Matrix")], standings, 2
         )
 
         self.assertIn("Standings:", text)
@@ -90,15 +98,50 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
         standings = [StandingsEntry(suggestion_id=1, vote_count=2)]
 
         text = build_vote_completion_announcement(
-            self._round(visibility=VoteVisibility.VISIBLE), ["The Matrix"], standings, 2
+            self._round(visibility=VoteVisibility.VISIBLE), [make_watch_item("The Matrix")], standings, 2
         )
 
         self.assertIn("Standings:", text)
 
     def test_mentions_round_id(self) -> None:
-        text = build_vote_completion_announcement(self._round(round_id=42), ["The Matrix"], [], 1)
+        text = build_vote_completion_announcement(
+            self._round(round_id=42), [make_watch_item("The Matrix")], [], 1
+        )
 
         self.assertIn("42", text)
+
+    # --- IMDb link reuse ---------------------------------------------------------
+
+    def test_single_winner_includes_imdb_link_when_available(self) -> None:
+        text = build_vote_completion_announcement(
+            self._round(),
+            [make_watch_item("The Matrix", imdb_url="https://www.imdb.com/title/tt0133093/")],
+            [],
+            1,
+        )
+
+        self.assertIn("Winner: The Matrix ([View on IMDb](https://www.imdb.com/title/tt0133093/))", text)
+
+    def test_single_winner_without_an_imdb_link_shows_only_the_title(self) -> None:
+        text = build_vote_completion_announcement(self._round(), [make_watch_item("The Matrix")], [], 1)
+
+        self.assertIn("Winner: The Matrix", text)
+        self.assertNotIn("IMDb", text)
+
+    def test_tie_includes_imdb_links_only_for_winners_that_have_one(self) -> None:
+        text = build_vote_completion_announcement(
+            self._round(),
+            [
+                make_watch_item("The Matrix", imdb_url="https://www.imdb.com/title/tt0133093/"),
+                make_watch_item("Inception"),
+            ],
+            [],
+            2,
+        )
+
+        self.assertIn("The Matrix ([View on IMDb](https://www.imdb.com/title/tt0133093/))", text)
+        self.assertIn("Inception", text)
+        self.assertNotIn("Inception ([View on IMDb]", text)
 
 
 class VoteCompletionCheckIntegrationTests(unittest.IsolatedAsyncioTestCase):

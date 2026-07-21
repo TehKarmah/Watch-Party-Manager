@@ -13,7 +13,7 @@ executes (created by schedule_vote_jobs() in FR-015).
 from __future__ import annotations
 
 import logging
-from typing import Optional, Protocol
+from typing import Optional
 
 from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus
 from watch_party_manager.services.discord_timestamp_formatter import (
@@ -21,24 +21,8 @@ from watch_party_manager.services.discord_timestamp_formatter import (
 )
 from watch_party_manager.services.vote_service import VoteService
 
-from .job_handler import JobExecutionResult
+from .job_handler import DiscordChannelMessenger, JobExecutionResult
 from .scheduled_job import JobResult, ScheduledJob
-
-
-class DiscordChannelMessenger(Protocol):
-    """The subset of a discord.Client this handler needs to post a reminder.
-
-    Matches the same duck-typed contract bot.py's
-    check_and_announce_expired_vote() already established for delivering a
-    Discord message from a background job: get_channel()/fetch_channel()
-    to resolve a channel by ID, and a .send(content) coroutine on the
-    result. A real discord.Client/Bot satisfies this; tests can supply a
-    lightweight fake.
-    """
-
-    def get_channel(self, channel_id: int) -> object: ...
-
-    async def fetch_channel(self, channel_id: int) -> object: ...
 
 
 def build_vote_reminder_text(vote_round: VoteRound) -> str:

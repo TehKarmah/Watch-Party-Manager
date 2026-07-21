@@ -118,6 +118,42 @@ class VoteCompletionService:
         if current_time < vote_round.closes_at:
             return None
 
+        return self.complete_round(vote_round.id)
+
+    def complete_round(self, round_id: int) -> Optional[VoteCompletionResult]:
+        """Close and finalize one specific round by ID, if it's still open.
+
+        Unlike check_and_complete_expired_round() -- which finds and
+        due-checks the single currently-open round -- this acts on
+        exactly the round identified by round_id and never consults
+        closes_at. It's the method a caller that already knows which
+        round is due uses directly: CloseVoteJobHandler, whose scheduled
+        job carries the vote_id and whose due time is already enforced by
+        SchedulerService before the job is ever claimed.
+
+        check_and_complete_expired_round() delegates here once it has
+        confirmed the open round is due, so this is the single place
+        "close, determine winner(s), update Watch Item Journey, and
+        calculate standings" is implemented -- neither caller duplicates
+        it.
+
+        Idempotent for the same reason check_and_complete_expired_round()
+        already is: VoteService.close_round() rejects a round that's
+        already closed (or that doesn't exist), so a later call for a
+        round this already completed returns None rather than redoing
+        any work.
+
+        Args:
+            round_id: The round to close and finalize.
+
+        Returns:
+            A VoteCompletionResult if the round was completed by this
+            call, or None if it doesn't exist or was already closed.
+        """
+        vote_round = self._vote_service.get_round(round_id)
+        if vote_round is None:
+            return None
+
         close_result = self._vote_service.close_round(vote_round.id)
         if not close_result.success:
             return None
@@ -130,8 +166,15 @@ class VoteCompletionService:
         # concluded, not whenever the bot happened to notice -- these can
         # differ if the bot was offline past the deadline (see restart
         # safety), and using the deadline keeps the result deterministic
-        # and testable.
-        completion_date = vote_round.closes_at.date()
+        # and testable. Rounds always have closes_at by the time they
+        # reach here in practice (neither caller above ever completes one
+        # without a deadline), but a direct complete_round() call is
+        # defended with a "now" fallback rather than raising.
+        completion_date = (
+            vote_round.closes_at.date()
+            if vote_round.closes_at is not None
+            else datetime.now(timezone.utc).date()
+        )
         for suggestion_id in winning_suggestion_ids:
             self._journey_recorder.record_vote_win(suggestion_id, completion_date)
 

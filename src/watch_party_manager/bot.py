@@ -61,6 +61,10 @@ from watch_party_manager.services.suggestion_list_formatter import (
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.suggestion_repair_service import SuggestionRepairService
 from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
+from watch_party_manager.services.vote_announcement_formatter import (
+    build_vote_completion_announcement,
+    format_standings_lines,
+)
 from watch_party_manager.services.vote_completion_service import VoteCompletionService
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
 from watch_party_manager.restore_confirmation_view import RestoreConfirmationView
@@ -115,7 +119,8 @@ class WatchPartyBot(commands.Bot):
             Path("data") / "scheduled_jobs.json"
         )
         self.scheduler_host.scheduler_service.register_handler(
-            CLOSE_VOTE_JOB_TYPE, CloseVoteJobHandler(self.vote_service)
+            CLOSE_VOTE_JOB_TYPE,
+            CloseVoteJobHandler(self.vote_completion_service, self.suggestion_service, self),
         )
         self.scheduler_host.scheduler_service.register_handler(
             VOTE_REMINDER_JOB_TYPE, VoteReminderJobHandler(self.vote_service, self)
@@ -757,39 +762,6 @@ def build_start_vote_confirmation(
         f"Vote changes allowed: {format_vote_changes_setting()}"
         f"{build_low_suggestion_pool_warning(pool_count if pool_count is not None else candidate_count)}"
     )
-
-
-def format_standings_lines(
-    standings: Optional[List[StandingsEntry]],
-    standings_error: Optional[str],
-) -> List[str]:
-    """Build the display lines for a round's standings, if any are shown.
-
-    Shared by /vote_status and /vote (for visible rounds) so the standings
-    format stays identical and isn't duplicated per call site.
-
-    Args:
-        standings: Standings entries to display, or None to show nothing.
-        standings_error: A message to show instead of standings if
-            calculating them failed, or None.
-
-    Returns:
-        Lines to append to a message, starting with a blank separator
-        line. Empty if there's nothing to show (both args are None).
-    """
-    if standings_error is not None:
-        return ["", f"Standings unavailable: {standings_error}"]
-
-    if standings is not None:
-        if not standings:
-            return ["", "Standings: no votes yet."]
-        lines = ["", "Standings:"]
-        for position, entry in enumerate(standings, start=1):
-            vote_word = "vote" if entry.vote_count == 1 else "votes"
-            lines.append(f"{position}. Suggestion #{entry.suggestion_id} — {entry.vote_count} {vote_word}")
-        return lines
-
-    return []
 
 
 def build_vote_status_text(
@@ -1453,50 +1425,6 @@ async def perform_add_suggestion_from_input(
     )
 
 
-def build_vote_completion_announcement(
-    vote_round: VoteRound,
-    winning_titles: List[str],
-    standings: List[StandingsEntry],
-    total_votes_cast: int,
-) -> str:
-    """Build the public announcement for a just-completed voting round.
-
-    By the time this is called the round is already closed, so standings
-    are always safe to reveal here -- including for a round that was
-    blind while open. That's the entire mechanism behind "reveal standings
-    only after voting has closed" for blind rounds: this function is only
-    ever invoked post-closure, so there's no separate blind-vs-visible
-    branch needed here the way build_voting_post_text has one for the
-    still-open case.
-
-    Args:
-        vote_round: The round that just completed.
-        winning_titles: The winning suggestion(s)' titles, in the same
-            order as vote_round's winner calculation. Empty if nobody
-            voted.
-        standings: The final vote tally, reused from
-            VoteService.calculate_standings() via format_standings_lines
-            rather than reformatted here.
-        total_votes_cast: How many members voted in this round.
-
-    Returns:
-        The announcement text.
-    """
-    lines = [f"Voting round {vote_round.id} has closed!"]
-
-    if not winning_titles:
-        lines.append("No votes were cast, so no winner could be determined.")
-    elif len(winning_titles) == 1:
-        lines.append(f"Winner: {winning_titles[0]}")
-    else:
-        lines.append("It's a tie! Winners: " + ", ".join(winning_titles))
-
-    lines.append(f"Total votes cast: {total_votes_cast}")
-    lines.extend(format_standings_lines(standings, None))
-
-    return "\n".join(lines)
-
-
 def perform_vote_completion_check(
     vote_completion_service: VoteCompletionService,
     suggestion_service: SuggestionService,
@@ -1510,7 +1438,8 @@ def perform_vote_completion_check(
 
     Args:
         vote_completion_service: Used to detect and complete an expired round.
-        suggestion_service: Used to resolve winning suggestion IDs to titles.
+        suggestion_service: Used to resolve winning suggestion IDs to the
+            WatchItem(s) shown in the announcement.
         now: Passed through to VoteCompletionService for deterministic testing.
 
     Returns:
@@ -1521,14 +1450,14 @@ def perform_vote_completion_check(
     if result is None:
         return None
 
-    winning_titles = []
+    winning_items = []
     for suggestion_id in result.winning_suggestion_ids:
         watch_item = suggestion_service.get_suggestion(suggestion_id)
         if watch_item is not None:
-            winning_titles.append(watch_item.title)
+            winning_items.append(watch_item)
 
     announcement = build_vote_completion_announcement(
-        result.vote_round, winning_titles, result.standings, result.total_votes_cast
+        result.vote_round, winning_items, result.standings, result.total_votes_cast
     )
     return result.vote_round, announcement
 

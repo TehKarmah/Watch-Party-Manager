@@ -1,6 +1,6 @@
 """Persistent scheduling infrastructure for WASH."""
 
-from .job_handler import JobExecutionResult, JobHandler, RetryableJobError
+from .job_handler import DiscordChannelMessenger, JobExecutionResult, JobHandler, RetryableJobError
 from .close_vote_job_handler import CloseVoteJobHandler
 from .json_scheduler_repository import (
     DuplicateActiveJobError,
@@ -28,6 +28,7 @@ from .vote_scheduling import (
 
 __all__ = [
     "CloseVoteJobHandler",
+    "DiscordChannelMessenger",
     "DuplicateActiveJobError",
     "InvalidSchedulerDataError",
     "JobExecutionResult",
