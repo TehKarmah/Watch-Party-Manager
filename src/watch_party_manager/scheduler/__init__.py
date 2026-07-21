@@ -13,6 +13,7 @@ from .scheduled_job import JobResult, JobStatus, ScheduledJob
 from .scheduler_host import SchedulerHost
 from .scheduler_repository import SchedulerRepository
 from .scheduler_service import SchedulerService
+from .vote_reminder_job_handler import VoteReminderJobHandler
 from .vote_scheduling import (
     CLOSE_VOTE_JOB_TYPE,
     VOTE_REMINDER_JOB_TYPE,
@@ -41,6 +42,7 @@ __all__ = [
     "SchedulerHost",
     "SchedulerRepository",
     "SchedulerService",
+    "VoteReminderJobHandler",
     "CLOSE_VOTE_JOB_TYPE",
     "VOTE_REMINDER_JOB_TYPE",
     "build_close_vote_job",

@@ -37,6 +37,8 @@ from watch_party_manager.scheduler import (
     CloseVoteJobHandler,
     SchedulerHost,
     SchedulerService,
+    VOTE_REMINDER_JOB_TYPE,
+    VoteReminderJobHandler,
     schedule_vote_jobs,
 )
 from watch_party_manager.services.about_service import build_about_content
@@ -44,6 +46,9 @@ from watch_party_manager.services.backup_service import (
     BackupError,
     BackupKind,
     BackupService,
+)
+from watch_party_manager.services.discord_timestamp_formatter import (
+    format_datetime_for_display,
 )
 from watch_party_manager.services.help_service import HelpResponse, build_help_response
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
@@ -111,6 +116,9 @@ class WatchPartyBot(commands.Bot):
         )
         self.scheduler_host.scheduler_service.register_handler(
             CLOSE_VOTE_JOB_TYPE, CloseVoteJobHandler(self.vote_service)
+        )
+        self.scheduler_host.scheduler_service.register_handler(
+            VOTE_REMINDER_JOB_TYPE, VoteReminderJobHandler(self.vote_service, self)
         )
         self.guild_configuration_repository = GuildConfigurationRepository()
 
@@ -699,32 +707,6 @@ def parse_default_nominee_count(value: Optional[str]) -> int:
         )
 
     return count
-
-
-def format_datetime_for_display(value: Optional[datetime]) -> str:
-    """Format a datetime using Discord's native timestamp syntax.
-
-    Discord renders native timestamps in each member's local timezone. The
-    full timestamp gives the exact date and time, while the relative timestamp
-    provides quick context such as "in 7 days."
-
-    Args:
-        value: A timezone-aware datetime, or None.
-
-    Returns:
-        Discord full and relative timestamp codes, or a fallback message when
-        no deadline is set.
-
-    Raises:
-        ValueError: If value is a naive datetime.
-    """
-    if value is None:
-        return "No deadline set"
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("value must be timezone-aware")
-
-    unix_timestamp = int(value.timestamp())
-    return f"<t:{unix_timestamp}:F> (<t:{unix_timestamp}:R>)"
 
 
 def format_vote_changes_setting() -> str:
