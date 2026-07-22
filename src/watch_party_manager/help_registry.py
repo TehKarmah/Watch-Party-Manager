@@ -76,12 +76,18 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/list",
-        "List watch items in a suggestion database.",
+        "List watch items by status.",
         "Watch Items",
-        HelpAudience.WASH_CREW,
+        HelpAudience.WATCH_PARTY_MEMBER,
     ),
     CommandHelp(
         "/remove", "Remove a watch item.", "Watch Items", HelpAudience.WASH_CREW
+    ),
+    CommandHelp(
+        "/edit_suggestion",
+        "Edit a suggestion's details or database.",
+        "Watch Items",
+        HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/start_vote", "Start a new voting round.", "WASH Crew: Voting", HelpAudience.WASH_CREW
@@ -130,13 +136,13 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/database_reset",
-        "Clear all suggestions from one database.",
+        "Clear one database's suggestions.",
         "WASH Crew: Suggestion Databases",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/repair_suggestions",
-        "Repair legacy titles and bad suggestions.",
+        "Repair bad suggestion data.",
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
@@ -184,7 +190,7 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/reschedule_watch_party",
-        "Change a watch party's start time.",
+        "Change a watch party's start.",
         "WASH Crew: Watch Parties",
         HelpAudience.WASH_CREW,
     ),

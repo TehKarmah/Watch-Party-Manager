@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional, Tuple
 
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
+
+MINIMUM_RELEASE_YEAR = 1870
+MAXIMUM_RELEASE_YEAR_LOOKAHEAD = 5
 
 
 class MediaType(str, Enum):
@@ -55,6 +59,8 @@ class WatchItem:
     channel_id: Optional[int] = None
     message_id: Optional[int] = None
     journey: WatchItemJourney = field(default_factory=WatchItemJourney)
+    release_year: Optional[int] = None
+    updated_at: Optional[datetime] = None
 
     def __post_init__(self) -> None:
         self.title = self.title.strip()
@@ -65,6 +71,8 @@ class WatchItem:
         self._validate_guild_id()
         self._validate_channel_id()
         self._validate_message_id()
+        self._validate_release_year()
+        self._validate_updated_at()
         self.genres = self._normalize_genres(self.genres)
         self.metadata_ids = self._normalize_metadata_ids(self.metadata_ids)
 
@@ -106,6 +114,20 @@ class WatchItem:
     def _validate_message_id(self) -> None:
         if self.message_id is not None and self.message_id <= 0:
             raise ValueError("message_id must be a positive integer when provided")
+
+    def _validate_release_year(self) -> None:
+        if self.release_year is None:
+            return
+        current_year = datetime.now(timezone.utc).year
+        if not (MINIMUM_RELEASE_YEAR <= self.release_year <= current_year + MAXIMUM_RELEASE_YEAR_LOOKAHEAD):
+            raise ValueError(
+                f"release_year must be between {MINIMUM_RELEASE_YEAR} and "
+                f"{current_year + MAXIMUM_RELEASE_YEAR_LOOKAHEAD} when provided"
+            )
+
+    def _validate_updated_at(self) -> None:
+        if self.updated_at is not None and self.updated_at.tzinfo is None:
+            raise ValueError("updated_at must be timezone-aware when provided")
 
     @staticmethod
     def _normalize_genres(genres: Tuple[str, ...] | list[str] | None) -> Tuple[str, ...]:

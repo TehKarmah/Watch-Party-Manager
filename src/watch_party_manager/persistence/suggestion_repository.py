@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable, Optional, Union
 
@@ -147,6 +147,8 @@ class JsonSuggestionRepository:
             "imdb_rating": watch_item.imdb_rating,
             "poster_url": watch_item.poster_url,
             "journey": JsonSuggestionRepository._serialize_journey(watch_item.journey),
+            "release_year": watch_item.release_year,
+            "updated_at": watch_item.updated_at.isoformat() if watch_item.updated_at else None,
         }
 
     @staticmethod
@@ -200,6 +202,8 @@ class JsonSuggestionRepository:
             imdb_rating=entry.get("imdb_rating"),
             poster_url=entry.get("poster_url"),
             journey=JsonSuggestionRepository._deserialize_journey(entry.get("journey")),
+            release_year=entry.get("release_year"),
+            updated_at=datetime.fromisoformat(entry["updated_at"]) if entry.get("updated_at") else None,
         )
 
 

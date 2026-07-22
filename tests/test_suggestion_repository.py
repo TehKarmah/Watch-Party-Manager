@@ -1,7 +1,7 @@
 import sys
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -351,3 +351,37 @@ class SuggestionRepositoryJourneyTests(unittest.TestCase):
         result = self.repository.load()
 
         self.assertEqual(result.watch_items[0].journey.rejected_by_discord_user_ids, ())
+
+    def test_release_year_and_updated_at_round_trip(self) -> None:
+        updated_at = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+        watch_item = WatchItem(
+            title="Arrival", media_type=MediaType.MOVIE, id=1, release_year=2016, updated_at=updated_at
+        )
+        self.repository.save([watch_item], next_id=2)
+
+        result = self.repository.load()
+
+        self.assertEqual(2016, result.watch_items[0].release_year)
+        self.assertEqual(updated_at, result.watch_items[0].updated_at)
+
+    def test_a_suggestion_saved_before_release_year_existed_still_loads(self) -> None:
+        legacy_json = """
+        {
+          "next_id": 2,
+          "suggestions": [
+            {
+              "id": 1,
+              "title": "The Matrix",
+              "media_type": "movie",
+              "metadata_ids": {}
+            }
+          ]
+        }
+        """
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+
+        self.assertIsNone(result.watch_items[0].release_year)
+        self.assertIsNone(result.watch_items[0].updated_at)

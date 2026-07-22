@@ -1177,3 +1177,334 @@ class GetSuggestionsForDatabaseArchivingTests(unittest.TestCase):
         items = self.suggestion_service.get_suggestions_for_database(self.database.database_id)
 
         self.assertEqual(len(items), 2)
+
+
+class ArchiveAndReactivateSuggestionTests(unittest.TestCase):
+    """FR-033A: WASH Crew-initiated archive/reactivate, distinct from
+    reject_suggestion()'s rejection-threshold auto-archive."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.database = self.service.create_database("Movie Night", guild_id=1, channel_id=100).database
+        self.matrix = self.service.suggest("The Matrix", database_id=self.database.database_id).watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_archive_suggestion_sets_archived_status(self) -> None:
+        result = self.service.archive_suggestion(self.matrix.id)
+
+        self.assertTrue(result.success)
+        self.assertEqual(WatchItemStatus.ARCHIVED, self.service.get_suggestion(self.matrix.id).status)
+
+    def test_archive_suggestion_does_not_touch_rejection_history(self) -> None:
+        self.service.archive_suggestion(self.matrix.id)
+
+        item = self.service.get_suggestion(self.matrix.id)
+        self.assertEqual((), item.journey.rejected_by_discord_user_ids)
+
+    def test_archive_suggestion_rejects_an_already_archived_item(self) -> None:
+        self.service.archive_suggestion(self.matrix.id)
+
+        result = self.service.archive_suggestion(self.matrix.id)
+
+        self.assertFalse(result.success)
+
+    def test_archive_suggestion_rejects_an_unknown_id(self) -> None:
+        result = self.service.archive_suggestion(999999)
+
+        self.assertFalse(result.success)
+
+    def test_reactivate_suggestion_returns_an_archived_item_to_suggested(self) -> None:
+        self.service.archive_suggestion(self.matrix.id)
+
+        result = self.service.reactivate_suggestion(self.matrix.id)
+
+        self.assertTrue(result.success)
+        self.assertEqual(WatchItemStatus.SUGGESTED, self.service.get_suggestion(self.matrix.id).status)
+
+    def test_reactivate_suggestion_returns_a_watched_item_to_suggested(self) -> None:
+        item = self.service.get_suggestion(self.matrix.id)
+        item.status = WatchItemStatus.WATCHED
+
+        result = self.service.reactivate_suggestion(self.matrix.id)
+
+        self.assertTrue(result.success)
+        self.assertEqual(WatchItemStatus.SUGGESTED, self.service.get_suggestion(self.matrix.id).status)
+
+    def test_reactivate_preserves_the_same_id_and_journey(self) -> None:
+        self.service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=1)
+
+        self.service.reactivate_suggestion(self.matrix.id)
+
+        item = self.service.get_suggestion(self.matrix.id)
+        self.assertEqual(self.matrix.id, item.id)
+        self.assertEqual((1,), item.journey.rejected_by_discord_user_ids)
+
+    def test_reactivate_rejects_an_already_active_item(self) -> None:
+        result = self.service.reactivate_suggestion(self.matrix.id)
+
+        self.assertFalse(result.success)
+
+    def test_reactivate_rejects_an_unknown_id(self) -> None:
+        result = self.service.reactivate_suggestion(999999)
+
+        self.assertFalse(result.success)
+
+    def test_reactivate_does_not_create_a_duplicate_record(self) -> None:
+        self.service.archive_suggestion(self.matrix.id)
+
+        self.service.reactivate_suggestion(self.matrix.id)
+
+        items = self.service.get_suggestions_for_database(self.database.database_id, include_archived=True)
+        self.assertEqual(1, len(items))
+
+
+class FindMatchesForRemovalTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.database = self.service.create_database("Movie Night", guild_id=1, channel_id=100).database
+        self.matrix = self.service.suggest(
+            "The Matrix (1999)", database_id=self.database.database_id
+        ).watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_matches_by_reference_number_with_hash(self) -> None:
+        matches = self.service.find_matches_for_removal(f"#{self.matrix.id}")
+        self.assertEqual([self.matrix], matches)
+
+    def test_matches_by_bare_reference_number(self) -> None:
+        matches = self.service.find_matches_for_removal(str(self.matrix.id))
+        self.assertEqual([self.matrix], matches)
+
+    def test_matches_by_exact_title(self) -> None:
+        matches = self.service.find_matches_for_removal("The Matrix (1999)")
+        self.assertEqual([self.matrix], matches)
+
+    def test_matches_by_title_without_year(self) -> None:
+        matches = self.service.find_matches_for_removal("The Matrix")
+        self.assertEqual([self.matrix], matches)
+
+    def test_no_matches_for_unrelated_query(self) -> None:
+        matches = self.service.find_matches_for_removal("Inception")
+        self.assertEqual([], matches)
+
+    def test_no_matches_for_empty_query(self) -> None:
+        matches = self.service.find_matches_for_removal("   ")
+        self.assertEqual([], matches)
+
+    def test_multiple_matches_when_title_is_ambiguous(self) -> None:
+        other_database = self.service.create_database("Other DB", guild_id=1, channel_id=200).database
+        other = self.service.suggest(
+            "The Matrix (1999)", database_id=other_database.database_id
+        ).watch_item
+
+        matches = self.service.find_matches_for_removal("The Matrix (1999)")
+
+        self.assertEqual({self.matrix.id, other.id}, {item.id for item in matches})
+
+    def test_database_scoping_narrows_matches(self) -> None:
+        other_database = self.service.create_database("Other DB", guild_id=1, channel_id=200).database
+        self.service.suggest("The Matrix (1999)", database_id=other_database.database_id)
+
+        matches = self.service.find_matches_for_removal(
+            "The Matrix (1999)", database_id=self.database.database_id
+        )
+
+        self.assertEqual([self.matrix], matches)
+
+
+class EditSuggestionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.database = self.service.create_database("Movie Night", guild_id=1, channel_id=100).database
+        self.other_database = self.service.create_database("Other DB", guild_id=1, channel_id=200).database
+        self.matrix = self.service.suggest("The Matrix", database_id=self.database.database_id).watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_edit_updates_title(self) -> None:
+        result = self.service.edit_suggestion(
+            self.matrix.id,
+            title="The Matrix Reloaded",
+            release_year=None,
+            imdb_url=None,
+            database_id=self.database.database_id,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual("The Matrix Reloaded", result.watch_item.title)
+
+    def test_edit_updates_release_year(self) -> None:
+        result = self.service.edit_suggestion(
+            self.matrix.id,
+            title=self.matrix.title,
+            release_year=1999,
+            imdb_url=None,
+            database_id=self.database.database_id,
+        )
+
+        self.assertEqual(1999, result.watch_item.release_year)
+
+    def test_edit_updates_imdb_url(self) -> None:
+        result = self.service.edit_suggestion(
+            self.matrix.id,
+            title=self.matrix.title,
+            release_year=None,
+            imdb_url="https://www.imdb.com/title/tt0133093/",
+            database_id=self.database.database_id,
+        )
+
+        self.assertEqual(
+            "https://www.imdb.com/title/tt0133093/", result.watch_item.metadata_ids[MetadataProvider.IMDB]
+        )
+
+    def test_edit_can_clear_the_imdb_url(self) -> None:
+        self.service.edit_suggestion(
+            self.matrix.id,
+            title=self.matrix.title,
+            release_year=None,
+            imdb_url="https://www.imdb.com/title/tt0133093/",
+            database_id=self.database.database_id,
+        )
+
+        result = self.service.edit_suggestion(
+            self.matrix.id,
+            title=self.matrix.title,
+            release_year=None,
+            imdb_url=None,
+            database_id=self.database.database_id,
+        )
+
+        self.assertNotIn(MetadataProvider.IMDB, result.watch_item.metadata_ids)
+
+    def test_edit_moves_to_another_database(self) -> None:
+        result = self.service.edit_suggestion(
+            self.matrix.id,
+            title=self.matrix.title,
+            release_year=None,
+            imdb_url=None,
+            database_id=self.other_database.database_id,
+        )
+
+        self.assertEqual(self.other_database.database_id, result.watch_item.database_id)
+        self.assertEqual(
+            0, self.service.suggestion_count_for_database(self.database.database_id)
+        )
+
+    def test_edit_preserves_stable_id(self) -> None:
+        result = self.service.edit_suggestion(
+            self.matrix.id,
+            title="Renamed",
+            release_year=None,
+            imdb_url=None,
+            database_id=self.database.database_id,
+        )
+
+        self.assertEqual(self.matrix.id, result.watch_item.id)
+
+    def test_edit_preserves_history(self) -> None:
+        self.service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=99)
+
+        result = self.service.edit_suggestion(
+            self.matrix.id,
+            title="Renamed",
+            release_year=None,
+            imdb_url=None,
+            database_id=self.database.database_id,
+        )
+
+        self.assertEqual((1,), result.watch_item.journey.rejected_by_discord_user_ids)
+
+    def test_edit_sets_updated_at(self) -> None:
+        result = self.service.edit_suggestion(
+            self.matrix.id,
+            title="Renamed",
+            release_year=None,
+            imdb_url=None,
+            database_id=self.database.database_id,
+        )
+
+        self.assertIsNotNone(result.watch_item.updated_at)
+
+    def test_edit_rejects_moving_onto_an_existing_title_in_the_destination(self) -> None:
+        self.service.suggest("Inception", database_id=self.other_database.database_id)
+
+        result = self.service.edit_suggestion(
+            self.matrix.id,
+            title="Inception",
+            release_year=None,
+            imdb_url=None,
+            database_id=self.other_database.database_id,
+        )
+
+        self.assertFalse(result.success)
+
+    def test_edit_rejects_an_unknown_suggestion(self) -> None:
+        result = self.service.edit_suggestion(
+            999999, title="Anything", release_year=None, imdb_url=None, database_id=self.database.database_id
+        )
+
+        self.assertFalse(result.success)
+
+    def test_edit_rejects_an_empty_title(self) -> None:
+        result = self.service.edit_suggestion(
+            self.matrix.id, title="   ", release_year=None, imdb_url=None, database_id=self.database.database_id
+        )
+
+        self.assertFalse(result.success)
+
+
+class SetConfirmationPostReferenceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.database = self.service.create_database("Movie Night", guild_id=1, channel_id=100).database
+        self.matrix = self.service.suggest("The Matrix", database_id=self.database.database_id).watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_updates_guild_channel_and_message(self) -> None:
+        updated = self.service.set_confirmation_post_reference(self.matrix.id, guild_id=1, channel_id=500, message_id=999)
+
+        self.assertTrue(updated)
+        item = self.service.get_suggestion(self.matrix.id)
+        self.assertEqual(1, item.guild_id)
+        self.assertEqual(500, item.channel_id)
+        self.assertEqual(999, item.message_id)
+
+    def test_persists_the_change(self) -> None:
+        self.service.set_confirmation_post_reference(self.matrix.id, guild_id=1, channel_id=500, message_id=999)
+
+        reloaded = SuggestionService(
+            repository=self.service._repository, database_repository=self.service._database_repository
+        )
+        self.assertEqual(500, reloaded.get_suggestion(self.matrix.id).channel_id)
+
+    def test_returns_false_for_unknown_id(self) -> None:
+        updated = self.service.set_confirmation_post_reference(999999, guild_id=1, channel_id=500, message_id=999)
+
+        self.assertFalse(updated)

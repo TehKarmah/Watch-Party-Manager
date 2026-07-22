@@ -1,10 +1,14 @@
 """Service for managing movie suggestions."""
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import Optional
 
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
+
+_TRAILING_YEAR_PATTERN = re.compile(r"\s*\(\d{4}\)\s*$")
 
 # Used when a caller doesn't resolve a guild/database-specific
 # configuration value -- matches SuggestionRulesConfig.rejection_threshold's
@@ -105,6 +109,7 @@ class SuggestionService:
         director: Optional[str] = None,
         imdb_rating: Optional[str] = None,
         poster_url: Optional[str] = None,
+        release_year: Optional[int] = None,
     ) -> SuggestionResult:
         """Add a suggestion to the list.
 
@@ -166,6 +171,7 @@ class SuggestionService:
             director=director,
             imdb_rating=imdb_rating,
             poster_url=poster_url,
+            release_year=release_year,
         )
         self._next_id += 1
         self._suggestions[suggestion_key] = watch_item
@@ -193,6 +199,31 @@ class SuggestionService:
         """
         for watch_item in self._suggestions.values():
             if watch_item.id == suggestion_id:
+                watch_item.message_id = message_id
+                self._save()
+                return True
+        return False
+
+    def set_confirmation_post_reference(
+        self, suggestion_id: int, guild_id: int, channel_id: int, message_id: int
+    ) -> bool:
+        """Record where a suggestion's public confirmation post actually lives.
+
+        Unlike attach_message_reference() (which only ever backfills a
+        message_id onto the same channel the suggestion was already
+        pointing at), this also updates guild_id/channel_id -- needed
+        when the confirmation post goes to a database's configured
+        suggestion channel rather than wherever /add was run, or when
+        reactivation posts a fresh confirmation in a new location.
+
+        Returns:
+            True if a matching suggestion was found and updated, False if
+            no suggestion has that ID.
+        """
+        for watch_item in self._suggestions.values():
+            if watch_item.id == suggestion_id:
+                watch_item.guild_id = guild_id
+                watch_item.channel_id = channel_id
                 watch_item.message_id = message_id
                 self._save()
                 return True
@@ -320,6 +351,54 @@ class SuggestionService:
             success=True,
             message=f'Your rejection of "{watch_item.title}" has been removed.',
             watch_item=watch_item,
+        )
+
+    # --- FR-033A: WASH Crew-initiated archive/reactivate -------------------------------
+
+    def archive_suggestion(self, suggestion_id: int) -> SuggestionResult:
+        """Archive a suggestion directly (e.g. via /remove), preserving its
+        identity and history.
+
+        Deliberately separate from reject_suggestion()'s rejection-
+        threshold auto-archive: this never touches
+        journey.rejected_by_discord_user_ids, so
+        duplicate_detection_service.categorize_watch_item() can tell the
+        two apart afterward (ARCHIVED_OTHER here, vs. ARCHIVED_REJECTED
+        for a threshold-triggered archive).
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return SuggestionResult(success=False, message="That suggestion doesn't exist.")
+
+        if watch_item.status is WatchItemStatus.ARCHIVED:
+            return SuggestionResult(success=False, message="That suggestion is already archived.")
+
+        watch_item.status = WatchItemStatus.ARCHIVED
+        self._save()
+        return SuggestionResult(
+            success=True, message=f'"{watch_item.title}" has been archived.', watch_item=watch_item
+        )
+
+    def reactivate_suggestion(self, suggestion_id: int) -> SuggestionResult:
+        """Return an archived or watched suggestion to the active pool.
+
+        Reuses the existing record's stable ID and full journey/history
+        unchanged -- callers use this instead of suggest() whenever a
+        re-suggestion should reuse an existing record rather than create
+        a duplicate one (see duplicate_detection_service and Section 3's
+        re-suggestion rules).
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return SuggestionResult(success=False, message="That suggestion doesn't exist.")
+
+        if watch_item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.WATCHED):
+            return SuggestionResult(success=False, message="That suggestion is already active.")
+
+        watch_item.status = WatchItemStatus.SUGGESTED
+        self._save()
+        return SuggestionResult(
+            success=True, message=f'"{watch_item.title}" has been reactivated.', watch_item=watch_item
         )
 
     def get_suggestions_for_database(
@@ -503,6 +582,116 @@ class SuggestionService:
             self._save()
             return "updated"
         return "not_found"
+
+    # --- FR-033A: /remove matching and Crew-only editing --------------------------------
+
+    def find_matches_for_removal(self, query: str, database_id: Optional[int] = None) -> list[WatchItem]:
+        """Find items matching a /remove query.
+
+        A query matches by reference number (``#0007`` or bare ``7``),
+        exact title, or exact title with any trailing " (YYYY)" suffix
+        stripped -- never fuzzy or partial matching, so /remove never
+        has to guess which item was meant.
+
+        Args:
+            query: The raw /remove input.
+            database_id: If given, only items in this database are
+                considered.
+        """
+        trimmed = query.strip()
+        if not trimmed:
+            return []
+
+        candidates = [
+            item
+            for item in self._suggestions.values()
+            if database_id is None or item.database_id == database_id
+        ]
+
+        reference_id = self._parse_reference(trimmed)
+        if reference_id is not None:
+            return [item for item in candidates if item.id == reference_id]
+
+        query_key = trimmed.casefold()
+        matches = []
+        for item in candidates:
+            title_key = item.title.strip().casefold()
+            title_without_year_key = _TRAILING_YEAR_PATTERN.sub("", item.title.strip()).casefold()
+            if query_key in (title_key, title_without_year_key):
+                matches.append(item)
+        return matches
+
+    @staticmethod
+    def _parse_reference(value: str) -> Optional[int]:
+        candidate = value[1:] if value.startswith("#") else value
+        if candidate.isdigit():
+            return int(candidate)
+        return None
+
+    def edit_suggestion(
+        self,
+        suggestion_id: int,
+        *,
+        title: str,
+        release_year: Optional[int],
+        imdb_url: Optional[str],
+        database_id: int,
+    ) -> SuggestionResult:
+        """Replace a suggestion's editable fields, preserving its stable ID and journey.
+
+        All four fields must already be the FINAL desired value -- the
+        caller (bot.py's /edit_suggestion handler) is responsible for
+        merging "field left unchanged" with the item's current value
+        before calling this, and for running duplicate detection first;
+        this method only performs the identity-preserving field
+        replacement and the exact-title-collision check within the
+        destination database.
+
+        Args:
+            suggestion_id: The suggestion to edit.
+            title: The new title (required; may be unchanged).
+            release_year: The new release year, or None to clear it.
+            imdb_url: The new canonical IMDb URL, or None to clear it.
+            database_id: The destination database (may be unchanged).
+
+        Returns:
+            SuggestionResult with the updated WatchItem on success.
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return SuggestionResult(success=False, message="That suggestion doesn't exist.")
+
+        new_title = title.strip()
+        if not new_title:
+            return SuggestionResult(success=False, message="Title cannot be empty.")
+
+        old_key = (watch_item.database_id, watch_item.title.casefold())
+        new_key = (database_id, new_title.casefold())
+        if new_key != old_key and new_key in self._suggestions:
+            return SuggestionResult(
+                success=False,
+                message="A suggestion with that title already exists in the destination database.",
+            )
+
+        metadata_ids = dict(watch_item.metadata_ids)
+        if imdb_url:
+            metadata_ids[MetadataProvider.IMDB] = imdb_url
+        else:
+            metadata_ids.pop(MetadataProvider.IMDB, None)
+
+        updated = replace(
+            watch_item,
+            title=new_title,
+            release_year=release_year,
+            metadata_ids=metadata_ids,
+            database_id=database_id,
+            updated_at=datetime.now(timezone.utc),
+        )
+
+        del self._suggestions[old_key]
+        self._suggestions[new_key] = updated
+        self._save()
+        return SuggestionResult(success=True, message=f'Updated "{new_title}".', watch_item=updated)
 
     def _save(self) -> None:
         """Persist the current suggestion list via the repository."""

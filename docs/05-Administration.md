@@ -61,6 +61,49 @@ Use `/database_remove` with its database ID. The command applies the repository'
 
 Database operations are guild-scoped. A guild must not access or change another guild's databases.
 
+### Adding suggestions
+
+`/add title:<text> [imdb_url] [release_year]` accepts a plain title, an IMDb link (either pasted into `title` directly or given separately via `imdb_url`), and an optional release year. Any Watch Party member may use it.
+
+**IMDb link normalization.** A supplied IMDb link is validated against common IMDb title URL variants (with or without `https://`/`www.`, with or without a trailing path/query) and stored in its canonical form: `https://www.imdb.com/title/tt1234567/`. A malformed link is rejected with a clear error before anything is saved. This normalization never contacts IMDb or any external service. Separately, and unrelated to this normalization step, `/add` also resolves basic metadata (runtime, genres, poster, etc.) through the OMDb API when `OMDB_API_KEY` is configured -- that lookup is pre-existing behavior this milestone did not change.
+
+**Duplicate detection.** Before a suggestion is saved, WASH checks the target database's active, archived, and watched items for a match:
+
+- An **IMDb ID match**, or a **matching title and release year**, is a *definite* duplicate.
+- A matching title where either side's release year is unknown is a *possible* duplicate -- WASH never guesses.
+
+What happens next depends on the matched item's status and who's asking:
+
+| Matched item's status | Regular Watch Party member | WASH Crew |
+| --- | --- | --- |
+| Active (on the list already) | Blocked. Reference, title, IMDb link, and status are shown. | Blocked -- there is nothing to reactivate. |
+| Archived (rejected via "I WILL NOT WATCH") | Blocked. | May confirm to reactivate the existing record. |
+| Watched | Blocked. | May confirm to reactivate the existing record. |
+| Archived some other way (e.g. via `/remove`) | Blocked. | May confirm to reactivate the existing record. |
+| Possible duplicate (no confirmed year) | Blocked. | May confirm to proceed with a new suggestion. |
+
+Reactivating always reuses the existing record's stable ID and full history (rejections, watch dates, vote appearances) rather than creating a second entry -- nothing is ever silently overwritten.
+
+**Confirmation posts.** The command's own acknowledgment is always ephemeral. If the target database has a suggestion channel configured, WASH posts (or, for a reactivation, updates) a public confirmation there showing the title, release year, canonical IMDb link, and reference number. If no suggestion channel is configured, the suggestion is still saved and the ephemeral reply explains that no public post was made. If posting fails (permissions, deleted channel, etc.), the suggestion is still preserved and the ephemeral reply explains the failure.
+
+### Listing suggestions
+
+`/list [status] [public]` is available to every Watch Party member. `status` selects **Active** (default), **Archived**, **Watched**, or **All**. Only WASH Crew may set `public:true` to post the list in the channel; everyone else always sees it privately, including Archived and Watched.
+
+Database selection follows the same automatic-then-selector pattern used elsewhere: the current channel's configured database is used automatically; if none matches and the guild has exactly one active database, that one is used; if several exist, WASH shows a picker. Each entry shows its reference number, title, release year (when known), IMDb link (when known), a link back to the original suggestion post (when known), and current status. Long lists page with Previous/Next buttons rather than being cut off or capped.
+
+### Removing suggestions
+
+`/remove query:<text>` is WASH Crew only. `query` may be a reference number (`#0007` or `7`), an exact title, or a title with its trailing "(YYYY)" year omitted. One match asks for confirmation before acting; several matches show a picker listing each candidate's reference, title, year, database, and status; no match reports that clearly. Confirmed removals **archive** the suggestion (its identity and full history are preserved) rather than deleting it -- see "Known limitations" for the one case where this isn't yet true everywhere.
+
+### Editing suggestions
+
+`/edit_suggestion reference:<text> [title] [release_year] [imdb_url] [database_id]` is WASH Crew only. `reference` is matched the same way `/remove` matches (reference number or exact title); any field left blank keeps its current value. A supplied IMDb link is normalized the same way `/add` normalizes one. Moving a suggestion to another database requires that database to exist, be active, and belong to the same guild. Whenever the title, release year, IMDb link, or database changes, the same duplicate check `/add` uses runs again against the destination database (excluding the suggestion's own record) -- a definite duplicate blocks the edit, a possible one requires confirmation. The stable ID, journey, and history are always preserved; only the edited fields (and an internal "last updated" timestamp) change.
+
+### Known limitation: identical titles within one database
+
+A "possible duplicate" warning is only ever raised because a candidate's title already matches an existing item's title (that's what makes it a candidate). Suggestion storage has always been keyed by (database, normalized title), so two records can never share an exactly-matching title in the same database. In practice this means confirming "add/save anyway" on a possible-duplicate warning succeeds only when the new title differs at all from every matched title -- confirming with a byte-for-byte identical title still reports the pre-existing "a suggestion with that title already exists" message instead of creating a second record. Changing this would mean changing how suggestions are identified in storage, which this milestone intentionally leaves alone.
+
 ## 4. Starting a Vote
 
 Use `/start_vote` to begin an interactive setup flow.

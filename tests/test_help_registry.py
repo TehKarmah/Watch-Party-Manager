@@ -53,18 +53,20 @@ class HelpRegistryTests(unittest.TestCase):
             commands = [entry.name for _, entries in sections for entry in entries]
             self.assertIn("/join_watch_party", commands)
 
-    def test_watch_party_member_sections_add_only_the_add_command(self) -> None:
-        # FR-029's corrected permission model: Watch Party members gain
-        # only /add over the "everyone" tier. Every other previously
-        # member-facing command (list, remove, vote_status,
-        # watch_party_status, diagnostics, stats) is WASH Crew only.
+    def test_watch_party_member_sections_add_only_add_and_list(self) -> None:
+        # FR-033A: Watch Party members gain /add and /list (view-only,
+        # never public -- enforced by permission checks, not by hiding
+        # the command) over the "everyone" tier. Every other previously
+        # member-facing command (remove, vote_status, watch_party_status,
+        # diagnostics, stats) remains WASH Crew only.
         sections = command_sections(show_wash_crew=False, show_watch_party_member=True)
         commands = [entry.name for _, entries in sections for entry in entries]
         self.assertIn("/help", commands)
         self.assertIn("/about", commands)
         self.assertIn("/add", commands)
-        self.assertNotIn("/list", commands)
+        self.assertIn("/list", commands)
         self.assertNotIn("/remove", commands)
+        self.assertNotIn("/edit_suggestion", commands)
         self.assertNotIn("/vote_status", commands)
         self.assertNotIn("/watch_party_status", commands)
         self.assertNotIn("/stats", commands)
@@ -179,14 +181,18 @@ class HelpRegistryTests(unittest.TestCase):
         entries = {entry.name: entry for entry in COMMAND_HELP}
         self.assertIs(entries["/start_vote"].audience, HelpAudience.WASH_CREW)
 
-    def test_add_is_the_only_watch_party_member_command(self) -> None:
+    def test_add_and_list_are_the_only_watch_party_member_commands(self) -> None:
         member_commands = [entry.name for entry in COMMAND_HELP if entry.audience is HelpAudience.WATCH_PARTY_MEMBER]
-        self.assertEqual(member_commands, ["/add"])
+        self.assertEqual(sorted(member_commands), ["/add", "/list"])
 
-    def test_list_remove_vote_status_watch_party_status_diagnostics_stats_are_wash_crew_only(self) -> None:
+    def test_remove_vote_status_watch_party_status_diagnostics_stats_are_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        for name in ("/list", "/remove", "/vote_status", "/watch_party_status", "/diagnostics", "/stats"):
+        for name in ("/remove", "/vote_status", "/watch_party_status", "/diagnostics", "/stats"):
             self.assertIs(entries[name].audience, HelpAudience.WASH_CREW)
+
+    def test_edit_suggestion_is_wash_crew_only(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        self.assertIs(entries["/edit_suggestion"].audience, HelpAudience.WASH_CREW)
 
     # --- FR-031: /watch_party is WASH Crew only, existing tiers unchanged --------
 
@@ -244,9 +250,10 @@ class HelpRegistryTests(unittest.TestCase):
             self.assertIn(name, commands)
 
     def test_existing_help_tier_visibility_is_unchanged(self) -> None:
-        # FR-031 must not alter any pre-existing tier: Everyone still sees
-        # only /help, /about, /join_watch_party; Watch Party members gain
-        # only /add over that.
+        # The Everyone tier has never changed across any FR: only
+        # /help, /about, /join_watch_party. The Watch Party Member tier
+        # was /add-only through FR-032C; FR-033A deliberately extends it
+        # with /list (Section 9: members may view lists privately).
         everyone = [
             entry.name for _, entries in command_sections(show_wash_crew=False) for entry in entries
         ]
@@ -257,7 +264,7 @@ class HelpRegistryTests(unittest.TestCase):
             for _, entries in command_sections(show_wash_crew=False, show_watch_party_member=True)
             for entry in entries
         ]
-        self.assertEqual(sorted(member), sorted(["/help", "/about", "/join_watch_party", "/add"]))
+        self.assertEqual(sorted(member), sorted(["/help", "/about", "/join_watch_party", "/add", "/list"]))
 
 
 if __name__ == "__main__":

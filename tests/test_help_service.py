@@ -66,17 +66,22 @@ class HelpServiceTests(unittest.TestCase):
         self.assertIn("**Expanded Help Documentation**", response.messages[1])
 
     def test_watch_party_member_help_includes_add(self) -> None:
-        # FR-029's corrected model: /add is the only command Watch Party
-        # members gain over the "everyone" tier.
         message = build_help_response(show_wash_crew=False, show_watch_party_member=True).messages[0]
 
         self.assertIn("`/add` - Add a watch item by title or IMDb link.", message)
 
+    def test_watch_party_member_help_includes_list(self) -> None:
+        # FR-033A: Watch Party members gain /list (view-only, never
+        # public) alongside /add over the "everyone" tier.
+        message = build_help_response(show_wash_crew=False, show_watch_party_member=True).messages[0]
+
+        self.assertIn("`/list`", message)
+
     def test_watch_party_member_help_hides_wash_crew_and_other_member_commands(self) -> None:
         message = build_help_response(show_wash_crew=False, show_watch_party_member=True).messages[0]
 
-        self.assertNotIn("`/list`", message)
         self.assertNotIn("`/remove`", message)
+        self.assertNotIn("`/edit_suggestion`", message)
         self.assertNotIn("`/vote_status`", message)
         self.assertNotIn("`/watch_party_status`", message)
         self.assertNotIn("`/stats`", message)

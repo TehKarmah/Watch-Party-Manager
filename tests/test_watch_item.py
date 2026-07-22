@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -147,3 +148,45 @@ class WatchItemJourneyFieldTests(unittest.TestCase):
 
         self.assertIs(item.journey, journey)
         self.assertEqual(item.journey.times_won, 3)
+
+
+class WatchItemReleaseYearAndUpdatedAtTests(unittest.TestCase):
+    def test_release_year_defaults_to_none(self) -> None:
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE)
+
+        self.assertIsNone(item.release_year)
+
+    def test_release_year_can_be_set(self) -> None:
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE, release_year=2016)
+
+        self.assertEqual(2016, item.release_year)
+
+    def test_release_year_rejects_a_year_before_cinema_existed(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchItem(title="Arrival", media_type=MediaType.MOVIE, release_year=1800)
+
+    def test_release_year_rejects_a_year_too_far_in_the_future(self) -> None:
+        far_future_year = datetime.now(timezone.utc).year + 50
+        with self.assertRaises(ValueError):
+            WatchItem(title="Arrival", media_type=MediaType.MOVIE, release_year=far_future_year)
+
+    def test_release_year_allows_a_near_future_year(self) -> None:
+        near_future_year = datetime.now(timezone.utc).year + 1
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE, release_year=near_future_year)
+
+        self.assertEqual(near_future_year, item.release_year)
+
+    def test_updated_at_defaults_to_none(self) -> None:
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE)
+
+        self.assertIsNone(item.updated_at)
+
+    def test_updated_at_can_be_set_when_timezone_aware(self) -> None:
+        now = datetime.now(timezone.utc)
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE, updated_at=now)
+
+        self.assertEqual(now, item.updated_at)
+
+    def test_updated_at_rejects_a_naive_datetime(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchItem(title="Arrival", media_type=MediaType.MOVIE, updated_at=datetime(2026, 1, 1))

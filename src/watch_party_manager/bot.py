@@ -4,8 +4,11 @@ import asyncio
 import logging
 import os
 import platform
+import re
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
@@ -122,6 +125,13 @@ from watch_party_manager.services.setup_wizard_service import (
     MIN_BACKUP_RETENTION_COUNT,
     SetupWizardService,
 )
+from watch_party_manager.services.duplicate_detection_service import (
+    DuplicateCheckResult,
+    DuplicateMatch,
+    DuplicateMatchCategory,
+    find_duplicates,
+)
+from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_list_formatter import (
     SuggestionListFormatter,
@@ -165,7 +175,12 @@ from watch_party_manager.config_view import (
 )
 from watch_party_manager.import_view import ImportModeChoiceView
 from watch_party_manager.membership_view import MembershipApprovalView, PendingRequestSelectView
+from watch_party_manager.pagination_view import PaginatedListView, paginate_lines
 from watch_party_manager.restore_confirmation_view import RestoreConfirmationView
+from watch_party_manager.suggestion_selection_view import (
+    ListDatabaseSelectView,
+    RemovalMatchSelectView,
+)
 from watch_party_manager.type_to_confirm_view import DestructiveConfirmationView
 from watch_party_manager.setup_wizard_view import (
     AdminChannelStepView,
@@ -367,85 +382,36 @@ class WatchPartyBot(commands.Bot):
                 )
 
         @self.tree.command(name="add")
+        @discord.app_commands.describe(
+            release_year="The movie/show's release year, if known (helps duplicate detection)."
+        )
         async def suggest(
             interaction: discord.Interaction,
             title: str,
             imdb_url: Optional[str] = None,
+            release_year: Optional[int] = None,
         ) -> None:
-            permission = self.permission_service.require_watch_party_member(interaction.user)
-            if not permission.allowed:
-                await interaction.response.send_message(permission.message, ephemeral=True)
-                return
-            message, ephemeral, watch_item = await perform_add_suggestion_from_input(
-                suggestion_input_service=self.suggestion_input_service,
-                suggestion_service=self.suggestion_service,
-                guild_id=interaction.guild_id,
-                channel_id=interaction.channel_id,
-                title=title,
-                imdb_url=imdb_url,
-            )
-            if watch_item is None:
-                await interaction.response.send_message(message, ephemeral=ephemeral)
-                return
-            resolution = self.suggestion_service.resolve_database_for_channel(
-                interaction.guild_id, interaction.channel_id
-            )
-            database_name = resolution.database.name if resolution.database is not None else "Suggestion Database"
-            embed = build_suggestion_confirmation_embed(
-                watch_item,
-                database_name=database_name,
-                suggested_by=getattr(interaction.user, "mention", str(interaction.user)),
-            )
-            view = build_suggestion_view(
-                self.suggestion_service,
-                self.suggestion_database_configuration_repository,
-                watch_item,
-                interaction.guild_id,
-                permission_service=self.permission_service,
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=ephemeral, view=view)
-            if watch_item is not None:
-                sent_message = await interaction.original_response()
-                self.suggestion_service.attach_message_reference(watch_item.id, sent_message.id)
-                logger.info(
-                    "User %s added watch item %s (%r) to database %s in guild %s",
-                    interaction.user.id,
-                    watch_item.id,
-                    watch_item.title,
-                    watch_item.database_id,
-                    interaction.guild_id,
-                )
+            await handle_add_suggestion(interaction, self, title, imdb_url, release_year)
 
         @self.tree.command(name="list")
         @discord.app_commands.describe(
-            view="Choose the simple member list or the expanded WASH Crew list.",
+            status="Which suggestions to show.",
             public="Post the list publicly instead of showing it only to you (WASH Crew only).",
         )
         @discord.app_commands.choices(
-            view=[
-                discord.app_commands.Choice(name="Standard", value="standard"),
-                discord.app_commands.Choice(name="WASH Crew", value="crew"),
+            status=[
+                discord.app_commands.Choice(name="Active", value="active"),
+                discord.app_commands.Choice(name="Archived", value="archived"),
+                discord.app_commands.Choice(name="Watched", value="watched"),
+                discord.app_commands.Choice(name="All", value="all"),
             ]
         )
         async def suggestions(
             interaction: discord.Interaction,
-            view: str = "standard",
+            status: str = "active",
             public: bool = False,
         ) -> None:
-            permission = self.permission_service.require_wash_crew(interaction.user)
-            if not permission.allowed:
-                await interaction.response.send_message(permission.message, ephemeral=True)
-                return
-            message, ephemeral = perform_list_suggestions_response(
-                suggestion_service=self.suggestion_service,
-                guild_id=interaction.guild_id,
-                channel_id=interaction.channel_id,
-                user=interaction.user,
-                wash_crew_role_id=self.wash_crew_role_id,
-                view=view,
-                public=public,
-            )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
+            await handle_list_suggestions(interaction, self, status, public)
 
         @self.tree.command(name="repair_suggestions")
         async def repair_suggestions(interaction: discord.Interaction) -> None:
@@ -525,21 +491,29 @@ class WatchPartyBot(commands.Bot):
             await handle_import(interaction, self, backup_file)
 
         @self.tree.command(name="remove")
-        async def remove_suggestion(interaction: discord.Interaction, title: str) -> None:
-            message, ephemeral, success = perform_remove_suggestion(
-                suggestion_service=self.suggestion_service,
-                user=interaction.user,
-                wash_crew_role_id=self.wash_crew_role_id,
-                title=title,
-            )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
-            if success:
-                logger.info(
-                    "User %s removed watch item %r in guild %s",
-                    interaction.user.id,
-                    title,
-                    interaction.guild_id,
-                )
+        @discord.app_commands.describe(
+            query="A reference number (e.g. #0007), exact title, or title without its year."
+        )
+        async def remove_suggestion(interaction: discord.Interaction, query: str) -> None:
+            await handle_remove_suggestion(interaction, self, query)
+
+        @self.tree.command(name="edit_suggestion")
+        @discord.app_commands.describe(
+            reference="The suggestion's reference number (e.g. #0007) or its current exact title.",
+            title="New title (leave blank to keep the current title).",
+            release_year="New release year (leave blank to keep the current value).",
+            imdb_url="New IMDb link (leave blank to keep the current value).",
+            database_id="Move to a different suggestion database (leave blank to keep the current one).",
+        )
+        async def edit_suggestion_command(
+            interaction: discord.Interaction,
+            reference: str,
+            title: Optional[str] = None,
+            release_year: Optional[int] = None,
+            imdb_url: Optional[str] = None,
+            database_id: Optional[int] = None,
+        ) -> None:
+            await handle_edit_suggestion(interaction, self, reference, title, release_year, imdb_url, database_id)
 
         @self.tree.command(name="start_vote")
         async def start_vote(interaction: discord.Interaction) -> None:
@@ -3971,6 +3945,298 @@ async def perform_add_suggestion_from_input(
     )
 
 
+# --- FR-033A: /add with duplicate detection, re-suggestion rules, and confirmation posts ---
+
+_TRAILING_YEAR_SUFFIX_PATTERN = re.compile(r"\((\d{4})\)\s*$")
+
+
+def extract_year_from_title_suffix(title: str) -> Optional[int]:
+    """Pull a trailing " (YYYY)" release year out of a title string.
+
+    OMDb-resolved titles already embed the year this way (see
+    ImdbMetadataService._format_display_title) -- this only reads
+    already-returned text and never contacts IMDb/OMDb itself.
+    """
+    match = _TRAILING_YEAR_SUFFIX_PATTERN.search(title.strip())
+    return int(match.group(1)) if match else None
+
+
+class AddSuggestionOutcomeKind(str, Enum):
+    """What /add should do next, decided by decide_add_suggestion_outcome()."""
+
+    BLOCKED_ACTIVE = "blocked_active"
+    BLOCKED_NO_CREW_OVERRIDE = "blocked_no_crew_override"
+    NEEDS_CREW_REACTIVATION_CONFIRM = "needs_crew_reactivation_confirm"
+    BLOCKED_POSSIBLE_NO_CREW = "blocked_possible_no_crew"
+    NEEDS_CREW_POSSIBLE_CONFIRM = "needs_crew_possible_confirm"
+    PROCEED = "proceed"
+
+
+@dataclass(frozen=True, slots=True)
+class AddSuggestionDecision:
+    kind: AddSuggestionOutcomeKind
+    message: str
+    matched_item: Optional[WatchItem] = None
+
+
+def build_duplicate_match_line(match: DuplicateMatch) -> str:
+    item = match.watch_item
+    imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
+    parts = [item.reference, item.title]
+    if imdb_url:
+        parts.append(imdb_url)
+    parts.append(f"status: {item.status.value.replace('_', ' ').title()}")
+    return " | ".join(parts)
+
+
+_ARCHIVE_CATEGORY_LABELS = {
+    DuplicateMatchCategory.ARCHIVED_REJECTED: 'archived after being rejected ("I WILL NOT WATCH")',
+    DuplicateMatchCategory.WATCHED: "already been watched",
+    DuplicateMatchCategory.ARCHIVED_OTHER: "already been archived",
+}
+
+
+def decide_add_suggestion_outcome(duplicate_result: DuplicateCheckResult, *, is_crew: bool) -> AddSuggestionDecision:
+    """Turn a duplicate check into what /add should do next (Sections 2-3).
+
+    Never guesses: an ACTIVE match always blocks outright (no override,
+    even for Crew); an archived/watched match only proceeds -- via
+    reactivation, never a new record -- after WASH Crew explicitly
+    confirms; a possible-only match only proceeds (as a genuinely new
+    suggestion) after WASH Crew explicitly confirms. Regular members
+    can never bypass either warning.
+    """
+    if duplicate_result.has_definite_match:
+        active_matches = [
+            match for match in duplicate_result.definite_matches if match.category is DuplicateMatchCategory.ACTIVE
+        ]
+        if active_matches:
+            match = active_matches[0]
+            return AddSuggestionDecision(
+                AddSuggestionOutcomeKind.BLOCKED_ACTIVE,
+                "That title is already on the list:\n" + build_duplicate_match_line(match),
+                matched_item=match.watch_item,
+            )
+
+        match = duplicate_result.definite_matches[0]
+        detail = f"This title has {_ARCHIVE_CATEGORY_LABELS[match.category]}:\n" + build_duplicate_match_line(match)
+        if not is_crew:
+            return AddSuggestionDecision(
+                AddSuggestionOutcomeKind.BLOCKED_NO_CREW_OVERRIDE, detail, matched_item=match.watch_item
+            )
+        return AddSuggestionDecision(
+            AddSuggestionOutcomeKind.NEEDS_CREW_REACTIVATION_CONFIRM, detail, matched_item=match.watch_item
+        )
+
+    if duplicate_result.has_possible_only:
+        lines = "\n".join(build_duplicate_match_line(match) for match in duplicate_result.matches)
+        detail = (
+            "This title matches existing item(s) with no confirmed release year, "
+            "so it might be a duplicate:\n" + lines
+        )
+        if not is_crew:
+            return AddSuggestionDecision(AddSuggestionOutcomeKind.BLOCKED_POSSIBLE_NO_CREW, detail)
+        return AddSuggestionDecision(AddSuggestionOutcomeKind.NEEDS_CREW_POSSIBLE_CONFIRM, detail)
+
+    return AddSuggestionDecision(AddSuggestionOutcomeKind.PROCEED, "")
+
+
+async def post_suggestion_confirmation(
+    bot: "WatchPartyBot",
+    watch_item: WatchItem,
+    database: SuggestionDatabase,
+    interaction: discord.Interaction,
+) -> tuple[bool, str]:
+    """Post (or refresh) a suggestion's public confirmation post.
+
+    Posts to the database's configured suggestion channel -- never the
+    channel /add happened to be run from. Reuses (edits) the existing
+    confirmation post when the suggestion already points at one in that
+    same channel (e.g. reactivation), otherwise sends a fresh one.
+
+    Returns:
+        A (posted, note) tuple. note is a short sentence for the
+        ephemeral acknowledgment: empty on a clean post, or an
+        explanation when no destination is configured or posting failed.
+        The suggestion itself is never rolled back either way.
+    """
+    configuration = bot.suggestion_database_configuration_repository.get(database.guild_id, database.database_id)
+    channel_id = configuration.channels.suggestion_channel_id if configuration is not None else None
+    if channel_id is None:
+        return (
+            False,
+            "No public confirmation post was created because no suggestion channel is configured for this database.",
+        )
+
+    embed = build_suggestion_confirmation_embed(
+        watch_item,
+        database_name=database.name,
+        suggested_by=getattr(interaction.user, "mention", str(interaction.user)),
+    )
+    view = build_suggestion_view(
+        bot.suggestion_service,
+        bot.suggestion_database_configuration_repository,
+        watch_item,
+        database.guild_id,
+        permission_service=bot.permission_service,
+    )
+
+    try:
+        channel = bot.get_channel(channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(channel_id)
+
+        if watch_item.channel_id == channel_id and watch_item.message_id is not None:
+            try:
+                message = await channel.fetch_message(watch_item.message_id)
+                await message.edit(embed=embed, view=view)
+                return True, ""
+            except discord.HTTPException:
+                pass  # The old post is gone or unreachable -- fall through and post fresh.
+
+        message = await channel.send(embed=embed, view=view)
+        bot.suggestion_service.set_confirmation_post_reference(
+            watch_item.id, database.guild_id, channel_id, message.id
+        )
+        return True, ""
+    except Exception:
+        logger.warning("Could not post suggestion confirmation for %s", watch_item.id, exc_info=True)
+        return (
+            False,
+            "The suggestion was saved, but WASH could not post the public confirmation. "
+            "Check the configured suggestion channel's permissions.",
+        )
+
+
+async def finish_add_or_reactivate(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    watch_item: WatchItem,
+    database: SuggestionDatabase,
+    *,
+    is_new: bool,
+) -> None:
+    """Send the ephemeral acknowledgment and attempt the public confirmation post.
+
+    The acknowledgment is always ephemeral (Section 8) regardless of
+    whether the public post succeeds, is skipped (no destination
+    configured), or fails.
+    """
+    action_word = "added" if is_new else "reactivated"
+    _posted, note = await post_suggestion_confirmation(bot, watch_item, database, interaction)
+    ack = f'"{watch_item.title}" has been {action_word}. Reference: {watch_item.reference}.'
+    if note:
+        ack += f"\n{note}"
+    await interaction.response.send_message(ack, ephemeral=True)
+
+
+async def handle_add_suggestion(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    title: str,
+    imdb_url: Optional[str],
+    release_year: Optional[int],
+) -> None:
+    permission = bot.permission_service.require_watch_party_member(interaction.user)
+    if not permission.allowed:
+        await interaction.response.send_message(permission.message, ephemeral=True)
+        return
+
+    guild_id = interaction.guild_id
+    channel_id = interaction.channel_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    resolved = await bot.suggestion_input_service.resolve(title, imdb_url)
+    if not resolved.success:
+        await interaction.response.send_message(
+            resolved.error_message or "I could not resolve that suggestion.", ephemeral=True
+        )
+        return
+
+    resolution = bot.suggestion_service.resolve_database_for_channel(guild_id, channel_id)
+    if resolution.database is None:
+        await interaction.response.send_message(
+            resolution.error_message or "No suggestion database is available here.", ephemeral=True
+        )
+        return
+    database = resolution.database
+
+    final_title = resolved.title or title
+    final_release_year = release_year if release_year is not None else extract_year_from_title_suffix(final_title)
+    is_crew = is_wash_crew_member(interaction.user, bot.wash_crew_role_id)
+
+    existing_items = bot.suggestion_service.get_suggestions_for_database(database.database_id, include_archived=True)
+    duplicate_result = find_duplicates(
+        title=final_title, release_year=final_release_year, imdb_url=resolved.imdb_url, existing_items=existing_items
+    )
+    decision = decide_add_suggestion_outcome(duplicate_result, is_crew=is_crew)
+
+    async def create_new_suggestion(target_interaction: discord.Interaction) -> None:
+        result = bot.suggestion_service.suggest(
+            final_title,
+            resolved.imdb_url,
+            database_id=database.database_id,
+            guild_id=guild_id,
+            channel_id=channel_id,
+            release_year=final_release_year,
+            runtime_minutes=resolved.runtime_minutes,
+            genres=resolved.genres,
+            description=resolved.plot,
+            content_rating=resolved.content_rating,
+            director=resolved.director,
+            imdb_rating=resolved.imdb_rating,
+            poster_url=resolved.poster_url,
+        )
+        if not result.success or result.watch_item is None:
+            await target_interaction.response.send_message(result.message, ephemeral=True)
+            return
+        await finish_add_or_reactivate(target_interaction, bot, result.watch_item, database, is_new=True)
+
+    async def reactivate_existing(target_interaction: discord.Interaction, matched_item: WatchItem) -> None:
+        result = bot.suggestion_service.reactivate_suggestion(matched_item.id)
+        if not result.success or result.watch_item is None:
+            await target_interaction.response.send_message(result.message, ephemeral=True)
+            return
+        await finish_add_or_reactivate(target_interaction, bot, result.watch_item, database, is_new=False)
+
+    if decision.kind in (
+        AddSuggestionOutcomeKind.BLOCKED_ACTIVE,
+        AddSuggestionOutcomeKind.BLOCKED_NO_CREW_OVERRIDE,
+        AddSuggestionOutcomeKind.BLOCKED_POSSIBLE_NO_CREW,
+    ):
+        await interaction.response.send_message(decision.message, ephemeral=True)
+        return
+
+    if decision.kind is AddSuggestionOutcomeKind.PROCEED:
+        await create_new_suggestion(interaction)
+        return
+
+    if decision.kind is AddSuggestionOutcomeKind.NEEDS_CREW_REACTIVATION_CONFIRM:
+        matched_item = decision.matched_item
+
+        async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+            await reactivate_existing(confirm_interaction, matched_item)
+
+        async def on_abort(abort_interaction: discord.Interaction) -> None:
+            await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
+
+        view = EditVoteConfirmationView(confirm_label="Reactivate", on_confirm=on_confirm, on_abort=on_abort)
+        await interaction.response.send_message(decision.message, view=view, ephemeral=True)
+        return
+
+    # NEEDS_CREW_POSSIBLE_CONFIRM
+    async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+        await create_new_suggestion(confirm_interaction)
+
+    async def on_abort(abort_interaction: discord.Interaction) -> None:
+        await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
+
+    view = EditVoteConfirmationView(confirm_label="Add Anyway", on_confirm=on_confirm, on_abort=on_abort)
+    await interaction.response.send_message(decision.message, view=view, ephemeral=True)
+
+
 def find_backup_by_filename(backup_service: BackupService, backup_filename: str) -> Optional[Path]:
     """Find a known backup archive by exact filename, across all backup kinds.
 
@@ -4851,6 +5117,145 @@ def perform_list_suggestions(
     return message
 
 
+# --- FR-033A: /list with status filters, richer entries, and pagination -------------------
+
+
+class SuggestionListStatusFilter(str, Enum):
+    """Which suggestions /list should include."""
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+    WATCHED = "watched"
+    ALL = "all"
+
+
+def filter_items_by_status(items: List[WatchItem], status_filter: SuggestionListStatusFilter) -> List[WatchItem]:
+    if status_filter is SuggestionListStatusFilter.ALL:
+        return items
+    if status_filter is SuggestionListStatusFilter.ARCHIVED:
+        return [item for item in items if item.status is WatchItemStatus.ARCHIVED]
+    if status_filter is SuggestionListStatusFilter.WATCHED:
+        return [item for item in items if item.status is WatchItemStatus.WATCHED]
+    return [item for item in items if item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.WATCHED)]
+
+
+def build_suggestion_entry_line(item: WatchItem) -> str:
+    """Render one /list entry: reference, title, year, IMDb link, post
+    link, and status -- each shown only when available (Section 4).
+    """
+    heading = item.reference + " " + item.title
+    if item.release_year:
+        heading += f" ({item.release_year})"
+
+    details = []
+    imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
+    if imdb_url:
+        details.append(f"[IMDb]({imdb_url})")
+    if item.guild_id is not None and item.channel_id is not None and item.message_id is not None:
+        message_url = f"https://discord.com/channels/{item.guild_id}/{item.channel_id}/{item.message_id}"
+        details.append(f"[Original post]({message_url})")
+    details.append(f"Status: {item.status.value.replace('_', ' ').title()}")
+
+    return f"- {heading} -- " + " | ".join(details)
+
+
+async def send_suggestion_list(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    database: SuggestionDatabase,
+    status_filter: SuggestionListStatusFilter,
+    public: bool,
+) -> None:
+    items = bot.suggestion_service.get_suggestions_for_database(database.database_id, include_archived=True)
+    filtered = filter_items_by_status(items, status_filter)
+    # Deterministic ordering: by stable suggestion ID (assignment order),
+    # never re-sorted by anything that could change between pages.
+    filtered = sorted(filtered, key=lambda item: item.id or 0)
+
+    if not filtered:
+        await interaction.response.send_message(
+            f'"{database.name}" has no {status_filter.value} watch items.', ephemeral=not public
+        )
+        return
+
+    header = f"**{database.name} -- {status_filter.value.title()} Watch Items ({len(filtered)})**"
+    lines = [build_suggestion_entry_line(item) for item in filtered]
+    pages = paginate_lines(header, lines)
+
+    if len(pages) == 1:
+        await interaction.response.send_message(pages[0], ephemeral=not public)
+        return
+
+    requester_id = getattr(interaction.user, "id", None)
+    view = PaginatedListView(pages, requester_id=requester_id)
+    await interaction.response.send_message(pages[0], view=view, ephemeral=not public)
+
+
+async def handle_list_suggestions(
+    interaction: discord.Interaction, bot: "WatchPartyBot", status: str, public: bool
+) -> None:
+    """Handle /list: resolve a database (automatically, or via picker),
+    then show it filtered by status with pagination.
+
+    Preserves existing permission behavior for the pieces that already
+    had it (public posting requires WASH Crew) while extending general
+    access to every Watch Party member per FR-033A Section 9.
+    """
+    permission = bot.permission_service.require_watch_party_member(interaction.user)
+    if not permission.allowed:
+        await interaction.response.send_message(permission.message, ephemeral=True)
+        return
+
+    guild_id = interaction.guild_id
+    channel_id = interaction.channel_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    is_crew = is_wash_crew_member(interaction.user, bot.wash_crew_role_id)
+    if public and not is_crew:
+        await interaction.response.send_message(
+            "You need the WASH Crew role to post the suggestion list publicly.", ephemeral=True
+        )
+        return
+
+    try:
+        status_filter = SuggestionListStatusFilter(status)
+    except ValueError:
+        await interaction.response.send_message("Choose Active, Archived, Watched, or All.", ephemeral=True)
+        return
+
+    resolution = bot.suggestion_service.resolve_database_for_channel(guild_id, channel_id)
+    if resolution.database is not None:
+        await send_suggestion_list(interaction, bot, resolution.database, status_filter, public)
+        return
+
+    active_databases = [
+        database for database in bot.suggestion_service.list_databases(guild_id) if database.active
+    ]
+    if len(active_databases) > 1:
+
+        async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
+            database = bot.suggestion_service.get_database(database_id)
+            if database is None:
+                await select_interaction.response.send_message(
+                    "That suggestion database no longer exists.", ephemeral=True
+                )
+                return
+            await send_suggestion_list(select_interaction, bot, database, status_filter, public)
+
+        options = [(database.database_id, database.name) for database in active_databases]
+        view = ListDatabaseSelectView(options, on_select)
+        await interaction.response.send_message(
+            "Multiple suggestion databases are configured. Choose one:", view=view, ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        resolution.error_message or "No suggestion database is available here.", ephemeral=True
+    )
+
+
 def resolve_rejection_threshold(
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository],
     guild_id: Optional[int],
@@ -5153,6 +5558,231 @@ def perform_remove_suggestion(
 
     result = suggestion_service.remove_suggestion(title)
     return result.message, False, result.success
+
+
+# --- FR-033A: /remove with reference/title matching, a selector, and archival ------------
+
+
+def build_removal_option_label(item: WatchItem, suggestion_service: SuggestionService) -> str:
+    """Build one /remove selector option's label: reference, title, year,
+    database, and status (Section 6's "Show a selector including...").
+    """
+    database = suggestion_service.get_database(item.database_id) if item.database_id is not None else None
+    database_name = database.name if database is not None else "Unknown database"
+    year_part = f" ({item.release_year})" if item.release_year else ""
+    status_part = item.status.value.replace("_", " ").title()
+    return f"{item.reference} {item.title}{year_part} -- {database_name} -- {status_part}"
+
+
+async def send_removal_confirmation(interaction: discord.Interaction, bot: "WatchPartyBot", item: WatchItem) -> None:
+    """Show the "remove this one?" confirmation, then archive on confirm.
+
+    Prefers archival over permanent deletion (Section 6): the existing
+    SuggestionService.remove_suggestion()/remove_suggestion_by_id()
+    hard-delete methods are untouched (still used by /repair_suggestions
+    for genuinely broken records) -- this reuses archive_suggestion()
+    instead, which preserves identity, journey, and history.
+    """
+    summary = build_removal_option_label(item, bot.suggestion_service)
+
+    async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+        result = bot.suggestion_service.archive_suggestion(item.id)
+        await confirm_interaction.response.send_message(result.message, ephemeral=True)
+
+    async def on_abort(abort_interaction: discord.Interaction) -> None:
+        await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
+
+    view = EditVoteConfirmationView(confirm_label="Remove", on_confirm=on_confirm, on_abort=on_abort)
+    await interaction.response.send_message(f"Remove this suggestion?\n{summary}", view=view, ephemeral=True)
+
+
+async def handle_remove_suggestion(interaction: discord.Interaction, bot: "WatchPartyBot", query: str) -> None:
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message("You need the WASH Crew role to remove a watch item.", ephemeral=True)
+        return
+
+    matches = bot.suggestion_service.find_matches_for_removal(query)
+    if not matches:
+        await interaction.response.send_message(f'No suggestion matches "{query}".', ephemeral=True)
+        return
+
+    if len(matches) == 1:
+        await send_removal_confirmation(interaction, bot, matches[0])
+        return
+
+    async def on_select(select_interaction: discord.Interaction, suggestion_id: int) -> None:
+        item = bot.suggestion_service.get_suggestion(suggestion_id)
+        if item is None:
+            await select_interaction.response.send_message("That suggestion no longer exists.", ephemeral=True)
+            return
+        await send_removal_confirmation(select_interaction, bot, item)
+
+    options = [(item.id, build_removal_option_label(item, bot.suggestion_service)) for item in matches]
+    view = RemovalMatchSelectView(options, on_select)
+    await interaction.response.send_message(
+        f'Multiple suggestions match "{query}". Choose one:', view=view, ephemeral=True
+    )
+
+
+# --- FR-033A: Crew-only suggestion editing --------------------------------------------
+
+
+def build_edit_diff_summary(
+    item: WatchItem,
+    *,
+    new_title: str,
+    new_release_year: Optional[int],
+    new_imdb_url: Optional[str],
+    new_database_id: Optional[int],
+    suggestion_service: SuggestionService,
+) -> str:
+    """Show only the fields actually changing, old value -> new value.
+
+    Satisfies "display current values" without a separate round-trip:
+    the confirmation/result message itself names what's being replaced.
+    """
+    lines = []
+    if new_title.casefold() != item.title.casefold():
+        lines.append(f'Title: "{item.title}" -> "{new_title}"')
+    if new_release_year != item.release_year:
+        lines.append(f"Release year: {item.release_year or 'unset'} -> {new_release_year or 'unset'}")
+    old_imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
+    if new_imdb_url != old_imdb_url:
+        lines.append(f"IMDb link: {old_imdb_url or 'unset'} -> {new_imdb_url or 'unset'}")
+    if new_database_id != item.database_id:
+        old_database = suggestion_service.get_database(item.database_id) if item.database_id else None
+        new_database = suggestion_service.get_database(new_database_id) if new_database_id else None
+        old_name = old_database.name if old_database is not None else "unset"
+        new_name = new_database.name if new_database is not None else "unset"
+        lines.append(f"Database: {old_name} -> {new_name}")
+    return "\n".join(lines)
+
+
+async def handle_edit_suggestion(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    reference: str,
+    title: Optional[str],
+    release_year: Optional[int],
+    imdb_url: Optional[str],
+    database_id: Optional[int],
+) -> None:
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message("You need the WASH Crew role to edit a suggestion.", ephemeral=True)
+        return
+
+    matches = bot.suggestion_service.find_matches_for_removal(reference)
+    if not matches:
+        await interaction.response.send_message(f'No suggestion matches "{reference}".', ephemeral=True)
+        return
+    if len(matches) > 1:
+        await interaction.response.send_message(
+            f'Multiple suggestions match "{reference}". Use its reference number (e.g. #0007) to be specific.',
+            ephemeral=True,
+        )
+        return
+    item = matches[0]
+
+    new_title = title.strip() if title else item.title
+    if not new_title:
+        await interaction.response.send_message("Title cannot be empty.", ephemeral=True)
+        return
+    new_release_year = release_year if release_year is not None else item.release_year
+    new_database_id = database_id if database_id is not None else item.database_id
+
+    if imdb_url is not None:
+        stripped_imdb_url = imdb_url.strip()
+        if not stripped_imdb_url:
+            new_imdb_url = None
+        else:
+            new_imdb_url = ImdbMetadataService.normalize_imdb_url(stripped_imdb_url)
+            if new_imdb_url is None:
+                await interaction.response.send_message(
+                    "That does not look like a valid IMDb title link.", ephemeral=True
+                )
+                return
+    else:
+        new_imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
+
+    if new_database_id != item.database_id:
+        destination = bot.suggestion_service.get_database(new_database_id)
+        if destination is None or not destination.active or destination.guild_id != item.guild_id:
+            await interaction.response.send_message(
+                "That destination suggestion database is not available.", ephemeral=True
+            )
+            return
+
+    diff_summary = build_edit_diff_summary(
+        item,
+        new_title=new_title,
+        new_release_year=new_release_year,
+        new_imdb_url=new_imdb_url,
+        new_database_id=new_database_id,
+        suggestion_service=bot.suggestion_service,
+    )
+    if not diff_summary:
+        await interaction.response.send_message(
+            "No changes were made -- every field already matches the current value.", ephemeral=True
+        )
+        return
+
+    async def apply_edit(target_interaction: discord.Interaction) -> None:
+        result = bot.suggestion_service.edit_suggestion(
+            item.id,
+            title=new_title,
+            release_year=new_release_year,
+            imdb_url=new_imdb_url,
+            database_id=new_database_id,
+        )
+        message = result.message
+        if result.success:
+            message += "\n" + diff_summary
+        await target_interaction.response.send_message(message, ephemeral=True)
+
+    existing_items = bot.suggestion_service.get_suggestions_for_database(new_database_id, include_archived=True)
+    duplicate_result = find_duplicates(
+        title=new_title,
+        release_year=new_release_year,
+        imdb_url=new_imdb_url,
+        existing_items=existing_items,
+        exclude_id=item.id,
+    )
+
+    if duplicate_result.has_definite_match:
+        match = duplicate_result.definite_matches[0]
+        await interaction.response.send_message(
+            "This edit would duplicate an existing suggestion:\n" + build_duplicate_match_line(match),
+            ephemeral=True,
+        )
+        return
+
+    if duplicate_result.has_possible_only:
+        lines = "\n".join(build_duplicate_match_line(match) for match in duplicate_result.matches)
+        message = f"{diff_summary}\n\nThis edit might duplicate existing item(s):\n{lines}"
+
+        async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+            await apply_edit(confirm_interaction)
+
+        async def on_abort(abort_interaction: discord.Interaction) -> None:
+            await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
+
+        view = EditVoteConfirmationView(confirm_label="Save Anyway", on_confirm=on_confirm, on_abort=on_abort)
+        await interaction.response.send_message(message, view=view, ephemeral=True)
+        return
+
+    await apply_edit(interaction)
 
 
 def perform_database_add(
