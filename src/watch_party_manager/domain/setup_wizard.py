@@ -32,6 +32,7 @@ class SetupWizardStep(str, Enum):
 
     WASH_CREW_ROLE = "wash_crew_role"
     WATCH_PARTY_ROLE = "watch_party_role"
+    ADMIN_CHANNEL = "admin_channel"
     SUGGESTION_DATABASE = "suggestion_database"
     WATCH_DESTINATION = "watch_destination"
     VOTING_DEFAULTS = "voting_defaults"
@@ -41,10 +42,11 @@ class SetupWizardStep(str, Enum):
 
 
 # The wizard's walkthrough order -- also what drives progress display
-# ("Step 3 of 8") and the Review screen's "jump to a section" menu.
+# ("Step 3 of 9") and the Review screen's "jump to a section" menu.
 SETUP_WIZARD_STEP_ORDER: tuple[SetupWizardStep, ...] = (
     SetupWizardStep.WASH_CREW_ROLE,
     SetupWizardStep.WATCH_PARTY_ROLE,
+    SetupWizardStep.ADMIN_CHANNEL,
     SetupWizardStep.SUGGESTION_DATABASE,
     SetupWizardStep.WATCH_DESTINATION,
     SetupWizardStep.VOTING_DEFAULTS,
@@ -89,6 +91,9 @@ class SetupWizardDraft:
     suggestion_database_name: Optional[str] = None
     suggestion_database_is_new: bool = False
 
+    admin_channel_id: Optional[int] = None
+    admin_channel_skipped: bool = False
+
     watch_destination_channel_id: Optional[int] = None
     watch_destination_skipped: bool = False
 
@@ -107,6 +112,7 @@ class SetupWizardDraft:
         _validate_optional_snowflake(self.wash_crew_role_id, "wash_crew_role_id")
         _validate_optional_snowflake(self.watch_party_role_id, "watch_party_role_id")
         _validate_optional_snowflake(self.suggestion_database_id, "suggestion_database_id")
+        _validate_optional_snowflake(self.admin_channel_id, "admin_channel_id")
         _validate_optional_snowflake(self.watch_destination_channel_id, "watch_destination_channel_id")
 
 

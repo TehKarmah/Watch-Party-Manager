@@ -12,6 +12,7 @@ from watch_party_manager.config_view import (
     BackToMenuButton,
     BackToMenuOnlyView,
     CONFIG_VIEW_TIMEOUT_SECONDS,
+    ConfigAdminChannelSectionView,
     ConfigDatabaseSectionView,
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
@@ -161,6 +162,25 @@ class ConfigDatabaseSectionViewTests(unittest.IsolatedAsyncioTestCase):
         select._values = ["5"]
         await select.callback(interaction=object())
         self.assertEqual(calls, [5])
+
+
+class ConfigAdminChannelSectionViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_channel_select_clear_and_back(self) -> None:
+        view = ConfigAdminChannelSectionView(_noop, _noop, _noop)
+        self.assertEqual(len(view.children), 3)
+        self.assertEqual(view.children[0].custom_id, "wpm_config_admin_channel_select")
+        self.assertEqual(view.children[1].label, "Clear Admin Channel")
+        self.assertEqual(view.children[2].label, "Back to Menu")
+
+    async def test_clear_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_clear(interaction) -> None:
+            calls.append("clear")
+
+        view = ConfigAdminChannelSectionView(_noop, on_clear, _noop)
+        await view.children[1].callback(interaction=object())
+        self.assertEqual(calls, ["clear"])
 
 
 class ConfigWatchDestinationSectionViewTests(unittest.IsolatedAsyncioTestCase):

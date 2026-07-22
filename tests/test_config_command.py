@@ -75,6 +75,15 @@ class FakeChannel:
         return FakePermissions()
 
 
+class _FakeChannelValue:
+    """Stands in for the discord.abc.GuildChannel a ChannelSelect hands
+    back in `.values` -- only `.id` is read by DestinationChannelSelect.
+    """
+
+    def __init__(self, channel_id: int) -> None:
+        self.id = channel_id
+
+
 class FakeGuildForValidation:
     def __init__(self, *, role_ids=(), channel_ids=()) -> None:
         self._role_ids = set(role_ids)
@@ -228,6 +237,29 @@ class SectionRenderingTests(ConfigCommandTestCase):
         interaction = FakeInteraction()
         await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.WATCH_PARTY_JOIN_MODE, edit=False)
         self.assertIsInstance(interaction.response.sent_view, ConfigJoinModeSectionView)
+
+    async def test_admin_channel_section_shows_the_channel_picker(self) -> None:
+        from watch_party_manager.config_view import ConfigAdminChannelSectionView
+
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.ADMIN_CHANNEL, edit=False)
+        self.assertIsInstance(interaction.response.sent_view, ConfigAdminChannelSectionView)
+
+    async def test_selecting_an_admin_channel_saves_immediately(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.ADMIN_CHANNEL, edit=False)
+        select = interaction.response.sent_view.children[0]
+        select._values = [_FakeChannelValue(DESTINATION_CHANNEL_ID)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+
+        self.assertIn("Admin channel updated", select_interaction.response.edited_content)
+        self.assertEqual(
+            self.guild_configuration_repository.get(GUILD_ID).channels.admin_channel_id, DESTINATION_CHANNEL_ID
+        )
 
     async def test_database_section_lists_existing_databases(self) -> None:
         self._seed_completed_setup()

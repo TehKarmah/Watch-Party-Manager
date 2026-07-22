@@ -31,6 +31,14 @@ class HelpServiceTests(unittest.TestCase):
         self.assertNotIn("`/setup`", message)
         self.assertNotIn("`/config`", message)
 
+    def test_everyone_help_includes_join_watch_party(self) -> None:
+        # FR-030: /join_watch_party is public, alongside /help and /about.
+        message = build_help_response(show_wash_crew=False).messages[0]
+
+        self.assertIn("`/join_watch_party`", message)
+        self.assertIn("`/help`", message)
+        self.assertIn("`/about`", message)
+
     def test_everyone_help_links_to_expanded_documentation(self) -> None:
         message = build_help_response(show_wash_crew=False).messages[0]
 

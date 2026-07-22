@@ -34,6 +34,25 @@ class HelpRegistryTests(unittest.TestCase):
         self.assertNotIn("/setup", commands)
         self.assertNotIn("/config", commands)
 
+    # --- FR-030: /join_watch_party is visible to everyone ------------------------
+
+    def test_join_watch_party_is_visible_to_everyone(self) -> None:
+        sections = command_sections(show_wash_crew=False)
+        commands = [entry.name for _, entries in sections for entry in entries]
+        self.assertIn("/join_watch_party", commands)
+
+    def test_join_watch_party_has_everyone_audience(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        self.assertIs(entries["/join_watch_party"].audience, HelpAudience.EVERYONE)
+
+    def test_join_watch_party_is_visible_to_every_tier(self) -> None:
+        for show_wash_crew, show_watch_party_member in ((False, False), (False, True), (True, False)):
+            sections = command_sections(
+                show_wash_crew=show_wash_crew, show_watch_party_member=show_watch_party_member
+            )
+            commands = [entry.name for _, entries in sections for entry in entries]
+            self.assertIn("/join_watch_party", commands)
+
     def test_watch_party_member_sections_add_only_the_add_command(self) -> None:
         # FR-029's corrected permission model: Watch Party members gain
         # only /add over the "everyone" tier. Every other previously

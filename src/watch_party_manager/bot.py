@@ -37,6 +37,7 @@ from watch_party_manager.domain.setup_wizard import (
     SetupWizardState,
     SetupWizardStep,
 )
+from watch_party_manager.domain.membership_request import MembershipRequest
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem, WatchItemStatus
@@ -45,6 +46,7 @@ from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.persistence.guild_configuration_repository import (
     GuildConfigurationRepository,
 )
+from watch_party_manager.persistence.membership_request_repository import MembershipRequestRepository
 from watch_party_manager.persistence.setup_wizard_repository import SetupWizardRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
@@ -83,6 +85,10 @@ from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
 )
 from watch_party_manager.services.help_service import HelpResponse, build_help_response
+from watch_party_manager.services.membership_service import (
+    JoinOutcomeKind,
+    MembershipService,
+)
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.setup_wizard_service import (
@@ -126,6 +132,7 @@ from watch_party_manager.edit_vote_view import (
 )
 from watch_party_manager.config_view import (
     BackToMenuOnlyView,
+    ConfigAdminChannelSectionView,
     ConfigDatabaseSectionView,
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
@@ -134,8 +141,10 @@ from watch_party_manager.config_view import (
     ConfigWatchDestinationSectionView,
     OnBackToMenu,
 )
+from watch_party_manager.membership_view import MembershipApprovalView
 from watch_party_manager.restore_confirmation_view import RestoreConfirmationView
 from watch_party_manager.setup_wizard_view import (
+    AdminChannelStepView,
     BackupDefaultsModal,
     CreateDatabaseChannelSelectView,
     CreateDatabaseNameModal,
@@ -226,6 +235,12 @@ class WatchPartyBot(commands.Bot):
             self.suggestion_service,
             self.suggestion_database_configuration_repository,
         )
+        self.membership_request_repository = MembershipRequestRepository()
+        self.membership_service = MembershipService(
+            self.guild_configuration_repository,
+            self.membership_request_repository,
+        )
+        self.membership_views_restored = 0
 
     def apply_role_configuration(
         self, wash_crew_role_id: Optional[int], watch_party_member_role_id: Optional[int]
@@ -260,6 +275,10 @@ class WatchPartyBot(commands.Bot):
                 f"*{content.footer}*"
             )
             await interaction.response.send_message(message, ephemeral=True)
+
+        @self.tree.command(name="join_watch_party")
+        async def join_watch_party(interaction: discord.Interaction) -> None:
+            await handle_join_watch_party(interaction, self)
 
         @self.tree.command(name="help")
         async def help_command(interaction: discord.Interaction) -> None:
@@ -814,6 +833,10 @@ class WatchPartyBot(commands.Bot):
             suggestion_service=self.suggestion_service,
             suggestion_database_configuration_repository=self.suggestion_database_configuration_repository,
             permission_service=self.permission_service,
+        )
+
+        self.membership_views_restored = restore_persistent_membership_approval_views(
+            self, self.membership_service
         )
 
         if self.guild_id:
@@ -1447,6 +1470,7 @@ def perform_setup_redirect_check(guild_configuration: Optional[GuildConfiguratio
 SETUP_WIZARD_STEP_TITLES: dict[SetupWizardStep, str] = {
     SetupWizardStep.WASH_CREW_ROLE: "WASH Crew Role",
     SetupWizardStep.WATCH_PARTY_ROLE: "Watch Party Role",
+    SetupWizardStep.ADMIN_CHANNEL: "Admin Channel",
     SetupWizardStep.SUGGESTION_DATABASE: "Suggestion Database",
     SetupWizardStep.WATCH_DESTINATION: "Watched Movie Destination",
     SetupWizardStep.VOTING_DEFAULTS: "Voting Defaults",
@@ -1658,6 +1682,22 @@ async def send_setup_wizard_step(
         view = WatchPartyRoleStepView(on_confirm, on_cancel)
         body += (
             "\n\nSelect the Watch Party role (optional) and its join mode, then press Continue."
+        )
+
+    elif step == SetupWizardStep.ADMIN_CHANNEL:
+
+        async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
+            updated = setup_wizard_service.set_admin_channel(state, channel_id)
+            await send_setup_wizard_step(select_interaction, bot, updated, edit=True)
+
+        async def on_skip(skip_interaction: discord.Interaction) -> None:
+            updated = setup_wizard_service.skip_admin_channel(state)
+            await send_setup_wizard_step(skip_interaction, bot, updated, edit=True)
+
+        view = AdminChannelStepView(on_select, on_skip, on_cancel)
+        body += (
+            "\n\nSelect the channel where Approval-Required membership requests should be "
+            "posted for WASH Crew, or skip for now."
         )
 
     elif step == SetupWizardStep.SUGGESTION_DATABASE:
@@ -1994,6 +2034,22 @@ async def send_config_section(
             view = ConfigDatabaseSectionView(databases, on_select, on_back)
             body += "\n\nSelect the suggestion database that should be active."
 
+    elif section == ConfigSection.ADMIN_CHANNEL:
+
+        async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
+            result = config_service.set_admin_channel(guild_id, channel_id, select_interaction.guild)
+            await send_config_result(select_interaction, bot, guild_id, result)
+
+        async def on_skip(skip_interaction: discord.Interaction) -> None:
+            result = config_service.clear_admin_channel(guild_id)
+            await send_config_result(skip_interaction, bot, guild_id, result)
+
+        view = ConfigAdminChannelSectionView(on_select, on_skip, on_back)
+        body += (
+            "\n\nSelect the channel where Approval-Required membership requests should be "
+            "posted for WASH Crew, or clear it."
+        )
+
     else:  # ConfigSection.WATCH_DESTINATION
 
         async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
@@ -2183,6 +2239,153 @@ async def send_config_backup_defaults_modal(
     retention = configuration.backup.extra_fields.get(BACKUP_RETENTION_COUNT_EXTRA_FIELD, 30)
     defaults = (str(interval), str(retention))
     await interaction.response.send_modal(BackupDefaultsModal(on_submit, defaults=defaults))
+
+
+# --- FR-030: /join_watch_party -----------------------------------------------------------
+
+
+def _build_membership_decision_callbacks(bot: "WatchPartyBot"):
+    """Build the shared Approve/Deny callbacks every MembershipApprovalView uses.
+
+    A single pair suffices for every request: the button itself carries
+    its own request_id and passes it as an argument at click time (see
+    ApproveMembershipRequestButton/DenyMembershipRequestButton), so no
+    per-request closure is needed here.
+    """
+
+    async def on_approve(interaction: discord.Interaction, request_id: int) -> None:
+        await handle_membership_approval_decision(interaction, bot, request_id, approve=True)
+
+    async def on_deny(interaction: discord.Interaction, request_id: int) -> None:
+        await handle_membership_approval_decision(interaction, bot, request_id, approve=False)
+
+    return on_approve, on_deny
+
+
+async def handle_join_watch_party(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """Handle /join_watch_party: the single entry point for every join mode.
+
+    Everyone may run this command (see PermissionService's approved
+    model -- there is no gate here at all), since it's how a non-member
+    becomes one in the first place.
+    """
+    guild_id = interaction.guild_id
+    if guild_id is None or interaction.guild is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    outcome = await bot.membership_service.handle_join_request(guild_id, interaction.user, interaction.guild)
+
+    if outcome.kind is JoinOutcomeKind.OFFER_LEAVE:
+        async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+            result = await bot.membership_service.leave_self_service(
+                guild_id, confirm_interaction.user, confirm_interaction.guild
+            )
+            await confirm_interaction.response.send_message(result.message, ephemeral=True)
+
+        async def on_abort(abort_interaction: discord.Interaction) -> None:
+            await abort_interaction.response.send_message(
+                "No changes were made. You're still a Watch Party member.", ephemeral=True
+            )
+
+        view = EditVoteConfirmationView(confirm_label="Leave Watch Party", on_confirm=on_confirm, on_abort=on_abort)
+        await interaction.response.send_message(outcome.message, view=view, ephemeral=True)
+        return
+
+    await interaction.response.send_message(outcome.message, ephemeral=True)
+
+    if outcome.kind is not JoinOutcomeKind.REQUEST_CREATED:
+        return
+
+    request = outcome.request
+    guild_configuration = bot.guild_configuration_repository.get(guild_id)
+    # MembershipService already validated the Admin channel is configured
+    # and usable before returning REQUEST_CREATED -- posted only there,
+    # never the log channel or the invocation channel, and never a
+    # fallback. A None here would mean Discord state changed in the tiny
+    # window since that validation ran; the except below handles it the
+    # same as any other last-second failure.
+    channel_id = guild_configuration.channels.admin_channel_id if guild_configuration is not None else None
+
+    try:
+        channel = bot.get_channel(channel_id) if channel_id is not None else None
+        if channel is None and channel_id is not None:
+            channel = await bot.fetch_channel(channel_id)
+        if channel is None:
+            raise RuntimeError("no notification channel available")
+
+        on_approve, on_deny = _build_membership_decision_callbacks(bot)
+        view = MembershipApprovalView(request.request_id, on_approve, on_deny)
+        wash_crew_mention = f"<@&{bot.wash_crew_role_id}>" if bot.wash_crew_role_id else "WASH Crew"
+        message = await channel.send(
+            f"{wash_crew_mention} {interaction.user.mention} has requested to join the Watch Party.",
+            view=view,
+        )
+        bot.membership_service.attach_request_message(request.request_id, channel.id, message.id)
+    except Exception:
+        logger.warning(
+            "Could not notify WASH Crew about membership request %s", request.request_id, exc_info=True
+        )
+        await interaction.followup.send(
+            "Your request was recorded, but WASH Crew could not be automatically notified. "
+            "Please reach out to them directly.",
+            ephemeral=True,
+        )
+
+
+async def handle_membership_approval_decision(
+    interaction: discord.Interaction, bot: "WatchPartyBot", request_id: int, *, approve: bool
+) -> None:
+    """Handle a click on a membership request's Approve or Deny button.
+
+    Only WASH Crew may process approvals -- fails closed exactly like
+    every other WASH-gated interaction. Approving/denying an
+    already-processed or nonexistent request fails gracefully (the
+    service returns success=False with a clear message; nothing raises).
+    """
+    permission = bot.permission_service.require_wash_crew(interaction.user)
+    if not permission.allowed:
+        await interaction.response.send_message(permission.message, ephemeral=True)
+        return
+
+    guild_id = interaction.guild_id
+    if approve:
+        request = bot.membership_service.get_request(request_id)
+        member = None
+        if request is not None and interaction.guild is not None:
+            member = interaction.guild.get_member(request.user_id)
+            if member is None:
+                try:
+                    member = await interaction.guild.fetch_member(request.user_id)
+                except Exception:
+                    member = None
+        result = await bot.membership_service.approve_request(
+            request_id, guild_id, interaction.user.id, member, interaction.guild
+        )
+    else:
+        result = bot.membership_service.deny_request(request_id, guild_id, interaction.user.id)
+
+    await interaction.response.send_message(result.message, ephemeral=True)
+
+    if not result.success or result.request is None:
+        return
+
+    action_word = "approved" if approve else "denied"
+    try:
+        await interaction.message.edit(
+            content=(
+                f"<@{result.request.user_id}> Your request to join the Watch Party was "
+                f"{action_word} by {interaction.user.mention}."
+            ),
+            view=None,
+        )
+    except Exception:
+        logger.warning(
+            "Could not update membership request %s's message after it was %s",
+            request_id,
+            action_word,
+            exc_info=True,
+        )
 
 
 def parse_start_vote_overrides(
@@ -2564,6 +2767,29 @@ def restore_persistent_voting_view(
         vote_round.message_id,
     )
     return True
+
+
+def restore_persistent_membership_approval_views(bot: "WatchPartyBot", membership_service: MembershipService) -> int:
+    """Restore Approve/Deny button handling for every still-pending membership request.
+
+    Every approval-request message is created fresh by this feature with
+    its buttons already attached (unlike suggestion posts, which predate
+    their button and needed a migration path) -- so, exactly like
+    restore_persistent_voting_view, this only needs to re-register
+    callback routing via bot.add_view(), never edit a message.
+
+    Returns:
+        The number of pending requests whose buttons were restored.
+    """
+    on_approve, on_deny = _build_membership_decision_callbacks(bot)
+    restored = 0
+    for request in membership_service.list_pending_requests():
+        if request.message_id is None:
+            continue
+        view = MembershipApprovalView(request.request_id, on_approve, on_deny)
+        bot.add_view(view, message_id=request.message_id)
+        restored += 1
+    return restored
 
 
 def build_suggestion_view(

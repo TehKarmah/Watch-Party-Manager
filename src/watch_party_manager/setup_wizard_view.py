@@ -301,6 +301,39 @@ class CreateDatabaseChannelSelectView(discord.ui.View):
         self.add_item(SetupCancelButton(on_cancel))
 
 
+# --- Admin Channel ---------------------------------------------------------------------------
+
+
+class SkipAdminChannelButton(discord.ui.Button):
+    def __init__(self, on_click: OnSkip) -> None:
+        super().__init__(label="Skip for Now", style=discord.ButtonStyle.secondary, custom_id="wpm_setup_admin_channel_skip")
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class AdminChannelStepView(discord.ui.View):
+    """Admin Channel step: choose where Approval-Required membership
+    requests are posted for WASH Crew, or skip for now.
+
+    Reuses DestinationChannelSelect (generic, already used for the Watch
+    Destination step) rather than a duplicate channel-select component.
+    """
+
+    def __init__(self, on_select: OnChannelSelected, on_skip: OnSkip, on_cancel: OnWizardCancel) -> None:
+        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+        self.add_item(
+            DestinationChannelSelect(
+                on_select,
+                custom_id="wpm_setup_admin_channel_select",
+                placeholder="Select an existing channel or thread",
+            )
+        )
+        self.add_item(SkipAdminChannelButton(on_skip))
+        self.add_item(SetupCancelButton(on_cancel))
+
+
 # --- Watched Movie Destination -------------------------------------------------------------
 
 

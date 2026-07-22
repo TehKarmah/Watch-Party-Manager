@@ -35,6 +35,21 @@ class GuildConfigurationRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.schema_version, CURRENT_SCHEMA_VERSION)
         self.assertEqual(loaded.voting_defaults.candidate_count, 3)
 
+    def test_admin_channel_and_denial_cooldown_round_trip(self):
+        from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, WatchPartyRoleConfig
+
+        self.repo.save(
+            GuildConfiguration(
+                guild_id=1,
+                guild_name="Guild",
+                channels=GuildChannelsConfig(admin_channel_id=555),
+                watch_party_role=WatchPartyRoleConfig(denial_cooldown_days=14),
+            )
+        )
+        loaded = self.repo.get(1)
+        self.assertEqual(loaded.channels.admin_channel_id, 555)
+        self.assertEqual(loaded.watch_party_role.denial_cooldown_days, 14)
+
     def test_multiple_guilds_are_preserved(self):
         self.repo.save(GuildConfiguration(guild_id=1, guild_name="One"))
         self.repo.save(GuildConfiguration(guild_id=2, guild_name="Two"))

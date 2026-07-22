@@ -63,6 +63,7 @@ class ConfigSection(str, Enum):
     WASH_CREW_ROLE = "wash_crew_role"
     WATCH_PARTY_ROLE = "watch_party_role"
     WATCH_PARTY_JOIN_MODE = "watch_party_join_mode"
+    ADMIN_CHANNEL = "admin_channel"
     SUGGESTION_DATABASE = "suggestion_database"
     WATCH_DESTINATION = "watch_destination"
     VOTING_DEFAULTS = "voting_defaults"
@@ -74,6 +75,7 @@ CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
     ConfigSection.WASH_CREW_ROLE,
     ConfigSection.WATCH_PARTY_ROLE,
     ConfigSection.WATCH_PARTY_JOIN_MODE,
+    ConfigSection.ADMIN_CHANNEL,
     ConfigSection.SUGGESTION_DATABASE,
     ConfigSection.WATCH_DESTINATION,
     ConfigSection.VOTING_DEFAULTS,
@@ -85,6 +87,7 @@ CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
     ConfigSection.WASH_CREW_ROLE: "WASH Crew Role",
     ConfigSection.WATCH_PARTY_ROLE: "Watch Party Role",
     ConfigSection.WATCH_PARTY_JOIN_MODE: "Watch Party Join Mode",
+    ConfigSection.ADMIN_CHANNEL: "Admin Channel",
     ConfigSection.SUGGESTION_DATABASE: "Active Suggestion Database",
     ConfigSection.WATCH_DESTINATION: "Watched-Movie Destination",
     ConfigSection.VOTING_DEFAULTS: "Voting Defaults",
@@ -185,6 +188,14 @@ class ConfigService:
             lines.append(f"Watch Party Role: Configured (<@&{watch_party_role_id}>)")
 
         lines.append(f"Watch Party Join Mode: Configured ({configuration.watch_party_role.join_mode.value})")
+
+        admin_channel_id = configuration.channels.admin_channel_id
+        if admin_channel_id is None:
+            lines.append("Admin Channel: Not configured")
+        elif validate_channel_usable(admin_channel_id, guild, resource_label="Admin channel"):
+            lines.append(f"Admin Channel: Invalid (<#{admin_channel_id}> no longer usable)")
+        else:
+            lines.append(f"Admin Channel: Configured (<#{admin_channel_id}>)")
 
         active_databases = [
             database for database in self._suggestion_service.list_databases(guild_id) if database.active
@@ -293,6 +304,30 @@ class ConfigService:
         )
         self._guild_configuration_repository.save(updated)
         return ConfigUpdateResult(True, f"Watch Party join mode updated to {join_mode.value}.", updated)
+
+    # --- Admin Channel ------------------------------------------------------------
+
+    def set_admin_channel(self, guild_id: int, channel_id: int, guild: GuildLookup) -> ConfigUpdateResult:
+        configuration = self.get_configuration(guild_id)
+        if configuration is None:
+            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
+
+        error = validate_channel_usable(channel_id, guild, resource_label="Admin channel")
+        if error:
+            return ConfigUpdateResult(False, error)
+
+        updated = replace(configuration, channels=replace(configuration.channels, admin_channel_id=channel_id))
+        self._guild_configuration_repository.save(updated)
+        return ConfigUpdateResult(True, f"Admin channel updated to <#{channel_id}>.", updated)
+
+    def clear_admin_channel(self, guild_id: int) -> ConfigUpdateResult:
+        configuration = self.get_configuration(guild_id)
+        if configuration is None:
+            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
+
+        updated = replace(configuration, channels=replace(configuration.channels, admin_channel_id=None))
+        self._guild_configuration_repository.save(updated)
+        return ConfigUpdateResult(True, "Admin channel cleared.", updated)
 
     # --- Active Suggestion Database ------------------------------------------------------------
 

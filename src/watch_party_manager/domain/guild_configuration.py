@@ -54,11 +54,18 @@ class WatchPartyRoleConfig:
     role_id: Optional[int] = None
     join_mode: JoinMode = JoinMode.SELF_SERVICE
     allow_self_leave: bool = True
+    # FR-030 refinement: how long a member must wait after an Approval-
+    # Required request is denied before requesting again. Persisted here
+    # (rather than invented as new top-level schema) so a future /setup or
+    # /config UI can expose it without another migration; only
+    # Approval-Required mode consults it.
+    denial_cooldown_days: int = 7
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         _validate_optional_snowflake(self.role_id, "role_id")
         self.join_mode = _coerce_enum(self.join_mode, JoinMode, "join_mode")  # type: ignore[assignment]
+        _validate_positive_int(self.denial_cooldown_days, "denial_cooldown_days", 1, 365)
         _validate_extra_fields(self.extra_fields)
 
 
@@ -66,11 +73,16 @@ class WatchPartyRoleConfig:
 class GuildChannelsConfig:
     announcements_channel_id: Optional[int] = None
     log_channel_id: Optional[int] = None
+    # FR-030 refinement: dedicated channel for Approval-Required membership
+    # requests -- deliberately separate from log_channel_id, which is a
+    # general administrative log, not a WASH Crew action queue.
+    admin_channel_id: Optional[int] = None
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         _validate_optional_snowflake(self.announcements_channel_id, "announcements_channel_id")
         _validate_optional_snowflake(self.log_channel_id, "log_channel_id")
+        _validate_optional_snowflake(self.admin_channel_id, "admin_channel_id")
         _validate_extra_fields(self.extra_fields)
 
 

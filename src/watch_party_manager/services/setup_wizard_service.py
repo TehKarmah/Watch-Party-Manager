@@ -218,6 +218,14 @@ class SetupWizardService:
         )
         return self._advance(state, SetupWizardStep.SUGGESTION_DATABASE, draft), result.message
 
+    def set_admin_channel(self, state: SetupWizardState, channel_id: int) -> SetupWizardState:
+        draft = replace(state.draft, admin_channel_id=channel_id, admin_channel_skipped=False)
+        return self._advance(state, SetupWizardStep.ADMIN_CHANNEL, draft)
+
+    def skip_admin_channel(self, state: SetupWizardState) -> SetupWizardState:
+        draft = replace(state.draft, admin_channel_id=None, admin_channel_skipped=True)
+        return self._advance(state, SetupWizardStep.ADMIN_CHANNEL, draft)
+
     def set_watch_destination(self, state: SetupWizardState, channel_id: int) -> SetupWizardState:
         draft = replace(state.draft, watch_destination_channel_id=channel_id, watch_destination_skipped=False)
         return self._advance(state, SetupWizardStep.WATCH_DESTINATION, draft)
@@ -285,6 +293,13 @@ class SetupWizardService:
             lines.append(f"Watch Party Role: Configured (<@&{draft.watch_party_role_id}>, join mode: {join_mode})")
         else:
             lines.append("Watch Party Role: Incomplete")
+
+        if draft.admin_channel_skipped:
+            lines.append("Admin Channel: Skipped")
+        elif draft.admin_channel_id is not None:
+            lines.append(f"Admin Channel: Configured (<#{draft.admin_channel_id}>)")
+        else:
+            lines.append("Admin Channel: Incomplete")
 
         if draft.suggestion_database_id is not None:
             action = "created" if draft.suggestion_database_is_new else "selected"
@@ -365,6 +380,10 @@ class SetupWizardService:
         if watch_party_role_error:
             issues.append(ValidationIssue(SetupWizardStep.WATCH_PARTY_ROLE, watch_party_role_error))
 
+        admin_channel_error = validate_channel_usable(draft.admin_channel_id, guild, resource_label="Admin channel")
+        if admin_channel_error:
+            issues.append(ValidationIssue(SetupWizardStep.ADMIN_CHANNEL, admin_channel_error))
+
         if draft.suggestion_database_id is None:
             issues.append(ValidationIssue(SetupWizardStep.SUGGESTION_DATABASE, "No suggestion database was selected."))
         elif self._suggestion_service.get_database(draft.suggestion_database_id) is None:
@@ -428,6 +447,11 @@ class SetupWizardService:
                 allow_self_leave=base.watch_party_role.allow_self_leave,
             ),
         )
+
+        if draft.admin_channel_id is not None or draft.admin_channel_skipped:
+            updated = replace(
+                updated, channels=replace(base.channels, admin_channel_id=draft.admin_channel_id)
+            )
 
         if draft.voting_candidate_count is not None:
             updated = replace(

@@ -48,6 +48,11 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         "/about", "View WASH information, version, latency, uptime, features, and project.", "General"
     ),
     CommandHelp(
+        "/join_watch_party",
+        "Join or leave the Watch Party, according to the server's configured join mode.",
+        "General",
+    ),
+    CommandHelp(
         "/stats", "Show watch-party activity statistics.", "General", HelpAudience.WASH_CREW
     ),
     CommandHelp(

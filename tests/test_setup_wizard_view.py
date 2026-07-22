@@ -11,6 +11,7 @@ import unittest
 from watch_party_manager.domain.guild_configuration import JoinMode
 from watch_party_manager.setup_wizard_view import (
     SETUP_WIZARD_STEP_TIMEOUT_SECONDS,
+    AdminChannelStepView,
     BackupDefaultsModal,
     CreateDatabaseChannelSelectView,
     CreateDatabaseNameModal,
@@ -184,6 +185,25 @@ class CreateDatabaseChannelSelectViewTests(unittest.IsolatedAsyncioTestCase):
         view = CreateDatabaseChannelSelectView(_noop, _noop)
         self.assertEqual(len(view.children), 2)
         self.assertEqual(view.children[0].custom_id, "wpm_setup_database_channel_select")
+
+
+class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_channel_select_skip_and_cancel(self) -> None:
+        view = AdminChannelStepView(_noop, _noop, _noop)
+        self.assertEqual(
+            [getattr(child, "label", None) or getattr(child, "custom_id", None) for child in view.children],
+            ["wpm_setup_admin_channel_select", "Skip for Now", "Cancel Setup"],
+        )
+
+    async def test_skip_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_skip(interaction) -> None:
+            calls.append("skip")
+
+        view = AdminChannelStepView(_noop, on_skip, _noop)
+        await view.children[1].callback(interaction=object())
+        self.assertEqual(calls, ["skip"])
 
 
 class WatchDestinationStepViewTests(unittest.IsolatedAsyncioTestCase):

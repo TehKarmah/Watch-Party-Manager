@@ -1,12 +1,12 @@
-"""Shared role/channel validation for FR-028's /setup wizard and FR-029's
-/config command.
+"""Shared role/channel validation for FR-028's /setup wizard, FR-029's
+/config command, and FR-030's membership workflow.
 
-Both interfaces need to confirm a selected role or channel/thread still
+These interfaces need to confirm a selected role or channel/thread still
 exists (and, for channels, that WASH still has permission to use it)
-before persisting a change. Extracted here so the two interfaces validate
-identically instead of drifting apart -- neither redesigns how roles or
-channels are resolved; both simply ask a live discord.Guild (or an
-equivalent fake in tests).
+before persisting a change. Extracted here so they validate identically
+instead of drifting apart -- none of them redesign how roles or channels
+are resolved; each simply asks a live discord.Guild (or an equivalent
+fake in tests).
 """
 
 from __future__ import annotations
@@ -87,5 +87,45 @@ def validate_channel_usable(
     permissions = channel.permissions_for(guild.me)
     if not permissions.view_channel or not permissions.send_messages:
         return f"WASH does not have permission to post in the selected {resource_label}."
+
+    return None
+
+
+def validate_role_mutable(
+    role_id: Optional[int], guild: RoleLookup, *, resource_label: str = "role"
+) -> Optional[str]:
+    """Confirm WASH can actually assign or remove a role, not just reference it.
+
+    FR-030's membership workflow needs this beyond validate_role_exists:
+    Discord silently refuses a role change unless the bot both has the
+    Manage Roles permission and its own top role sits above the target
+    role in the guild's hierarchy.
+
+    Args:
+        role_id: The role to check, or None if nothing is configured
+            (never an error here -- an unconfigured role is a
+            caller-level concern).
+        guild: A live Discord guild (or an equivalent fake in tests).
+            `guild.me` must additionally expose `guild_permissions` and
+            `top_role`, matching a real discord.Member.
+        resource_label: Used in the returned message, e.g. "Watch Party role".
+
+    Returns:
+        None if role_id is unset or fully usable, otherwise a clear
+        error message.
+    """
+    if role_id is None:
+        return None
+
+    role = guild.get_role(role_id)
+    if role is None:
+        return f"The {resource_label} no longer exists."
+
+    me = guild.me
+    if not me.guild_permissions.manage_roles:
+        return "WASH does not have the Manage Roles permission."
+
+    if me.top_role.position <= role.position:
+        return f"WASH's role must be positioned above the {resource_label} to assign or remove it."
 
     return None

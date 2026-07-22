@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from watch_party_manager.domain.guild_configuration import (
+    GuildChannelsConfig,
     GuildConfiguration,
     GuildSuggestionDatabaseEntry,
     GuildVoteVisibility,
@@ -76,6 +77,34 @@ class GuildConfigurationTests(unittest.TestCase):
     def test_rejects_invalid_join_mode(self):
         with self.assertRaises(ValueError):
             WatchPartyRoleConfig(join_mode="invalid")
+
+    # --- FR-030 refinement: default Join Mode is Self-Service ---------------------
+
+    def test_default_join_mode_is_self_service_for_a_new_watch_party_role_config(self):
+        self.assertEqual(WatchPartyRoleConfig().join_mode, JoinMode.SELF_SERVICE)
+
+    def test_default_join_mode_is_self_service_for_a_new_guild_configuration(self):
+        config = GuildConfiguration(guild_id=1, guild_name="Guild")
+        self.assertEqual(config.watch_party_role.join_mode, JoinMode.SELF_SERVICE)
+
+    # --- FR-030 refinement: Admin channel and denial cooldown ---------------------
+
+    def test_admin_channel_id_defaults_to_none(self):
+        config = GuildConfiguration(guild_id=1, guild_name="Guild")
+        self.assertIsNone(config.channels.admin_channel_id)
+
+    def test_admin_channel_id_rejects_non_positive_values(self):
+        with self.assertRaises(ValueError):
+            GuildChannelsConfig(admin_channel_id=0)
+
+    def test_denial_cooldown_days_defaults_to_seven(self):
+        self.assertEqual(WatchPartyRoleConfig().denial_cooldown_days, 7)
+
+    def test_denial_cooldown_days_rejects_out_of_range_values(self):
+        with self.assertRaises(ValueError):
+            WatchPartyRoleConfig(denial_cooldown_days=0)
+        with self.assertRaises(ValueError):
+            WatchPartyRoleConfig(denial_cooldown_days=366)
 
     def test_voting_validation_boundaries(self):
         VotingDefaultsConfig(candidate_count=2, duration_days=1, max_vote_changes=0)

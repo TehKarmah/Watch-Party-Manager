@@ -232,13 +232,13 @@ class BuildSetupStepHeaderTests(unittest.TestCase):
     def test_shows_position_and_title_for_first_step(self):
         state = SetupWizardState(guild_id=GUILD_ID)
         header = build_setup_step_header(state)
-        self.assertIn("Step 1 of 8", header)
+        self.assertIn("Step 1 of 9", header)
         self.assertIn("WASH Crew Role", header)
 
     def test_shows_position_and_title_for_review_step(self):
         state = SetupWizardState(guild_id=GUILD_ID, current_step=SetupWizardStep.REVIEW)
         header = build_setup_step_header(state)
-        self.assertIn("Step 8 of 8", header)
+        self.assertIn("Step 9 of 9", header)
         self.assertIn("Review", header)
 
 
@@ -294,7 +294,7 @@ class SetupCommandFlowTests(unittest.IsolatedAsyncioTestCase):
 
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
-        self.assertIn("Step 1 of 8", interaction.response.sent_message)
+        self.assertIn("Step 1 of 9", interaction.response.sent_message)
         self.assertTrue(interaction.response.sent_ephemeral)
         self.assertIsInstance(interaction.response.sent_view, WashCrewRoleStepView)
 
@@ -312,8 +312,28 @@ class SetupCommandFlowTests(unittest.IsolatedAsyncioTestCase):
         select_interaction = FakeInteraction()
         await role_select.callback(interaction=select_interaction)
 
-        self.assertIn("Step 2 of 8", select_interaction.response.edited_content)
+        self.assertIn("Step 2 of 9", select_interaction.response.edited_content)
         self.assertIsInstance(select_interaction.response.edited_view, WatchPartyRoleStepView)
+
+    async def test_admin_channel_step_renders_and_advances_to_suggestion_database(self) -> None:
+        from watch_party_manager.domain.setup_wizard import SetupWizardStep
+        from watch_party_manager.setup_wizard_view import AdminChannelStepView
+
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.ADMIN_CHANNEL)
+        interaction = FakeInteraction()
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        self.assertIn("Step 3 of 9", interaction.response.sent_message)
+        self.assertIn("Admin Channel", interaction.response.sent_message)
+        self.assertIsInstance(interaction.response.sent_view, AdminChannelStepView)
+
+        skip_button = interaction.response.sent_view.children[1]
+        skip_interaction = FakeInteraction()
+        await skip_button.callback(interaction=skip_interaction)
+
+        self.assertIn("Step 4 of 9", skip_interaction.response.edited_content)
 
     async def test_cancel_deletes_wizard_state_and_edits_the_message(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)

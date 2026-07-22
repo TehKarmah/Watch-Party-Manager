@@ -168,6 +168,7 @@ class GuildConfigurationRepository:
                 "role_id": c.watch_party_role.role_id,
                 "join_mode": c.watch_party_role.join_mode.value,
                 "allow_self_leave": c.watch_party_role.allow_self_leave,
+                "denial_cooldown_days": c.watch_party_role.denial_cooldown_days,
             }),
             "suggestion_databases": {
                 item.id: cls._merge(item.extra_fields, {
@@ -177,6 +178,7 @@ class GuildConfigurationRepository:
             "channels": cls._merge(c.channels.extra_fields, {
                 "announcements_channel_id": c.channels.announcements_channel_id,
                 "log_channel_id": c.channels.log_channel_id,
+                "admin_channel_id": c.channels.admin_channel_id,
             }),
             "voting_defaults": cls._merge(c.voting_defaults.extra_fields, {
                 "candidate_count": c.voting_defaults.candidate_count,
@@ -263,7 +265,8 @@ class GuildConfigurationRepository:
             watch_party_role=WatchPartyRoleConfig(
                 role_id=role.get("role_id"), join_mode=JoinMode(role.get("join_mode", "self_service")),
                 allow_self_leave=role.get("allow_self_leave", True),
-                extra_fields=cls._split_known(role, {"role_id", "join_mode", "allow_self_leave"}),
+                denial_cooldown_days=role.get("denial_cooldown_days", 7),
+                extra_fields=cls._split_known(role, {"role_id", "join_mode", "allow_self_leave", "denial_cooldown_days"}),
             ),
             suggestion_databases=tuple(
                 GuildSuggestionDatabaseEntry(
@@ -273,7 +276,8 @@ class GuildConfigurationRepository:
             ),
             channels=GuildChannelsConfig(
                 announcements_channel_id=channels.get("announcements_channel_id"), log_channel_id=channels.get("log_channel_id"),
-                extra_fields=cls._split_known(channels, {"announcements_channel_id", "log_channel_id"}),
+                admin_channel_id=channels.get("admin_channel_id"),
+                extra_fields=cls._split_known(channels, {"announcements_channel_id", "log_channel_id", "admin_channel_id"}),
             ),
             voting_defaults=VotingDefaultsConfig(
                 candidate_count=voting.get("candidate_count", 3), duration_days=voting.get("duration_days", 7),

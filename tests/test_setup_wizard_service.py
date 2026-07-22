@@ -195,7 +195,7 @@ class WatchPartyRoleStepTests(SetupWizardServiceTestCase):
         updated = self.service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.APPROVAL)
         self.assertEqual(updated.draft.watch_party_role_id, WATCH_PARTY_ROLE_ID)
         self.assertEqual(updated.draft.watch_party_join_mode, JoinMode.APPROVAL)
-        self.assertEqual(updated.current_step, SetupWizardStep.SUGGESTION_DATABASE)
+        self.assertEqual(updated.current_step, SetupWizardStep.ADMIN_CHANNEL)
 
     def test_role_is_optional(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
@@ -267,6 +267,69 @@ class SuggestionDatabaseStepTests(SetupWizardServiceTestCase):
                 for issue in issues
             )
         )
+
+
+class AdminChannelStepTests(SetupWizardServiceTestCase):
+    def test_selecting_a_channel_advances(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        updated = self.service.set_admin_channel(state, DESTINATION_CHANNEL_ID)
+        self.assertEqual(updated.draft.admin_channel_id, DESTINATION_CHANNEL_ID)
+        self.assertFalse(updated.draft.admin_channel_skipped)
+        self.assertEqual(updated.current_step, SetupWizardStep.SUGGESTION_DATABASE)
+
+    def test_skipping_advances_and_marks_skipped(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        updated = self.service.skip_admin_channel(state)
+        self.assertTrue(updated.draft.admin_channel_skipped)
+        self.assertIsNone(updated.draft.admin_channel_id)
+        self.assertEqual(updated.current_step, SetupWizardStep.SUGGESTION_DATABASE)
+
+    def test_review_line_reflects_configured_skipped_and_incomplete_states(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        self.assertIn("Admin Channel: Incomplete", self.service.build_review_lines(state))
+
+        skipped = self.service.skip_admin_channel(state)
+        self.assertIn("Admin Channel: Skipped", self.service.build_review_lines(skipped))
+
+        configured = self.service.set_admin_channel(state, DESTINATION_CHANNEL_ID)
+        self.assertIn(
+            f"Admin Channel: Configured (<#{DESTINATION_CHANNEL_ID}>)",
+            self.service.build_review_lines(configured),
+        )
+
+    def test_invalid_channel_fails_validation(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_admin_channel(state, 555)
+        guild = FakeGuild(role_ids=set(), channel_ids=set())
+        issues = self.service.validate(state, guild)
+        self.assertTrue(any(issue.step == SetupWizardStep.ADMIN_CHANNEL for issue in issues))
+
+    def test_skipped_admin_channel_is_not_a_validation_failure(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.skip_admin_channel(state)
+        guild = self._full_guild()
+        issues = self.service.validate(state, guild)
+        self.assertFalse(any(issue.step == SetupWizardStep.ADMIN_CHANNEL for issue in issues))
+
+    def test_configured_admin_channel_is_persisted_to_guild_configuration(self):
+        database = self._create_database()
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.SELF_SERVICE)
+        state = self.service.set_admin_channel(state, DESTINATION_CHANNEL_ID)
+        state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
+        state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
+        state = self.service.set_voting_defaults(
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.BALANCED_RANDOM
+        )
+        state = self.service.set_reminder_defaults(state, True, 24)
+        state = self.service.set_backup_defaults(state, 1, 30)
+
+        guild = self._full_guild()
+        result = self.service.finalize(state, GUILD_ID, "Test Guild", guild)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.configuration.channels.admin_channel_id, DESTINATION_CHANNEL_ID)
 
 
 class WatchDestinationStepTests(SetupWizardServiceTestCase):
