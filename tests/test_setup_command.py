@@ -335,6 +335,38 @@ class SetupCommandFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Step 4 of 9", skip_interaction.response.edited_content)
 
+    async def test_voting_defaults_step_sends_a_modal_with_valid_component_labels(self) -> None:
+        # Regression test: Step 6 (Voting Defaults) previously crashed with
+        # discord.errors.HTTPException 400 ("Must be between 1 and 45 in
+        # length") because VotingDefaultsModal's fourth TextInput label
+        # was 46 characters. This exercises the exact path that failed --
+        # go_to_step -> send_setup_wizard_step -> ModalStepIntroView's
+        # button -> on_configure -> interaction.response.send_modal(...)
+        # -- and confirms every field on the modal actually sent has a
+        # label within Discord's 1-45 character limit.
+        from watch_party_manager.domain.setup_wizard import SetupWizardStep
+        from watch_party_manager.setup_wizard_view import ModalStepIntroView, VotingDefaultsModal
+
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
+        interaction = FakeInteraction()
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        self.assertIsInstance(interaction.response.sent_view, ModalStepIntroView)
+        configure_button = interaction.response.sent_view.children[0]
+
+        configure_interaction = FakeInteraction()
+        await configure_button.callback(interaction=configure_interaction)
+
+        sent_modal = configure_interaction.response.sent_modal
+        self.assertIsInstance(sent_modal, VotingDefaultsModal)
+        for child in sent_modal.children:
+            label = getattr(child, "label", None)
+            if label is not None:
+                self.assertGreaterEqual(len(label), 1)
+                self.assertLessEqual(len(label), 45)
+
     async def test_cancel_deletes_wizard_state_and_edits_the_message(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         interaction = FakeInteraction()

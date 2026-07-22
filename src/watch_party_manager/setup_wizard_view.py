@@ -408,7 +408,9 @@ class VotingDefaultsModal(discord.ui.Modal):
             label="Default visibility: blind or visible", default=visibility_default
         )
         self.candidate_selection_input = discord.ui.TextInput(
-            label="Candidate selection: random or balanced_random", default=candidate_selection_default
+            label="Candidate selection",
+            default=candidate_selection_default,
+            placeholder="random or balanced_random",
         )
         self.add_item(self.candidate_count_input)
         self.add_item(self.duration_days_input)
