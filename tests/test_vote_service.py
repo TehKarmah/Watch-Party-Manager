@@ -319,6 +319,46 @@ class VoteServiceTests(unittest.TestCase):
         self.assertEqual(vote_round.message_id, 300)
         self.assertEqual(vote_round.results_message_id, 400)
 
+    # --- FR-027: configurable vote reminders --------------------------------
+
+    def test_create_round_defaults_reminder_overrides_to_none(self) -> None:
+        result = self.service.create_round()
+
+        self.assertIsNone(result.vote_round.reminder_enabled)
+        self.assertIsNone(result.vote_round.reminder_hours_before_close)
+
+    def test_create_round_accepts_a_reminder_enabled_override(self) -> None:
+        result = self.service.create_round(reminder_enabled=False)
+
+        self.assertFalse(result.vote_round.reminder_enabled)
+
+    def test_create_round_accepts_a_reminder_hours_override(self) -> None:
+        result = self.service.create_round(reminder_hours_before_close=4)
+
+        self.assertEqual(result.vote_round.reminder_hours_before_close, 4)
+
+    def test_mark_reminder_sent_updates_the_round(self) -> None:
+        created = self.service.create_round()
+        sent_at = datetime.now(timezone.utc)
+
+        updated = self.service.mark_reminder_sent(created.vote_round.id, sent_at)
+
+        self.assertTrue(updated)
+        self.assertEqual(self.service.get_round(created.vote_round.id).reminder_sent_at, sent_at)
+
+    def test_mark_reminder_sent_persists_the_update(self) -> None:
+        created = self.service.create_round()
+        sent_at = datetime.now(timezone.utc)
+
+        self.service.mark_reminder_sent(created.vote_round.id, sent_at)
+
+        reloaded = self.repository.load()
+        self.assertEqual(reloaded.rounds[0].reminder_sent_at, sent_at)
+
+    def test_mark_reminder_sent_returns_false_for_an_unknown_round(self) -> None:
+        updated = self.service.mark_reminder_sent(999, datetime.now(timezone.utc))
+        self.assertFalse(updated)
+
     # --- Reset behaviors --------------------------------------------------
 
     def test_remove_member_vote_deletes_the_vote_entirely(self) -> None:

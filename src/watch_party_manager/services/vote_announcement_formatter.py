@@ -16,7 +16,7 @@ from typing import List, Optional
 
 import discord
 
-from watch_party_manager.domain.vote import VoteRound
+from watch_party_manager.domain.vote import VoteRound, VoteVisibility
 from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.services.discord_message_link import build_discord_message_link
 from watch_party_manager.services.discord_timestamp_formatter import format_datetime_for_display
@@ -193,6 +193,38 @@ def build_final_standings_lines(
         position += 1
 
     return lines
+
+
+def build_vote_reminder_standings_lines(
+    vote_round: VoteRound, candidates: List[WatchItem], standings: Optional[List[StandingsEntry]]
+) -> List[str]:
+    """Build the "Current standings" section for a pre-close vote reminder.
+
+    FR-027: preserves the project's existing blind-vote visibility rule
+    -- a blind round never reveals standings while still open (see
+    bot.py's build_candidate_standings_lines, which applies the identical
+    rule to the voting post itself). This is that same rule, reused here
+    rather than reimplemented, since a reminder fires while the round is
+    still open and visibility still matters (unlike
+    build_final_standings_lines, used only after a round has closed,
+    when standings are always safe to reveal regardless of visibility).
+
+    Args:
+        vote_round: The still-open round the reminder is for.
+        candidates: Every nominee in the round, in button order.
+        standings: The current vote tally, or None/empty if nobody has
+            voted yet.
+
+    Returns:
+        Lines to append to the reminder, starting with a blank separator line.
+    """
+    if vote_round.visibility != VoteVisibility.VISIBLE:
+        return ["", "Votes hidden until voting closes."]
+
+    standings_lines = build_final_standings_lines(candidates, standings)
+    if not standings_lines:
+        return ["", "Current standings: no votes yet."]
+    return ["", "Current standings:", *standings_lines]
 
 
 def _build_winner_summary_line(winning_items: List[WatchItem], total_votes_cast: int) -> str:

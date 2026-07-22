@@ -288,6 +288,54 @@ class JsonVoteRepositoryTests(unittest.TestCase):
         result = self.repository.load()
         self.assertIsNone(result.rounds[0].results_message_id)
 
+    # --- FR-027: configurable vote reminders --------------------------------
+
+    def test_save_then_load_round_trips_reminder_enabled(self) -> None:
+        self.repository.save([VoteRound(id=1, reminder_enabled=False)], next_round_id=2)
+
+        result = self.repository.load()
+        self.assertFalse(result.rounds[0].reminder_enabled)
+
+    def test_save_then_load_round_trips_reminder_hours_before_close(self) -> None:
+        self.repository.save([VoteRound(id=1, reminder_hours_before_close=4)], next_round_id=2)
+
+        result = self.repository.load()
+        self.assertEqual(result.rounds[0].reminder_hours_before_close, 4)
+
+    def test_save_then_load_round_trips_reminder_sent_at(self) -> None:
+        sent_at = utc_now()
+        self.repository.save([VoteRound(id=1, reminder_sent_at=sent_at)], next_round_id=2)
+
+        result = self.repository.load()
+        self.assertEqual(result.rounds[0].reminder_sent_at, sent_at)
+
+    def test_loading_a_file_without_reminder_fields_defaults_them_to_none(self) -> None:
+        now = utc_now()
+        legacy_json = f"""
+        {{
+          "next_round_id": 2,
+          "rounds": [
+            {{
+              "id": 1,
+              "status": "open",
+              "visibility": "visible",
+              "created_at": "{now.isoformat()}",
+              "closes_at": null,
+              "winning_suggestion_id": null,
+              "votes": []
+            }}
+          ]
+        }}
+        """
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+        loaded = result.rounds[0]
+        self.assertIsNone(loaded.reminder_enabled)
+        self.assertIsNone(loaded.reminder_hours_before_close)
+        self.assertIsNone(loaded.reminder_sent_at)
+
     def test_loading_a_file_without_discord_location_fields_defaults_them_to_none(self) -> None:
         now = utc_now()
         legacy_json = f"""

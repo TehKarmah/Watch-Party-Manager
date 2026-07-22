@@ -16,7 +16,8 @@ import discord
 OnUseDefaults = Callable[[discord.Interaction], Awaitable[None]]
 OnCustomizeChosen = Callable[[discord.Interaction], Awaitable[None]]
 OnCustomizeSubmit = Callable[
-    [discord.Interaction, Optional[str], Optional[str], Optional[str]], Awaitable[None]
+    [discord.Interaction, Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]],
+    Awaitable[None],
 ]
 
 START_VOTE_CHOICE_TIMEOUT_SECONDS = 180
@@ -76,15 +77,19 @@ class StartVoteChoiceView(discord.ui.View):
 
 
 class CustomizeVoteModal(discord.ui.Modal):
-    """Collects nominee count, duration, and visibility overrides.
+    """Collects nominee count, duration, visibility, and reminder overrides.
 
-    All three fields are optional text inputs -- a blank field means "use
-    the configured default for this setting", matching how nominee_count
-    and duration_days already behave as optional /start_vote parameters.
+    All fields are optional text inputs -- a blank field means "use the
+    configured default for this setting", matching how nominee_count and
+    duration_days already behave as optional /start_vote parameters.
     Values are handed to the on_submit callback as raw strings; parsing
     and validation happen in bot.py, reusing the exact same functions
     /start_vote's direct parameters already used, so nothing here
     duplicates that logic.
+
+    FR-027 added the two reminder fields -- Discord modals support at
+    most 5 components, and this was already at 3, so this is the modal's
+    full capacity.
     """
 
     def __init__(self, on_submit: OnCustomizeSubmit) -> None:
@@ -92,7 +97,8 @@ class CustomizeVoteModal(discord.ui.Modal):
 
         Args:
             on_submit: Called with (interaction, nominee_count_text,
-                duration_days_text, visibility_text) once submitted.
+                duration_days_text, visibility_text, reminder_enabled_text,
+                reminder_hours_text) once submitted.
         """
         super().__init__(title="Customize This Vote")
         self._submit_callback = on_submit
@@ -112,9 +118,21 @@ class CustomizeVoteModal(discord.ui.Modal):
             required=False,
             placeholder="Leave blank to use visible",
         )
+        self.reminder_enabled_input = discord.ui.TextInput(
+            label="Reminder before close? (yes/no)",
+            required=False,
+            placeholder="Leave blank to use the configured default",
+        )
+        self.reminder_hours_input = discord.ui.TextInput(
+            label="Reminder hours before close (1-720)",
+            required=False,
+            placeholder="e.g. 1, 4, 12, 24, or 48 -- blank uses the default",
+        )
         self.add_item(self.nominee_count_input)
         self.add_item(self.duration_days_input)
         self.add_item(self.visibility_input)
+        self.add_item(self.reminder_enabled_input)
+        self.add_item(self.reminder_hours_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Forward the raw optional field values to the configured handler."""
@@ -123,4 +141,6 @@ class CustomizeVoteModal(discord.ui.Modal):
             self.nominee_count_input.value or None,
             self.duration_days_input.value or None,
             self.visibility_input.value or None,
+            self.reminder_enabled_input.value or None,
+            self.reminder_hours_input.value or None,
         )

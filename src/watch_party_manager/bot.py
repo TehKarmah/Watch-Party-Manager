@@ -153,7 +153,7 @@ class WatchPartyBot(commands.Bot):
             CloseVoteJobHandler(self.vote_completion_service, self.vote_service, self.suggestion_service, self),
         )
         self.scheduler_host.scheduler_service.register_handler(
-            VOTE_REMINDER_JOB_TYPE, VoteReminderJobHandler(self.vote_service, self)
+            VOTE_REMINDER_JOB_TYPE, VoteReminderJobHandler(self.vote_service, self.suggestion_service, self)
         )
         self.scheduler_host.scheduler_service.register_handler(
             WATCH_PARTY_REMINDER_JOB_TYPE,
@@ -384,6 +384,8 @@ class WatchPartyBot(commands.Bot):
                     nominee_count_text: Optional[str],
                     duration_days_text: Optional[str],
                     visibility_text: Optional[str],
+                    reminder_enabled_text: Optional[str],
+                    reminder_hours_text: Optional[str],
                 ) -> None:
                     await handle_customize_vote_submit(
                         modal_interaction,
@@ -395,6 +397,8 @@ class WatchPartyBot(commands.Bot):
                         nominee_count_text=nominee_count_text,
                         duration_days_text=duration_days_text,
                         visibility_text=visibility_text,
+                        reminder_enabled_text=reminder_enabled_text,
+                        reminder_hours_text=reminder_hours_text,
                         scheduler_service=self.scheduler_host.scheduler_service,
                         guild_configuration_repository=self.guild_configuration_repository,
                     )
@@ -855,6 +859,42 @@ def parse_vote_duration_days(duration_days: Optional[int]) -> int:
     return duration_days
 
 
+# Bounds for a per-round reminder-hours override, matching
+# VoteNotificationsConfig.reminder_hours_before_close's own guild-level
+# bounds (domain/guild_configuration.py) so a round can never be
+# configured with a value the guild-level setting itself would reject.
+MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE = 1
+MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE = 720
+
+
+def parse_vote_reminder_hours_before_close(hours: Optional[int]) -> Optional[int]:
+    """Validate a /start_vote reminder-hours-before-close override.
+
+    Args:
+        hours: The raw reminder_hours option, or None to use the guild's
+            configured default (see
+            scheduler.vote_scheduling.resolve_vote_reminder_settings).
+
+    Returns:
+        None if hours is None (use the guild default), otherwise hours
+        itself once validated.
+
+    Raises:
+        ValueError: If hours is outside
+            [MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE, MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE].
+    """
+    if hours is None:
+        return None
+
+    if not (MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE <= hours <= MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE):
+        raise ValueError(
+            f"reminder_hours must be between {MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE} and "
+            f"{MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE}."
+        )
+
+    return hours
+
+
 def parse_vote_nominee_count(value: Optional[int], default: int = DEFAULT_VOTE_CANDIDATE_COUNT) -> int:
     """Validate and resolve the nominee count for /start_vote.
 
@@ -1021,6 +1061,8 @@ def perform_start_vote(
     default_nominee_count: int = DEFAULT_VOTE_CANDIDATE_COUNT,
     guild_id: Optional[int] = None,
     channel_id: Optional[int] = None,
+    reminder_enabled: Optional[bool] = None,
+    reminder_hours_before_close: Optional[int] = None,
 ) -> tuple[str, bool]:
     """Core logic for /start_vote, kept free of Discord objects except `user`.
 
@@ -1045,6 +1087,12 @@ def perform_start_vote(
         guild_id: The Discord guild the command was run in, if known.
         channel_id: The Discord channel or thread the command was run in,
             if known.
+        reminder_enabled: FR-027: a per-round override of the guild's
+            configured vote-ending reminder setting, or None to use the
+            guild default.
+        reminder_hours_before_close: FR-027: a per-round override of how
+            many hours before closing the reminder fires, or None to use
+            the guild default.
 
     Returns:
         A (message, ephemeral) tuple. Errors and permission failures are
@@ -1076,6 +1124,11 @@ def perform_start_vote(
     except ValueError as exc:
         return str(exc), True
 
+    try:
+        reminder_hours_before_close = parse_vote_reminder_hours_before_close(reminder_hours_before_close)
+    except ValueError as exc:
+        return str(exc), True
+
     resolution = None
     if guild_id is not None and channel_id is not None and nominee_selection_service is not None:
         resolution = suggestion_service.resolve_database_for_channel(guild_id, channel_id)
@@ -1104,6 +1157,8 @@ def perform_start_vote(
         closes_at=closes_at,
         candidate_suggestion_ids=[candidate.id for candidate in candidates],
         database_id=(resolution.database.database_id if resolution is not None else None),
+        reminder_enabled=reminder_enabled,
+        reminder_hours_before_close=reminder_hours_before_close,
     )
     if not result.success:
         return result.message, True
@@ -1131,22 +1186,59 @@ def parse_optional_int_field(value: Optional[str]) -> Optional[int]:
         raise ValueError(f"'{value.strip()}' is not a whole number.") from exc
 
 
+_TRUTHY_FIELD_VALUES = {"yes", "y", "true", "on", "enable", "enabled"}
+_FALSY_FIELD_VALUES = {"no", "n", "false", "off", "disable", "disabled"}
+
+
+def parse_optional_bool_field(value: Optional[str]) -> Optional[bool]:
+    """Parse an optional yes/no field from a Discord modal.
+
+    FR-027: used for the "Customize This Vote" reminder-enabled override.
+    Blank means "use the configured default" -- the same convention every
+    other optional modal field already follows.
+
+    Args:
+        value: The raw field text, or None/blank to use the default.
+
+    Returns:
+        None if value is blank, otherwise the parsed boolean.
+
+    Raises:
+        ValueError: If value is non-blank but not a recognized yes/no word.
+    """
+    if value is None or not value.strip():
+        return None
+
+    normalized = value.strip().lower()
+    if normalized in _TRUTHY_FIELD_VALUES:
+        return True
+    if normalized in _FALSY_FIELD_VALUES:
+        return False
+    raise ValueError(f"'{value.strip()}' must be 'yes' or 'no'.")
+
+
 def parse_start_vote_overrides(
     nominee_count_text: Optional[str],
     duration_days_text: Optional[str],
     visibility_text: Optional[str],
-) -> tuple[Optional[int], Optional[int], str]:
+    reminder_enabled_text: Optional[str] = None,
+    reminder_hours_text: Optional[str] = None,
+) -> tuple[Optional[int], Optional[int], str, Optional[bool], Optional[int]]:
     """Parse raw customization-modal values into start-vote arguments.
 
     Blank numeric fields remain ``None`` so :func:`perform_start_vote` can
     apply configured defaults. Blank visibility uses the established visible
-    default. Range and enum validation remain centralized in
-    :func:`perform_start_vote`.
+    default. Blank reminder fields remain ``None`` so the guild's
+    configured reminder default is used (see
+    scheduler.vote_scheduling.resolve_vote_reminder_settings). Range and
+    enum validation remain centralized in :func:`perform_start_vote`.
     """
     nominee_count = parse_optional_int_field(nominee_count_text)
     duration_days = parse_optional_int_field(duration_days_text)
     visibility = (visibility_text or "").strip() or "visible"
-    return nominee_count, duration_days, visibility
+    reminder_enabled = parse_optional_bool_field(reminder_enabled_text)
+    reminder_hours_before_close = parse_optional_int_field(reminder_hours_text)
+    return nominee_count, duration_days, visibility, reminder_enabled, reminder_hours_before_close
 
 
 async def handle_start_vote_completion(
@@ -1161,12 +1253,18 @@ async def handle_start_vote_completion(
     default_nominee_count: int,
     scheduler_service: Optional[SchedulerService] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
+    reminder_enabled: Optional[bool] = None,
+    reminder_hours_before_close: Optional[int] = None,
 ) -> None:
     """Create a round and publish its interactive voting post.
 
     scheduler_service/guild_configuration_repository default to None so
     existing callers that don't pass them keep working unchanged; passing
     None simply skips scheduling (see schedule_vote_jobs).
+    reminder_enabled/reminder_hours_before_close default to None so
+    existing callers keep working unchanged too; passing None uses the
+    guild's configured reminder default (see FR-027's
+    resolve_vote_reminder_settings).
     """
     message, ephemeral = perform_start_vote(
         vote_service=vote_service,
@@ -1180,6 +1278,8 @@ async def handle_start_vote_completion(
         default_nominee_count=default_nominee_count,
         guild_id=interaction.guild_id,
         channel_id=interaction.channel_id,
+        reminder_enabled=reminder_enabled,
+        reminder_hours_before_close=reminder_hours_before_close,
     )
     if ephemeral:
         await interaction.response.send_message(message, ephemeral=True)
@@ -1270,13 +1370,17 @@ async def handle_customize_vote_submit(
     nominee_count_text: Optional[str],
     duration_days_text: Optional[str],
     visibility_text: Optional[str],
+    reminder_enabled_text: Optional[str] = None,
+    reminder_hours_text: Optional[str] = None,
     scheduler_service: Optional[SchedulerService] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
 ) -> None:
     """Start a round using optional one-time modal overrides."""
     try:
-        nominee_count, duration_days, visibility_str = parse_start_vote_overrides(
-            nominee_count_text, duration_days_text, visibility_text
+        nominee_count, duration_days, visibility_str, reminder_enabled, reminder_hours_before_close = (
+            parse_start_vote_overrides(
+                nominee_count_text, duration_days_text, visibility_text, reminder_enabled_text, reminder_hours_text
+            )
         )
     except ValueError as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
@@ -1294,6 +1398,8 @@ async def handle_customize_vote_submit(
         default_nominee_count=default_nominee_count,
         scheduler_service=scheduler_service,
         guild_configuration_repository=guild_configuration_repository,
+        reminder_enabled=reminder_enabled,
+        reminder_hours_before_close=reminder_hours_before_close,
     )
 
 

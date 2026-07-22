@@ -112,6 +112,9 @@ class JsonVoteRepository:
             "results_message_id": vote_round.results_message_id,
             "database_id": vote_round.database_id,
             "candidate_suggestion_ids": list(vote_round.candidate_suggestion_ids),
+            "reminder_enabled": vote_round.reminder_enabled,
+            "reminder_hours_before_close": vote_round.reminder_hours_before_close,
+            "reminder_sent_at": vote_round.reminder_sent_at.isoformat() if vote_round.reminder_sent_at else None,
             "votes": [
                 JsonVoteRepository._serialize_vote(vote_record)
                 for vote_record in vote_round.votes.values()
@@ -137,6 +140,7 @@ class JsonVoteRepository:
             votes[vote_record.discord_user_id] = vote_record
 
         closes_at_raw = entry.get("closes_at")
+        reminder_sent_at_raw = entry.get("reminder_sent_at")
         return VoteRound(
             id=entry["id"],
             status=VoteRoundStatus(entry["status"]),
@@ -151,6 +155,9 @@ class JsonVoteRepository:
             results_message_id=entry.get("results_message_id"),
             database_id=entry.get("database_id"),
             candidate_suggestion_ids=entry.get("candidate_suggestion_ids", []),
+            reminder_enabled=entry.get("reminder_enabled"),
+            reminder_hours_before_close=entry.get("reminder_hours_before_close"),
+            reminder_sent_at=datetime.fromisoformat(reminder_sent_at_raw) if reminder_sent_at_raw else None,
         )
 
     @staticmethod

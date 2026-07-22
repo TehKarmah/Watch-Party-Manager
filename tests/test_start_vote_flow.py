@@ -9,8 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from watch_party_manager.bot import (
     handle_customize_vote_submit,
     handle_start_vote_use_defaults,
+    parse_optional_bool_field,
     parse_optional_int_field,
     parse_start_vote_overrides,
+    parse_vote_reminder_hours_before_close,
 )
 from watch_party_manager.domain.vote import VoteVisibility
 from watch_party_manager.persistence.suggestion_database_repository import (
@@ -424,6 +426,68 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
         self.assertEqual(len(second_round.candidate_suggestion_ids), 3)
 
 
+class CustomizeVoteReminderTests(StartVoteFlowTestCase):
+    """FR-027: reminder overrides threaded through /start_vote's "Customize This Vote" flow."""
+
+    async def _submit(self, reminder_enabled_text=None, reminder_hours_text=None) -> None:
+        await handle_customize_vote_submit(
+            self._interaction(),
+            self.vote_service,
+            self.suggestion_service,
+            self.nominee_selection_service,
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            default_nominee_count=self.default_nominee_count,
+            nominee_count_text=None,
+            duration_days_text=None,
+            visibility_text=None,
+            reminder_enabled_text=reminder_enabled_text,
+            reminder_hours_text=reminder_hours_text,
+        )
+
+    async def test_default_reminder_is_enabled_when_not_customized(self) -> None:
+        # Using defaults (no reminder override) leaves reminder_enabled as
+        # None on the round -- resolved later against the guild's default,
+        # which is itself enabled by default (see VoteNotificationsConfig).
+        await self._submit()
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertIsNone(vote_round.reminder_enabled)
+
+    async def test_default_reminder_timing_is_not_overridden_when_not_customized(self) -> None:
+        await self._submit()
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertIsNone(vote_round.reminder_hours_before_close)
+
+    async def test_custom_reminder_timing_is_stored_on_the_round(self) -> None:
+        await self._submit(reminder_hours_text="4")
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertEqual(vote_round.reminder_hours_before_close, 4)
+
+    async def test_reminder_can_be_explicitly_disabled(self) -> None:
+        await self._submit(reminder_enabled_text="no")
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertEqual(vote_round.reminder_enabled, False)
+
+    async def test_reminder_can_be_explicitly_enabled(self) -> None:
+        await self._submit(reminder_enabled_text="yes")
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertEqual(vote_round.reminder_enabled, True)
+
+    async def test_invalid_reminder_hours_is_rejected_and_creates_no_round(self) -> None:
+        await self._submit(reminder_hours_text="900")
+
+        self.assertIsNone(self.vote_service.get_open_round())
+
+    async def test_invalid_reminder_enabled_text_is_rejected_and_creates_no_round(self) -> None:
+        await self._submit(reminder_enabled_text="maybe")
+
+        self.assertIsNone(self.vote_service.get_open_round())
+
+
 class StartVoteChoiceViewTests(unittest.IsolatedAsyncioTestCase):
     async def _noop(self, interaction) -> None:
         pass
@@ -481,19 +545,46 @@ class StartVoteChoiceViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CustomizeVoteModalTests(unittest.TestCase):
-    def test_modal_has_three_fields(self) -> None:
-        async def noop(interaction, nominee_count_text, duration_days_text, visibility_text) -> None:
-            pass
+    async def _noop(
+        self, interaction, nominee_count_text, duration_days_text, visibility_text,
+        reminder_enabled_text, reminder_hours_text,
+    ) -> None:
+        pass
 
-        modal = CustomizeVoteModal(noop)
-        self.assertEqual(len(modal.children), 3)
+    def test_modal_has_five_fields(self) -> None:
+        modal = CustomizeVoteModal(self._noop)
+        self.assertEqual(len(modal.children), 5)
 
     def test_modal_fields_are_all_optional(self) -> None:
-        async def noop(interaction, nominee_count_text, duration_days_text, visibility_text) -> None:
-            pass
-
-        modal = CustomizeVoteModal(noop)
+        modal = CustomizeVoteModal(self._noop)
         self.assertTrue(all(not field.required for field in modal.children))
+
+    def test_includes_reminder_fields(self) -> None:
+        modal = CustomizeVoteModal(self._noop)
+        self.assertIn(modal.reminder_enabled_input, modal.children)
+        self.assertIn(modal.reminder_hours_input, modal.children)
+
+
+class CustomizeVoteModalSubmitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_submit_forwards_all_five_raw_values(self) -> None:
+        received = []
+
+        async def on_submit(interaction, nominee_count_text, duration_days_text, visibility_text,
+                             reminder_enabled_text, reminder_hours_text) -> None:
+            received.append(
+                (nominee_count_text, duration_days_text, visibility_text, reminder_enabled_text, reminder_hours_text)
+            )
+
+        modal = CustomizeVoteModal(on_submit)
+        modal.nominee_count_input._value = "5"
+        modal.duration_days_input._value = "3"
+        modal.visibility_input._value = "blind"
+        modal.reminder_enabled_input._value = "no"
+        modal.reminder_hours_input._value = "12"
+
+        await modal.on_submit(interaction=object())
+
+        self.assertEqual(received, [("5", "3", "blind", "no", "12")])
 
 
 
@@ -519,18 +610,91 @@ class ParseStartVoteOverridesTests(unittest.TestCase):
     def test_blank_values_resolve_to_defaults(self) -> None:
         self.assertEqual(
             parse_start_vote_overrides(None, "   ", ""),
-            (None, None, "visible"),
+            (None, None, "visible", None, None),
         )
 
     def test_values_are_trimmed_and_parsed(self) -> None:
         self.assertEqual(
             parse_start_vote_overrides(" 5 ", " 3 ", " blind "),
-            (5, 3, "blind"),
+            (5, 3, "blind", None, None),
         )
 
     def test_numeric_parse_errors_are_preserved(self) -> None:
         with self.assertRaisesRegex(ValueError, "not a whole number"):
             parse_start_vote_overrides("many", None, None)
+
+    # --- FR-027: reminder overrides -------------------------------------------
+
+    def test_blank_reminder_fields_resolve_to_none(self) -> None:
+        nominee_count, duration_days, visibility, reminder_enabled, reminder_hours = parse_start_vote_overrides(
+            None, None, None, "", "  "
+        )
+        self.assertIsNone(reminder_enabled)
+        self.assertIsNone(reminder_hours)
+
+    def test_reminder_enabled_yes_is_parsed_true(self) -> None:
+        *_, reminder_enabled, _ = parse_start_vote_overrides(None, None, None, "yes", None)
+        self.assertTrue(reminder_enabled)
+
+    def test_reminder_enabled_no_is_parsed_false(self) -> None:
+        *_, reminder_enabled, _ = parse_start_vote_overrides(None, None, None, "no", None)
+        self.assertFalse(reminder_enabled)
+
+    def test_reminder_hours_is_parsed_as_an_integer(self) -> None:
+        *_, reminder_hours = parse_start_vote_overrides(None, None, None, None, "12")
+        self.assertEqual(reminder_hours, 12)
+
+    def test_invalid_reminder_enabled_text_raises(self) -> None:
+        with self.assertRaisesRegex(ValueError, "yes' or 'no'"):
+            parse_start_vote_overrides(None, None, None, "maybe", None)
+
+    def test_invalid_reminder_hours_text_raises(self) -> None:
+        with self.assertRaisesRegex(ValueError, "not a whole number"):
+            parse_start_vote_overrides(None, None, None, None, "soon")
+
+
+class ParseOptionalBoolFieldTests(unittest.TestCase):
+    def test_returns_none_for_none(self) -> None:
+        self.assertIsNone(parse_optional_bool_field(None))
+
+    def test_returns_none_for_blank_string(self) -> None:
+        self.assertIsNone(parse_optional_bool_field("   "))
+
+    def test_parses_yes_variants_as_true(self) -> None:
+        for value in ["yes", "y", "true", "on", "enable", "enabled", "YES", " Yes "]:
+            with self.subTest(value=value):
+                self.assertTrue(parse_optional_bool_field(value))
+
+    def test_parses_no_variants_as_false(self) -> None:
+        for value in ["no", "n", "false", "off", "disable", "disabled", "NO", " No "]:
+            with self.subTest(value=value):
+                self.assertFalse(parse_optional_bool_field(value))
+
+    def test_rejects_unrecognized_text(self) -> None:
+        with self.assertRaisesRegex(ValueError, "yes' or 'no'"):
+            parse_optional_bool_field("maybe")
+
+
+class ParseVoteReminderHoursBeforeCloseTests(unittest.TestCase):
+    def test_none_resolves_to_none(self) -> None:
+        self.assertIsNone(parse_vote_reminder_hours_before_close(None))
+
+    def test_accepts_a_value_within_bounds(self) -> None:
+        self.assertEqual(parse_vote_reminder_hours_before_close(24), 24)
+
+    def test_accepts_the_minimum_bound(self) -> None:
+        self.assertEqual(parse_vote_reminder_hours_before_close(1), 1)
+
+    def test_accepts_the_maximum_bound(self) -> None:
+        self.assertEqual(parse_vote_reminder_hours_before_close(720), 720)
+
+    def test_rejects_zero(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_vote_reminder_hours_before_close(0)
+
+    def test_rejects_a_value_above_the_maximum(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_vote_reminder_hours_before_close(721)
 
 
 if __name__ == "__main__":

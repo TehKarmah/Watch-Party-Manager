@@ -123,6 +123,8 @@ class VoteService:
         closes_at: Optional[datetime] = None,
         candidate_suggestion_ids: Optional[List[int]] = None,
         database_id: Optional[int] = None,
+        reminder_enabled: Optional[bool] = None,
+        reminder_hours_before_close: Optional[int] = None,
     ) -> VoteRoundResult:
         """Open a new voting round.
 
@@ -133,6 +135,13 @@ class VoteService:
             candidate_suggestion_ids: The exact nominees eligible in this round.
                 When omitted, legacy service callers retain the previous behavior.
             database_id: The suggestion database this round belongs to, when known.
+            reminder_enabled: FR-027: a per-round override of the guild's
+                configured vote-ending reminder setting, or None to use
+                the guild default (see
+                scheduler.vote_scheduling.resolve_vote_reminder_settings).
+            reminder_hours_before_close: FR-027: a per-round override of
+                how many hours before closing the reminder fires, or None
+                to use the guild default.
 
         Returns:
             VoteRoundResult. Fails if a round is already open (only one
@@ -180,6 +189,8 @@ class VoteService:
             closes_at=closes_at,
             candidate_suggestion_ids=candidate_ids,
             database_id=database_id,
+            reminder_enabled=reminder_enabled,
+            reminder_hours_before_close=reminder_hours_before_close,
         )
         self._next_round_id += 1
         self._rounds[new_round.id] = new_round
@@ -311,6 +322,34 @@ class VoteService:
             return False
 
         vote_round.results_message_id = message_id
+        self._save()
+        return True
+
+    def mark_reminder_sent(self, round_id: int, sent_at: datetime) -> bool:
+        """Record that a round's pre-close reminder has been posted.
+
+        FR-027: this is the persisted, at-most-once guarantee for vote
+        reminders -- VoteReminderJobHandler checks reminder_sent_at before
+        posting and calls this immediately after a successful send, so a
+        reminder is never posted twice for the same round even if its
+        scheduled job is somehow re-queued or replayed after a restart.
+        Once set, this is never cleared (not even by rescheduling the
+        round's deadline) -- FR-027 requires at most one reminder ever,
+        for the lifetime of the round.
+
+        Args:
+            round_id: The round whose reminder was just sent.
+            sent_at: When the reminder was posted.
+
+        Returns:
+            True if a matching round was found and updated, False if no
+            round has that ID.
+        """
+        vote_round = self._rounds.get(round_id)
+        if vote_round is None:
+            return False
+
+        vote_round.reminder_sent_at = sent_at
         self._save()
         return True
 

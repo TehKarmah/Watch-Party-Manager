@@ -1,11 +1,14 @@
-"""Tests for FR-017: Vote Reminder Job Handler.
+"""Tests for FR-017: Vote Reminder Job Handler, extended by FR-027
+(Configurable Vote Reminders).
 
-Covers the vote_reminder job handler this milestone adds -- locating a
-vote by the job's payload, verifying it still exists and is still open,
-posting the reminder to its channel, and returning a successful no-op
-when the round no longer exists or has already closed. Also verifies
-registration during WatchPartyBot startup and execution through the real
-SchedulerService.
+Covers the vote_reminder job handler: locating a vote by the job's
+payload, verifying it still exists, is still open, and hasn't already had
+its reminder sent (FR-027's persisted reminder_sent_at guard), posting
+the reminder (with FR-027's added "Current standings" section, respecting
+the project's existing blind-vote visibility rule) to its channel, and
+returning a successful no-op otherwise. Also verifies registration during
+WatchPartyBot startup and execution through the real SchedulerService,
+including recovery after a simulated restart.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from watch_party_manager.domain.vote import VoteRoundStatus, VoteVisibility
+from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus, VoteVisibility
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
@@ -28,7 +31,7 @@ from watch_party_manager.scheduler.vote_reminder_job_handler import (
     build_vote_reminder_text,
 )
 from watch_party_manager.services.suggestion_service import SuggestionService
-from watch_party_manager.services.vote_service import VoteService
+from watch_party_manager.services.vote_service import StandingsEntry, VoteService
 
 
 def make_job(vote_id: int, run_at: datetime | None = None) -> ScheduledJob:
@@ -82,16 +85,16 @@ class VoteReminderJobHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.channel = FakeChannel()
         self.bot = FakeBot(self.channel)
-        self.handler = VoteReminderJobHandler(self.vote_service, self.bot)
+        self.handler = VoteReminderJobHandler(self.vote_service, self.suggestion_service, self.bot)
 
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
 
-    def _open_round(self, closes_at=None, guild_id=100, channel_id=200):
+    def _open_round(self, closes_at=None, guild_id=100, channel_id=200, visibility=VoteVisibility.VISIBLE):
         if closes_at is None:
             closes_at = datetime.now(timezone.utc) + timedelta(hours=1)
         vote_round = self.vote_service.create_round(
-            visibility=VoteVisibility.VISIBLE,
+            visibility=visibility,
             closes_at=closes_at,
             candidate_suggestion_ids=[self.matrix.id, self.inception.id],
         ).vote_round
@@ -156,12 +159,45 @@ class VoteReminderJobHandlerTests(unittest.IsolatedAsyncioTestCase):
             async def fetch_channel(self, channel_id):
                 return self._channel
 
-        handler = VoteReminderJobHandler(self.vote_service, FetchOnlyBot(self.channel))
+        handler = VoteReminderJobHandler(self.vote_service, self.suggestion_service, FetchOnlyBot(self.channel))
 
         result = await handler.execute(make_job(vote_round.id))
 
         self.assertEqual(result.result, JobResult.EXECUTED)
         self.assertEqual(len(self.channel.sent_messages), 1)
+
+    # --- FR-027: standings content, respecting blind-vote visibility ---------------
+
+    async def test_visible_round_shows_current_standings(self) -> None:
+        vote_round = self._open_round(visibility=VoteVisibility.VISIBLE)
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        text = self.channel.sent_messages[0]
+        self.assertIn("Current standings:", text)
+        self.assertIn("The Matrix", text)
+
+    async def test_visible_round_shows_vote_counts(self) -> None:
+        vote_round = self._open_round(visibility=VoteVisibility.VISIBLE)
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+        self.vote_service.cast_vote(discord_user_id=2, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        self.assertIn("2 votes", self.channel.sent_messages[0])
+
+    async def test_blind_round_preserves_existing_visibility_rules(self) -> None:
+        vote_round = self._open_round(visibility=VoteVisibility.BLIND)
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+        self.vote_service.cast_vote(discord_user_id=2, suggestion_id=self.matrix.id)
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        text = self.channel.sent_messages[0]
+        self.assertIn("Votes hidden until voting closes.", text)
+        self.assertNotIn("2 votes", text)
+        self.assertNotIn("Current standings:", text)
 
     # --- Vote no longer exists: successful no-op ---------------------------------
 
@@ -226,6 +262,39 @@ class VoteReminderJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.result, JobResult.SKIPPED_NOT_APPLICABLE)
         self.assertEqual(len(self.channel.sent_messages), 1)
 
+    # --- FR-027: reminder_sent_at prevents duplicates, even while still open -------
+
+    async def test_marks_the_round_as_reminded_after_sending(self) -> None:
+        vote_round = self._open_round()
+
+        await self.handler.execute(make_job(vote_round.id))
+
+        self.assertIsNotNone(self.vote_service.get_round(vote_round.id).reminder_sent_at)
+
+    async def test_a_replayed_job_for_a_still_open_round_does_not_resend(self) -> None:
+        # Unlike the "already closed" guard, this covers the case FR-027
+        # specifically calls out: the job is somehow re-queued/replayed
+        # while the round is STILL open (e.g. after a restart) -- the
+        # persisted reminder_sent_at must prevent a second send even
+        # though the status-based guard alone would not catch this.
+        vote_round = self._open_round()
+
+        first = await self.handler.execute(make_job(vote_round.id))
+        second = await self.handler.execute(make_job(vote_round.id))
+
+        self.assertEqual(first.result, JobResult.EXECUTED)
+        self.assertEqual(second.result, JobResult.SKIPPED_NOT_APPLICABLE)
+        self.assertEqual(len(self.channel.sent_messages), 1)
+
+    async def test_a_round_with_reminder_already_marked_sent_is_skipped(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.mark_reminder_sent(vote_round.id, datetime.now(timezone.utc))
+
+        result = await self.handler.execute(make_job(vote_round.id))
+
+        self.assertEqual(result.result, JobResult.SKIPPED_NOT_APPLICABLE)
+        self.assertEqual(self.channel.sent_messages, [])
+
     # --- Multiple rounds don't interfere -------------------------------------------
 
     async def test_a_reminder_job_for_one_round_never_reminds_about_a_different_round(self) -> None:
@@ -251,15 +320,13 @@ class VoteReminderJobHandlerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class BuildVoteReminderTextTests(unittest.TestCase):
-    def _round(self, round_id=1, closes_at=None):
-        from watch_party_manager.domain.vote import VoteRound
-
+    def _round(self, round_id=1, closes_at=None, visibility=VoteVisibility.VISIBLE, **kwargs):
         if closes_at is None:
             closes_at = datetime(2026, 7, 20, 18, 0, tzinfo=timezone.utc)
-        return VoteRound(id=round_id, closes_at=closes_at)
+        return VoteRound(id=round_id, closes_at=closes_at, visibility=visibility, **kwargs)
 
     def test_mentions_round_id(self) -> None:
-        text = build_vote_reminder_text(self._round(round_id=42))
+        text = build_vote_reminder_text(self._round(round_id=42), [], [])
 
         self.assertIn("42", text)
 
@@ -267,34 +334,49 @@ class BuildVoteReminderTextTests(unittest.TestCase):
         closes_at = datetime(2026, 7, 20, 18, 0, tzinfo=timezone.utc)
         unix_timestamp = int(closes_at.timestamp())
 
-        text = build_vote_reminder_text(self._round(closes_at=closes_at))
+        text = build_vote_reminder_text(self._round(closes_at=closes_at), [], [])
 
         self.assertIn(f"<t:{unix_timestamp}:F> (<t:{unix_timestamp}:R>)", text)
 
     def test_includes_a_call_to_action(self) -> None:
-        text = build_vote_reminder_text(self._round())
+        text = build_vote_reminder_text(self._round(), [], [])
 
         self.assertIn("/vote", text)
 
     def test_includes_the_original_vote_link_when_available(self) -> None:
-        from watch_party_manager.domain.vote import VoteRound
+        vote_round = self._round(guild_id=100, channel_id=200, message_id=300)
 
-        vote_round = VoteRound(
-            id=1,
-            closes_at=datetime(2026, 7, 20, 18, 0, tzinfo=timezone.utc),
-            guild_id=100,
-            channel_id=200,
-            message_id=300,
-        )
-
-        text = build_vote_reminder_text(vote_round)
+        text = build_vote_reminder_text(vote_round, [], [])
 
         self.assertIn("https://discord.com/channels/100/200/300", text)
 
     def test_omits_the_link_for_a_legacy_round_without_message_metadata(self) -> None:
-        text = build_vote_reminder_text(self._round())
+        text = build_vote_reminder_text(self._round(), [], [])
 
         self.assertNotIn("discord.com", text)
+
+    def test_visible_round_shows_standings(self) -> None:
+        from watch_party_manager.domain.watch_item import MediaType, WatchItem
+
+        candidates = [WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=1)]
+        standings = [StandingsEntry(suggestion_id=1, vote_count=3)]
+
+        text = build_vote_reminder_text(self._round(visibility=VoteVisibility.VISIBLE), candidates, standings)
+
+        self.assertIn("Current standings:", text)
+        self.assertIn("The Matrix", text)
+        self.assertIn("3 votes", text)
+
+    def test_blind_round_hides_standings(self) -> None:
+        from watch_party_manager.domain.watch_item import MediaType, WatchItem
+
+        candidates = [WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=1)]
+        standings = [StandingsEntry(suggestion_id=1, vote_count=3)]
+
+        text = build_vote_reminder_text(self._round(visibility=VoteVisibility.BLIND), candidates, standings)
+
+        self.assertIn("Votes hidden until voting closes.", text)
+        self.assertNotIn("3 votes", text)
 
 
 class VoteReminderJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -303,7 +385,9 @@ class VoteReminderJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTe
     directly -- i.e. that FR-017's registration actually takes effect, and
     that the scheduler's own job lifecycle (a completed job is never
     re-claimed) is what keeps repeated polling from sending duplicate
-    reminders.
+    reminders. Also confirms FR-027's persisted reminder_sent_at guard
+    survives a simulated restart -- a fresh handler/scheduler pair backed
+    by the same persisted VoteService state must not re-send.
     """
 
     def setUp(self) -> None:
@@ -331,7 +415,7 @@ class VoteReminderJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTe
         scheduler_service = SchedulerService(scheduler_repository)
         channel = FakeChannel()
         scheduler_service.register_handler(
-            "vote_reminder", VoteReminderJobHandler(self.vote_service, FakeBot(channel))
+            "vote_reminder", VoteReminderJobHandler(self.vote_service, self.suggestion_service, FakeBot(channel))
         )
 
         closes_at = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -365,7 +449,7 @@ class VoteReminderJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTe
         scheduler_service = SchedulerService(scheduler_repository)
         channel = FakeChannel()
         scheduler_service.register_handler(
-            "vote_reminder", VoteReminderJobHandler(self.vote_service, FakeBot(channel))
+            "vote_reminder", VoteReminderJobHandler(self.vote_service, self.suggestion_service, FakeBot(channel))
         )
 
         closes_at = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -391,6 +475,54 @@ class VoteReminderJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTe
         self.assertEqual(first_processed, 1)
         self.assertEqual(second_processed, 0)
         self.assertEqual(len(channel.sent_messages), 1)
+
+    async def test_reminder_survives_scheduler_restart_without_duplicating(self) -> None:
+        # Simulates a scheduler restart: a fresh SchedulerService backed
+        # by the SAME persisted job repository picks up where the first
+        # left off. The reminder must still be sent exactly once overall.
+        from watch_party_manager.scheduler.json_scheduler_repository import JsonSchedulerRepository
+        from watch_party_manager.scheduler.scheduler_service import SchedulerService
+        from watch_party_manager.scheduler.vote_scheduling import build_vote_reminder_job
+
+        scheduler_repository_path = Path(self._temp_dir.name) / "scheduled_jobs.json"
+        channel = FakeChannel()
+
+        closes_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        vote_round = self.vote_service.create_round(
+            visibility=VoteVisibility.VISIBLE,
+            closes_at=closes_at,
+            candidate_suggestion_ids=[self.matrix.id, self.inception.id],
+        ).vote_round
+        self.vote_service.attach_message_reference(
+            vote_round.id, guild_id=100, channel_id=200, message_id=999
+        )
+        job = build_vote_reminder_job(
+            vote_round, guild_id=100, reminder_enabled=True, reminder_hours_before_close=48
+        )
+
+        first_scheduler_service = SchedulerService(JsonSchedulerRepository(scheduler_repository_path))
+        first_scheduler_service.register_handler(
+            "vote_reminder", VoteReminderJobHandler(self.vote_service, self.suggestion_service, FakeBot(channel))
+        )
+        await first_scheduler_service.schedule(job)
+        first_processed = await first_scheduler_service.run_once()
+
+        # "Restart": a brand-new SchedulerService/VoteReminderJobHandler,
+        # backed by the same persisted files, re-polls for due jobs.
+        reloaded_vote_service = VoteService(
+            self.suggestion_service, repository=JsonVoteRepository(Path(self._temp_dir.name) / "voting.json")
+        )
+        second_scheduler_service = SchedulerService(JsonSchedulerRepository(scheduler_repository_path))
+        second_scheduler_service.register_handler(
+            "vote_reminder",
+            VoteReminderJobHandler(reloaded_vote_service, self.suggestion_service, FakeBot(channel)),
+        )
+        second_processed = await second_scheduler_service.run_once()
+
+        self.assertEqual(first_processed, 1)
+        self.assertEqual(second_processed, 0)
+        self.assertEqual(len(channel.sent_messages), 1)
+        self.assertIsNotNone(reloaded_vote_service.get_round(vote_round.id).reminder_sent_at)
 
 
 if __name__ == "__main__":

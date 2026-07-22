@@ -246,6 +246,36 @@ class VoteRoundModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             VoteRound(id=1, results_message_id=0)
 
+    # --- FR-027: configurable vote reminders --------------------------------
+
+    def test_reminder_fields_default_to_none(self) -> None:
+        vote_round = VoteRound(id=1)
+
+        self.assertIsNone(vote_round.reminder_enabled)
+        self.assertIsNone(vote_round.reminder_hours_before_close)
+        self.assertIsNone(vote_round.reminder_sent_at)
+
+    def test_accepts_a_reminder_enabled_override(self) -> None:
+        self.assertTrue(VoteRound(id=1, reminder_enabled=True).reminder_enabled)
+        self.assertFalse(VoteRound(id=1, reminder_enabled=False).reminder_enabled)
+
+    def test_accepts_a_reminder_hours_before_close_override(self) -> None:
+        vote_round = VoteRound(id=1, reminder_hours_before_close=4)
+        self.assertEqual(vote_round.reminder_hours_before_close, 4)
+
+    def test_rejects_a_non_positive_reminder_hours_before_close(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, reminder_hours_before_close=0)
+
+    def test_accepts_a_timezone_aware_reminder_sent_at(self) -> None:
+        sent_at = utc_now()
+        vote_round = VoteRound(id=1, reminder_sent_at=sent_at)
+        self.assertEqual(vote_round.reminder_sent_at, sent_at)
+
+    def test_rejects_a_naive_reminder_sent_at(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, reminder_sent_at=datetime(2026, 1, 1))
+
 
 if __name__ == "__main__":
     unittest.main()
