@@ -6,7 +6,7 @@ import os
 import platform
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import discord
 from discord.ext import commands
@@ -87,6 +87,7 @@ from watch_party_manager.services.discord_timestamp_formatter import (
 from watch_party_manager.services.help_service import HelpResponse, build_help_response
 from watch_party_manager.services.membership_service import (
     JoinOutcomeKind,
+    MemberSearchResult,
     MembershipService,
 )
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
@@ -141,7 +142,7 @@ from watch_party_manager.config_view import (
     ConfigWatchDestinationSectionView,
     OnBackToMenu,
 )
-from watch_party_manager.membership_view import MembershipApprovalView
+from watch_party_manager.membership_view import MembershipApprovalView, PendingRequestSelectView
 from watch_party_manager.restore_confirmation_view import RestoreConfirmationView
 from watch_party_manager.setup_wizard_view import (
     AdminChannelStepView,
@@ -795,6 +796,8 @@ class WatchPartyBot(commands.Bot):
                 return
 
             await send_config_main_menu(interaction, self, guild_id, edit=False)
+
+        self.tree.add_command(WatchPartyAdminGroup(self))
 
         # Environment variables remain the primary way to configure the
         # WASH Crew / Watch Party roles (unchanged, backward compatible),
@@ -2386,6 +2389,299 @@ async def handle_membership_approval_decision(
             action_word,
             exc_info=True,
         )
+
+
+# --- FR-031: /watch_party administration --------------------------------------------------
+
+WATCH_PARTY_LIST_PAGE_SIZE = 10
+
+
+class WatchPartyAdminGroup(discord.app_commands.Group):
+    """WASH Crew-only /watch_party command group.
+
+    Subcommands only collect Discord-native parameters and delegate to
+    module-level handle_watch_party_*() functions -- kept as thin as
+    every other command in this file -- so the actual behavior stays
+    unit-testable without a live Discord connection.
+    """
+
+    def __init__(self, bot: "WatchPartyBot") -> None:
+        super().__init__(name="watch_party", description="Manage Watch Party membership (WASH Crew only).")
+        self.bot = bot
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Gate every /watch_party subcommand on WASH Crew, in one place.
+
+        Reuses PermissionService.require_wash_crew exactly like every
+        other WASH-gated command -- fails closed when unconfigured.
+        """
+        permission = self.bot.permission_service.require_wash_crew(interaction.user)
+        if not permission.allowed:
+            await interaction.response.send_message(permission.message, ephemeral=True)
+            return False
+        return True
+
+    @discord.app_commands.command(name="members", description="List current Watch Party members.")
+    async def members(self, interaction: discord.Interaction) -> None:
+        await handle_watch_party_members(interaction, self.bot)
+
+    @discord.app_commands.command(name="pending", description="List pending Approval-Required join requests.")
+    async def pending(self, interaction: discord.Interaction) -> None:
+        await handle_watch_party_pending(interaction, self.bot)
+
+    @discord.app_commands.command(name="approved", description="List recently approved Watch Party join requests.")
+    async def approved(self, interaction: discord.Interaction) -> None:
+        await handle_watch_party_approved(interaction, self.bot)
+
+    @discord.app_commands.command(name="denied", description="List recently denied Watch Party join requests.")
+    async def denied(self, interaction: discord.Interaction) -> None:
+        await handle_watch_party_denied(interaction, self.bot)
+
+    @discord.app_commands.command(name="add", description="Manually add a member to the Watch Party role.")
+    async def add(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        await handle_watch_party_add(interaction, self.bot, member)
+
+    @discord.app_commands.command(name="remove", description="Manually remove a member from the Watch Party role.")
+    async def remove(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        await handle_watch_party_remove(interaction, self.bot, member)
+
+    @discord.app_commands.command(name="search", description="Look up a member's Watch Party membership history.")
+    async def search(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        await handle_watch_party_search(interaction, self.bot, member)
+
+
+def build_watch_party_members_text(role_name: str, members: List[Any]) -> str:
+    """Build /watch_party members' response text.
+
+    `members` is expected in the order the caller wants displayed (real
+    discord.Role.members preserves no particular order, so callers that
+    care about recency should sort before calling this).
+    """
+    if not members:
+        return f'"{role_name}" currently has no members.'
+
+    lines = [f"**{role_name} Members ({len(members)})**", ""]
+    shown = members[:WATCH_PARTY_LIST_PAGE_SIZE]
+    for member in shown:
+        display_name = getattr(member, "display_name", None) or str(member)
+        username = getattr(member, "name", None)
+        joined_at = getattr(member, "joined_at", None)
+        joined_text = format_datetime_for_display(joined_at) if joined_at is not None else "Unknown"
+        if username and username != display_name:
+            lines.append(f"- {display_name} (@{username}) -- joined {joined_text}")
+        else:
+            lines.append(f"- {display_name} -- joined {joined_text}")
+
+    remaining = len(members) - len(shown)
+    if remaining > 0:
+        lines.append(f"...and {remaining} more.")
+    return "\n".join(lines)
+
+
+async def handle_watch_party_members(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None or interaction.guild is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    role_config = bot.membership_service.get_role_config(guild_id)
+    if role_config is None or role_config.role_id is None:
+        await interaction.response.send_message(
+            "The Watch Party role hasn't been configured for this server.", ephemeral=True
+        )
+        return
+
+    role = interaction.guild.get_role(role_config.role_id)
+    if role is None:
+        await interaction.response.send_message("The configured Watch Party role no longer exists.", ephemeral=True)
+        return
+
+    text = build_watch_party_members_text(role.name, list(role.members))
+    await interaction.response.send_message(text, ephemeral=True)
+
+
+async def handle_watch_party_add(interaction: discord.Interaction, bot: "WatchPartyBot", member: discord.Member) -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None or interaction.guild is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    result = await bot.membership_service.admin_add_member(guild_id, member, interaction.guild, interaction.user.id)
+    await interaction.response.send_message(result.message, ephemeral=True)
+
+
+async def handle_watch_party_remove(
+    interaction: discord.Interaction, bot: "WatchPartyBot", member: discord.Member
+) -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None or interaction.guild is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    result = await bot.membership_service.admin_remove_member(guild_id, member, interaction.guild, interaction.user.id)
+    await interaction.response.send_message(result.message, ephemeral=True)
+
+
+def build_watch_party_search_text(member: discord.Member, result: MemberSearchResult) -> str:
+    display_name = getattr(member, "display_name", None) or str(member)
+    lines = [f"**Watch Party Membership -- {display_name}**", ""]
+    lines.append(f"Current status: {'Member' if result.is_current_member else 'Not a member'}")
+
+    if result.pending_request is not None:
+        lines.append(f"Pending request: submitted {format_datetime_for_display(result.pending_request.created_at)}")
+    else:
+        lines.append("Pending request: none")
+
+    if result.last_approved_request is not None:
+        lines.append(
+            f"Last approval: {format_datetime_for_display(result.last_approved_request.resolved_at)} "
+            f"by <@{result.last_approved_request.resolved_by_user_id}>"
+        )
+    else:
+        lines.append("Last approval: none")
+
+    if result.last_denied_request is not None:
+        lines.append(
+            f"Last denial: {format_datetime_for_display(result.last_denied_request.resolved_at)} "
+            f"by <@{result.last_denied_request.resolved_by_user_id}>"
+        )
+    else:
+        lines.append("Last denial: none")
+
+    lines.append(result.cooldown_message if result.cooldown_message is not None else "Cooldown: none active")
+
+    return "\n".join(lines)
+
+
+async def handle_watch_party_search(
+    interaction: discord.Interaction, bot: "WatchPartyBot", member: discord.Member
+) -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    result = bot.membership_service.search_member(guild_id, member.id, member)
+    await interaction.response.send_message(build_watch_party_search_text(member, result), ephemeral=True)
+
+
+def build_watch_party_pending_text(pending: List[MembershipRequest]) -> str:
+    if not pending:
+        return "There are no pending Watch Party join requests."
+
+    lines = [f"**Pending Join Requests ({len(pending)})**", ""]
+    shown = pending[:WATCH_PARTY_LIST_PAGE_SIZE]
+    for request in shown:
+        lines.append(
+            f"#{request.request_id} -- <@{request.user_id}> -- requested "
+            f"{format_datetime_for_display(request.created_at)}"
+        )
+    remaining = len(pending) - len(shown)
+    if remaining > 0:
+        lines.append(f"...and {remaining} more.")
+    return "\n".join(lines)
+
+
+async def handle_watch_party_pending(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    pending = bot.membership_service.list_pending_requests(guild_id)
+    text = build_watch_party_pending_text(pending)
+
+    if not pending:
+        await interaction.response.send_message(text, ephemeral=True)
+        return
+
+    async def on_select(select_interaction: discord.Interaction, request_id: int) -> None:
+        request = bot.membership_service.get_request(request_id)
+        if request is None or not request.is_pending:
+            await select_interaction.response.edit_message(
+                content="That request is no longer pending.", view=None
+            )
+            return
+
+        on_approve, on_deny = _build_membership_decision_callbacks(bot)
+        view = MembershipApprovalView(request_id, on_approve, on_deny)
+        await select_interaction.response.edit_message(
+            content=f"Request #{request_id} from <@{request.user_id}> -- choose an action.",
+            view=view,
+        )
+
+    options = [
+        (request.request_id, f"#{request.request_id} - requested {request.created_at.date()}")
+        for request in pending[:WATCH_PARTY_LIST_PAGE_SIZE]
+    ]
+    view = PendingRequestSelectView(options, on_select)
+    await interaction.response.send_message(text, view=view, ephemeral=True)
+
+
+def build_watch_party_approved_text(approved: List[MembershipRequest]) -> str:
+    if not approved:
+        return "No approved Watch Party join requests yet."
+
+    lines = [f"**Approved Join Requests ({len(approved)})**", ""]
+    shown = approved[:WATCH_PARTY_LIST_PAGE_SIZE]
+    for request in shown:
+        lines.append(
+            f"<@{request.user_id}> -- approved {format_datetime_for_display(request.resolved_at)} "
+            f"by <@{request.resolved_by_user_id}>"
+        )
+    remaining = len(approved) - len(shown)
+    if remaining > 0:
+        lines.append(f"...and {remaining} more.")
+    return "\n".join(lines)
+
+
+async def handle_watch_party_approved(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    approved = sorted(
+        bot.membership_request_repository.get_approved(guild_id),
+        key=lambda request: request.resolved_at,
+        reverse=True,
+    )
+    await interaction.response.send_message(build_watch_party_approved_text(approved), ephemeral=True)
+
+
+def build_watch_party_denied_text(denied: List[MembershipRequest], cooldown_days: int) -> str:
+    if not denied:
+        return "No denied Watch Party join requests yet."
+
+    lines = [f"**Denied Join Requests ({len(denied)})**", ""]
+    shown = denied[:WATCH_PARTY_LIST_PAGE_SIZE]
+    for request in shown:
+        cooldown_expires_at = request.resolved_at + timedelta(days=cooldown_days)
+        lines.append(
+            f"<@{request.user_id}> -- denied {format_datetime_for_display(request.resolved_at)} "
+            f"by <@{request.resolved_by_user_id}> -- cooldown until "
+            f"{format_datetime_for_display(cooldown_expires_at)}"
+        )
+    remaining = len(denied) - len(shown)
+    if remaining > 0:
+        lines.append(f"...and {remaining} more.")
+    return "\n".join(lines)
+
+
+async def handle_watch_party_denied(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    denied = sorted(
+        bot.membership_request_repository.get_denied(guild_id),
+        key=lambda request: request.resolved_at,
+        reverse=True,
+    )
+    role_config = bot.membership_service.get_role_config(guild_id)
+    cooldown_days = role_config.denial_cooldown_days if role_config is not None else 7
+    await interaction.response.send_message(build_watch_party_denied_text(denied, cooldown_days), ephemeral=True)
 
 
 def parse_start_vote_overrides(

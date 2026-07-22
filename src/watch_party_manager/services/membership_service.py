@@ -98,6 +98,22 @@ class MembershipApprovalResult:
     request: Optional[MembershipRequest] = None
 
 
+@dataclass(frozen=True, slots=True)
+class MemberSearchResult:
+    """Everything FR-031's /watch_party search needs about one member.
+
+    Gathered entirely from data this service and its repository already
+    track -- no new persistence, just a single read-only view over it.
+    """
+
+    user_id: int
+    is_current_member: bool
+    pending_request: Optional[MembershipRequest]
+    last_approved_request: Optional[MembershipRequest]
+    last_denied_request: Optional[MembershipRequest]
+    cooldown_message: Optional[str]
+
+
 class MembershipService:
     """Orchestrates FR-030's membership workflow: join-mode-aware
     join/leave, Approval-Required request tracking, and the shared
@@ -356,6 +372,95 @@ class MembershipService:
         role = guild.get_role(role_config.role_id)
         await member.remove_roles(role, reason="WASH: /join_watch_party (self-service leave)")
         return MembershipActionResult(True, "You've left the Watch Party.")
+
+    # --- FR-031: WASH Crew administrative add/remove ---------------------------------
+    #
+    # Deliberately separate from join_self_service()/leave_self_service():
+    # those two enforce Self-Service-only rules (allow_self_leave, join_mode
+    # must be SELF_SERVICE) appropriate for a member acting on their own
+    # behalf. WASH Crew adding or removing someone via /watch_party is an
+    # administrative override that must work under any configured Join
+    # Mode -- it still reuses the same role_id resolution and
+    # validate_role_mutable() check, so it never validates differently.
+
+    async def admin_add_member(
+        self, guild_id: int, member: MemberLike, guild: GuildLookup, actor_user_id: int
+    ) -> MembershipActionResult:
+        """Grant the configured Watch Party role, on WASH Crew's behalf."""
+        role_config = self.get_role_config(guild_id)
+        if role_config is None or role_config.role_id is None:
+            return MembershipActionResult(False, "The Watch Party role hasn't been configured for this server.")
+
+        if self.is_current_member(member, role_config.role_id):
+            return MembershipActionResult(False, "That member is already in the Watch Party.")
+
+        error = validate_role_mutable(role_config.role_id, guild, resource_label=WATCH_PARTY_ROLE_LABEL)
+        if error:
+            return MembershipActionResult(False, error)
+
+        role = guild.get_role(role_config.role_id)
+        await member.add_roles(role, reason=f"WASH: /watch_party add (by {actor_user_id})")
+        return MembershipActionResult(True, "Member added to the Watch Party.")
+
+    async def admin_remove_member(
+        self, guild_id: int, member: MemberLike, guild: GuildLookup, actor_user_id: int
+    ) -> MembershipActionResult:
+        """Remove the configured Watch Party role, on WASH Crew's behalf."""
+        role_config = self.get_role_config(guild_id)
+        if role_config is None or role_config.role_id is None:
+            return MembershipActionResult(False, "The Watch Party role hasn't been configured for this server.")
+
+        if not self.is_current_member(member, role_config.role_id):
+            return MembershipActionResult(False, "That member is not currently in the Watch Party.")
+
+        error = validate_role_mutable(role_config.role_id, guild, resource_label=WATCH_PARTY_ROLE_LABEL)
+        if error:
+            return MembershipActionResult(False, error)
+
+        role = guild.get_role(role_config.role_id)
+        await member.remove_roles(role, reason=f"WASH: /watch_party remove (by {actor_user_id})")
+        return MembershipActionResult(True, "Member removed from the Watch Party.")
+
+    # --- FR-031: search -----------------------------------------------------------------
+
+    def get_cooldown_status(self, guild_id: int, user_id: int) -> Optional[str]:
+        """Public entry point for the member's current denial cooldown, if any."""
+        role_config = self.get_role_config(guild_id)
+        if role_config is None:
+            return None
+        return self._describe_active_cooldown(guild_id, user_id, role_config.denial_cooldown_days)
+
+    def search_member(
+        self, guild_id: int, user_id: int, member: Optional[MemberLike]
+    ) -> MemberSearchResult:
+        """Gather everything /watch_party search shows about one member.
+
+        Reuses get_pending_request() and the repository's get_by_member()
+        (added in the FR-030 refinement) rather than re-scanning requests
+        with new logic.
+        """
+        role_config = self.get_role_config(guild_id)
+        is_member = (
+            member is not None
+            and role_config is not None
+            and role_config.role_id is not None
+            and self.is_current_member(member, role_config.role_id)
+        )
+
+        history = self._membership_request_repository.get_by_member(guild_id, user_id)
+        approved = [request for request in history if request.status is MembershipRequestStatus.APPROVED]
+        denied = [request for request in history if request.status is MembershipRequestStatus.DENIED]
+        last_approved = max(approved, key=lambda request: request.resolved_at) if approved else None
+        last_denied = max(denied, key=lambda request: request.resolved_at) if denied else None
+
+        return MemberSearchResult(
+            user_id=user_id,
+            is_current_member=is_member,
+            pending_request=self.get_pending_request(guild_id, user_id),
+            last_approved_request=last_approved,
+            last_denied_request=last_denied,
+            cooldown_message=self.get_cooldown_status(guild_id, user_id),
+        )
 
     # --- Approval-Required workflow --------------------------------------------------
 

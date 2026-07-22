@@ -97,6 +97,7 @@ class HelpRegistryTests(unittest.TestCase):
             [name for name, _ in sections],
             [
                 "General",
+                "WASH Crew: Membership",
                 "WASH Crew: Configuration",
                 "Watch Items",
                 "WASH Crew: Voting",
@@ -186,6 +187,43 @@ class HelpRegistryTests(unittest.TestCase):
         entries = {entry.name: entry for entry in COMMAND_HELP}
         for name in ("/list", "/remove", "/vote_status", "/watch_party_status", "/diagnostics", "/stats"):
             self.assertIs(entries[name].audience, HelpAudience.WASH_CREW)
+
+    # --- FR-031: /watch_party is WASH Crew only, existing tiers unchanged --------
+
+    def test_watch_party_admin_command_is_wash_crew_only(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        self.assertIs(entries["/watch_party"].audience, HelpAudience.WASH_CREW)
+
+    def test_watch_party_admin_command_hidden_from_everyone_and_watch_party_member(self) -> None:
+        for show_watch_party_member in (False, True):
+            sections = command_sections(show_wash_crew=False, show_watch_party_member=show_watch_party_member)
+            commands = [entry.name for _, entries in sections for entry in entries]
+            self.assertNotIn("/watch_party", commands)
+
+    def test_watch_party_admin_command_visible_to_wash_crew(self) -> None:
+        sections = command_sections(show_wash_crew=True)
+        commands = [entry.name for _, entries in sections for entry in entries]
+        self.assertIn("/watch_party", commands)
+
+    def test_watch_party_admin_command_text_hidden_from_everyone(self) -> None:
+        text = build_command_help_text(show_wash_crew=False)
+        self.assertNotIn("/watch_party", text)
+
+    def test_existing_help_tier_visibility_is_unchanged(self) -> None:
+        # FR-031 must not alter any pre-existing tier: Everyone still sees
+        # only /help, /about, /join_watch_party; Watch Party members gain
+        # only /add over that.
+        everyone = [
+            entry.name for _, entries in command_sections(show_wash_crew=False) for entry in entries
+        ]
+        self.assertEqual(sorted(everyone), sorted(["/help", "/about", "/join_watch_party"]))
+
+        member = [
+            entry.name
+            for _, entries in command_sections(show_wash_crew=False, show_watch_party_member=True)
+            for entry in entries
+        ]
+        self.assertEqual(sorted(member), sorted(["/help", "/about", "/join_watch_party", "/add"]))
 
 
 if __name__ == "__main__":

@@ -56,6 +56,12 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         "/stats", "Show watch-party activity statistics.", "General", HelpAudience.WASH_CREW
     ),
     CommandHelp(
+        "/watch_party",
+        "Manage Watch Party membership: list, add, remove, search, and review join requests.",
+        "WASH Crew: Membership",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
         "/setup",
         "Run the guided first-time server configuration wizard.",
         "WASH Crew: Configuration",

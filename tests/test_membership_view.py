@@ -10,6 +10,7 @@ import unittest
 
 from watch_party_manager.membership_view import (
     MembershipApprovalView,
+    PendingRequestSelectView,
     build_membership_approve_button_custom_id,
     build_membership_deny_button_custom_id,
 )
@@ -66,6 +67,50 @@ class MembershipApprovalViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(
             build_membership_approve_button_custom_id(1), build_membership_deny_button_custom_id(1)
         )
+
+
+# --- FR-031: /watch_party pending's request picker ----------------------------------
+
+
+class PendingRequestSelectViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_one_select_and_is_temporary(self) -> None:
+        view = PendingRequestSelectView([(1, "req 1"), (2, "req 2")], _noop)
+        self.assertEqual(len(view.children), 1)
+        self.assertEqual(view.timeout, 300)
+
+    async def test_select_has_a_stable_custom_id(self) -> None:
+        view = PendingRequestSelectView([(1, "req 1")], _noop)
+        self.assertEqual(view.children[0].custom_id, "wpm_watch_party_pending_select")
+
+    async def test_select_builds_one_option_per_request(self) -> None:
+        view = PendingRequestSelectView([(1, "req 1"), (2, "req 2"), (3, "req 3")], _noop)
+        select = view.children[0]
+        self.assertEqual(len(select.options), 3)
+        self.assertEqual([option.value for option in select.options], ["1", "2", "3"])
+        self.assertEqual([option.label for option in select.options], ["req 1", "req 2", "req 3"])
+
+    async def test_select_caps_options_at_twenty_five(self) -> None:
+        requests = [(i, f"req {i}") for i in range(1, 31)]
+        view = PendingRequestSelectView(requests, _noop)
+        self.assertEqual(len(view.children[0].options), 25)
+
+    async def test_select_truncates_long_labels_to_one_hundred_chars(self) -> None:
+        long_label = "x" * 150
+        view = PendingRequestSelectView([(1, long_label)], _noop)
+        self.assertEqual(len(view.children[0].options[0].label), 100)
+
+    async def test_select_callback_forwards_the_chosen_request_id(self) -> None:
+        calls = []
+
+        async def on_select(interaction, request_id) -> None:
+            calls.append(request_id)
+
+        view = PendingRequestSelectView([(1, "req 1"), (2, "req 2")], on_select)
+        select = view.children[0]
+        select._values = ["2"]
+        await select.callback(interaction=object())
+
+        self.assertEqual(calls, [2])
 
 
 if __name__ == "__main__":

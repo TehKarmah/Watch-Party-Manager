@@ -705,5 +705,222 @@ class PersistenceTests(MembershipServiceTestCase):
         self.assertEqual(new_outcome.kind, JoinOutcomeKind.COOLDOWN_ACTIVE)
 
 
+# --- FR-031: WASH Crew administrative add/remove ------------------------------------
+
+
+class AdminAddRemoveMemberTests(MembershipServiceTestCase):
+    async def test_admin_add_grants_the_role_under_approval_mode(self) -> None:
+        # Administrative add must work regardless of configured join mode.
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1)
+        guild = FakeGuild()
+
+        result = await self.service.admin_add_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertTrue(result.success)
+        self.assertEqual(member.added_role_ids, [ROLE_ID])
+
+    async def test_admin_add_grants_the_role_under_manual_mode(self) -> None:
+        self._seed(JoinMode.MANUAL)
+        member = FakeMember(1)
+        guild = FakeGuild()
+
+        result = await self.service.admin_add_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertTrue(result.success)
+        self.assertEqual(member.added_role_ids, [ROLE_ID])
+
+    async def test_admin_add_rejects_an_existing_member(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1, roles=[FakeRole(ROLE_ID)])
+        guild = FakeGuild()
+
+        result = await self.service.admin_add_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertFalse(result.success)
+        self.assertIn("already", result.message.lower())
+        self.assertEqual(member.added_role_ids, [])
+
+    async def test_admin_add_rejects_missing_role_configuration(self) -> None:
+        self._seed(JoinMode.APPROVAL, role_id=None)
+        member = FakeMember(1)
+        guild = FakeGuild()
+
+        result = await self.service.admin_add_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertFalse(result.success)
+
+    async def test_admin_add_rejects_a_deleted_role(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1)
+        guild = FakeGuild(role_ids=set())
+
+        result = await self.service.admin_add_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertFalse(result.success)
+        self.assertIn("no longer exists", result.message)
+
+    async def test_admin_add_rejects_missing_manage_roles_permission(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1)
+        guild = FakeGuild(manage_roles=False)
+
+        result = await self.service.admin_add_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertFalse(result.success)
+        self.assertIn("Manage Roles", result.message)
+
+    async def test_admin_add_rejects_role_hierarchy_failure(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1)
+        guild = FakeGuild(top_role_position=1)
+
+        result = await self.service.admin_add_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertFalse(result.success)
+        self.assertIn("positioned above", result.message)
+
+    async def test_admin_remove_removes_the_role_under_approval_mode(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1, roles=[FakeRole(ROLE_ID)])
+        guild = FakeGuild()
+
+        result = await self.service.admin_remove_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertTrue(result.success)
+        self.assertEqual(member.removed_role_ids, [ROLE_ID])
+
+    async def test_admin_remove_rejects_a_non_member(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1)
+        guild = FakeGuild()
+
+        result = await self.service.admin_remove_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertFalse(result.success)
+        self.assertIn("not currently", result.message)
+        self.assertEqual(member.removed_role_ids, [])
+
+    async def test_admin_remove_rejects_missing_role_configuration(self) -> None:
+        self._seed(JoinMode.APPROVAL, role_id=None)
+        member = FakeMember(1)
+        guild = FakeGuild()
+
+        result = await self.service.admin_remove_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertFalse(result.success)
+
+    async def test_admin_remove_rejects_a_deleted_role(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1, roles=[FakeRole(ROLE_ID)])
+        guild = FakeGuild(role_ids=set())
+
+        result = await self.service.admin_remove_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertFalse(result.success)
+        self.assertIn("no longer exists", result.message)
+
+    async def test_admin_remove_rejects_missing_manage_roles_permission(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1, roles=[FakeRole(ROLE_ID)])
+        guild = FakeGuild(manage_roles=False)
+
+        result = await self.service.admin_remove_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertFalse(result.success)
+        self.assertIn("Manage Roles", result.message)
+
+    async def test_admin_remove_rejects_role_hierarchy_failure(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1, roles=[FakeRole(ROLE_ID)])
+        guild = FakeGuild(top_role_position=1)
+
+        result = await self.service.admin_remove_member(GUILD_ID, member, guild, actor_user_id=999)
+
+        self.assertFalse(result.success)
+        self.assertIn("positioned above", result.message)
+
+
+# --- FR-031: search_member / get_cooldown_status -------------------------------------
+
+
+class SearchMemberTests(MembershipServiceTestCase):
+    async def test_search_reports_current_membership(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1, roles=[FakeRole(ROLE_ID)])
+
+        result = self.service.search_member(GUILD_ID, member.id, member)
+
+        self.assertTrue(result.is_current_member)
+        self.assertIsNone(result.pending_request)
+        self.assertIsNone(result.last_approved_request)
+        self.assertIsNone(result.last_denied_request)
+        self.assertIsNone(result.cooldown_message)
+
+    async def test_search_reports_non_membership(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1)
+
+        result = self.service.search_member(GUILD_ID, member.id, member)
+
+        self.assertFalse(result.is_current_member)
+
+    async def test_search_reports_an_unknown_member_as_not_a_member(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+
+        result = self.service.search_member(GUILD_ID, 12345, None)
+
+        self.assertFalse(result.is_current_member)
+        self.assertIsNone(result.pending_request)
+
+    async def test_search_reports_a_pending_request(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1)
+        outcome = await self.service.handle_join_request(GUILD_ID, member, FakeGuild())
+
+        result = self.service.search_member(GUILD_ID, member.id, member)
+
+        self.assertIsNotNone(result.pending_request)
+        self.assertEqual(result.pending_request.request_id, outcome.request.request_id)
+
+    async def test_search_reports_the_last_approval(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        member = FakeMember(1)
+        guild = FakeGuild()
+        outcome = await self.service.handle_join_request(GUILD_ID, member, guild)
+        await self.service.approve_request(outcome.request.request_id, GUILD_ID, 999, member, guild)
+
+        result = self.service.search_member(GUILD_ID, member.id, member)
+
+        self.assertIsNotNone(result.last_approved_request)
+        self.assertEqual(result.last_approved_request.resolved_by_user_id, 999)
+        self.assertIsNone(result.last_denied_request)
+
+    async def test_search_reports_the_last_denial_and_cooldown(self) -> None:
+        self._seed(JoinMode.APPROVAL, denial_cooldown_days=7)
+        member = FakeMember(1)
+        outcome = await self.service.handle_join_request(GUILD_ID, member, FakeGuild())
+        self.service.deny_request(outcome.request.request_id, GUILD_ID, 999)
+
+        result = self.service.search_member(GUILD_ID, member.id, member)
+
+        self.assertIsNotNone(result.last_denied_request)
+        self.assertEqual(result.last_denied_request.resolved_by_user_id, 999)
+        self.assertIsNotNone(result.cooldown_message)
+        self.assertIn("cooldown", result.cooldown_message.lower())
+
+    async def test_get_cooldown_status_returns_none_without_a_denial(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+
+        status = self.service.get_cooldown_status(GUILD_ID, 1)
+
+        self.assertIsNone(status)
+
+    async def test_get_cooldown_status_returns_none_when_unconfigured(self) -> None:
+        status = self.service.get_cooldown_status(GUILD_ID, 1)
+
+        self.assertIsNone(status)
+
+
 if __name__ == "__main__":
     unittest.main()
