@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 import tempfile
 import unittest
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from watch_party_manager.services.backup_service import (
     BACKUP_FORMAT_VERSION,
@@ -18,6 +21,7 @@ from watch_party_manager.services.backup_service import (
     BackupKind,
     BackupScheduleSettings,
     BackupService,
+    BackupType,
 )
 
 
@@ -305,6 +309,132 @@ class BackupServiceTests(unittest.TestCase):
             self.service.restore_backup(bad_archive)
 
         self.assertEqual({"value": "current"}, json.loads(suggestions.read_text()))
+
+    def test_restore_leaves_no_partial_state_when_a_later_file_fails_to_copy(self):
+        # Simulates a mid-restore failure: the first declared file should
+        # never be left half-written just because a later one failed.
+        first = self.write_json("aaa_first.json", {"value": "before"})
+        second = self.write_json("zzz_second.json", {"value": "before"})
+        result = self.service.create_backup(created_at=self.created_at)
+        first.write_text(json.dumps({"value": "after"}), encoding="utf-8")
+        second.write_text(json.dumps({"value": "after"}), encoding="utf-8")
+
+        original_copy2 = shutil.copy2
+
+        def failing_copy2(source, destination, *args, **kwargs):
+            if Path(destination).name.startswith("zzz_second"):
+                raise OSError("simulated disk failure")
+            return original_copy2(source, destination, *args, **kwargs)
+
+        with patch("watch_party_manager.services.backup_service.shutil.copy2", side_effect=failing_copy2):
+            with self.assertRaises(BackupError):
+                self.service.restore_backup(result.archive_path, create_safety_backup=False)
+
+        # The failure happened on the second file -- the first file's
+        # temp-swap must have already completed atomically and not be
+        # left in a half-written .tmp state.
+        self.assertEqual({"value": "before"}, json.loads(first.read_text()))
+        self.assertFalse((self.data_directory / "zzz_second.json.tmp").exists())
+
+    # --- FR-032B: richer manifest metadata --------------------------------
+
+    def test_manifest_records_project_name_and_application_version(self):
+        self.write_json("suggestions.json", {"suggestions": []})
+        result = self.service.create_backup(created_at=self.created_at)
+
+        self.assertEqual("Watch Party Manager", result.manifest.project_name)
+        self.assertIsNotNone(result.manifest.application_version)
+
+    def test_manifest_defaults_to_full_backup_type(self):
+        self.write_json("suggestions.json", {"suggestions": []})
+        result = self.service.create_backup(created_at=self.created_at)
+
+        self.assertEqual(BackupType.FULL, result.manifest.backup_type)
+
+    def test_manifest_records_guild_id_when_provided(self):
+        self.write_json("suggestions.json", {"suggestions": []})
+        result = self.service.create_backup(created_at=self.created_at, guild_id=555)
+
+        self.assertEqual(555, result.manifest.guild_id)
+
+    def test_manifest_guild_id_is_none_when_not_provided(self):
+        self.write_json("suggestions.json", {"suggestions": []})
+        result = self.service.create_backup(created_at=self.created_at)
+
+        self.assertIsNone(result.manifest.guild_id)
+
+    def test_manifest_json_includes_backup_format_version_alias(self):
+        self.write_json("suggestions.json", {"suggestions": []})
+        result = self.service.create_backup(created_at=self.created_at)
+
+        with zipfile.ZipFile(result.archive_path) as archive:
+            raw = json.loads(archive.read(MANIFEST_NAME))
+
+        self.assertEqual(BACKUP_FORMAT_VERSION, raw["backup_format_version"])
+        self.assertEqual("full", raw["backup_type"])
+        self.assertEqual("Watch Party Manager", raw["project_name"])
+
+    def test_validate_backup_accepts_a_pre_fr032b_manifest_missing_new_fields(self):
+        # An archive created before FR-032B has none of the new manifest
+        # keys at all -- validation must still accept it, and the new
+        # fields must come back as sensible defaults, not errors.
+        payload = b"{}"
+        manifest = {
+            "format_version": BACKUP_FORMAT_VERSION,
+            "created_at": "2026-07-17T12:30:00Z",
+            "kind": "manual",
+            "files": [
+                {
+                    "path": "suggestions.json",
+                    "size": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                }
+            ],
+        }
+        archive_path = self.root / "legacy.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr(MANIFEST_NAME, json.dumps(manifest))
+            archive.writestr("suggestions.json", payload)
+
+        validation = self.service.validate_backup(archive_path)
+
+        self.assertTrue(validation.is_valid)
+        self.assertEqual(BackupType.FULL, validation.manifest.backup_type)
+        self.assertIsNone(validation.manifest.project_name)
+        self.assertIsNone(validation.manifest.application_version)
+        self.assertIsNone(validation.manifest.guild_id)
+
+    def test_create_scoped_backup_writes_only_the_given_files(self):
+        result = self.service.create_scoped_backup(
+            {"suggestion_databases.json": b'{"databases": []}'},
+            kind=BackupKind.MANUAL,
+            backup_type=BackupType.SUGGESTION_DATABASE,
+            created_at=self.created_at,
+            guild_id=100,
+            database_id=3,
+            database_name="Movie Night",
+        )
+
+        self.assertEqual(BackupType.SUGGESTION_DATABASE, result.manifest.backup_type)
+        self.assertEqual(3, result.manifest.database_id)
+        self.assertEqual("Movie Night", result.manifest.database_name)
+        self.assertEqual(("suggestion_databases.json",), tuple(f.path for f in result.manifest.files))
+
+        with zipfile.ZipFile(result.archive_path) as archive:
+            self.assertEqual(
+                {"databases": []}, json.loads(archive.read("suggestion_databases.json"))
+            )
+
+    def test_create_scoped_backup_filename_includes_the_tag(self):
+        result = self.service.create_scoped_backup(
+            {"suggestion_databases.json": b"{}"},
+            kind=BackupKind.MANUAL,
+            backup_type=BackupType.SUGGESTION_DATABASE,
+            created_at=self.created_at,
+            filename_tag="db3",
+        )
+
+        self.assertIn("-db3-", result.archive_path.name)
 
 
 if __name__ == "__main__":

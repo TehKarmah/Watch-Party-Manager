@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from watch_party_manager.bot import (
     find_backup_by_filename,
     perform_backup,
-    perform_confirmed_restore,
-    perform_restore,
+    perform_confirmed_restore_from_path,
+    perform_restore_from_path,
     send_help_response,
 )
 from watch_party_manager.services.backup_service import (
@@ -19,6 +19,7 @@ from watch_party_manager.services.backup_service import (
     BackupKind,
     BackupScheduleSettings,
     BackupService,
+    BackupType,
 )
 from watch_party_manager.services.help_service import build_help_response
 
@@ -135,44 +136,79 @@ class BackupCommandTests(unittest.TestCase):
 
     # --- /backup ------------------------------------------------------------
 
-    def test_backup_succeeds_and_reports_the_filename(self) -> None:
-        message, ephemeral = perform_backup(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID)
+    def test_backup_succeeds_and_reports_creation(self) -> None:
+        message, ephemeral, archive_path, display_filename = perform_backup(
+            self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID
+        )
 
         self.assertTrue(ephemeral)
-        self.assertIn("Backup created:", message)
+        self.assertIn("Backup created successfully", message)
         created = self.backup_service.list_backups(BackupKind.MANUAL)
         self.assertEqual(len(created), 1)
-        self.assertIn(created[0].name, message)
+        self.assertEqual(archive_path, created[0])
+
+    def test_backup_display_filename_uses_the_project_name_and_required_format(self) -> None:
+        message, ephemeral, archive_path, display_filename = perform_backup(
+            self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID
+        )
+
+        self.assertRegex(
+            display_filename, r"^Watch_Party_Manager_Backup_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.zip$"
+        )
+        self.assertIn(display_filename, message)
+        # The internal archive keeps its existing wash-*.zip name -- only
+        # the Discord-facing display name uses the project's own naming.
+        self.assertTrue(archive_path.name.startswith("wash-manual-"))
+
+    def test_backup_message_reports_creation_time_and_type(self) -> None:
+        message, ephemeral, archive_path, display_filename = perform_backup(
+            self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID
+        )
+
+        self.assertIn("**Created:**", message)
+        self.assertIn("**Type:** Manual", message)
 
     def test_backup_fails_closed_when_role_not_configured(self) -> None:
-        message, ephemeral = perform_backup(self.backup_service, self._wash_crew_member(), None)
+        message, ephemeral, archive_path, display_filename = perform_backup(
+            self.backup_service, self._wash_crew_member(), None
+        )
 
         self.assertTrue(ephemeral)
         self.assertIn("not been configured", message)
+        self.assertIsNone(archive_path)
+        self.assertIsNone(display_filename)
         self.assertEqual(self.backup_service.list_backups(), ())
 
     def test_backup_rejects_a_non_wash_crew_member(self) -> None:
-        message, ephemeral = perform_backup(self.backup_service, self._regular_member(), WASH_CREW_ROLE_ID)
+        message, ephemeral, archive_path, display_filename = perform_backup(
+            self.backup_service, self._regular_member(), WASH_CREW_ROLE_ID
+        )
 
         self.assertTrue(ephemeral)
         self.assertIn("WASH Crew", message)
+        self.assertIsNone(archive_path)
+        self.assertIsNone(display_filename)
         self.assertEqual(self.backup_service.list_backups(), ())
 
     def test_backup_reports_failure_cleanly(self) -> None:
         with patch.object(
             self.backup_service, "create_backup", side_effect=BackupError("disk full")
         ):
-            message, ephemeral = perform_backup(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID)
+            message, ephemeral, archive_path, display_filename = perform_backup(
+                self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID
+            )
 
         self.assertTrue(ephemeral)
         self.assertIn("Backup failed", message)
         self.assertIn("disk full", message)
+        self.assertIsNone(archive_path)
+        self.assertIsNone(display_filename)
 
-    # --- /restore: validation before confirmation --------------------------
+    # --- /restore: validation before confirmation (perform_restore_from_path) --
 
     def test_restore_fails_closed_when_role_not_configured(self) -> None:
-        message, ephemeral, needs_confirmation = perform_restore(
-            self.backup_service, self._wash_crew_member(), None, "wash-manual-x.zip"
+        message, ephemeral, needs_confirmation = perform_restore_from_path(
+            self.backup_service, self._wash_crew_member(), None, self.data_directory.parent / "wash-manual-x.zip"
         )
 
         self.assertTrue(ephemeral)
@@ -180,55 +216,47 @@ class BackupCommandTests(unittest.TestCase):
         self.assertIn("not been configured", message)
 
     def test_restore_rejects_a_non_wash_crew_member(self) -> None:
-        message, ephemeral, needs_confirmation = perform_restore(
-            self.backup_service, self._regular_member(), WASH_CREW_ROLE_ID, "wash-manual-x.zip"
+        message, ephemeral, needs_confirmation = perform_restore_from_path(
+            self.backup_service, self._regular_member(), WASH_CREW_ROLE_ID, self.data_directory.parent / "wash-manual-x.zip"
         )
 
         self.assertTrue(ephemeral)
         self.assertFalse(needs_confirmation)
         self.assertIn("WASH Crew", message)
 
-    def test_restore_reports_unknown_filename_and_lists_available_backups(self) -> None:
-        perform_backup(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID)
-        real_backup = self.backup_service.list_backups()[0].name
-
-        message, ephemeral, needs_confirmation = perform_restore(
-            self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, "does-not-exist.zip"
-        )
-
-        self.assertTrue(ephemeral)
-        self.assertFalse(needs_confirmation)
-        self.assertIn("does-not-exist.zip", message)
-        self.assertIn(real_backup, message)
-
-    def test_restore_reports_no_backups_available_when_none_exist(self) -> None:
-        message, ephemeral, needs_confirmation = perform_restore(
-            self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, "anything.zip"
-        )
-
-        self.assertTrue(ephemeral)
-        self.assertFalse(needs_confirmation)
-        self.assertIn("No backups are available", message)
-
     def test_restore_requests_confirmation_for_a_valid_backup(self) -> None:
         perform_backup(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID)
-        real_backup = self.backup_service.list_backups()[0].name
+        real_backup = self.backup_service.list_backups()[0]
 
-        message, ephemeral, needs_confirmation = perform_restore(
+        message, ephemeral, needs_confirmation = perform_restore_from_path(
             self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, real_backup
         )
 
         self.assertTrue(ephemeral)
         self.assertTrue(needs_confirmation)
-        self.assertIn(real_backup, message)
-        self.assertIn("cannot be undone", message)
+        self.assertIn("Restore Summary", message)
+        self.assertIn("automatically first", message)
+
+    def test_restore_summary_reports_counts_when_determinable(self) -> None:
+        (self.data_directory / "suggestions.json").write_text(
+            '{"suggestions": [{"title": "Alien"}]}', encoding="utf-8"
+        )
+        perform_backup(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID)
+        real_backup = self.backup_service.list_backups()[0]
+
+        message, _, _ = perform_restore_from_path(
+            self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, real_backup
+        )
+
+        self.assertIn("Suggestions: 1", message)
+        self.assertIn("Backup type: Full", message)
 
     def test_restore_does_not_touch_data_before_confirmation(self) -> None:
         perform_backup(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID)
-        real_backup = self.backup_service.list_backups()[0].name
+        real_backup = self.backup_service.list_backups()[0]
         original_content = (self.data_directory / "suggestions.json").read_text(encoding="utf-8")
 
-        perform_restore(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, real_backup)
+        perform_restore_from_path(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, real_backup)
 
         # No safety backup should have been created yet either, since
         # nothing was actually restored.
@@ -243,33 +271,47 @@ class BackupCommandTests(unittest.TestCase):
         with zipfile.ZipFile(corrupt_archive, "w") as archive:
             archive.writestr("not_the_manifest.txt", "oops")
 
-        message, ephemeral, needs_confirmation = perform_restore(
-            self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, "wash-manual-corrupt.zip"
+        message, ephemeral, needs_confirmation = perform_restore_from_path(
+            self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, corrupt_archive
         )
 
         self.assertTrue(ephemeral)
         self.assertFalse(needs_confirmation)
         self.assertIn("failed validation", message)
 
-    # --- /restore: confirmed restore ----------------------------------------
+    def test_restore_rejects_a_suggestion_database_backup(self) -> None:
+        result = self.backup_service.create_scoped_backup(
+            {"suggestion_databases.json": b'{"databases": []}'},
+            kind=BackupKind.MANUAL,
+            backup_type=BackupType.SUGGESTION_DATABASE,
+        )
+
+        message, ephemeral, needs_confirmation = perform_restore_from_path(
+            self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, result.archive_path
+        )
+
+        self.assertFalse(needs_confirmation)
+        self.assertIn("Unsupported backup type", message)
+
+    # --- /restore: confirmed restore (perform_confirmed_restore_from_path) -----
 
     def test_confirmed_restore_succeeds_and_reports_restored_file_count(self) -> None:
         perform_backup(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID)
-        real_backup = self.backup_service.list_backups()[0].name
+        real_backup = self.backup_service.list_backups()[0]
 
-        message, ephemeral = perform_confirmed_restore(
+        message, ephemeral = perform_confirmed_restore_from_path(
             self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, real_backup
         )
 
         self.assertTrue(ephemeral)
         self.assertIn("Restored", message)
-        self.assertIn(real_backup, message)
+        self.assertIn("safety backup", message)
 
     def test_confirmed_restore_fails_closed_when_role_not_configured(self) -> None:
         perform_backup(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID)
-        real_backup = self.backup_service.list_backups()[0].name
+        real_backup = self.backup_service.list_backups()[0]
 
-        message, ephemeral = perform_confirmed_restore(
+        message, ephemeral = perform_confirmed_restore_from_path(
             self.backup_service, self._wash_crew_member(), None, real_backup
         )
 
@@ -278,24 +320,24 @@ class BackupCommandTests(unittest.TestCase):
 
     def test_confirmed_restore_rejects_a_non_wash_crew_member(self) -> None:
         perform_backup(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID)
-        real_backup = self.backup_service.list_backups()[0].name
+        real_backup = self.backup_service.list_backups()[0]
 
-        message, ephemeral = perform_confirmed_restore(
+        message, ephemeral = perform_confirmed_restore_from_path(
             self.backup_service, self._regular_member(), WASH_CREW_ROLE_ID, real_backup
         )
 
         self.assertTrue(ephemeral)
         self.assertIn("WASH Crew", message)
 
-    def test_confirmed_restore_reports_unknown_filename(self) -> None:
+    def test_confirmed_restore_reports_a_missing_archive(self) -> None:
         perform_backup(self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID)
 
-        message, ephemeral = perform_confirmed_restore(
-            self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, "does-not-exist.zip"
+        message, ephemeral = perform_confirmed_restore_from_path(
+            self.backup_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, self.data_directory.parent / "does-not-exist.zip"
         )
 
         self.assertTrue(ephemeral)
-        self.assertIn("No backup named", message)
+        self.assertIn("failed validation", message)
 
     # --- find_backup_by_filename ----------------------------------------------
 

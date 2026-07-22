@@ -209,6 +209,20 @@ class HelpRegistryTests(unittest.TestCase):
         text = build_command_help_text(show_wash_crew=False)
         self.assertNotIn("/watch_party", text)
 
+    # --- FR-032B: /database_backup and /database_restore are WASH Crew only -----
+
+    def test_database_backup_and_restore_are_wash_crew_only(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        self.assertIs(entries["/database_backup"].audience, HelpAudience.WASH_CREW)
+        self.assertIs(entries["/database_restore"].audience, HelpAudience.WASH_CREW)
+
+    def test_database_backup_and_restore_hidden_from_everyone_and_watch_party_member(self) -> None:
+        for show_watch_party_member in (False, True):
+            sections = command_sections(show_wash_crew=False, show_watch_party_member=show_watch_party_member)
+            commands = [entry.name for _, entries in sections for entry in entries]
+            self.assertNotIn("/database_backup", commands)
+            self.assertNotIn("/database_restore", commands)
+
     def test_existing_help_tier_visibility_is_unchanged(self) -> None:
         # FR-031 must not alter any pre-existing tier: Everyone still sees
         # only /help, /about, /join_watch_party; Watch Party members gain

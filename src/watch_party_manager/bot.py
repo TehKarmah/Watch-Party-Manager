@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import platform
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
@@ -51,6 +52,8 @@ from watch_party_manager.persistence.setup_wizard_repository import SetupWizardR
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
 )
+from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
+from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.scheduler import (
     CLOSE_VOTE_JOB_TYPE,
     CloseVoteJobHandler,
@@ -69,10 +72,18 @@ from watch_party_manager.scheduler import (
 )
 from watch_party_manager.services.about_service import build_about_content
 from watch_party_manager.services.backup_service import (
+    BackupCreationResult,
     BackupError,
     BackupKind,
     BackupService,
+    BackupType,
 )
+from watch_party_manager.services.database_backup_service import (
+    DatabaseRestoreMode,
+    create_database_backup,
+    restore_database_backup,
+)
+from watch_party_manager.services.restore_summary_service import RestoreSummary, build_restore_summary
 from watch_party_manager.services.config_service import (
     CONFIG_SECTION_ORDER,
     CONFIG_SECTION_TITLES,
@@ -206,6 +217,14 @@ class WatchPartyBot(commands.Bot):
         self.vote_completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
         self.watch_party_service = WatchPartyService(self.suggestion_service)
         self.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository()
+        # FR-032B: separate repository instances from suggestion_service's
+        # own internal ones, pointed at the same default files. Both
+        # repositories always read/write straight through to disk with no
+        # caching of their own (see their module docstrings), so two
+        # instances sharing a path is safe -- this just avoids reaching
+        # into SuggestionService's private state for database backup/restore.
+        self.suggestion_database_repository = JsonSuggestionDatabaseRepository()
+        self.suggestion_repository = JsonSuggestionRepository()
         self.backup_service = BackupService()
         self.interactive_voting_restored = False
         self.suggestion_views_restored = 0
@@ -422,43 +441,55 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="backup")
         async def backup(interaction: discord.Interaction) -> None:
-            message, ephemeral = perform_backup(
+            message, ephemeral, archive_path, display_filename = perform_backup(
                 backup_service=self.backup_service,
                 user=interaction.user,
                 wash_crew_role_id=self.wash_crew_role_id,
             )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
-
-        @self.tree.command(name="restore")
-        async def restore(interaction: discord.Interaction, backup_filename: str) -> None:
-            message, ephemeral, prompt = perform_restore(
-                backup_service=self.backup_service,
-                user=interaction.user,
-                wash_crew_role_id=self.wash_crew_role_id,
-                backup_filename=backup_filename,
-            )
-            if not prompt:
+            if archive_path is None or display_filename is None:
                 await interaction.response.send_message(message, ephemeral=ephemeral)
                 return
 
-            async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-                result_message, result_ephemeral = perform_confirmed_restore(
-                    backup_service=self.backup_service,
-                    user=confirm_interaction.user,
-                    wash_crew_role_id=self.wash_crew_role_id,
-                    backup_filename=backup_filename,
-                )
-                await confirm_interaction.response.send_message(
-                    result_message, ephemeral=result_ephemeral
-                )
+            file = discord.File(archive_path, filename=display_filename)
+            await interaction.response.send_message(message, file=file, ephemeral=ephemeral)
 
-            async def on_cancel(cancel_interaction: discord.Interaction) -> None:
-                await cancel_interaction.response.send_message(
-                    "Restore cancelled. No data was changed.", ephemeral=True
-                )
+        @self.tree.command(name="restore")
+        @discord.app_commands.describe(
+            backup_filename="An existing local backup's filename (see /backup's response).",
+            backup_file="Upload a backup .zip to restore from instead of selecting a local one.",
+        )
+        async def restore(
+            interaction: discord.Interaction,
+            backup_filename: Optional[str] = None,
+            backup_file: Optional[discord.Attachment] = None,
+        ) -> None:
+            await handle_restore(interaction, self, backup_filename, backup_file)
 
-            view = RestoreConfirmationView(on_confirm, on_cancel)
-            await interaction.response.send_message(message, view=view, ephemeral=True)
+        @self.tree.command(name="database_backup")
+        @discord.app_commands.describe(database_id="The suggestion database's ID (see /database_list).")
+        async def database_backup(interaction: discord.Interaction, database_id: int) -> None:
+            await handle_database_backup(interaction, self, database_id)
+
+        @self.tree.command(name="database_restore")
+        @discord.app_commands.describe(
+            mode="Merge adds compatible suggestions without touching existing ones. "
+            "Replace overwrites the whole database.",
+            backup_filename="An existing local database backup's filename.",
+            backup_file="Upload a database backup .zip to restore from instead of selecting a local one.",
+        )
+        @discord.app_commands.choices(
+            mode=[
+                discord.app_commands.Choice(name="Merge", value="merge"),
+                discord.app_commands.Choice(name="Replace", value="replace"),
+            ]
+        )
+        async def database_restore(
+            interaction: discord.Interaction,
+            mode: str,
+            backup_filename: Optional[str] = None,
+            backup_file: Optional[discord.Attachment] = None,
+        ) -> None:
+            await handle_database_restore(interaction, self, mode, backup_filename, backup_file)
 
         @self.tree.command(name="remove")
         async def remove_suggestion(interaction: discord.Interaction, title: str) -> None:
@@ -3944,11 +3975,31 @@ def build_backup_not_found_message(backup_service: BackupService, backup_filenam
     return f"No backup named `{backup_filename}` was found. Available backups:\n{listed}"
 
 
+BACKUP_DISPLAY_NAME_PREFIX = "Watch_Party_Manager_Backup"
+
+
+def build_backup_display_filename(created_at: datetime) -> str:
+    """Build the user-facing filename for a backup's Discord attachment.
+
+    Uses the project's own name (Watch Party Manager), not the bot's
+    Discord-facing name (WASH), so a downloaded backup is self-explanatory
+    outside of Discord. The archive stored under data/backups/ keeps its
+    existing wash-<kind>-<timestamp>.zip name unchanged -- retention and
+    /restore's filename lookup both depend on that internal name, so only
+    the attachment/display name changes here.
+    """
+    return f"{BACKUP_DISPLAY_NAME_PREFIX}_{created_at.strftime('%Y-%m-%d_%H-%M-%S')}.zip"
+
+
+def _parse_manifest_created_at(created_at: str) -> datetime:
+    return datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+
+
 def perform_backup(
     backup_service: BackupService,
     user: object,
     wash_crew_role_id: Optional[int],
-) -> tuple[str, bool]:
+) -> tuple[str, bool, Optional[Path], Optional[str]]:
     """Create an immediate manual backup for the WASH Crew-only /backup command.
 
     Args:
@@ -3958,55 +4009,105 @@ def perform_backup(
             unconfigured.
 
     Returns:
-        A (message, ephemeral) tuple. Every /backup response is ephemeral
-        -- this is an admin maintenance command. On success, the message
-        includes the created archive's filename.
+        A (message, ephemeral, archive_path, display_filename) tuple.
+        Every /backup response is ephemeral -- this is an admin
+        maintenance command. archive_path/display_filename are None
+        whenever no backup was created (permission failure or
+        BackupError), telling the caller there's nothing to attach.
     """
     if wash_crew_role_id is None:
         return (
             "WASH Crew permissions have not been configured. "
             "Set WASH_CREW_ROLE_ID before using this command.",
             True,
+            None,
+            None,
         )
     if not is_wash_crew_member(user, wash_crew_role_id):
-        return "You need the WASH Crew role to create a backup.", True
+        return "You need the WASH Crew role to create a backup.", True, None, None
 
     try:
         result = backup_service.create_backup(BackupKind.MANUAL)
     except BackupError as exc:
-        return f"Backup failed: {exc}", True
+        return f"Backup failed: {exc}", True, None, None
 
-    return f"Backup created: `{result.archive_path.name}`", True
+    created_at = _parse_manifest_created_at(result.manifest.created_at)
+    display_filename = build_backup_display_filename(created_at)
+    message = (
+        "Backup created successfully.\n"
+        f"**Filename:** `{display_filename}`\n"
+        f"**Created:** {format_datetime_for_display(created_at)}\n"
+        f"**Type:** {result.manifest.kind.value.capitalize()}"
+    )
+    return message, True, result.archive_path, display_filename
 
 
-def perform_restore(
+def build_restore_summary_text(summary: RestoreSummary) -> str:
+    """Render a RestoreSummary as the text shown between validation and confirmation.
+
+    Only ever shows fields the summary itself could determine -- None
+    values are simply omitted rather than displayed as 0 or "unknown",
+    per FR-032B's "do not report values that cannot be reliably
+    determined."
+    """
+    if not summary.is_valid:
+        detail = "; ".join(summary.errors) or "unknown validation error"
+        return f"This backup failed validation and cannot be restored: {detail}"
+
+    lines = ["**Restore Summary**", ""]
+    if summary.project_name:
+        lines.append(f"Project: {summary.project_name}")
+    if summary.application_version:
+        lines.append(f"Application version: {summary.application_version}")
+    if summary.created_at:
+        try:
+            created_at = datetime.fromisoformat(summary.created_at.replace("Z", "+00:00"))
+            lines.append(f"Created: {format_datetime_for_display(created_at)}")
+        except ValueError:
+            pass
+    if summary.backup_type is not None:
+        lines.append(f"Backup type: {summary.backup_type.value.replace('_', ' ').title()}")
+    if summary.database_name:
+        lines.append(f"Database: {summary.database_name} (ID {summary.database_id})")
+    if summary.guild_id is not None:
+        lines.append(f"Guild ID: {summary.guild_id}")
+    if summary.suggestion_database_count is not None:
+        lines.append(f"Suggestion databases: {summary.suggestion_database_count}")
+    if summary.suggestion_count is not None:
+        lines.append(f"Suggestions: {summary.suggestion_count}")
+    if summary.vote_round_count is not None:
+        lines.append(f"Vote rounds: {summary.vote_round_count}")
+    if summary.membership_request_count is not None:
+        lines.append(f"Membership requests: {summary.membership_request_count}")
+    if summary.configuration_present is not None:
+        lines.append(f"Guild configuration present: {'Yes' if summary.configuration_present else 'No'}")
+
+    if summary.warnings:
+        lines.append("")
+        lines.append("**Warnings**")
+        lines.extend(f"- {warning}" for warning in summary.warnings)
+
+    return "\n".join(lines)
+
+
+def perform_restore_from_path(
     backup_service: BackupService,
     user: object,
     wash_crew_role_id: Optional[int],
-    backup_filename: str,
+    archive_path: Path,
 ) -> tuple[str, bool, bool]:
-    """Validate a requested /restore target and build its confirmation prompt.
+    """Validate a full-restore candidate and build its summary + confirmation gate.
 
-    This function never restores anything -- it only checks permissions
-    and validates the requested backup, then hands back a message for
-    bot.py to show alongside a confirmation view. The actual restore only
-    happens if that confirmation is accepted (see perform_confirmed_restore).
-
-    Args:
-        backup_service: The backup service to look up and validate the
-            requested archive through.
-        user: The member invoking the command.
-        wash_crew_role_id: The configured WASH Crew role ID, or None if
-            unconfigured.
-        backup_filename: The archive's filename, as reported by /backup or
-            a previous /restore attempt's error message.
+    Never restores anything -- bot.py resolves a `backup_filename`
+    argument to a path (via find_backup_by_filename) or downloads an
+    uploaded `backup_file` attachment to a temporary path before calling
+    this, so this function only ever deals in already-resolved paths.
 
     Returns:
         A (message, ephemeral, needs_confirmation) tuple. needs_confirmation
-        is False whenever there's nothing left to confirm -- a permission
-        failure, an unknown filename, or a backup that fails validation --
-        and True only when a valid backup was found and the member should
-        be shown the confirm/cancel prompt.
+        is False for a permission failure or a backup that fails
+        validation, and True only when the summary is valid and the
+        member should be shown the confirm/cancel prompt.
     """
     if wash_crew_role_id is None:
         return (
@@ -4018,47 +4119,30 @@ def perform_restore(
     if not is_wash_crew_member(user, wash_crew_role_id):
         return "You need the WASH Crew role to restore a backup.", True, False
 
-    archive_path = find_backup_by_filename(backup_service, backup_filename)
-    if archive_path is None:
-        return build_backup_not_found_message(backup_service, backup_filename), True, False
-
-    validation = backup_service.validate_backup(archive_path)
-    if not validation.is_valid:
-        detail = "; ".join(validation.errors) or "unknown validation error"
-        return f"That backup failed validation and cannot be restored: {detail}", True, False
-
-    return (
-        f"Restoring from `{archive_path.name}` will overwrite WASH's current data with "
-        "this backup's contents. A safety backup of the current data will be made "
-        "first, but this action cannot be undone from within Discord. Proceed?",
-        True,
-        True,
-    )
+    summary = build_restore_summary(backup_service, archive_path, expected_backup_type=BackupType.FULL)
+    text = build_restore_summary_text(summary)
+    if summary.is_valid:
+        text += (
+            "\n\nRestoring will overwrite WASH's current data with this backup's contents. "
+            "A safety backup of the current data will be made automatically first. "
+            "A bot restart is recommended afterward so all in-memory state reflects the restored data."
+        )
+    return text, True, summary.is_valid
 
 
-def perform_confirmed_restore(
+def perform_confirmed_restore_from_path(
     backup_service: BackupService,
     user: object,
     wash_crew_role_id: Optional[int],
-    backup_filename: str,
+    archive_path: Path,
 ) -> tuple[str, bool]:
-    """Perform the actual restore after the member has confirmed.
+    """Perform the actual full restore after WASH Crew has confirmed.
 
-    Re-checks the WASH Crew permission and re-resolves the requested
-    backup rather than trusting anything carried over from the initial
-    /restore call -- the confirmation button click is a separate
-    interaction, and re-validating here keeps this function's own
-    behavior correct regardless of how it's invoked.
-
-    Args:
-        backup_service: The backup service to restore through.
-        user: The member who clicked "Confirm Restore".
-        wash_crew_role_id: The configured WASH Crew role ID, or None if
-            unconfigured.
-        backup_filename: The archive's filename to restore from.
-
-    Returns:
-        A (message, ephemeral) tuple reporting success or any error.
+    Re-checks the WASH Crew permission and re-validates archive_path
+    from scratch rather than trusting the initial /restore call -- the
+    confirm click is a separate interaction, and the file (especially an
+    uploaded one sitting in a temporary directory) could have changed or
+    vanished since.
     """
     if wash_crew_role_id is None:
         return (
@@ -4069,16 +4153,251 @@ def perform_confirmed_restore(
     if not is_wash_crew_member(user, wash_crew_role_id):
         return "You need the WASH Crew role to restore a backup.", True
 
-    archive_path = find_backup_by_filename(backup_service, backup_filename)
-    if archive_path is None:
-        return build_backup_not_found_message(backup_service, backup_filename), True
+    summary = build_restore_summary(backup_service, archive_path, expected_backup_type=BackupType.FULL)
+    if not summary.is_valid:
+        detail = "; ".join(summary.errors) or "unknown validation error"
+        return f"That backup failed validation and cannot be restored: {detail}", True
 
     try:
         result = backup_service.restore_backup(archive_path)
     except BackupError as exc:
-        return f"Restore failed: {exc}", True
+        detail = str(exc)
+        if detail.startswith("Could not create backup"):
+            return (
+                f"Safety backup failed, so the restore was aborted. Your live data was NOT changed. Details: {detail}",
+                True,
+            )
+        return (
+            f"Restore failed after the safety backup succeeded. Your previous data is preserved in that "
+            f"safety backup. Details: {detail}",
+            True,
+        )
 
-    return f"Restored {len(result.restored_files)} file(s) from `{archive_path.name}`.", True
+    message = f"Restored {len(result.restored_files)} file(s) from this backup."
+    if result.safety_backup is not None:
+        message += f" A safety backup of your previous data was made first: `{result.safety_backup.name}`."
+    message += " A bot restart is recommended so all in-memory state reflects the restored data."
+    return message, True
+
+
+async def handle_restore(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    backup_filename: Optional[str],
+    backup_file: Optional[discord.Attachment],
+) -> None:
+    """Handle /restore: select-or-upload -> validate -> summary -> confirm/cancel.
+
+    Downloading an uploaded attachment is a network call that can
+    outlast Discord's 3-second initial-response window, so this always
+    defers first and replies via followup from then on -- unlike every
+    other command in this file, which responds directly.
+    """
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message("You need the WASH Crew role to restore a backup.", ephemeral=True)
+        return
+
+    if (backup_filename is None) == (backup_file is None):
+        await interaction.response.send_message(
+            "Provide exactly one of `backup_filename` (an existing local backup) or "
+            "`backup_file` (a .zip to upload).",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    temporary_directory: Optional[tempfile.TemporaryDirectory] = None
+    if backup_file is not None:
+        if not backup_file.filename.casefold().endswith(".zip"):
+            await interaction.followup.send("The uploaded file must be a `.zip` backup archive.", ephemeral=True)
+            return
+        temporary_directory = tempfile.TemporaryDirectory()
+        archive_path = Path(temporary_directory.name) / "uploaded-backup.zip"
+        try:
+            await backup_file.save(archive_path)
+        except discord.HTTPException as exc:
+            temporary_directory.cleanup()
+            await interaction.followup.send(f"Could not download the uploaded backup: {exc}", ephemeral=True)
+            return
+    else:
+        found = find_backup_by_filename(bot.backup_service, backup_filename)
+        if found is None:
+            await interaction.followup.send(
+                build_backup_not_found_message(bot.backup_service, backup_filename), ephemeral=True
+            )
+            return
+        archive_path = found
+
+    message, _, needs_confirmation = perform_restore_from_path(
+        bot.backup_service, interaction.user, bot.wash_crew_role_id, archive_path
+    )
+    if not needs_confirmation:
+        if temporary_directory is not None:
+            temporary_directory.cleanup()
+        await interaction.followup.send(message, ephemeral=True)
+        return
+
+    async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+        try:
+            result_message, result_ephemeral = perform_confirmed_restore_from_path(
+                bot.backup_service, confirm_interaction.user, bot.wash_crew_role_id, archive_path
+            )
+        finally:
+            if temporary_directory is not None:
+                temporary_directory.cleanup()
+        await confirm_interaction.response.send_message(result_message, ephemeral=result_ephemeral)
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        if temporary_directory is not None:
+            temporary_directory.cleanup()
+        await cancel_interaction.response.send_message("Restore cancelled. No data was changed.", ephemeral=True)
+
+    view = RestoreConfirmationView(on_confirm, on_cancel)
+    await interaction.followup.send(message, view=view, ephemeral=True)
+
+
+async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPartyBot", database_id: int) -> None:
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message(
+            "You need the WASH Crew role to back up a suggestion database.", ephemeral=True
+        )
+        return
+
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    result = create_database_backup(
+        bot.backup_service,
+        bot.suggestion_database_repository,
+        bot.suggestion_repository,
+        bot.suggestion_database_configuration_repository,
+        guild_id,
+        database_id,
+    )
+    if not result.success or result.creation is None or result.display_filename is None:
+        await interaction.response.send_message(result.message, ephemeral=True)
+        return
+
+    file = discord.File(result.creation.archive_path, filename=result.display_filename)
+    await interaction.response.send_message(result.message, file=file, ephemeral=True)
+
+
+async def handle_database_restore(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    mode: str,
+    backup_filename: Optional[str],
+    backup_file: Optional[discord.Attachment],
+) -> None:
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message(
+            "You need the WASH Crew role to restore a suggestion database.", ephemeral=True
+        )
+        return
+
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    try:
+        restore_mode = DatabaseRestoreMode(mode)
+    except ValueError:
+        await interaction.response.send_message("Choose either Merge or Replace.", ephemeral=True)
+        return
+
+    if (backup_filename is None) == (backup_file is None):
+        await interaction.response.send_message(
+            "Provide exactly one of `backup_filename` (an existing local backup) or "
+            "`backup_file` (a .zip to upload).",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    temporary_directory: Optional[tempfile.TemporaryDirectory] = None
+    if backup_file is not None:
+        if not backup_file.filename.casefold().endswith(".zip"):
+            await interaction.followup.send("The uploaded file must be a `.zip` backup archive.", ephemeral=True)
+            return
+        temporary_directory = tempfile.TemporaryDirectory()
+        archive_path = Path(temporary_directory.name) / "uploaded-database-backup.zip"
+        try:
+            await backup_file.save(archive_path)
+        except discord.HTTPException as exc:
+            temporary_directory.cleanup()
+            await interaction.followup.send(f"Could not download the uploaded backup: {exc}", ephemeral=True)
+            return
+    else:
+        found = find_backup_by_filename(bot.backup_service, backup_filename)
+        if found is None:
+            await interaction.followup.send(
+                build_backup_not_found_message(bot.backup_service, backup_filename), ephemeral=True
+            )
+            return
+        archive_path = found
+
+    summary = build_restore_summary(bot.backup_service, archive_path, expected_backup_type=BackupType.SUGGESTION_DATABASE)
+    text = build_restore_summary_text(summary)
+    if not summary.is_valid:
+        if temporary_directory is not None:
+            temporary_directory.cleanup()
+        await interaction.followup.send(text, ephemeral=True)
+        return
+
+    text += (
+        f"\n\n{restore_mode.value.title()} this suggestion database? "
+        "A safety backup of your current data will be made automatically first."
+    )
+
+    async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+        try:
+            result = restore_database_backup(
+                bot.backup_service,
+                bot.suggestion_database_repository,
+                bot.suggestion_repository,
+                bot.suggestion_database_configuration_repository,
+                archive_path,
+                guild_id,
+                restore_mode,
+            )
+        finally:
+            if temporary_directory is not None:
+                temporary_directory.cleanup()
+        message = result.message
+        if result.success:
+            message += " A bot restart is recommended so all in-memory state reflects the restored data."
+        await confirm_interaction.response.send_message(message, ephemeral=True)
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        if temporary_directory is not None:
+            temporary_directory.cleanup()
+        await cancel_interaction.response.send_message("Restore cancelled. No data was changed.", ephemeral=True)
+
+    view = RestoreConfirmationView(on_confirm, on_cancel)
+    await interaction.followup.send(text, view=view, ephemeral=True)
 
 
 def build_suggestion_confirmation_embed(

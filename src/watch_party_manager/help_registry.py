@@ -44,12 +44,10 @@ class CommandHelp:
 
 COMMAND_HELP: tuple[CommandHelp, ...] = (
     CommandHelp("/help", "Show the WASH command guide and documentation links.", "General"),
-    CommandHelp(
-        "/about", "View WASH information, version, latency, uptime, features, and project.", "General"
-    ),
+    CommandHelp("/about", "View WASH info, version, latency, and uptime.", "General"),
     CommandHelp(
         "/join_watch_party",
-        "Join or leave the Watch Party, according to the server's configured join mode.",
+        "Join or leave the Watch Party.",
         "General",
     ),
     CommandHelp(
@@ -57,19 +55,19 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/watch_party",
-        "Manage Watch Party membership: list, add, remove, search, and review join requests.",
+        "Manage Watch Party membership and join requests.",
         "WASH Crew: Membership",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/setup",
-        "Run the guided first-time server configuration wizard.",
+        "Run the guided server setup wizard.",
         "WASH Crew: Configuration",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/config",
-        "View and change WASH's server configuration, one section at a time.",
+        "View or change WASH's server configuration.",
         "WASH Crew: Configuration",
         HelpAudience.WASH_CREW,
     ),
@@ -78,7 +76,7 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/list",
-        "List watch items in the relevant suggestion database.",
+        "List watch items in a suggestion database.",
         "Watch Items",
         HelpAudience.WASH_CREW,
     ),
@@ -96,19 +94,19 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/edit_vote",
-        "Change the active vote's end time, end it now, or cancel it.",
+        "Change, end, or cancel the active vote.",
         "WASH Crew: Voting",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/database_add",
-        "Create a suggestion database for the current channel or thread.",
+        "Create a suggestion database for this channel.",
         "WASH Crew: Suggestion Databases",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/database_list",
-        "List suggestion databases configured for this server.",
+        "List this server's suggestion databases.",
         "WASH Crew: Suggestion Databases",
         HelpAudience.WASH_CREW,
     ),
@@ -119,20 +117,32 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
+        "/database_backup",
+        "Back up a single suggestion database.",
+        "WASH Crew: Suggestion Databases",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
+        "/database_restore",
+        "Restore a suggestion database backup (merge or replace).",
+        "WASH Crew: Suggestion Databases",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
         "/repair_suggestions",
-        "Repair legacy IMDb titles and remove malformed suggestions.",
+        "Repair legacy IMDb titles and malformed suggestions.",
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/backup",
-        "Create an immediate backup of WASH's data.",
+        "Create and download an immediate backup of WASH's data.",
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/restore",
-        "Restore WASH's data from a selected backup.",
+        "Restore WASH's data from a selected or uploaded backup.",
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
@@ -144,7 +154,7 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/watch_party_status",
-        "View the currently scheduled watch party.",
+        "View the scheduled watch party.",
         "Watch Parties",
         HelpAudience.WASH_CREW,
     ),

@@ -7,13 +7,16 @@ import json
 import shutil
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Iterable
+from typing import Iterable, Optional
+
+from watch_party_manager.version import __version__ as APPLICATION_VERSION
 
 BACKUP_FORMAT_VERSION = 1
+PROJECT_NAME = "Watch Party Manager"
 MANIFEST_NAME = "manifest.json"
 DEFAULT_DATA_DIRECTORY = Path("data")
 DEFAULT_BACKUP_DIRECTORY = DEFAULT_DATA_DIRECTORY / "backups"
@@ -22,11 +25,25 @@ DEFAULT_RETENTION_LIMIT = 30
 
 
 class BackupKind(str, Enum):
-    """Supported backup categories."""
+    """Why/when a backup was created -- drives its retention directory
+    and retention limit. Orthogonal to BackupType (what it contains).
+    """
 
     SCHEDULED = "scheduled"
     MANUAL = "manual"
 
+
+class BackupType(str, Enum):
+    """What a backup archive's contents represent.
+
+    Orthogonal to BackupKind: a suggestion-database-scoped backup is
+    still created "manually" (BackupKind.MANUAL) for retention purposes,
+    but its BackupType tells /restore it must never be used for a full
+    restore, and vice versa.
+    """
+
+    FULL = "full"
+    SUGGESTION_DATABASE = "suggestion_database"
 
 
 
@@ -59,12 +76,25 @@ class BackupFile:
 
 @dataclass(frozen=True, slots=True)
 class BackupManifest:
-    """Metadata describing a complete WASH backup."""
+    """Metadata describing a complete WASH backup.
+
+    project_name/application_version/guild_id/database_id/database_name
+    are all optional: backups created before FR-032B never recorded
+    them, so validate_backup() must keep accepting archives that omit
+    them rather than treating their absence as corruption (see "Do not
+    report values that cannot be reliably determined").
+    """
 
     format_version: int
     created_at: str
     kind: BackupKind
     files: tuple[BackupFile, ...]
+    backup_type: BackupType = BackupType.FULL
+    project_name: Optional[str] = None
+    application_version: Optional[str] = None
+    guild_id: Optional[int] = None
+    database_id: Optional[int] = None
+    database_name: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,15 +152,77 @@ class BackupService:
         *,
         created_at: datetime | None = None,
         enforce_retention: bool = True,
+        guild_id: int | None = None,
     ) -> BackupCreationResult:
-        """Create a checksummed ZIP snapshot of all JSON data files."""
+        """Create a checksummed ZIP snapshot of all JSON data files.
+
+        guild_id is purely informational (recorded in the manifest for
+        display/troubleshooting) -- the archive itself still contains
+        every JSON file under data_directory, unscoped by guild, exactly
+        as before. This project's data model is not strictly multi-
+        tenant across files, so a full backup has never been (and still
+        isn't) filtered by guild.
+        """
         timestamp = self._normalize_datetime(created_at)
         source_files = tuple(self._iter_data_files())
-        manifest = self._build_manifest(source_files, kind, timestamp)
+        file_contents = {
+            relative_path.as_posix(): source_path.read_bytes() for source_path, relative_path in source_files
+        }
+        return self.create_scoped_backup(
+            file_contents,
+            kind=kind,
+            backup_type=BackupType.FULL,
+            created_at=timestamp,
+            enforce_retention=enforce_retention,
+            guild_id=guild_id,
+        )
+
+    def create_scoped_backup(
+        self,
+        files: dict[str, bytes],
+        *,
+        kind: BackupKind,
+        backup_type: BackupType,
+        created_at: datetime | None = None,
+        enforce_retention: bool = True,
+        guild_id: int | None = None,
+        database_id: int | None = None,
+        database_name: str | None = None,
+        filename_tag: str | None = None,
+    ) -> BackupCreationResult:
+        """Create a checksummed ZIP from explicit in-memory file contents.
+
+        create_backup() is a thin wrapper around this for the common
+        case (every *.json file under data_directory). This lower-level
+        entry point exists for FR-032B's single suggestion database
+        backups, which need a filtered file set (just one database's
+        records) instead of everything on disk.
+
+        Args:
+            files: Relative archive path (posix-style, e.g.
+                "suggestions.json") mapped to its exact file content.
+            kind: Retention category (drives which directory/limit the
+                archive counts against -- unchanged from before).
+            backup_type: What the archive's contents represent (full
+                snapshot vs. a single suggestion database).
+            filename_tag: Optional short tag appended to the generated
+                filename (e.g. "db3") so a scoped backup's filename is
+                self-descriptive without needing to open its manifest.
+        """
+        timestamp = self._normalize_datetime(created_at)
+        manifest = self._build_manifest(
+            files,
+            kind,
+            timestamp,
+            backup_type=backup_type,
+            guild_id=guild_id,
+            database_id=database_id,
+            database_name=database_name,
+        )
 
         destination_directory = self._backup_directory / kind.value
         destination_directory.mkdir(parents=True, exist_ok=True)
-        archive_path = self._unique_archive_path(destination_directory, kind, timestamp)
+        archive_path = self._unique_archive_path(destination_directory, kind, timestamp, tag=filename_tag)
 
         try:
             with tempfile.NamedTemporaryFile(
@@ -150,8 +242,8 @@ class BackupService:
                     MANIFEST_NAME,
                     json.dumps(self._manifest_to_dict(manifest), indent=2),
                 )
-                for source_path, relative_path in source_files:
-                    archive.write(source_path, arcname=relative_path.as_posix())
+                for relative_path, payload in files.items():
+                    archive.writestr(relative_path, payload)
 
             temporary_path.replace(archive_path)
         except (OSError, zipfile.BadZipFile) as exc:
@@ -308,7 +400,13 @@ class BackupService:
                     for entry in validation.manifest.files:
                         destination = self._data_directory / Path(entry.path)
                         destination.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(stage_root / Path(entry.path), destination)
+                        # Atomic per-file swap (temp file + replace), matching
+                        # every repository's own save() convention -- a crash
+                        # mid-restore can never leave a partially written
+                        # destination file, only a stray .tmp sibling.
+                        temporary_destination = destination.with_name(destination.name + ".tmp")
+                        shutil.copy2(stage_root / Path(entry.path), temporary_destination)
+                        temporary_destination.replace(destination)
                         restored.append(destination)
         except (OSError, zipfile.BadZipFile, KeyError) as exc:
             raise BackupError(f"Could not restore backup: {exc}") from exc
@@ -347,25 +445,30 @@ class BackupService:
 
     def _build_manifest(
         self,
-        files: Iterable[tuple[Path, PurePosixPath]],
+        files: dict[str, bytes],
         kind: BackupKind,
         created_at: datetime,
+        *,
+        backup_type: BackupType = BackupType.FULL,
+        guild_id: int | None = None,
+        database_id: int | None = None,
+        database_name: str | None = None,
     ) -> BackupManifest:
-        entries = []
-        for source_path, relative_path in files:
-            payload = source_path.read_bytes()
-            entries.append(
-                BackupFile(
-                    path=relative_path.as_posix(),
-                    size=len(payload),
-                    sha256=self._sha256(payload),
-                )
-            )
+        entries = [
+            BackupFile(path=relative_path, size=len(payload), sha256=self._sha256(payload))
+            for relative_path, payload in sorted(files.items())
+        ]
         return BackupManifest(
             format_version=BACKUP_FORMAT_VERSION,
             created_at=created_at.isoformat().replace("+00:00", "Z"),
             kind=kind,
             files=tuple(entries),
+            backup_type=backup_type,
+            project_name=PROJECT_NAME,
+            application_version=APPLICATION_VERSION,
+            guild_id=guild_id,
+            database_id=database_id,
+            database_name=database_name,
         )
 
     @staticmethod
@@ -377,9 +480,12 @@ class BackupService:
         return value.astimezone(timezone.utc)
 
     @staticmethod
-    def _unique_archive_path(directory: Path, kind: BackupKind, created_at: datetime) -> Path:
+    def _unique_archive_path(
+        directory: Path, kind: BackupKind, created_at: datetime, *, tag: str | None = None
+    ) -> Path:
         timestamp = created_at.strftime("%Y%m%dT%H%M%S%fZ")
-        return directory / f"wash-{kind.value}-{timestamp}.zip"
+        suffix = f"-{tag}" if tag else ""
+        return directory / f"wash-{kind.value}{suffix}-{timestamp}.zip"
 
     @staticmethod
     def _sha256(payload: bytes) -> str:
@@ -400,8 +506,20 @@ class BackupService:
     def _manifest_to_dict(manifest: BackupManifest) -> dict:
         return {
             "format_version": manifest.format_version,
+            # Mirrors format_version under the name FR-032B's manifest
+            # schema specifies. format_version remains the field every
+            # existing reader (this class's own _parse_manifest, and
+            # already-shipped backups) actually depends on; this is an
+            # additive alias, not a replacement.
+            "backup_format_version": manifest.format_version,
             "created_at": manifest.created_at,
             "kind": manifest.kind.value,
+            "backup_type": manifest.backup_type.value,
+            "project_name": manifest.project_name,
+            "application_version": manifest.application_version,
+            "guild_id": manifest.guild_id,
+            "database_id": manifest.database_id,
+            "database_name": manifest.database_name,
             "files": [
                 {"path": entry.path, "size": entry.size, "sha256": entry.sha256}
                 for entry in manifest.files
@@ -423,9 +541,19 @@ class BackupService:
             )
             for entry in raw["files"]
         )
+        # backup_type/project_name/application_version/guild_id/database_id/
+        # database_name are all absent from backups created before
+        # FR-032B -- default rather than require, so older archives
+        # still validate and restore.
         return BackupManifest(
             format_version=int(raw["format_version"]),
             created_at=str(raw["created_at"]),
             kind=BackupKind(raw["kind"]),
             files=files,
+            backup_type=BackupType(raw.get("backup_type", BackupType.FULL.value)),
+            project_name=raw.get("project_name"),
+            application_version=raw.get("application_version"),
+            guild_id=raw.get("guild_id"),
+            database_id=raw.get("database_id"),
+            database_name=raw.get("database_name"),
         )
