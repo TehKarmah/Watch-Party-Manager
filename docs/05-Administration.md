@@ -124,7 +124,7 @@ Before manual maintenance, stop the bot and make a copy of the data files.
 7. Run `/diagnostics` from an authorized account.
 8. Smoke-test any commands changed in the release.
 
-Import/export between separate WASH instances and configurable scheduled backup execution are planned but not implemented (see Section 9).
+Configurable scheduled backup execution is planned but not implemented (see Section 9) -- backups still require an explicit `/backup` today. Import from another WASH instance is implemented via `/import`; that other instance's own `/backup` output is the "export" side of the exchange, so there is no separate export command.
 
 ## 9. Backup & Recovery
 
@@ -168,17 +168,61 @@ Back up or restore a single suggestion database instead of everything. `/databas
 
 A single-database backup can only be restored back into the guild it came from; WASH rejects a mismatch rather than silently importing another server's data.
 
+### `/database_reset`
+
+Clears every suggestion (active and archived alike -- there is no separate archive store; both are just `WatchItem` records in the same file) from one suggestion database. The database record itself, its ID, its name, and its configuration are never touched, and no other database is affected.
+
+Flow: select the database (`/database_reset database_id:<id>`) -> WASH shows how many suggestions would be removed -> click **Reset** -> a modal asks you to type `RESET` exactly (case-sensitive) -> WASH creates a full safety backup, then performs the reset. Clicking **Cancel**, or submitting anything other than `RESET`, leaves all data unchanged.
+
+### `/factory_reset`
+
+Removes every WASH-managed record belonging to the current server: guild configuration, suggestion databases and their configuration, suggestions (including embedded watch history), vote rounds, membership requests, scheduled watch parties, and scheduled reminder jobs. Backup archives, `.env` files, the bot token, application code, the virtual environment, and logs are never touched -- this command only ever writes through WASH's own JSON repositories.
+
+Flow: `/factory_reset` -> WASH shows a count of everything that would be removed -> click **Factory Reset** -> type `RESET` exactly -> a full safety backup is made, then the reset runs. Afterward, `/setup` is required again (removing the guild's configuration is what makes WASH treat the server as never having been set up -- the same check `/setup` already used before this milestone).
+
+### `/import`
+
+Imports a backup produced by *another* WASH instance's own `/backup`. Unlike `/restore`, `/import` only ever accepts an uploaded `.zip` -- there is no "select an existing local backup" option, since the whole point is bringing in data WASH doesn't already have on disk.
+
+Flow: upload the backup -> WASH validates it and shows the same kind of summary `/restore` shows -> choose **Merge**, **Replace**, or **Cancel** -> (Replace only) type `REPLACE` exactly -> a full safety backup is made, then the import runs.
+
+Only "portable" data is ever imported: suggestion databases, their configuration, their suggestions, and vote rounds. This server's guild configuration -- its configured roles, channels, and guild ID -- is **never** changed by an import, in either mode. Membership requests, scheduled reminders, and scheduled watch parties are also never imported, since they reference the *source* server's Discord channels/messages/approval history and would be meaningless (or actively misleading) here.
+
+#### Merge versus Replace
+
+Never inferred -- you always choose explicitly:
+
+- **Merge**: a database whose name already exists locally (case-insensitive match) has its suggestions merged in; a suggestion whose title already exists for that database is skipped and reported as a conflict, never overwritten. Every other incoming database is imported as new. Numeric IDs from the other instance are meaningless here (each WASH instance assigns them independently), so they're reassigned automatically whenever they'd otherwise collide with something already local.
+- **Replace**: every portable record currently belonging to this guild is removed first, then the backup's portable data is imported fresh in its place. Other guilds' data (in a hypothetical multi-guild deployment) is untouched, and so is this guild's own Discord role/channel configuration.
+
+#### Import results
+
+After an import completes, WASH reports databases and suggestions imported vs. skipped, any title conflicts detected, how many identifiers were reassigned to avoid collisions, and which categories of data were intentionally excluded. WASH does not keep a persistent history of past imports -- each result is only shown once, in that response.
+
+### Restart requirement
+
+**A bot restart is recommended after `/restore`, `/database_restore`, `/database_reset`, `/factory_reset`, or `/import`.** Several services (suggestions, votes, membership requests) load their data once at startup and cache it in memory; changes written to disk by any of these commands won't be reflected in a running bot's behavior until it restarts. `GuildConfiguration` reads are not cached, so configuration changes (including a factory reset requiring `/setup` again) take effect immediately even without a restart.
+
+### Recommended backup strategy
+
+- Run `/backup` before any release, dependency upgrade, or manual data edit.
+- Run `/database_backup` before experimenting with a specific database's suggestion rules or content.
+- Keep at least one backup downloaded outside of WASH's own `data/backups/` directory (e.g. before a factory reset, since a factory reset's automatic safety backup still only lives in the same `data/` tree it's resetting).
+- After using `/import`, review the reported conflicts and restart the bot before relying on the imported data.
+
 ### Troubleshooting
 
 | Symptom | Cause | What happened to live data |
 | --- | --- | --- |
-| "This backup failed validation and cannot be restored" | Corrupt ZIP, missing/unreadable manifest, unsafe path, or a checksum mismatch (tampered or truncated file). | Unchanged -- validation never writes anything. |
-| "Unsupported backup type" | A full backup was offered to `/database_restore`, or a single-database backup was offered to `/restore`. | Unchanged. |
+| "This backup failed validation and cannot be restored" / "Import validation failed" | Corrupt ZIP, missing/unreadable manifest, unsafe path, or a checksum mismatch (tampered or truncated file). | Unchanged -- validation never writes anything. |
+| "Unsupported backup type" | A full backup was offered to `/database_restore`, a single-database backup was offered to `/restore` or `/import`, or an incompatible format version was found. | Unchanged. |
 | "That backup was created in a different Discord server" | A `/database_backup` archive's recorded guild ID doesn't match the server `/database_restore` was run in. | Unchanged. |
 | "No existing suggestion database with that ID was found to merge into" | Merge was chosen but the destination database doesn't exist yet. | Unchanged -- use Replace instead if that's intended. |
-| "N suggestion(s) were skipped as duplicates" | Merge detected a title already present in the destination database. | Only the non-conflicting suggestions were imported; nothing existing was overwritten. |
-| "Safety backup failed, so the restore was aborted" | WASH couldn't write the pre-restore safety backup (e.g. disk full or permissions). | Unchanged -- the restore never began. |
+| "N suggestion(s) were skipped as duplicates" (restore, reset, or import) | Merge detected a title already present in the destination database. | Only the non-conflicting suggestions were imported; nothing existing was overwritten. |
+| "Confirmation text did not match ... exactly" | The typed `RESET`/`REPLACE` phrase didn't match, or didn't match case. | Unchanged -- nothing runs until the exact phrase is submitted. |
+| "Safety backup failed, so the ... was aborted" (restore, reset, factory reset, or import) | WASH couldn't write the pre-action safety backup (e.g. disk full or permissions). | Unchanged -- the destructive action never began. |
 | "Restore failed after the safety backup succeeded" | The safety backup was made, but copying the backup's files onto live data failed partway through. | The safety backup archive is intact and named in the error message; use `/restore` again with it if needed. |
+| No suggestions appear after a successful restore/reset/import | A bot restart is required for the running process's in-memory cache to reflect the change (see "Restart requirement" above). | Data on disk is already correct; only the live bot's view of it is stale. |
 
 ## 10. Planned Version 1 Administration
 
@@ -189,7 +233,6 @@ The Version 1 plan includes:
 - Rotation and event-series administration
 - Scheduling and Discord Event publishing
 - Historical corrections and retroactive watch-history entry
-- Cross-instance import and export
 - Configurable scheduled backup execution (the retention/interval settings already exist in `/config`; the scheduler does not yet act on them)
 - Health and maintenance reporting
 

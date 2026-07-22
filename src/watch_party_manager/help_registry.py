@@ -43,7 +43,7 @@ class CommandHelp:
 
 
 COMMAND_HELP: tuple[CommandHelp, ...] = (
-    CommandHelp("/help", "Show the WASH command guide and documentation links.", "General"),
+    CommandHelp("/help", "Show the WASH command guide.", "General"),
     CommandHelp("/about", "View WASH info, version, latency, and uptime.", "General"),
     CommandHelp(
         "/join_watch_party",
@@ -55,7 +55,7 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/watch_party",
-        "Manage Watch Party membership and join requests.",
+        "Manage Watch Party membership.",
         "WASH Crew: Membership",
         HelpAudience.WASH_CREW,
     ),
@@ -100,7 +100,7 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/database_add",
-        "Create a suggestion database for this channel.",
+        "Create a suggestion database.",
         "WASH Crew: Suggestion Databases",
         HelpAudience.WASH_CREW,
     ),
@@ -124,25 +124,43 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/database_restore",
-        "Restore a suggestion database backup (merge or replace).",
+        "Restore a database backup.",
+        "WASH Crew: Suggestion Databases",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
+        "/database_reset",
+        "Clear all suggestions from one database.",
         "WASH Crew: Suggestion Databases",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/repair_suggestions",
-        "Repair legacy IMDb titles and malformed suggestions.",
+        "Repair legacy titles and bad suggestions.",
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/backup",
-        "Create and download an immediate backup of WASH's data.",
+        "Create and download a WASH backup.",
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/restore",
-        "Restore WASH's data from a selected or uploaded backup.",
+        "Restore WASH's data from a backup.",
+        "WASH Crew: Maintenance",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
+        "/factory_reset",
+        "Erase all WASH data for this server.",
+        "WASH Crew: Maintenance",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
+        "/import",
+        "Import a backup from another WASH instance.",
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
@@ -160,13 +178,13 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/schedule_watch_party",
-        "Schedule a watch party for a watch item.",
+        "Schedule a watch party.",
         "WASH Crew: Watch Parties",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
         "/reschedule_watch_party",
-        "Change when a scheduled watch party starts.",
+        "Change a watch party's start time.",
         "WASH Crew: Watch Parties",
         HelpAudience.WASH_CREW,
     ),

@@ -188,6 +188,25 @@ class JsonSchedulerRepository:
         async with self._lock:
             return list(self._load_jobs())
 
+    async def remove_for_guild(self, guild_id: int) -> list[ScheduledJob]:
+        """Permanently remove every job belonging to one guild.
+
+        Unlike cancel(), which soft-marks a single job CANCELLED and
+        keeps its record, this hard-deletes -- used by FR-032C's
+        factory reset, where stale job records (even cancelled ones)
+        should not survive a reset.
+
+        Returns:
+            The removed jobs, for reporting purposes.
+        """
+        async with self._lock:
+            jobs = self._load_jobs()
+            removed = [job for job in jobs if job.guild_id == guild_id]
+            if removed:
+                remaining = [job for job in jobs if job.guild_id != guild_id]
+                self._save_jobs(remaining)
+            return removed
+
     async def _replace_status(
         self,
         job_id: str,

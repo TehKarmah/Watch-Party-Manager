@@ -18,7 +18,7 @@ This checklist tracks implemented foundations against the Version 1 specificatio
 | FR-012 | Implement reminders and recurring event behavior | Not started | Depends on scheduling foundations. |
 | FR-013 | Expand statistics and reporting | Partial | Initial statistics service and `/stats` are implemented. |
 | FR-014 | Implement setup and administration workflows | Partial | WASH Crew and database commands exist; guided setup is pending. |
-| FR-015 | Implement backup, restore, import, and export | Partial | Manual backup, validated restore (select or upload, with a pre-restore summary and confirmation), safety backups, and single-suggestion-database backup/restore (merge or replace) are implemented. Cross-instance import/export and scheduled backup execution are not. |
+| FR-015 | Implement backup, restore, import, and export | Complete foundation | Manual backup, validated restore (select or upload, with a pre-restore summary and confirmation), safety backups, single-suggestion-database backup/restore (merge or replace), suggestion-database reset, factory reset, and cross-instance import (merge or replace, typed-confirmation-gated) are implemented. Configurable scheduled backup execution is not. |
 | FR-016 | Implement migration support | Not started | Required before persistent format changes become necessary. |
 
 ## Cross-Cutting Foundations

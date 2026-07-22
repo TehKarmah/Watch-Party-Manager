@@ -83,6 +83,24 @@ class GuildConfigurationRepository:
         configurations[persisted.guild_id] = persisted
         self._save_all(configurations)
 
+    def delete(self, guild_id: int) -> bool:
+        """Remove a guild's configuration entirely, e.g. during a factory reset.
+
+        Mirrors SetupWizardRepository.delete()'s exact shape. Once removed,
+        every existing "is setup complete" check (get() returning None)
+        already treats the guild as never having been set up -- no
+        separate flag needs clearing.
+
+        Returns:
+            True if a record existed and was removed, False otherwise.
+        """
+        configurations = self._load_all()
+        if guild_id not in configurations:
+            return False
+        del configurations[guild_id]
+        self._save_all(configurations)
+        return True
+
     def _load_all(self) -> dict[int, GuildConfiguration]:
         if not self._file_path.exists():
             return {}

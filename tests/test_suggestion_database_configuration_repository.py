@@ -491,6 +491,33 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
         self.assertIn('"database_id": 1', raw_text)
         self.assertIn('"display_name": "Movies"', raw_text)
 
+    # --- FR-032C: delete() / delete_for_guild() for reset/import ---------------
+
+    def test_delete_removes_a_single_record(self) -> None:
+        self.repository.save(self._config(guild_id=100, database_id=1))
+
+        removed = self.repository.delete(100, 1)
+
+        self.assertTrue(removed)
+        self.assertIsNone(self.repository.get(100, 1))
+
+    def test_delete_returns_false_when_nothing_to_remove(self) -> None:
+        self.assertFalse(self.repository.delete(100, 999))
+
+    def test_delete_for_guild_removes_only_that_guilds_records(self) -> None:
+        self.repository.save(self._config(guild_id=100, database_id=1))
+        self.repository.save(self._config(guild_id=100, database_id=2))
+        self.repository.save(self._config(guild_id=200, database_id=1))
+
+        removed_count = self.repository.delete_for_guild(100)
+
+        self.assertEqual(2, removed_count)
+        self.assertEqual([], self.repository.list_for_guild(100))
+        self.assertEqual(1, len(self.repository.list_for_guild(200)))
+
+    def test_delete_for_guild_returns_zero_when_nothing_to_remove(self) -> None:
+        self.assertEqual(0, self.repository.delete_for_guild(999))
+
 
 if __name__ == "__main__":
     unittest.main()

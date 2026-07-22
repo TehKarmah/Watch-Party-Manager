@@ -54,9 +54,12 @@ from watch_party_manager.persistence.suggestion_database_configuration_repositor
 )
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
+from watch_party_manager.persistence.vote_repository import JsonVoteRepository
+from watch_party_manager.persistence.watch_party_repository import JsonWatchPartyRepository
 from watch_party_manager.scheduler import (
     CLOSE_VOTE_JOB_TYPE,
     CloseVoteJobHandler,
+    JsonSchedulerRepository,
     SchedulerHost,
     SchedulerService,
     VOTE_REMINDER_JOB_TYPE,
@@ -82,6 +85,13 @@ from watch_party_manager.services.database_backup_service import (
     DatabaseRestoreMode,
     create_database_backup,
     restore_database_backup,
+)
+from watch_party_manager.services.import_service import ImportMode, build_import_summary, import_backup
+from watch_party_manager.services.reset_service import (
+    build_database_reset_summary,
+    build_factory_reset_summary,
+    factory_reset as perform_factory_reset,
+    reset_suggestion_database,
 )
 from watch_party_manager.services.restore_summary_service import RestoreSummary, build_restore_summary
 from watch_party_manager.services.config_service import (
@@ -153,8 +163,10 @@ from watch_party_manager.config_view import (
     ConfigWatchDestinationSectionView,
     OnBackToMenu,
 )
+from watch_party_manager.import_view import ImportModeChoiceView
 from watch_party_manager.membership_view import MembershipApprovalView, PendingRequestSelectView
 from watch_party_manager.restore_confirmation_view import RestoreConfirmationView
+from watch_party_manager.type_to_confirm_view import DestructiveConfirmationView
 from watch_party_manager.setup_wizard_view import (
     AdminChannelStepView,
     BackupDefaultsModal,
@@ -225,6 +237,11 @@ class WatchPartyBot(commands.Bot):
         # into SuggestionService's private state for database backup/restore.
         self.suggestion_database_repository = JsonSuggestionDatabaseRepository()
         self.suggestion_repository = JsonSuggestionRepository()
+        # FR-032C: same pattern, extended to every other guild-scoped store
+        # factory reset and import need direct access to.
+        self.vote_repository = JsonVoteRepository()
+        self.watch_party_repository = JsonWatchPartyRepository()
+        self.scheduler_repository = JsonSchedulerRepository(Path("data") / "scheduled_jobs.json")
         self.backup_service = BackupService()
         self.interactive_voting_restored = False
         self.suggestion_views_restored = 0
@@ -490,6 +507,22 @@ class WatchPartyBot(commands.Bot):
             backup_file: Optional[discord.Attachment] = None,
         ) -> None:
             await handle_database_restore(interaction, self, mode, backup_filename, backup_file)
+
+        @self.tree.command(name="database_reset")
+        @discord.app_commands.describe(database_id="The suggestion database's ID (see /database_list).")
+        async def database_reset(interaction: discord.Interaction, database_id: int) -> None:
+            await handle_database_reset(interaction, self, database_id)
+
+        @self.tree.command(name="factory_reset")
+        async def factory_reset_command(interaction: discord.Interaction) -> None:
+            await handle_factory_reset(interaction, self)
+
+        @self.tree.command(name="import")
+        @discord.app_commands.describe(
+            backup_file="Upload a full backup .zip created by another WASH instance's /backup."
+        )
+        async def import_command(interaction: discord.Interaction, backup_file: discord.Attachment) -> None:
+            await handle_import(interaction, self, backup_file)
 
         @self.tree.command(name="remove")
         async def remove_suggestion(interaction: discord.Interaction, title: str) -> None:
@@ -4397,6 +4430,252 @@ async def handle_database_restore(
         await cancel_interaction.response.send_message("Restore cancelled. No data was changed.", ephemeral=True)
 
     view = RestoreConfirmationView(on_confirm, on_cancel)
+    await interaction.followup.send(text, view=view, ephemeral=True)
+
+
+# --- FR-032C: suggestion database reset ----------------------------------------------
+
+
+def build_database_reset_summary_text(summary) -> str:
+    return (
+        f'**Reset Suggestion Database "{summary.database_name}"**\n\n'
+        f"This will permanently remove {summary.suggestion_count} suggestion(s) from this database.\n"
+        "The database itself, its configuration, and every other database will NOT be affected."
+    )
+
+
+async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPartyBot", database_id: int) -> None:
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message(
+            "You need the WASH Crew role to reset a suggestion database.", ephemeral=True
+        )
+        return
+
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    summary = build_database_reset_summary(
+        bot.suggestion_database_repository, bot.suggestion_repository, guild_id, database_id
+    )
+    if summary is None:
+        await interaction.response.send_message(
+            "No suggestion database with that ID exists in this server.", ephemeral=True
+        )
+        return
+
+    async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+        if bot.wash_crew_role_id is None or not is_wash_crew_member(
+            confirm_interaction.user, bot.wash_crew_role_id
+        ):
+            await confirm_interaction.response.send_message(
+                "You need the WASH Crew role to reset a suggestion database.", ephemeral=True
+            )
+            return
+        result = reset_suggestion_database(
+            bot.backup_service, bot.suggestion_database_repository, bot.suggestion_repository, guild_id, database_id
+        )
+        await confirm_interaction.response.send_message(result.message, ephemeral=True)
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        await cancel_interaction.response.send_message("Reset cancelled. No data was changed.", ephemeral=True)
+
+    view = DestructiveConfirmationView(
+        button_label="Reset",
+        required_text="RESET",
+        modal_title="Reset Suggestion Database",
+        custom_id_prefix="database_reset",
+        on_confirm=on_confirm,
+        on_cancel=on_cancel,
+    )
+    await interaction.response.send_message(build_database_reset_summary_text(summary), view=view, ephemeral=True)
+
+
+# --- FR-032C: factory reset -----------------------------------------------------------
+
+
+def build_factory_reset_summary_text(summary) -> str:
+    lines = [
+        "**Factory Reset**",
+        "",
+        "This will permanently remove ALL WASH-managed data for this server, including:",
+        f"- Guild configuration: {'present' if summary.configuration_present else 'not configured'}",
+        f"- Suggestion databases: {summary.suggestion_database_count}",
+        f"- Suggestions: {summary.suggestion_count}",
+        f"- Vote rounds: {summary.vote_round_count}",
+        f"- Membership requests: {summary.membership_request_count}",
+        f"- Scheduled watch parties: {summary.watch_party_count}",
+        f"- Scheduled jobs: {summary.scheduled_job_count}",
+        "",
+        "Backup archives, environment files, and application code are NOT affected. "
+        "WASH will require `/setup` again afterward.",
+    ]
+    return "\n".join(lines)
+
+
+async def handle_factory_reset(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message("You need the WASH Crew role to factory reset WASH.", ephemeral=True)
+        return
+
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    summary = await build_factory_reset_summary(
+        guild_configuration_repository=bot.guild_configuration_repository,
+        database_repository=bot.suggestion_database_repository,
+        suggestion_repository=bot.suggestion_repository,
+        vote_repository=bot.vote_repository,
+        membership_request_repository=bot.membership_request_repository,
+        watch_party_repository=bot.watch_party_repository,
+        scheduler_repository=bot.scheduler_repository,
+        guild_id=guild_id,
+    )
+
+    async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+        if bot.wash_crew_role_id is None or not is_wash_crew_member(
+            confirm_interaction.user, bot.wash_crew_role_id
+        ):
+            await confirm_interaction.response.send_message(
+                "You need the WASH Crew role to factory reset WASH.", ephemeral=True
+            )
+            return
+        result = await perform_factory_reset(
+            backup_service=bot.backup_service,
+            guild_configuration_repository=bot.guild_configuration_repository,
+            setup_wizard_repository=bot.setup_wizard_repository,
+            database_repository=bot.suggestion_database_repository,
+            suggestion_repository=bot.suggestion_repository,
+            configuration_repository=bot.suggestion_database_configuration_repository,
+            vote_repository=bot.vote_repository,
+            membership_request_repository=bot.membership_request_repository,
+            watch_party_repository=bot.watch_party_repository,
+            scheduler_repository=bot.scheduler_repository,
+            guild_id=guild_id,
+        )
+        await confirm_interaction.response.send_message(result.message, ephemeral=True)
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        await cancel_interaction.response.send_message(
+            "Factory reset cancelled. No data was changed.", ephemeral=True
+        )
+
+    view = DestructiveConfirmationView(
+        button_label="Factory Reset",
+        required_text="RESET",
+        modal_title="Factory Reset",
+        custom_id_prefix="factory_reset",
+        on_confirm=on_confirm,
+        on_cancel=on_cancel,
+    )
+    await interaction.response.send_message(build_factory_reset_summary_text(summary), view=view, ephemeral=True)
+
+
+# --- FR-032C: import from another WASH instance ---------------------------------------
+
+
+def build_import_result_text(result) -> str:
+    lines = [result.message]
+    if result.excluded:
+        lines.append("")
+        lines.append("Not imported by design: " + "; ".join(result.excluded) + ".")
+    if result.success:
+        lines.append("A bot restart is recommended so all in-memory state reflects the imported data.")
+    return "\n".join(lines)
+
+
+async def handle_import(
+    interaction: discord.Interaction, bot: "WatchPartyBot", backup_file: discord.Attachment
+) -> None:
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message("You need the WASH Crew role to import a backup.", ephemeral=True)
+        return
+
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    if not backup_file.filename.casefold().endswith(".zip"):
+        await interaction.response.send_message("The uploaded file must be a `.zip` backup archive.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    temporary_directory = tempfile.TemporaryDirectory()
+    archive_path = Path(temporary_directory.name) / "uploaded-import.zip"
+    try:
+        await backup_file.save(archive_path)
+    except discord.HTTPException as exc:
+        temporary_directory.cleanup()
+        await interaction.followup.send(f"Could not download the uploaded backup: {exc}", ephemeral=True)
+        return
+
+    summary = build_import_summary(bot.backup_service, archive_path)
+    text = build_restore_summary_text(summary)
+    if not summary.is_valid:
+        temporary_directory.cleanup()
+        await interaction.followup.send(text, ephemeral=True)
+        return
+
+    text += (
+        "\n\nChoose how to import this backup's suggestion databases, suggestions, and vote rounds. "
+        "Your Discord role/channel configuration and guild ID will never be changed by an import."
+    )
+
+    async def _run_import(run_interaction: discord.Interaction, mode: ImportMode) -> None:
+        if bot.wash_crew_role_id is None or not is_wash_crew_member(run_interaction.user, bot.wash_crew_role_id):
+            await run_interaction.response.send_message(
+                "You need the WASH Crew role to import a backup.", ephemeral=True
+            )
+            return
+        try:
+            result = await import_backup(
+                bot.backup_service,
+                bot.suggestion_database_repository,
+                bot.suggestion_repository,
+                bot.suggestion_database_configuration_repository,
+                bot.vote_repository,
+                archive_path,
+                guild_id,
+                mode,
+            )
+        finally:
+            temporary_directory.cleanup()
+        await run_interaction.response.send_message(build_import_result_text(result), ephemeral=True)
+
+    async def on_merge(merge_interaction: discord.Interaction) -> None:
+        await _run_import(merge_interaction, ImportMode.MERGE)
+
+    async def on_replace(replace_interaction: discord.Interaction) -> None:
+        await _run_import(replace_interaction, ImportMode.REPLACE)
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        temporary_directory.cleanup()
+        await cancel_interaction.response.send_message("Import cancelled. No data was changed.", ephemeral=True)
+
+    view = ImportModeChoiceView(on_merge=on_merge, on_replace=on_replace, on_cancel=on_cancel)
     await interaction.followup.send(text, view=view, ephemeral=True)
 
 

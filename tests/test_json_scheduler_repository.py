@@ -201,6 +201,47 @@ class JsonSchedulerRepositoryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.repository.get_due(NOW, limit=0)
 
+    # --- FR-032C: remove_for_guild() for factory reset --------------------------
+
+    async def test_remove_for_guild_hard_deletes_matching_jobs(self) -> None:
+        await self.repository.add(self.make_job(logical_key="close_vote:1"))
+        await self.repository.add(self.make_job(logical_key="close_vote:2"))
+
+        removed = await self.repository.remove_for_guild(123)
+
+        self.assertEqual(2, len(removed))
+        self.assertEqual([], await self.repository.list_all())
+
+    async def test_remove_for_guild_preserves_other_guilds_jobs(self) -> None:
+        await self.repository.add(self.make_job(logical_key="close_vote:1"))
+        other_guild_job = ScheduledJob(
+            guild_id=999,
+            job_type="close_vote",
+            logical_key="close_vote:other",
+            run_at=NOW,
+            created_at=NOW,
+            payload={"vote_id": "2"},
+        )
+        await self.repository.add(other_guild_job)
+
+        removed = await self.repository.remove_for_guild(123)
+
+        self.assertEqual(1, len(removed))
+        remaining = await self.repository.list_all()
+        self.assertEqual([other_guild_job], remaining)
+
+    async def test_remove_for_guild_returns_empty_when_nothing_matches(self) -> None:
+        self.assertEqual([], await self.repository.remove_for_guild(123))
+
+    async def test_remove_for_guild_hard_deletes_even_a_cancelled_job(self) -> None:
+        job = await self.repository.add(self.make_job())
+        await self.repository.cancel(job.job_id, NOW)
+
+        removed = await self.repository.remove_for_guild(123)
+
+        self.assertEqual(1, len(removed))
+        self.assertIsNone(await self.repository.get_by_id(job.job_id))
+
 
 if __name__ == "__main__":
     unittest.main()

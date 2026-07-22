@@ -126,6 +126,28 @@ class GuildConfigurationRepositoryTests(unittest.TestCase):
         self.repo.save(GuildConfiguration(guild_id=1, guild_name="Guild"))
         self.assertFalse(self.path.with_suffix(self.path.suffix + ".tmp").exists())
 
+    # --- FR-032C: delete() for factory reset -----------------------------------
+
+    def test_delete_removes_an_existing_configuration(self):
+        self.repo.save(GuildConfiguration(guild_id=1, guild_name="Guild"))
+
+        removed = self.repo.delete(1)
+
+        self.assertTrue(removed)
+        self.assertIsNone(self.repo.get(1))
+
+    def test_delete_returns_false_when_nothing_to_remove(self):
+        self.assertFalse(self.repo.delete(999))
+
+    def test_delete_only_affects_the_targeted_guild(self):
+        self.repo.save(GuildConfiguration(guild_id=1, guild_name="Guild One"))
+        self.repo.save(GuildConfiguration(guild_id=2, guild_name="Guild Two"))
+
+        self.repo.delete(1)
+
+        self.assertIsNone(self.repo.get(1))
+        self.assertIsNotNone(self.repo.get(2))
+
 
 if __name__ == "__main__":
     unittest.main()

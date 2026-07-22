@@ -165,6 +165,33 @@ class SuggestionDatabaseConfigurationRepository:
         configurations[key] = persisted
         self._save_all(configurations)
 
+    def delete(self, guild_id: int, database_id: int) -> bool:
+        """Remove a single database's configuration by its composite key.
+
+        Returns:
+            True if a record existed and was removed, False otherwise.
+        """
+        configurations = self._load_all()
+        key = (guild_id, database_id)
+        if key not in configurations:
+            return False
+        del configurations[key]
+        self._save_all(configurations)
+        return True
+
+    def delete_for_guild(self, guild_id: int) -> int:
+        """Remove every configuration belonging to one guild, e.g. during a factory reset.
+
+        Returns:
+            The number of records removed.
+        """
+        configurations = self._load_all()
+        remaining = {key: value for key, value in configurations.items() if key[0] != guild_id}
+        removed_count = len(configurations) - len(remaining)
+        if removed_count:
+            self._save_all(remaining)
+        return removed_count
+
     def _load_all(self) -> dict[tuple[int, int], SuggestionDatabaseConfiguration]:
         """Load and deserialize every configuration from disk.
 

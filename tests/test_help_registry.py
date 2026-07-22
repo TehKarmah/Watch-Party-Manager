@@ -223,6 +223,26 @@ class HelpRegistryTests(unittest.TestCase):
             self.assertNotIn("/database_backup", commands)
             self.assertNotIn("/database_restore", commands)
 
+    # --- FR-032C: /database_reset, /factory_reset, /import are WASH Crew only ---
+
+    def test_reset_and_import_commands_are_wash_crew_only(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        for name in ("/database_reset", "/factory_reset", "/import"):
+            self.assertIs(entries[name].audience, HelpAudience.WASH_CREW)
+
+    def test_reset_and_import_commands_hidden_from_everyone_and_watch_party_member(self) -> None:
+        for show_watch_party_member in (False, True):
+            sections = command_sections(show_wash_crew=False, show_watch_party_member=show_watch_party_member)
+            commands = [entry.name for _, entries in sections for entry in entries]
+            for name in ("/database_reset", "/factory_reset", "/import"):
+                self.assertNotIn(name, commands)
+
+    def test_reset_and_import_commands_visible_to_wash_crew(self) -> None:
+        sections = command_sections(show_wash_crew=True)
+        commands = [entry.name for _, entries in sections for entry in entries]
+        for name in ("/database_reset", "/factory_reset", "/import"):
+            self.assertIn(name, commands)
+
     def test_existing_help_tier_visibility_is_unchanged(self) -> None:
         # FR-031 must not alter any pre-existing tier: Everyone still sees
         # only /help, /about, /join_watch_party; Watch Party members gain
