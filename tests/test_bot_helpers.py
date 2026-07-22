@@ -47,17 +47,19 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("**Watch Items**", help_text)
         self.assertIn("**Voting**", help_text)
         self.assertIn("**WASH Crew: Suggestion Databases**", help_text)
+        self.assertIn("**WASH Crew: Configuration**", help_text)
 
         expected_commands = (
             "/help",
             "/about",
             "/stats",
+            "/setup",
+            "/config",
             "/add",
             "/list",
             "/remove",
             "/start_vote",
             "/vote_status",
-            "/vote",
             "/database_add",
             "/database_list",
             "/database_remove",
@@ -66,10 +68,11 @@ class BotHelperTests(unittest.TestCase):
         for command in expected_commands:
             self.assertIn(command, help_text)
 
+        self.assertNotIn("`/vote`", help_text)
+
         self.assertLess(help_text.index("**General**"), help_text.index("**Watch Items**"))
-        self.assertLess(help_text.index("**Watch Items**"), help_text.index("**Voting**"))
         self.assertLess(
-            help_text.index("**Voting**"),
+            help_text.index("**Watch Items**"),
             help_text.index("**WASH Crew: Suggestion Databases**"),
         )
 
@@ -82,18 +85,46 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("**Watch Item** -", help_text)
         self.assertNotIn("**Blind Vote** -", help_text)
 
-    def test_help_text_hides_wash_crew_commands_for_regular_members(self) -> None:
+    def test_help_text_hides_member_and_wash_crew_commands_for_everyone(self) -> None:
         help_text = build_help_text(show_admin=False)
 
         self.assertIn("**General**", help_text)
-        self.assertIn("**Watch Items**", help_text)
-        self.assertIn("**Voting**", help_text)
+        self.assertNotIn("**Watch Items**", help_text)
         self.assertNotIn("**WASH Crew: Suggestion Databases**", help_text)
+        self.assertNotIn("**WASH Crew: Configuration**", help_text)
+        self.assertNotIn("/add", help_text)
+        self.assertNotIn("/list", help_text)
+        self.assertNotIn("/remove", help_text)
         self.assertNotIn("/database_add", help_text)
         self.assertNotIn("/database_list", help_text)
         self.assertNotIn("/database_remove", help_text)
         self.assertNotIn("/diagnostics", help_text)
-        self.assertIn("/stats", help_text)
+        self.assertNotIn("/setup", help_text)
+        self.assertNotIn("/config", help_text)
+        self.assertNotIn("/stats", help_text)
+
+    def test_help_text_shows_add_for_members_but_hides_everything_else(self) -> None:
+        # FR-029's corrected model: /add is the only command Watch Party
+        # members gain over "everyone" -- /list, /remove, /vote_status,
+        # /watch_party_status, /diagnostics, and /stats are WASH Crew only.
+        help_text = build_help_text(show_admin=False, show_member=True)
+
+        self.assertIn("**General**", help_text)
+        self.assertIn("**Watch Items**", help_text)
+        self.assertIn("/add", help_text)
+        self.assertNotIn("/list", help_text)
+        self.assertNotIn("/remove", help_text)
+        self.assertNotIn("/vote_status", help_text)
+        self.assertNotIn("/watch_party_status", help_text)
+        self.assertNotIn("/stats", help_text)
+        self.assertNotIn("**WASH Crew: Suggestion Databases**", help_text)
+        self.assertNotIn("**WASH Crew: Configuration**", help_text)
+        self.assertNotIn("/database_add", help_text)
+        self.assertNotIn("/database_list", help_text)
+        self.assertNotIn("/database_remove", help_text)
+        self.assertNotIn("/diagnostics", help_text)
+        self.assertNotIn("/setup", help_text)
+        self.assertNotIn("/config", help_text)
 
     def test_ping_text_includes_latency_and_uptime(self) -> None:
         started_at = datetime(2026, 7, 16, 10, 0, tzinfo=timezone.utc)

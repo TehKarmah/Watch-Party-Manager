@@ -22,15 +22,37 @@ class HelpRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "begin with"):
             CommandHelp("help", "Show help.", "General")
 
-    def test_member_sections_exclude_wash_crew_entries(self) -> None:
+    def test_everyone_sections_exclude_watch_party_member_and_wash_crew_entries(self) -> None:
         sections = command_sections(show_wash_crew=False)
         commands = [entry.name for _, entries in sections for entry in entries]
         self.assertIn("/help", commands)
         self.assertIn("/about", commands)
-        self.assertNotIn("/ping", commands)
-        self.assertNotIn("/version", commands)
+        self.assertNotIn("/add", commands)
+        self.assertNotIn("/list", commands)
         self.assertNotIn("/database_add", commands)
         self.assertNotIn("/diagnostics", commands)
+        self.assertNotIn("/setup", commands)
+        self.assertNotIn("/config", commands)
+
+    def test_watch_party_member_sections_add_only_the_add_command(self) -> None:
+        # FR-029's corrected permission model: Watch Party members gain
+        # only /add over the "everyone" tier. Every other previously
+        # member-facing command (list, remove, vote_status,
+        # watch_party_status, diagnostics, stats) is WASH Crew only.
+        sections = command_sections(show_wash_crew=False, show_watch_party_member=True)
+        commands = [entry.name for _, entries in sections for entry in entries]
+        self.assertIn("/help", commands)
+        self.assertIn("/about", commands)
+        self.assertIn("/add", commands)
+        self.assertNotIn("/list", commands)
+        self.assertNotIn("/remove", commands)
+        self.assertNotIn("/vote_status", commands)
+        self.assertNotIn("/watch_party_status", commands)
+        self.assertNotIn("/stats", commands)
+        self.assertNotIn("/database_add", commands)
+        self.assertNotIn("/diagnostics", commands)
+        self.assertNotIn("/setup", commands)
+        self.assertNotIn("/config", commands)
 
     def test_crew_sections_include_administrative_entries(self) -> None:
         sections = command_sections(show_wash_crew=True)
@@ -38,6 +60,17 @@ class HelpRegistryTests(unittest.TestCase):
         self.assertIn("/database_add", commands)
         self.assertIn("/diagnostics", commands)
         self.assertIn("/repair_suggestions", commands)
+        self.assertIn("/setup", commands)
+        self.assertIn("/config", commands)
+
+    def test_crew_sections_also_include_member_entries(self) -> None:
+        # show_wash_crew implies show_watch_party_member -- WASH Crew
+        # inherits every Watch Party member capability.
+        sections = command_sections(show_wash_crew=True)
+        commands = [entry.name for _, entries in sections for entry in entries]
+        self.assertIn("/add", commands)
+        self.assertIn("/list", commands)
+        self.assertIn("/vote_status", commands)
 
     def test_sections_preserve_declared_order(self) -> None:
         sections = command_sections(show_wash_crew=True)
@@ -45,9 +78,10 @@ class HelpRegistryTests(unittest.TestCase):
             [name for name, _ in sections],
             [
                 "General",
+                "WASH Crew: Configuration",
                 "Watch Items",
-                "Voting",
                 "WASH Crew: Voting",
+                "Voting",
                 "WASH Crew: Suggestion Databases",
                 "WASH Crew: Maintenance",
                 "WASH Crew: Diagnostics",
@@ -62,10 +96,17 @@ class HelpRegistryTests(unittest.TestCase):
             self.assertIn(entry.name, text)
             self.assertIn(entry.summary, text)
 
-    def test_member_command_text_hides_crew_content(self) -> None:
+    def test_everyone_command_text_hides_crew_and_member_content(self) -> None:
         text = build_command_help_text(show_wash_crew=False)
         self.assertNotIn("WASH Crew", text)
         self.assertNotIn("/diagnostics", text)
+        self.assertNotIn("/add", text)
+
+    def test_watch_party_member_command_text_hides_crew_content(self) -> None:
+        text = build_command_help_text(show_wash_crew=False, show_watch_party_member=True)
+        self.assertNotIn("WASH Crew", text)
+        self.assertNotIn("/diagnostics", text)
+        self.assertIn("/add", text)
 
     def test_all_crew_commands_use_crew_audience(self) -> None:
         crew_commands = [entry for entry in COMMAND_HELP if entry.name.startswith("/database_")]
@@ -93,6 +134,39 @@ class HelpRegistryTests(unittest.TestCase):
         text = build_command_help_text(show_wash_crew=True)
         self.assertNotIn("/reject", text)
         self.assertNotIn("/unreject", text)
+
+    # --- FR-029: /vote removed, /setup and /config added, audiences fixed --------
+
+    def test_registry_no_longer_lists_vote(self) -> None:
+        names = [entry.name for entry in COMMAND_HELP]
+        self.assertNotIn("/vote", names)
+
+    def test_command_text_never_advertises_vote(self) -> None:
+        for show_wash_crew in (True, False):
+            text = build_command_help_text(show_wash_crew=show_wash_crew, show_watch_party_member=True)
+            self.assertNotIn("`/vote`", text)
+
+    def test_setup_and_config_are_wash_crew_only(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        self.assertIs(entries["/setup"].audience, HelpAudience.WASH_CREW)
+        self.assertIs(entries["/config"].audience, HelpAudience.WASH_CREW)
+
+    def test_edit_vote_is_wash_crew_only(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        self.assertIs(entries["/edit_vote"].audience, HelpAudience.WASH_CREW)
+
+    def test_start_vote_is_wash_crew_only(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        self.assertIs(entries["/start_vote"].audience, HelpAudience.WASH_CREW)
+
+    def test_add_is_the_only_watch_party_member_command(self) -> None:
+        member_commands = [entry.name for entry in COMMAND_HELP if entry.audience is HelpAudience.WATCH_PARTY_MEMBER]
+        self.assertEqual(member_commands, ["/add"])
+
+    def test_list_remove_vote_status_watch_party_status_diagnostics_stats_are_wash_crew_only(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        for name in ("/list", "/remove", "/vote_status", "/watch_party_status", "/diagnostics", "/stats"):
+            self.assertIs(entries[name].audience, HelpAudience.WASH_CREW)
 
 
 if __name__ == "__main__":

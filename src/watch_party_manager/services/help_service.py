@@ -34,17 +34,25 @@ def build_expanded_help_link_text() -> str:
     )
 
 
-def build_help_response(*, show_wash_crew: bool) -> HelpResponse:
+def build_help_response(*, show_wash_crew: bool, show_watch_party_member: bool = False) -> HelpResponse:
     """Return the role-aware command guide and documentation links.
 
     /help remains a concise command reference. Definitions, setup details,
     administration procedures, and other infrequently used material stay in
     the GitHub documentation, which is the single source of truth.
+
+    FR-029's three-tier permission model (everyone / Watch Party member /
+    WASH Crew) is reflected here via show_watch_party_member in addition
+    to show_wash_crew -- show_wash_crew implies show_watch_party_member
+    (see help_registry.command_sections), matching
+    PermissionService.is_wash_crew's own inheritance.
     """
-    command_text = build_command_help_text(show_wash_crew=show_wash_crew)
+    command_text = build_command_help_text(
+        show_wash_crew=show_wash_crew, show_watch_party_member=show_watch_party_member
+    )
     reference_text = build_expanded_help_link_text()
 
-    if show_wash_crew:
+    if show_wash_crew or show_watch_party_member:
         return HelpResponse(
             messages=(command_text, reference_text),
             ephemeral=True,

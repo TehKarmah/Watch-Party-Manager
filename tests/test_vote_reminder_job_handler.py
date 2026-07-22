@@ -135,7 +135,7 @@ class VoteReminderJobHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         await self.handler.execute(make_job(vote_round.id))
 
-        self.assertIn("/vote", self.channel.sent_messages[0])
+        self.assertIn("Cast your vote using the buttons on the voting post", self.channel.sent_messages[0])
 
     async def test_reminder_includes_the_original_vote_link(self) -> None:
         # _open_round() always attaches a message reference, so the link
@@ -341,7 +341,7 @@ class BuildVoteReminderTextTests(unittest.TestCase):
     def test_includes_a_call_to_action(self) -> None:
         text = build_vote_reminder_text(self._round(), [], [])
 
-        self.assertIn("/vote", text)
+        self.assertIn("Cast your vote using the buttons on the voting post", text)
 
     def test_includes_the_original_vote_link_when_available(self) -> None:
         vote_round = self._round(guild_id=100, channel_id=200, message_id=300)

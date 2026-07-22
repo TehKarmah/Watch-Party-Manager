@@ -87,7 +87,7 @@ def build_vote_reminder_text(
     ]
     lines.extend(build_vote_reminder_standings_lines(vote_round, candidates, standings))
     lines.append("")
-    lines.append("Cast your vote with /vote before it closes!")
+    lines.append("Cast your vote using the buttons on the voting post before it closes!")
     link = build_vote_link(vote_round)
     if link:
         lines.append(f"Original post: {link}")

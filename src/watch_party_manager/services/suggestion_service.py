@@ -666,6 +666,45 @@ class SuggestionService:
             database=database,
         )
 
+    def activate_database(
+        self, database_id: int, guild_id: int
+    ) -> SuggestionDatabaseResult:
+        """Mark a suggestion database active again.
+
+        The exact mirror of deactivate_database(). Used by the setup
+        wizard (FR-028) when WASH Crew selects an existing database that
+        happens to be inactive and wants it to become "the" active
+        database again -- does not touch any suggestions already
+        assigned to it.
+
+        Args:
+            database_id: The database to reactivate.
+            guild_id: The Discord guild requesting the reactivation.
+
+        Returns:
+            SuggestionDatabaseResult indicating success or failure.
+        """
+        database = self._databases.get(database_id)
+        if database is None or database.guild_id != guild_id:
+            return SuggestionDatabaseResult(
+                success=False,
+                message="That suggestion database doesn't exist.",
+            )
+
+        if database.active:
+            return SuggestionDatabaseResult(
+                success=False,
+                message="That suggestion database is already active.",
+            )
+
+        database.active = True
+        self._save_databases()
+        return SuggestionDatabaseResult(
+            success=True,
+            message=f'Suggestion database "{database.name}" has been activated.',
+            database=database,
+        )
+
     def suggestion_count_for_database(self, database_id: int) -> int:
         """Count suggestions currently assigned to a database.
 

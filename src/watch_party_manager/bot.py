@@ -6,7 +6,7 @@ import os
 import platform
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import discord
 from discord.ext import commands
@@ -26,13 +26,26 @@ from watch_party_manager.domain.vote import (
     VoteRoundStatus,
     VoteVisibility,
 )
+from watch_party_manager.domain.guild_configuration import (
+    GuildConfiguration,
+    GuildVoteVisibility,
+    JoinMode,
+)
+from watch_party_manager.domain.setup_wizard import (
+    SETUP_WIZARD_STEP_ORDER,
+    SetupWizardDraft,
+    SetupWizardState,
+    SetupWizardStep,
+)
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
+from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_party import WatchParty
 from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.persistence.guild_configuration_repository import (
     GuildConfigurationRepository,
 )
+from watch_party_manager.persistence.setup_wizard_repository import SetupWizardRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
 )
@@ -58,6 +71,13 @@ from watch_party_manager.services.backup_service import (
     BackupKind,
     BackupService,
 )
+from watch_party_manager.services.config_service import (
+    CONFIG_SECTION_ORDER,
+    CONFIG_SECTION_TITLES,
+    ConfigSection,
+    ConfigService,
+    ConfigUpdateResult,
+)
 from watch_party_manager.services.discord_message_link import build_discord_message_link
 from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
@@ -65,6 +85,15 @@ from watch_party_manager.services.discord_timestamp_formatter import (
 from watch_party_manager.services.help_service import HelpResponse, build_help_response
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.permission_service import PermissionService
+from watch_party_manager.services.setup_wizard_service import (
+    BACKUP_INTERVAL_DAYS_EXTRA_FIELD,
+    BACKUP_RETENTION_COUNT_EXTRA_FIELD,
+    MAX_BACKUP_INTERVAL_DAYS,
+    MAX_BACKUP_RETENTION_COUNT,
+    MIN_BACKUP_INTERVAL_DAYS,
+    MIN_BACKUP_RETENTION_COUNT,
+    SetupWizardService,
+)
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_list_formatter import (
     SuggestionListFormatter,
@@ -95,7 +124,32 @@ from watch_party_manager.edit_vote_view import (
     EditVoteEndTimeModal,
     EditVoteManagementView,
 )
+from watch_party_manager.config_view import (
+    BackToMenuOnlyView,
+    ConfigDatabaseSectionView,
+    ConfigJoinModeSectionView,
+    ConfigMainMenuView,
+    ConfigModalRetryView,
+    ConfigRoleSectionView,
+    ConfigWatchDestinationSectionView,
+    OnBackToMenu,
+)
 from watch_party_manager.restore_confirmation_view import RestoreConfirmationView
+from watch_party_manager.setup_wizard_view import (
+    BackupDefaultsModal,
+    CreateDatabaseChannelSelectView,
+    CreateDatabaseNameModal,
+    ExistingDatabaseSelectView,
+    ModalStepIntroView,
+    ReminderDefaultsModal,
+    ReviewStepView,
+    SetupWizardResumeView,
+    SuggestionDatabaseChoiceView,
+    VotingDefaultsModal,
+    WashCrewRoleStepView,
+    WatchDestinationStepView,
+    WatchPartyRoleStepView,
+)
 from watch_party_manager.start_vote_view import (
     CustomizeVoteModal,
     StartVoteChoiceView,
@@ -160,6 +214,35 @@ class WatchPartyBot(commands.Bot):
             WatchPartyReminderJobHandler(self.watch_party_service, self.suggestion_service, self),
         )
         self.guild_configuration_repository = GuildConfigurationRepository()
+        self.setup_wizard_repository = SetupWizardRepository()
+        self.setup_wizard_service = SetupWizardService(
+            self.setup_wizard_repository,
+            self.guild_configuration_repository,
+            self.suggestion_service,
+            self.suggestion_database_configuration_repository,
+        )
+        self.config_service = ConfigService(
+            self.guild_configuration_repository,
+            self.suggestion_service,
+            self.suggestion_database_configuration_repository,
+        )
+
+    def apply_role_configuration(
+        self, wash_crew_role_id: Optional[int], watch_party_member_role_id: Optional[int]
+    ) -> None:
+        """Apply newly configured WASH Crew / Watch Party role IDs immediately.
+
+        Used both at startup (falling back to a persisted GuildConfiguration
+        when the environment variables are unset) and right after /setup
+        completes, so administrative commands become available without a
+        bot restart -- PermissionService stores these as plain instance
+        attributes, so updating it here takes effect on the very next
+        command invocation.
+        """
+        self.wash_crew_role_id = wash_crew_role_id
+        self.watch_party_member_role_id = watch_party_member_role_id
+        self.permission_service.wash_crew_role_id = wash_crew_role_id
+        self.permission_service.watch_party_member_role_id = watch_party_member_role_id
 
     async def setup_hook(self) -> None:
         @self.tree.command(name="about")
@@ -180,14 +263,19 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="help")
         async def help_command(interaction: discord.Interaction) -> None:
-            show_wash_crew = is_wash_crew_member(
-                interaction.user, self.wash_crew_role_id
+            show_wash_crew = self.permission_service.is_wash_crew(interaction.user)
+            show_watch_party_member = self.permission_service.is_watch_party_member(interaction.user)
+            response = build_help_response(
+                show_wash_crew=show_wash_crew, show_watch_party_member=show_watch_party_member
             )
-            response = build_help_response(show_wash_crew=show_wash_crew)
             await send_help_response(interaction, response)
 
         @self.tree.command(name="stats")
         async def stats(interaction: discord.Interaction) -> None:
+            permission = self.permission_service.require_wash_crew(interaction.user)
+            if not permission.allowed:
+                await interaction.response.send_message(permission.message, ephemeral=True)
+                return
             message = perform_stats(
                 statistics_service=self.statistics_service,
                 guild_id=interaction.guild_id,
@@ -288,7 +376,7 @@ class WatchPartyBot(commands.Bot):
             view: str = "standard",
             public: bool = False,
         ) -> None:
-            permission = self.permission_service.require_watch_party_member(interaction.user)
+            permission = self.permission_service.require_wash_crew(interaction.user)
             if not permission.allowed:
                 await interaction.response.send_message(permission.message, ephemeral=True)
                 return
@@ -354,9 +442,14 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="remove")
         async def remove_suggestion(interaction: discord.Interaction, title: str) -> None:
-            result = self.suggestion_service.remove_suggestion(title)
-            await interaction.response.send_message(result.message)
-            if result.success:
+            message, ephemeral, success = perform_remove_suggestion(
+                suggestion_service=self.suggestion_service,
+                user=interaction.user,
+                wash_crew_role_id=self.wash_crew_role_id,
+                title=title,
+            )
+            await interaction.response.send_message(message, ephemeral=ephemeral)
+            if success:
                 logger.info(
                     "User %s removed watch item %r in guild %s",
                     interaction.user.id,
@@ -412,7 +505,7 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="vote_status")
         async def vote_status(interaction: discord.Interaction) -> None:
-            permission = self.permission_service.require_watch_party_member(interaction.user)
+            permission = self.permission_service.require_wash_crew(interaction.user)
             if not permission.allowed:
                 await interaction.response.send_message(permission.message, ephemeral=True)
                 return
@@ -421,19 +514,6 @@ class WatchPartyBot(commands.Bot):
                 suggestion_service=self.suggestion_service,
             )
             await interaction.response.send_message(message, ephemeral=True)
-
-        @self.tree.command(name="vote")
-        async def vote(interaction: discord.Interaction, suggestion_id: int) -> None:
-            permission = self.permission_service.require_watch_party_member(interaction.user)
-            if not permission.allowed:
-                await interaction.response.send_message(permission.message, ephemeral=True)
-                return
-            message, ephemeral = perform_vote(
-                vote_service=self.vote_service,
-                user_id=interaction.user.id,
-                suggestion_id=suggestion_id,
-            )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
 
         @self.tree.command(name="edit_vote")
         async def edit_vote(interaction: discord.Interaction) -> None:
@@ -625,7 +705,7 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="watch_party_status")
         async def watch_party_status(interaction: discord.Interaction) -> None:
-            permission = self.permission_service.require_watch_party_member(interaction.user)
+            permission = self.permission_service.require_wash_crew(interaction.user)
             if not permission.allowed:
                 await interaction.response.send_message(permission.message, ephemeral=True)
                 return
@@ -634,6 +714,80 @@ class WatchPartyBot(commands.Bot):
                 suggestion_service=self.suggestion_service,
             )
             await interaction.response.send_message(message)
+
+        @self.tree.command(name="setup")
+        async def setup(interaction: discord.Interaction) -> None:
+            message, blocked = perform_setup_permission_check(interaction.user, self.wash_crew_role_id)
+            if blocked:
+                await interaction.response.send_message(message, ephemeral=True)
+                return
+
+            guild_id = interaction.guild_id
+            if guild_id is None:
+                await interaction.response.send_message("Setup can only be run inside a server.", ephemeral=True)
+                return
+
+            redirect_message = perform_setup_redirect_check(self.guild_configuration_repository.get(guild_id))
+            if redirect_message is not None:
+                await interaction.response.send_message(redirect_message, ephemeral=True)
+                return
+
+            state, resumed = self.setup_wizard_service.start_or_resume(guild_id)
+
+            if resumed:
+                async def on_continue(resume_interaction: discord.Interaction) -> None:
+                    await send_setup_wizard_step(resume_interaction, self, state, edit=True)
+
+                async def on_review(resume_interaction: discord.Interaction) -> None:
+                    reviewed = self.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
+                    await send_setup_wizard_step(resume_interaction, self, reviewed, edit=True)
+
+                async def on_restart(resume_interaction: discord.Interaction) -> None:
+                    restarted = self.setup_wizard_service.restart(guild_id)
+                    await send_setup_wizard_step(resume_interaction, self, restarted, edit=True)
+
+                view = SetupWizardResumeView(on_continue, on_review, on_restart)
+                await interaction.response.send_message(
+                    "A setup attempt is already in progress. What would you like to do?",
+                    view=view,
+                    ephemeral=True,
+                )
+                return
+
+            await send_setup_wizard_step(interaction, self, state, edit=False)
+
+        @self.tree.command(name="config")
+        async def config(interaction: discord.Interaction) -> None:
+            permission = self.permission_service.require_wash_crew(interaction.user)
+            if not permission.allowed:
+                await interaction.response.send_message(permission.message, ephemeral=True)
+                return
+
+            guild_id = interaction.guild_id
+            if guild_id is None:
+                await interaction.response.send_message("Config can only be used inside a server.", ephemeral=True)
+                return
+
+            configuration = self.guild_configuration_repository.get(guild_id)
+            if configuration is None or not configuration.setup_completed:
+                await interaction.response.send_message(
+                    "Initial setup hasn't been completed yet. Run `/setup` first.", ephemeral=True
+                )
+                return
+
+            await send_config_main_menu(interaction, self, guild_id, edit=False)
+
+        # Environment variables remain the primary way to configure the
+        # WASH Crew / Watch Party roles (unchanged, backward compatible),
+        # but whichever of the two is left unset there falls back to a
+        # persisted GuildConfiguration -- e.g. one saved by /setup -- so a
+        # server that has completed setup doesn't also need the env vars.
+        if self.guild_id and (self.wash_crew_role_id is None or self.watch_party_member_role_id is None):
+            guild_configuration = self.guild_configuration_repository.get(self.guild_id)
+            resolved_wash_crew_role_id, resolved_watch_party_member_role_id = resolve_startup_role_ids(
+                self.wash_crew_role_id, self.watch_party_member_role_id, guild_configuration
+            )
+            self.apply_role_configuration(resolved_wash_crew_role_id, resolved_watch_party_member_role_id)
 
         # Complete any round that expired while WASH was offline before
         # attempting to restore its interactive voting controls. This is
@@ -707,6 +861,39 @@ class WatchPartyBot(commands.Bot):
         except discord.errors.LoginFailure:
             logger.error("Failed to login. Invalid DISCORD_TOKEN or bot token has been revoked.")
             raise
+
+
+def resolve_startup_role_ids(
+    env_wash_crew_role_id: Optional[int],
+    env_watch_party_member_role_id: Optional[int],
+    guild_configuration: Optional[GuildConfiguration],
+) -> tuple[Optional[int], Optional[int]]:
+    """Resolve the effective WASH Crew / Watch Party role IDs at startup.
+
+    Environment variables remain the primary configuration mechanism
+    (unchanged, backward compatible); a persisted GuildConfiguration --
+    e.g. one saved by /setup (FR-028) -- fills in whichever of the two
+    roles the environment left unconfigured. Neither role's fail-closed
+    behavior changes: if both sources leave a role unset, it stays None.
+
+    Args:
+        env_wash_crew_role_id: The WASH_CREW_ROLE_ID env var, already parsed.
+        env_watch_party_member_role_id: The WATCH_PARTY_MEMBER_ROLE_ID env var, already parsed.
+        guild_configuration: The persisted GuildConfiguration for the
+            startup guild, or None if none has been saved yet.
+
+    Returns:
+        (wash_crew_role_id, watch_party_member_role_id).
+    """
+    wash_crew_role_id = env_wash_crew_role_id
+    if wash_crew_role_id is None and guild_configuration is not None:
+        wash_crew_role_id = guild_configuration.wash_crew_role_id
+
+    watch_party_member_role_id = env_watch_party_member_role_id
+    if watch_party_member_role_id is None and guild_configuration is not None:
+        watch_party_member_role_id = guild_configuration.watch_party_role.role_id
+
+    return wash_crew_role_id, watch_party_member_role_id
 
 
 def parse_guild_id(guild_id_str: Optional[str]) -> Optional[int]:
@@ -1217,6 +1404,787 @@ def parse_optional_bool_field(value: Optional[str]) -> Optional[bool]:
     raise ValueError(f"'{value.strip()}' must be 'yes' or 'no'.")
 
 
+# --- FR-028: /setup wizard ---------------------------------------------------------------
+
+
+def perform_setup_permission_check(user: object, wash_crew_role_id: Optional[int]) -> tuple[str, bool]:
+    """Gate /setup.
+
+    /setup is the one administrative command that must remain usable
+    before a WASH Crew role has been configured -- otherwise nobody could
+    ever complete initial setup to configure that role in the first
+    place. Once a WASH Crew role IS configured, /setup falls back to the
+    same fail-closed rule as every other administrative command, so a
+    completed setup can't be silently redone by an unauthorized member.
+
+    Returns:
+        (message, blocked) -- blocked is True if the command should stop
+        here and show `message` instead of proceeding.
+    """
+    if wash_crew_role_id is not None and not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to run setup.", True
+    return "", False
+
+
+def perform_setup_redirect_check(guild_configuration: Optional[GuildConfiguration]) -> Optional[str]:
+    """FR-029: stop /setup from silently restarting a completed setup.
+
+    Once GuildConfiguration.setup_completed is True, /setup must never
+    resume or restart the wizard -- changes belong in /config from then
+    on. Incomplete setup (guild_configuration is None, or setup_completed
+    is still False) is untouched: it keeps FR-028's existing
+    resume/restart behavior.
+
+    Returns:
+        A message to show instead of starting/resuming the wizard, or
+        None if /setup should proceed as usual.
+    """
+    if guild_configuration is not None and guild_configuration.setup_completed:
+        return "Setup has already been completed for this server. Use `/config` to review or change settings."
+    return None
+
+
+SETUP_WIZARD_STEP_TITLES: dict[SetupWizardStep, str] = {
+    SetupWizardStep.WASH_CREW_ROLE: "WASH Crew Role",
+    SetupWizardStep.WATCH_PARTY_ROLE: "Watch Party Role",
+    SetupWizardStep.SUGGESTION_DATABASE: "Suggestion Database",
+    SetupWizardStep.WATCH_DESTINATION: "Watched Movie Destination",
+    SetupWizardStep.VOTING_DEFAULTS: "Voting Defaults",
+    SetupWizardStep.REMINDER_DEFAULTS: "Reminder Defaults",
+    SetupWizardStep.BACKUP_DEFAULTS: "Backup Defaults",
+    SetupWizardStep.REVIEW: "Review",
+}
+
+
+def build_setup_step_header(state: SetupWizardState) -> str:
+    """Build the "Step N of M: Title" progress indicator shown atop every step."""
+    total = len(SETUP_WIZARD_STEP_ORDER)
+    position = SETUP_WIZARD_STEP_ORDER.index(state.current_step) + 1
+    title = SETUP_WIZARD_STEP_TITLES[state.current_step]
+    return f"**WASH Setup -- Step {position} of {total}: {title}**"
+
+
+def parse_setup_voting_candidate_count(value: str) -> int:
+    """Validate a Voting Defaults modal's nominee-count field.
+
+    Reuses /start_vote's own bounds (MIN/MAX_VOTE_CANDIDATE_COUNT) so the
+    guild-wide default the wizard sets can never be a value /start_vote
+    would itself reject.
+    """
+    try:
+        count = int(value.strip())
+    except ValueError:
+        raise ValueError("Default nominee count must be a whole number.")
+    if not (MIN_VOTE_CANDIDATE_COUNT <= count <= MAX_VOTE_CANDIDATE_COUNT):
+        raise ValueError(
+            f"Default nominee count must be between {MIN_VOTE_CANDIDATE_COUNT} and {MAX_VOTE_CANDIDATE_COUNT}."
+        )
+    return count
+
+
+def parse_setup_voting_duration_days(value: str) -> int:
+    """Validate a Voting Defaults modal's duration field, reusing /start_vote's bounds."""
+    try:
+        days = int(value.strip())
+    except ValueError:
+        raise ValueError("Default vote duration must be a whole number of days.")
+    if not (MIN_VOTE_DURATION_DAYS <= days <= MAX_VOTE_DURATION_DAYS):
+        raise ValueError(
+            f"Default vote duration must be between {MIN_VOTE_DURATION_DAYS} and {MAX_VOTE_DURATION_DAYS} days."
+        )
+    return days
+
+
+def parse_setup_voting_visibility(value: str) -> GuildVoteVisibility:
+    """Validate a Voting Defaults modal's visibility field."""
+    normalized = value.strip().lower()
+    try:
+        return GuildVoteVisibility(normalized)
+    except ValueError:
+        raise ValueError("Default visibility must be 'blind' or 'visible'.")
+
+
+def parse_setup_candidate_selection(value: str) -> CandidateSelectionMode:
+    """Validate a Voting Defaults modal's candidate-selection field."""
+    normalized = value.strip().lower()
+    try:
+        return CandidateSelectionMode(normalized)
+    except ValueError:
+        raise ValueError("Candidate selection must be 'random' or 'balanced_random'.")
+
+
+def parse_setup_reminder_enabled(value: str) -> bool:
+    """Validate a Reminder Defaults modal's enabled field.
+
+    Unlike parse_optional_bool_field's "blank means default" convention,
+    this field is required -- the wizard's modal always pre-fills it, so
+    a blank submission means the WASH Crew member cleared it deliberately
+    and should be asked to re-enter it rather than silently falling back.
+    """
+    parsed = parse_optional_bool_field(value)
+    if parsed is None:
+        raise ValueError("Reminder enabled must be 'yes' or 'no'.")
+    return parsed
+
+
+def parse_setup_reminder_hours_before_close(value: str) -> int:
+    """Validate a Reminder Defaults modal's hours-before-close field.
+
+    Reuses the same bounds as a /start_vote per-round reminder override
+    (MIN/MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE).
+    """
+    try:
+        hours = int(value.strip())
+    except ValueError:
+        raise ValueError("Reminder hours before close must be a whole number.")
+    if not (MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE <= hours <= MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE):
+        raise ValueError(
+            "Reminder hours before close must be between "
+            f"{MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE} and {MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE}."
+        )
+    return hours
+
+
+def parse_setup_backup_interval_days(value: str) -> int:
+    """Validate a Backup Defaults modal's interval field."""
+    try:
+        days = int(value.strip())
+    except ValueError:
+        raise ValueError("Automatic backup interval must be a whole number of days.")
+    if not (MIN_BACKUP_INTERVAL_DAYS <= days <= MAX_BACKUP_INTERVAL_DAYS):
+        raise ValueError(
+            f"Automatic backup interval must be between {MIN_BACKUP_INTERVAL_DAYS} and {MAX_BACKUP_INTERVAL_DAYS} days."
+        )
+    return days
+
+
+def parse_setup_backup_retention_count(value: str) -> int:
+    """Validate a Backup Defaults modal's retention field."""
+    try:
+        count = int(value.strip())
+    except ValueError:
+        raise ValueError("Backup retention count must be a whole number.")
+    if not (MIN_BACKUP_RETENTION_COUNT <= count <= MAX_BACKUP_RETENTION_COUNT):
+        raise ValueError(
+            f"Backup retention count must be between {MIN_BACKUP_RETENTION_COUNT} and {MAX_BACKUP_RETENTION_COUNT}."
+        )
+    return count
+
+
+def build_setup_completion_summary(configuration: GuildConfiguration, draft: SetupWizardDraft) -> str:
+    """Build the final "setup complete" message, distinguishing skipped items."""
+    lines = ["**WASH Setup Complete**", ""]
+    lines.append(f"WASH Crew Role: <@&{configuration.wash_crew_role_id}>")
+    if configuration.watch_party_role.role_id is not None:
+        lines.append(
+            f"Watch Party Role: <@&{configuration.watch_party_role.role_id}> "
+            f"(join mode: {configuration.watch_party_role.join_mode.value})"
+        )
+    else:
+        lines.append("Watch Party Role: Not set")
+    lines.append(f'Suggestion Database: "{draft.suggestion_database_name}" (#{draft.suggestion_database_id})')
+    if draft.watch_destination_skipped:
+        lines.append("Watched Movie Destination: Skipped (configure later)")
+    elif draft.watch_destination_channel_id is not None:
+        lines.append(f"Watched Movie Destination: <#{draft.watch_destination_channel_id}>")
+    lines.append(
+        "Voting Defaults: "
+        f"{configuration.voting_defaults.candidate_count} nominees, "
+        f"{configuration.voting_defaults.duration_days} day(s), "
+        f"{configuration.voting_defaults.visibility.value}"
+    )
+    if configuration.notifications.vote.vote_ending_reminder:
+        lines.append(
+            "Reminder Defaults: enabled, "
+            f"{configuration.notifications.vote.reminder_hours_before_close}h before close"
+        )
+    else:
+        lines.append("Reminder Defaults: disabled")
+    if draft.backup_interval_days is not None:
+        lines.append(
+            f"Backup Defaults: every {draft.backup_interval_days} day(s), keep {draft.backup_retention_count}"
+        )
+    return "\n".join(lines)
+
+
+async def send_setup_wizard_step(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    state: SetupWizardState,
+    *,
+    edit: bool,
+    error_message: Optional[str] = None,
+) -> None:
+    """Render whichever step `state.current_step` points to.
+
+    Every step's callbacks recursively call this again with the next
+    state to render the following step in the SAME ephemeral message
+    (via edit_message) -- see each `on_*` closure below. This is the one
+    place that knows how to turn a SetupWizardState into a Discord
+    message; the service layer never touches discord.ui objects.
+    """
+    setup_wizard_service = bot.setup_wizard_service
+    suggestion_service = bot.suggestion_service
+    guild_id = state.guild_id
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        setup_wizard_service.cancel(guild_id)
+        await cancel_interaction.response.edit_message(
+            content="Setup has been cancelled. No configuration was changed.", view=None
+        )
+
+    header = build_setup_step_header(state)
+    body = header if not error_message else f"{header}\n\n⚠ {error_message}"
+    step = state.current_step
+    view: discord.ui.View
+
+    if step == SetupWizardStep.WASH_CREW_ROLE:
+
+        async def on_select(select_interaction: discord.Interaction, role_id: int) -> None:
+            updated = setup_wizard_service.set_wash_crew_role(state, role_id)
+            await send_setup_wizard_step(select_interaction, bot, updated, edit=True)
+
+        view = WashCrewRoleStepView(on_select, on_cancel)
+        body += "\n\nSelect the Discord role that should control administrative access to WASH."
+
+    elif step == SetupWizardStep.WATCH_PARTY_ROLE:
+
+        async def on_confirm(
+            confirm_interaction: discord.Interaction, role_id: Optional[int], join_mode: JoinMode
+        ) -> None:
+            updated = setup_wizard_service.set_watch_party_role(state, role_id, join_mode)
+            await send_setup_wizard_step(confirm_interaction, bot, updated, edit=True)
+
+        view = WatchPartyRoleStepView(on_confirm, on_cancel)
+        body += (
+            "\n\nSelect the Watch Party role (optional) and its join mode, then press Continue."
+        )
+
+    elif step == SetupWizardStep.SUGGESTION_DATABASE:
+
+        async def on_select_existing(choice_interaction: discord.Interaction) -> None:
+            databases = [(d.database_id, d.name) for d in suggestion_service.list_databases(guild_id)]
+            if not databases:
+                await choice_interaction.response.edit_message(
+                    content=body + "\n\nNo suggestion databases exist yet in this server. Choose Create New instead.",
+                    view=SuggestionDatabaseChoiceView(on_select_existing, on_create_new, on_cancel),
+                )
+                return
+
+            async def on_database_selected(select_interaction: discord.Interaction, database_id: int) -> None:
+                updated, message = setup_wizard_service.select_existing_database(
+                    state, database_id, guild_id=guild_id
+                )
+                await send_setup_wizard_step(select_interaction, bot, updated, edit=True)
+
+            await choice_interaction.response.edit_message(
+                content=body + "\n\nChoose a suggestion database.",
+                view=ExistingDatabaseSelectView(databases, on_database_selected, on_cancel),
+            )
+
+        async def on_create_new(choice_interaction: discord.Interaction) -> None:
+            async def on_name_submit(modal_interaction: discord.Interaction, name: str) -> None:
+                async def on_channel_selected(channel_interaction: discord.Interaction, channel_id: int) -> None:
+                    updated, message = setup_wizard_service.create_new_database(
+                        state, name, channel_id, guild_id=guild_id
+                    )
+                    await send_setup_wizard_step(channel_interaction, bot, updated, edit=True)
+
+                await modal_interaction.response.edit_message(
+                    content=body + f'\n\nWhich channel or thread should "{name}" use?',
+                    view=CreateDatabaseChannelSelectView(on_channel_selected, on_cancel),
+                )
+
+            await choice_interaction.response.send_modal(CreateDatabaseNameModal(on_name_submit))
+
+        view = SuggestionDatabaseChoiceView(on_select_existing, on_create_new, on_cancel)
+        body += "\n\nSelect an existing suggestion database or create a new one."
+
+    elif step == SetupWizardStep.WATCH_DESTINATION:
+
+        async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
+            updated = setup_wizard_service.set_watch_destination(state, channel_id)
+            await send_setup_wizard_step(select_interaction, bot, updated, edit=True)
+
+        async def on_skip(skip_interaction: discord.Interaction) -> None:
+            updated = setup_wizard_service.skip_watch_destination(state)
+            await send_setup_wizard_step(skip_interaction, bot, updated, edit=True)
+
+        view = WatchDestinationStepView(on_select, on_skip, on_cancel)
+        body += "\n\nChoose where watched-movie history should be posted, or skip for now."
+
+    elif step == SetupWizardStep.VOTING_DEFAULTS:
+
+        async def on_configure(configure_interaction: discord.Interaction) -> None:
+            async def on_submit(
+                modal_interaction: discord.Interaction,
+                candidate_count_text: str,
+                duration_days_text: str,
+                visibility_text: str,
+                candidate_selection_text: str,
+            ) -> None:
+                try:
+                    candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
+                    duration_days = parse_setup_voting_duration_days(duration_days_text)
+                    visibility = parse_setup_voting_visibility(visibility_text)
+                    candidate_selection = parse_setup_candidate_selection(candidate_selection_text)
+                except ValueError as exc:
+                    await modal_interaction.response.edit_message(
+                        content=body + f"\n\n⚠ {exc}",
+                        view=ModalStepIntroView(
+                            on_configure,
+                            on_cancel,
+                            button_label="Set Voting Defaults",
+                            custom_id="wpm_setup_voting_defaults_configure",
+                        ),
+                    )
+                    return
+
+                updated = setup_wizard_service.set_voting_defaults(
+                    state, candidate_count, duration_days, visibility, candidate_selection
+                )
+                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True)
+
+            await configure_interaction.response.send_modal(VotingDefaultsModal(on_submit))
+
+        view = ModalStepIntroView(
+            on_configure, on_cancel, button_label="Set Voting Defaults", custom_id="wpm_setup_voting_defaults_configure"
+        )
+        body += "\n\nConfigure the guild's default nominee count, vote duration, visibility, and candidate selection mode."
+
+    elif step == SetupWizardStep.REMINDER_DEFAULTS:
+
+        async def on_configure(configure_interaction: discord.Interaction) -> None:
+            async def on_submit(
+                modal_interaction: discord.Interaction, enabled_text: str, hours_text: str
+            ) -> None:
+                try:
+                    enabled = parse_setup_reminder_enabled(enabled_text)
+                    hours_before_close = parse_setup_reminder_hours_before_close(hours_text)
+                except ValueError as exc:
+                    await modal_interaction.response.edit_message(
+                        content=body + f"\n\n⚠ {exc}",
+                        view=ModalStepIntroView(
+                            on_configure,
+                            on_cancel,
+                            button_label="Set Reminder Defaults",
+                            custom_id="wpm_setup_reminder_defaults_configure",
+                        ),
+                    )
+                    return
+
+                updated = setup_wizard_service.set_reminder_defaults(state, enabled, hours_before_close)
+                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True)
+
+            await configure_interaction.response.send_modal(ReminderDefaultsModal(on_submit))
+
+        view = ModalStepIntroView(
+            on_configure,
+            on_cancel,
+            button_label="Set Reminder Defaults",
+            custom_id="wpm_setup_reminder_defaults_configure",
+        )
+        body += "\n\nConfigure whether a vote-ending reminder is sent, and how many hours before close."
+
+    elif step == SetupWizardStep.BACKUP_DEFAULTS:
+
+        async def on_configure(configure_interaction: discord.Interaction) -> None:
+            async def on_submit(
+                modal_interaction: discord.Interaction, interval_text: str, retention_text: str
+            ) -> None:
+                try:
+                    interval_days = parse_setup_backup_interval_days(interval_text)
+                    retention_count = parse_setup_backup_retention_count(retention_text)
+                except ValueError as exc:
+                    await modal_interaction.response.edit_message(
+                        content=body + f"\n\n⚠ {exc}",
+                        view=ModalStepIntroView(
+                            on_configure,
+                            on_cancel,
+                            button_label="Set Backup Defaults",
+                            custom_id="wpm_setup_backup_defaults_configure",
+                        ),
+                    )
+                    return
+
+                updated = setup_wizard_service.set_backup_defaults(state, interval_days, retention_count)
+                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True)
+
+            await configure_interaction.response.send_modal(BackupDefaultsModal(on_submit))
+
+        view = ModalStepIntroView(
+            on_configure, on_cancel, button_label="Set Backup Defaults", custom_id="wpm_setup_backup_defaults_configure"
+        )
+        body += "\n\nConfigure the automatic backup interval and how many backups to retain."
+
+    else:  # SetupWizardStep.REVIEW
+
+        async def on_save(save_interaction: discord.Interaction) -> None:
+            guild = save_interaction.guild
+            guild_name = guild.name if guild is not None else ""
+            result = setup_wizard_service.finalize(state, guild_id, guild_name, guild)
+            if not result.success:
+                issue_lines = "\n".join(f"- {issue.step.value}: {issue.message}" for issue in result.issues)
+                failed_step = result.issues[0].step if result.issues else SetupWizardStep.REVIEW
+                redirected = setup_wizard_service.go_to_step(state, failed_step)
+                await send_setup_wizard_step(
+                    save_interaction,
+                    bot,
+                    redirected,
+                    edit=True,
+                    error_message=f"Setup could not be saved:\n{issue_lines}",
+                )
+                return
+
+            bot.apply_role_configuration(
+                result.configuration.wash_crew_role_id, result.configuration.watch_party_role.role_id
+            )
+            summary = build_setup_completion_summary(result.configuration, state.draft)
+            await save_interaction.response.edit_message(content=summary, view=None)
+
+        async def on_edit_section(select_interaction: discord.Interaction, step_value: str) -> None:
+            target_step = SetupWizardStep(step_value)
+            updated = setup_wizard_service.go_to_step(state, target_step)
+            await send_setup_wizard_step(select_interaction, bot, updated, edit=True)
+
+        review_lines = setup_wizard_service.build_review_lines(state)
+        body += "\n\n" + "\n".join(review_lines)
+        view = ReviewStepView(
+            section_options=[
+                (s.value, SETUP_WIZARD_STEP_TITLES[s]) for s in SETUP_WIZARD_STEP_ORDER if s != SetupWizardStep.REVIEW
+            ],
+            on_save=on_save,
+            on_edit_section=on_edit_section,
+            on_cancel=on_cancel,
+        )
+
+    if edit:
+        await interaction.response.edit_message(content=body, view=view)
+    else:
+        await interaction.response.send_message(body, view=view, ephemeral=True)
+
+
+# --- FR-029: /config -------------------------------------------------------------------
+
+
+async def send_config_main_menu(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, *, edit: bool
+) -> None:
+    """Render /config's main menu: a live configuration summary plus a
+    "choose a section to edit" dropdown.
+    """
+    config_service = bot.config_service
+    lines = config_service.build_summary_lines(guild_id, interaction.guild)
+    body = "**WASH Configuration**\n\n" + "\n".join(lines)
+
+    async def on_section_chosen(select_interaction: discord.Interaction, section_value: str) -> None:
+        await send_config_section(select_interaction, bot, guild_id, ConfigSection(section_value), edit=True)
+
+    view = ConfigMainMenuView(
+        [(section.value, CONFIG_SECTION_TITLES[section]) for section in CONFIG_SECTION_ORDER],
+        on_section_chosen,
+    )
+
+    if edit:
+        await interaction.response.edit_message(content=body, view=view)
+    else:
+        await interaction.response.send_message(body, view=view, ephemeral=True)
+
+
+async def send_config_result(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, result: "ConfigUpdateResult"
+) -> None:
+    """Show a section's save outcome (success or failure) with a Back to
+    Menu button -- /config's "confirm what changed, then return to the
+    main menu" contract, for both successful and rejected changes.
+    """
+
+    async def on_back(back_interaction: discord.Interaction) -> None:
+        await send_config_main_menu(back_interaction, bot, guild_id, edit=True)
+
+    prefix = "" if result.success else "⚠ "
+    await interaction.response.edit_message(content=f"{prefix}{result.message}", view=BackToMenuOnlyView(on_back))
+
+
+async def send_config_section(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    guild_id: int,
+    section: ConfigSection,
+    *,
+    edit: bool,
+    error_message: Optional[str] = None,
+) -> None:
+    """Render whichever section of /config `section` points to.
+
+    Voting/Reminder/Backup Defaults are modal-based and must be the
+    direct response to a not-yet-answered interaction, so they're
+    dispatched to their own send_config_*_modal() helpers instead of
+    following this function's generic edit/send tail.
+    """
+    config_service = bot.config_service
+
+    async def on_back(back_interaction: discord.Interaction) -> None:
+        await send_config_main_menu(back_interaction, bot, guild_id, edit=True)
+
+    if section == ConfigSection.VOTING_DEFAULTS:
+        await send_config_voting_defaults_modal(interaction, bot, guild_id, on_back)
+        return
+    if section == ConfigSection.REMINDER_DEFAULTS:
+        await send_config_reminder_defaults_modal(interaction, bot, guild_id, on_back)
+        return
+    if section == ConfigSection.BACKUP_DEFAULTS:
+        await send_config_backup_defaults_modal(interaction, bot, guild_id, on_back)
+        return
+
+    title = CONFIG_SECTION_TITLES[section]
+    summary_lines = config_service.build_summary_lines(guild_id, interaction.guild)
+    current_value_line = summary_lines[CONFIG_SECTION_ORDER.index(section)]
+    header = f"**WASH Configuration -- {title}**\n\nCurrent value -- {current_value_line}"
+    body = header if not error_message else f"{header}\n\n⚠ {error_message}"
+
+    if section == ConfigSection.WASH_CREW_ROLE:
+
+        async def on_select(select_interaction: discord.Interaction, role_id: Optional[int]) -> None:
+            await handle_config_wash_crew_role_selected(select_interaction, bot, guild_id, role_id)
+
+        view = ConfigRoleSectionView(
+            on_select,
+            on_back,
+            custom_id="wpm_config_wash_crew_role_select",
+            placeholder="Select the new WASH Crew role",
+            min_values=1,
+        )
+        body += "\n\nSelect the Discord role that should control administrative access to WASH."
+
+    elif section == ConfigSection.WATCH_PARTY_ROLE:
+
+        async def on_select(select_interaction: discord.Interaction, role_id: Optional[int]) -> None:
+            result = config_service.set_watch_party_role(guild_id, role_id, select_interaction.guild)
+            await send_config_result(select_interaction, bot, guild_id, result)
+
+        view = ConfigRoleSectionView(
+            on_select,
+            on_back,
+            custom_id="wpm_config_watch_party_role_select",
+            placeholder="Select the new Watch Party role (optional)",
+            min_values=0,
+        )
+        body += "\n\nSelect the Watch Party role, or leave blank to clear it."
+
+    elif section == ConfigSection.WATCH_PARTY_JOIN_MODE:
+
+        async def on_select(select_interaction: discord.Interaction, join_mode: JoinMode) -> None:
+            result = config_service.set_watch_party_join_mode(guild_id, join_mode)
+            await send_config_result(select_interaction, bot, guild_id, result)
+
+        view = ConfigJoinModeSectionView(on_select, on_back)
+        body += "\n\nSelect the Watch Party role's join mode."
+
+    elif section == ConfigSection.SUGGESTION_DATABASE:
+        databases = [(database.database_id, database.name) for database in bot.suggestion_service.list_databases(guild_id)]
+        if not databases:
+            view = BackToMenuOnlyView(on_back)
+            body += "\n\nNo suggestion databases exist in this server yet."
+        else:
+            async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
+                result = config_service.set_active_suggestion_database(guild_id, database_id)
+                await send_config_result(select_interaction, bot, guild_id, result)
+
+            view = ConfigDatabaseSectionView(databases, on_select, on_back)
+            body += "\n\nSelect the suggestion database that should be active."
+
+    else:  # ConfigSection.WATCH_DESTINATION
+
+        async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
+            result = config_service.set_watch_destination(guild_id, channel_id, select_interaction.guild)
+            await send_config_result(select_interaction, bot, guild_id, result)
+
+        async def on_skip(skip_interaction: discord.Interaction) -> None:
+            result = config_service.skip_watch_destination(guild_id)
+            await send_config_result(skip_interaction, bot, guild_id, result)
+
+        view = ConfigWatchDestinationSectionView(on_select, on_skip, on_back)
+        body += "\n\nChoose where watched-movie history should be posted, or clear it."
+
+    if edit:
+        await interaction.response.edit_message(content=body, view=view)
+    else:
+        await interaction.response.send_message(body, view=view, ephemeral=True)
+
+
+async def handle_config_wash_crew_role_selected(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, role_id: Optional[int]
+) -> None:
+    """Handle a WASH Crew Role selection, warning first if the invoking
+    member doesn't have the newly selected role themselves.
+
+    The role change must never leave the server without valid WASH Crew
+    access by accident -- if the acting member would lose their own
+    access, they must explicitly confirm before it's saved (reusing
+    EditVoteConfirmationView, the project's existing confirm/abort
+    pattern). Declining leaves the current role untouched.
+    """
+    config_service = bot.config_service
+    member_has_new_role = any(
+        getattr(role, "id", None) == role_id for role in getattr(interaction.user, "roles", [])
+    )
+
+    if member_has_new_role:
+        result = config_service.set_wash_crew_role(guild_id, role_id, interaction.guild)
+        if result.success:
+            bot.apply_role_configuration(role_id, bot.watch_party_member_role_id)
+        await send_config_result(interaction, bot, guild_id, result)
+        return
+
+    async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+        result = config_service.set_wash_crew_role(guild_id, role_id, confirm_interaction.guild)
+        if result.success:
+            bot.apply_role_configuration(role_id, bot.watch_party_member_role_id)
+        await send_config_result(confirm_interaction, bot, guild_id, result)
+
+    async def on_abort(abort_interaction: discord.Interaction) -> None:
+        await send_config_section(
+            abort_interaction,
+            bot,
+            guild_id,
+            ConfigSection.WASH_CREW_ROLE,
+            edit=True,
+            error_message="Change cancelled. The WASH Crew role was not changed.",
+        )
+
+    confirmation_view = EditVoteConfirmationView(confirm_label="Change Anyway", on_confirm=on_confirm, on_abort=on_abort)
+    await interaction.response.edit_message(
+        content=(
+            f"**WASH Configuration -- WASH Crew Role**\n\n"
+            f"You do not have the selected role (<@&{role_id}>) yourself. If you continue, "
+            "you may lose access to WASH Crew commands, including `/config`. Continue anyway?"
+        ),
+        view=confirmation_view,
+    )
+
+
+def _resolve_config_voting_defaults_modal_defaults(
+    bot: "WatchPartyBot", guild_id: int
+) -> Tuple[str, str, str, str]:
+    """Pre-fill the Voting Defaults modal with the guild's current values."""
+    configuration = bot.config_service.get_configuration(guild_id)
+    candidate_selection = CandidateSelectionMode.BALANCED_RANDOM
+    database = bot.config_service.resolve_configured_database(guild_id)
+    if database is not None:
+        database_configuration = bot.suggestion_database_configuration_repository.get(guild_id, database.database_id)
+        if database_configuration is not None:
+            candidate_selection = database_configuration.suggestion_rules.candidate_selection
+    return (
+        str(configuration.voting_defaults.candidate_count),
+        str(configuration.voting_defaults.duration_days),
+        configuration.voting_defaults.visibility.value,
+        candidate_selection.value,
+    )
+
+
+async def send_config_voting_defaults_modal(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, on_back: OnBackToMenu
+) -> None:
+    config_service = bot.config_service
+
+    async def on_retry(retry_interaction: discord.Interaction) -> None:
+        await send_config_voting_defaults_modal(retry_interaction, bot, guild_id, on_back)
+
+    async def on_submit(
+        modal_interaction: discord.Interaction,
+        candidate_count_text: str,
+        duration_days_text: str,
+        visibility_text: str,
+        candidate_selection_text: str,
+    ) -> None:
+        try:
+            candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
+            duration_days = parse_setup_voting_duration_days(duration_days_text)
+            visibility = parse_setup_voting_visibility(visibility_text)
+            candidate_selection = parse_setup_candidate_selection(candidate_selection_text)
+        except ValueError as exc:
+            view = ConfigModalRetryView(
+                on_retry, on_back, button_label="Try Again", custom_id="wpm_config_voting_defaults_retry"
+            )
+            await modal_interaction.response.edit_message(
+                content=f"**WASH Configuration -- Voting Defaults**\n\n⚠ {exc}", view=view
+            )
+            return
+
+        result = config_service.set_voting_defaults(
+            guild_id, candidate_count, duration_days, visibility, candidate_selection
+        )
+        await send_config_result(modal_interaction, bot, guild_id, result)
+
+    defaults = _resolve_config_voting_defaults_modal_defaults(bot, guild_id)
+    await interaction.response.send_modal(VotingDefaultsModal(on_submit, defaults=defaults))
+
+
+async def send_config_reminder_defaults_modal(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, on_back: OnBackToMenu
+) -> None:
+    config_service = bot.config_service
+
+    async def on_retry(retry_interaction: discord.Interaction) -> None:
+        await send_config_reminder_defaults_modal(retry_interaction, bot, guild_id, on_back)
+
+    async def on_submit(modal_interaction: discord.Interaction, enabled_text: str, hours_text: str) -> None:
+        try:
+            enabled = parse_setup_reminder_enabled(enabled_text)
+            hours_before_close = parse_setup_reminder_hours_before_close(hours_text)
+        except ValueError as exc:
+            view = ConfigModalRetryView(
+                on_retry, on_back, button_label="Try Again", custom_id="wpm_config_reminder_defaults_retry"
+            )
+            await modal_interaction.response.edit_message(
+                content=f"**WASH Configuration -- Reminder Defaults**\n\n⚠ {exc}", view=view
+            )
+            return
+
+        result = config_service.set_reminder_defaults(guild_id, enabled, hours_before_close)
+        await send_config_result(modal_interaction, bot, guild_id, result)
+
+    configuration = bot.config_service.get_configuration(guild_id)
+    vote_notifications = configuration.notifications.vote
+    defaults = (
+        "yes" if vote_notifications.vote_ending_reminder else "no",
+        str(vote_notifications.reminder_hours_before_close),
+    )
+    await interaction.response.send_modal(ReminderDefaultsModal(on_submit, defaults=defaults))
+
+
+async def send_config_backup_defaults_modal(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, on_back: OnBackToMenu
+) -> None:
+    config_service = bot.config_service
+
+    async def on_retry(retry_interaction: discord.Interaction) -> None:
+        await send_config_backup_defaults_modal(retry_interaction, bot, guild_id, on_back)
+
+    async def on_submit(modal_interaction: discord.Interaction, interval_text: str, retention_text: str) -> None:
+        try:
+            interval_days = parse_setup_backup_interval_days(interval_text)
+            retention_count = parse_setup_backup_retention_count(retention_text)
+        except ValueError as exc:
+            view = ConfigModalRetryView(
+                on_retry, on_back, button_label="Try Again", custom_id="wpm_config_backup_defaults_retry"
+            )
+            await modal_interaction.response.edit_message(
+                content=f"**WASH Configuration -- Backup Defaults**\n\n⚠ {exc}", view=view
+            )
+            return
+
+        result = config_service.set_backup_defaults(guild_id, interval_days, retention_count)
+        await send_config_result(modal_interaction, bot, guild_id, result)
+
+    configuration = bot.config_service.get_configuration(guild_id)
+    interval = configuration.backup.extra_fields.get(BACKUP_INTERVAL_DAYS_EXTRA_FIELD, 1)
+    retention = configuration.backup.extra_fields.get(BACKUP_RETENTION_COUNT_EXTRA_FIELD, 30)
+    defaults = (str(interval), str(retention))
+    await interaction.response.send_modal(BackupDefaultsModal(on_submit, defaults=defaults))
+
+
 def parse_start_vote_overrides(
     nominee_count_text: Optional[str],
     duration_days_text: Optional[str],
@@ -1444,7 +2412,7 @@ def perform_vote_status(vote_service: VoteService, suggestion_service: Suggestio
 def build_vote_confirmation(
     vote_record: VoteRecord, is_first_vote: bool, remaining_changes: int, vote_round: Optional[VoteRound] = None
 ) -> str:
-    """Build the /vote confirmation message.
+    """Build the vote confirmation message shown after casting a vote.
 
     Args:
         vote_record: The member's own vote record after casting.
@@ -1477,7 +2445,12 @@ def build_vote_confirmation(
 
 
 def perform_vote(vote_service: VoteService, user_id: int, suggestion_id: int) -> tuple[str, bool]:
-    """Core logic for /vote, kept entirely free of Discord objects.
+    """Core vote-casting logic, kept entirely free of Discord objects.
+
+    Used exclusively by interactive voting's nominee buttons (see
+    handle_nominee_vote) -- FR-029 removed the /vote slash command in
+    favor of interactive voting only, but this underlying logic is
+    unchanged and still fully exercised.
 
     All eligibility rules — an open round existing, the suggestion ID
     existing, one active vote per member, one allowed change per member —
@@ -1491,8 +2464,8 @@ def perform_vote(vote_service: VoteService, user_id: int, suggestion_id: int) ->
         suggestion_id: The suggestion ID they're voting for.
 
     Returns:
-        A (message, ephemeral) tuple. Every /vote response is ephemeral —
-        a member's own vote, and any standings shown alongside it, are for
+        A (message, ephemeral) tuple. Every response is ephemeral — a
+        member's own vote, and any standings shown alongside it, are for
         their eyes only.
     """
     open_round_before = vote_service.get_open_round()
@@ -1968,9 +2941,8 @@ async def handle_nominee_vote(
     """Core logic for a nominee button click.
 
     Reuses perform_vote() for the actual vote-casting and ephemeral
-    confirmation -- exactly the same logic /vote uses -- then refreshes
-    the public voting post for a visible round. Never duplicates
-    VoteService's own validation.
+    confirmation, then refreshes the public voting post for a visible
+    round. Never duplicates VoteService's own validation.
 
     Args:
         interaction: The button-click interaction.
@@ -2819,8 +3791,8 @@ def perform_reject_suggestion(
         suggestion_id: The suggestion being rejected.
 
     Returns:
-        A (message, ephemeral) tuple. Always ephemeral -- like /vote, a
-        member's own rejection is for their eyes only.
+        A (message, ephemeral) tuple. Always ephemeral -- a member's own
+        rejection is for their eyes only.
     """
     permission = permission_service.require_watch_party_member(user)
     if not permission.allowed:
@@ -3023,6 +3995,44 @@ def build_database_list_text(
             f"Watch items: {suggestion_count} {item_word}"
         )
     return "\n\n".join(sections)
+
+
+def perform_remove_suggestion(
+    suggestion_service: SuggestionService,
+    user: object,
+    wash_crew_role_id: Optional[int],
+    title: str,
+) -> tuple[str, bool, bool]:
+    """Core logic for /remove, kept free of Discord objects except `user`.
+
+    FR-029's approved permission model restricts /remove to WASH Crew
+    (an earlier revision of this milestone incorrectly allowed any Watch
+    Party member; this is the corrected, fail-closed WASH Crew check).
+
+    Args:
+        suggestion_service: The suggestion service to remove the item through.
+        user: The member invoking the command.
+        wash_crew_role_id: The configured WASH Crew role ID, or None if unconfigured.
+        title: The watch item's title to remove.
+
+    Returns:
+        A (message, ephemeral, success) tuple. Permission failures are
+        ephemeral; the service's own result message is shown publicly on
+        success or failure, matching /remove's existing confirmation style.
+    """
+    if wash_crew_role_id is None:
+        return (
+            "WASH Crew permissions have not been configured. "
+            "Set WASH_CREW_ROLE_ID before using this command.",
+            True,
+            False,
+        )
+
+    if not is_wash_crew_member(user, wash_crew_role_id):
+        return "You need the WASH Crew role to remove a watch item.", True, False
+
+    result = suggestion_service.remove_suggestion(title)
+    return result.message, False, result.success
 
 
 def perform_database_add(
@@ -3659,14 +4669,17 @@ def perform_diagnostics(
     )
 
 
-def build_help_text(show_admin: bool = True) -> str:
+def build_help_text(show_admin: bool = True, show_member: bool = False) -> str:
     """Build the complete role-aware help response as a single string.
 
     This compatibility helper delegates to :mod:`help_service`. WASH Crew
     help is sent as two Discord messages, but this helper preserves its
-    original single-string contract for existing callers.
+    original single-string contract for existing callers. show_member
+    reflects FR-029's three-tier permission model (everyone / Watch Party
+    member / WASH Crew); show_admin implies show_member, matching
+    build_help_response's own inheritance.
     """
-    response = build_help_response(show_wash_crew=show_admin)
+    response = build_help_response(show_wash_crew=show_admin, show_watch_party_member=show_member)
     return "\n\n".join(response.messages)
 
 

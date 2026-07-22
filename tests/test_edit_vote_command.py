@@ -48,6 +48,7 @@ from watch_party_manager.services.vote_completion_service import VoteCompletionS
 from watch_party_manager.services.vote_service import VoteService
 
 WASH_CREW_ROLE_ID = 999
+WATCH_PARTY_ROLE_ID = 888
 
 
 class FakeRole:
@@ -247,6 +248,36 @@ class PerformEditVoteOpenTests(EditVoteTestCase):
 
         self.assertTrue(ephemeral)
         self.assertIn("not been configured", message)
+        self.assertIsNone(vote_round)
+
+    # --- FR-029: /edit_vote must be restricted to WASH Crew specifically,
+    # not merely "not unauthorized" -- distinguishing a Watch Party member
+    # (has the member role) from a fully unprivileged user (no roles at
+    # all) makes explicit that /edit_vote's gate checks for the WASH Crew
+    # role specifically, not just "has some role".
+
+    def test_watch_party_member_is_rejected(self) -> None:
+        self._open_round()
+        watch_party_member = FakeMember(roles=[FakeRole(WATCH_PARTY_ROLE_ID)])
+
+        message, ephemeral, vote_round = perform_edit_vote_open(
+            self.vote_service, self.suggestion_service, watch_party_member, WASH_CREW_ROLE_ID
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("WASH Crew", message)
+        self.assertIsNone(vote_round)
+
+    def test_unprivileged_user_with_no_roles_is_rejected(self) -> None:
+        self._open_round()
+        unprivileged_user = FakeMember(roles=[])
+
+        message, ephemeral, vote_round = perform_edit_vote_open(
+            self.vote_service, self.suggestion_service, unprivileged_user, WASH_CREW_ROLE_ID
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("WASH Crew", message)
         self.assertIsNone(vote_round)
 
     def test_no_active_vote_is_reported(self) -> None:
