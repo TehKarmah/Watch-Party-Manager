@@ -298,7 +298,30 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 | "Restore failed after the safety backup succeeded" | The safety backup was made, but copying the backup's files onto live data failed partway through. | The safety backup archive is intact and named in the error message; use `/restore` again with it if needed. |
 | No suggestions appear after a successful restore/reset/import | A bot restart is required for the running process's in-memory cache to reflect the change (see "Restart requirement" above). | Data on disk is already correct; only the live bot's view of it is stale. |
 
-## 10. Planned Version 1 Administration
+## 10. Statistics & Reporting
+
+`/stats [type] [public] [suggestion]` exposes read-only statistics derived entirely from existing historical data -- nothing is cached or incrementally counted; every value is recalculated from the suggestion, voting, rotation, and watch-party repositories each time the command runs.
+
+### Statistic types
+
+- **Server** (the default) -- watch parties, voting rounds (open/closed/cancelled, blind/visible, ties), participation, average candidates per round, and average vote duration.
+- **Member** -- the requesting member's own suggestions submitted/watched/retired, votes cast, participation percentage, and winning suggestions. There is no way to target another member's statistics, by design.
+- **Suggestion** -- one suggestion's created date, submitter, current status, nomination history (count, first/last nominated), watch/retirement history, and rotations participated in. `suggestion` accepts the same reference-number-or-exact-title matching `/remove` and `/edit_suggestion` use; multiple matches show a picker.
+- **Rotation** -- the target database's current rotation progress (presented/remaining/retired/watched/completion) plus historical rotation count, average duration, and average size. Database selection follows `/list`'s automatic-then-picker pattern.
+- **Database** -- one database's active/archived/watched/retired suggestion counts alongside its current rotation summary.
+
+### Privacy
+
+- Every Watch Party member may use `/stats`; every response is ephemeral by default, for every member including WASH Crew.
+- WASH Crew may set `public:true` to post Server, Suggestion, Rotation, or Database statistics publicly -- the same pattern `/list` already uses.
+- **Member statistics are the one exception**: any member (not just WASH Crew) may set `public:true` to post their *own* member statistics publicly, since that's a self-consenting disclosure of their own data rather than an aggregate view. WASH Crew cannot retrieve or post another member's statistics under any circumstance -- there is no parameter to target one.
+- A member's statistics remain fully available even after they leave the Watch Party role, since they're derived from Discord user IDs recorded on suggestions and votes, never from live role membership.
+
+### Known limitation: submitter and creation-date tracking only covers suggestions added since this feature shipped
+
+Member and suggestion statistics that depend on "who submitted this" or "when was this created" (suggestions submitted/watched/retired/winning per member; a suggestion's created date and days-until-first-nomination) rely on two fields -- `journey.original_suggester` and `journey.suggestion_date` -- that are recorded for the first time by this milestone, exclusively at the moment `/add` creates a brand-new suggestion. They are never modified afterward (not by reactivation, editing, or a database move) and are never backfilled onto suggestions that already existed. A suggestion added before this feature shipped simply has no recorded submitter or creation date, and its Suggestion statistics report those fields as unavailable rather than guessing; it's also excluded from every member's submission-based counts. Votes-cast-based statistics are unaffected, since `VoteRecord.discord_user_id` has always been recorded.
+
+## 11. Planned Version 1 Administration
 
 The Version 1 plan includes:
 

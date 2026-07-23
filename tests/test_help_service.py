@@ -77,6 +77,14 @@ class HelpServiceTests(unittest.TestCase):
 
         self.assertIn("`/list`", message)
 
+    def test_watch_party_member_help_includes_stats(self) -> None:
+        # FR-034: Watch Party members gain /stats (privacy-scoped --
+        # ephemeral by default, public posting requires WASH Crew except
+        # for a member's own statistics) alongside /add and /list.
+        message = build_help_response(show_wash_crew=False, show_watch_party_member=True).messages[0]
+
+        self.assertIn("`/stats`", message)
+
     def test_watch_party_member_help_hides_wash_crew_and_other_member_commands(self) -> None:
         message = build_help_response(show_wash_crew=False, show_watch_party_member=True).messages[0]
 
@@ -84,7 +92,6 @@ class HelpServiceTests(unittest.TestCase):
         self.assertNotIn("`/edit_suggestion`", message)
         self.assertNotIn("`/vote_status`", message)
         self.assertNotIn("`/watch_party_status`", message)
-        self.assertNotIn("`/stats`", message)
         self.assertNotIn("`/database_add`", message)
         self.assertNotIn("`/diagnostics`", message)
         self.assertNotIn("`/backup`", message)

@@ -149,6 +149,26 @@ class WatchPartyService:
             return None
         return min(scheduled, key=lambda watch_party: watch_party.scheduled_at)
 
+    def list_watch_parties(self, guild_id: Optional[int] = None) -> list[WatchParty]:
+        """Return every watch party ever scheduled, in creation order.
+
+        Args:
+            guild_id: If given, only watch parties belonging to this
+                guild are included. If None, every watch party is
+                returned regardless of guild, matching
+                SuggestionService.list_databases' same optional-scope
+                convention.
+
+        Returns:
+            Every WatchParty (scheduled or cancelled) -- used by FR-034's
+            server statistics, which needs the complete historical set,
+            not just the current upcoming one.
+        """
+        watch_parties = list(self._watch_parties.values())
+        if guild_id is not None:
+            watch_parties = [watch_party for watch_party in watch_parties if watch_party.guild_id == guild_id]
+        return watch_parties
+
     def reschedule_watch_party(
         self, watch_party_id: int, new_scheduled_at: datetime
     ) -> WatchPartyResult:

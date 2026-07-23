@@ -260,6 +260,17 @@ class AddNoDestinationTests(HandleAddSuggestionTestCase):
         self.assertIn("No public confirmation post", interaction.response.sent_message)
         self.assertEqual(1, len(self.suggestion_service.get_suggestions_for_database(self.database.database_id)))
 
+    async def test_add_records_the_submitter_and_creation_date(self) -> None:
+        # FR-034: /add is the one path that populates journey.original_suggester
+        # (the submitting member's Discord user ID) and journey.suggestion_date.
+        interaction = FakeInteraction(user=FakeMember([WATCH_PARTY_MEMBER_ROLE_ID], user_id=42))
+
+        await handle_add_suggestion(interaction, self.bot, "Alien", None, None)
+
+        item = self.suggestion_service.get_suggestions_for_database(self.database.database_id)[0]
+        self.assertEqual(item.journey.original_suggester, "42")
+        self.assertIsNotNone(item.journey.suggestion_date)
+
     async def test_non_watch_party_member_is_rejected(self) -> None:
         interaction = FakeInteraction(user=FakeMember([]))
 

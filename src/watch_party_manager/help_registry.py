@@ -51,7 +51,10 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         "General",
     ),
     CommandHelp(
-        "/stats", "Show watch-party activity statistics.", "General", HelpAudience.WASH_CREW
+        "/stats",
+        "Show server, member, suggestion, rotation, or database statistics.",
+        "General",
+        HelpAudience.WATCH_PARTY_MEMBER,
     ),
     CommandHelp(
         "/watch_party",

@@ -7,10 +7,10 @@ import platform
 import re
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, List, Optional, Tuple
 
 import discord
 from discord.ext import commands
@@ -148,7 +148,15 @@ from watch_party_manager.services.suggestion_service import (
     SuggestionService,
 )
 from watch_party_manager.services.suggestion_repair_service import SuggestionRepairService
-from watch_party_manager.services.statistics_service import StatisticsService, StatisticsSnapshot
+from watch_party_manager.services.statistics_service import (
+    DatabaseStatistics,
+    MemberStatistics,
+    RotationStatistics,
+    ServerStatistics,
+    StatisticsService,
+    StatisticsSnapshot,
+    SuggestionStatistics,
+)
 from watch_party_manager.services.vote_announcement_formatter import (
     build_suggestion_link,
     build_vote_cancellation_notice,
@@ -247,9 +255,13 @@ class WatchPartyBot(commands.Bot):
         self.vote_service = VoteService(self.suggestion_service)
         self.nominee_selection_service = NomineeSelectionService(self.suggestion_service, self.vote_service)
         self.rotation_service = RotationService(self.suggestion_service)
-        self.statistics_service = StatisticsService(self.suggestion_service)
         self.vote_completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
         self.watch_party_service = WatchPartyService(self.suggestion_service)
+        self.statistics_service = StatisticsService(
+            self.suggestion_service,
+            rotation_service=self.rotation_service,
+            watch_party_source=self.watch_party_service,
+        )
         self.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository()
         # FR-032B: separate repository instances from suggestion_service's
         # own internal ones, pointed at the same default files. Both
@@ -354,19 +366,31 @@ class WatchPartyBot(commands.Bot):
             await send_help_response(interaction, response)
 
         @self.tree.command(name="stats")
-        async def stats(interaction: discord.Interaction) -> None:
-            permission = self.permission_service.require_wash_crew(interaction.user)
-            if not permission.allowed:
-                await interaction.response.send_message(permission.message, ephemeral=True)
-                return
-            message = perform_stats(
-                statistics_service=self.statistics_service,
-                guild_id=interaction.guild_id,
-            )
-            await interaction.response.send_message(message)
+        @discord.app_commands.describe(
+            type="Which statistics to show (defaults to Server).",
+            public="Post the statistics publicly instead of showing them only to you (WASH Crew only, except for your own Member statistics).",
+            suggestion="Required when type is Suggestion: a reference number or exact title.",
+        )
+        @discord.app_commands.choices(
+            type=[
+                discord.app_commands.Choice(name="Server", value="server"),
+                discord.app_commands.Choice(name="Member", value="member"),
+                discord.app_commands.Choice(name="Suggestion", value="suggestion"),
+                discord.app_commands.Choice(name="Rotation", value="rotation"),
+                discord.app_commands.Choice(name="Database", value="database"),
+            ]
+        )
+        async def stats(
+            interaction: discord.Interaction,
+            type: str = "server",
+            public: bool = False,
+            suggestion: Optional[str] = None,
+        ) -> None:
+            await handle_stats(interaction, self, type, public, suggestion)
             logger.info(
-                "User %s requested statistics in guild %s",
+                "User %s requested %s statistics in guild %s",
                 interaction.user.id,
+                type,
                 interaction.guild_id,
             )
 
@@ -4298,6 +4322,7 @@ async def handle_add_suggestion(
             director=resolved.director,
             imdb_rating=resolved.imdb_rating,
             poster_url=resolved.poster_url,
+            original_suggester=str(target_interaction.user.id),
         )
         if not result.success or result.watch_item is None:
             await target_interaction.response.send_message(result.message, ephemeral=True)
@@ -6448,6 +6473,404 @@ def perform_stats(
     if guild_id is None:
         return "This command can only be used in a Discord server."
     return build_statistics_text(statistics_service.snapshot(guild_id))
+
+
+# --- FR-034: Statistics & Reporting -------------------------------------------------
+#
+# /stats replaces the WASH-Crew-only, always-public command above with a
+# Watch-Party-Member-accessible one that defaults to ephemeral output and
+# lets WASH Crew (or, for a member's own statistics, anyone) opt into
+# posting publicly -- mirroring /list's exact public/private pattern
+# (FR-033A Section 9). perform_stats/build_statistics_text above are
+# reused unchanged as the "server" type's underlying data/formatting.
+
+
+class StatsType(str, Enum):
+    """Which /stats view to show."""
+
+    SERVER = "server"
+    MEMBER = "member"
+    SUGGESTION = "suggestion"
+    ROTATION = "rotation"
+    DATABASE = "database"
+
+
+def format_optional_percentage(value: Optional[float]) -> str:
+    return "not available" if value is None else f"{value:.1f}%"
+
+
+def format_optional_hours(value: Optional[float]) -> str:
+    return "not available" if value is None else f"{value:.1f}h"
+
+
+def format_optional_average(value: Optional[float]) -> str:
+    return "not available" if value is None else f"{value:.1f}"
+
+
+def format_optional_date(value: Optional[date]) -> str:
+    return value.isoformat() if value is not None else "unknown (created before statistics tracking began)"
+
+
+def format_optional_timestamp(value: Optional[datetime]) -> str:
+    if value is None:
+        return "never"
+    return f"<t:{int(value.timestamp())}:f>"
+
+
+def format_optional_days(value: Optional[int]) -> str:
+    if value is None:
+        return "not available"
+    return format_count(value, "day")
+
+
+def build_server_statistics_text(stats: ServerStatistics) -> str:
+    """Format FR-034 Section 5's server statistics for Discord."""
+    lines = [
+        "**Server Statistics**",
+        "",
+        "**Watch Parties**",
+        f"Total: {format_count(stats.total_watch_parties, 'watch party', 'watch parties')}",
+        f"Scheduled: {format_count(stats.scheduled_watch_parties, 'watch party', 'watch parties')}",
+        f"Cancelled: {format_count(stats.cancelled_watch_parties, 'watch party', 'watch parties')}",
+        "",
+        "**Voting Rounds**",
+        f"Total: {format_count(stats.total_vote_rounds, 'round')}",
+        f"Open: {format_count(stats.open_vote_rounds, 'round')}",
+        f"Closed: {format_count(stats.closed_vote_rounds, 'round')}",
+        f"Cancelled: {format_count(stats.cancelled_vote_rounds, 'round')}",
+        f"Blind: {format_count(stats.blind_vote_rounds, 'round')}",
+        f"Visible: {format_count(stats.visible_vote_rounds, 'round')}",
+        f"Ties: {format_count(stats.tie_count, 'round')}",
+        f"Average vote duration: {format_optional_hours(stats.average_vote_duration_hours)}",
+        f"Average candidates per round: {stats.average_candidates_per_round:.1f}",
+        "",
+        "**Participation**",
+        f"Votes cast: {format_count(stats.total_votes_cast, 'vote')}",
+        f"Average participation per round: {stats.average_participation_per_round:.1f}",
+    ]
+    if stats.total_watch_party_members is not None:
+        lines.append(f"Current Watch Party members: {stats.total_watch_party_members}")
+    lines.append(f"Participation percentage: {format_optional_percentage(stats.participation_percentage)}")
+    return "\n".join(lines)
+
+
+def build_member_statistics_text(stats: MemberStatistics, member_mention: str) -> str:
+    """Format FR-034 Section 7's member statistics for Discord."""
+    lines = [
+        f"**Your Statistics** ({member_mention})",
+        "",
+        "**Suggestions**",
+        f"Submitted: {format_count(stats.suggestions_submitted, 'suggestion')}",
+        f"Watched: {format_count(stats.suggestions_watched, 'suggestion')}",
+        f"Retired: {format_count(stats.suggestions_retired, 'suggestion')}",
+        f"Won a vote: {format_count(stats.winning_suggestions, 'suggestion')}",
+        "",
+        "**Voting**",
+        f"Votes cast: {format_count(stats.votes_cast, 'vote')}",
+        f"Participation percentage: {stats.participation_percentage:.1f}% of all rounds",
+    ]
+    if not stats.has_submission_history:
+        lines.append(
+            "\nNo suggestions with a recorded submitter were found for you -- "
+            "suggestion statistics are only tracked for suggestions added since this feature shipped."
+        )
+    return "\n".join(lines)
+
+
+def build_suggestion_statistics_text(stats: SuggestionStatistics) -> str:
+    """Format FR-034 Section 6's suggestion statistics for Discord."""
+    status_text = stats.status.value.replace("_", " ").title()
+    lines = [
+        f"**Suggestion Statistics -- {stats.title}**",
+        "",
+        f"Reference: #{stats.suggestion_id:04d}",
+        f"Status: {status_text}",
+        f"Created: {format_optional_date(stats.created_date)}",
+        f"Submitted by: {f'<@{stats.submitter}>' if stats.submitter else 'unknown (created before statistics tracking began)'}",
+        "",
+        "**Voting**",
+        f"Nominations: {format_count(stats.nomination_count, 'time')}",
+        f"First nominated: {format_optional_timestamp(stats.first_nomination_at)}",
+        f"Last nominated: {format_optional_timestamp(stats.last_nomination_at)}",
+        f"Days until first nomination: {format_optional_days(stats.days_until_first_nomination)}",
+        "",
+        "**Lifecycle**",
+        f"Watched: {format_count(stats.watch_count, 'time')}",
+        f"Days until watched: {format_optional_days(stats.days_until_watched)}",
+        f"Retired: {'Yes' if stats.is_retired else 'No'}"
+        + (f" ({format_optional_timestamp(stats.retired_at)})" if stats.is_retired else ""),
+        f"Currently archived: {'Yes' if stats.is_archived else 'No'}",
+        f"Rotations participated in: {stats.rotations_participated_in}",
+    ]
+    return "\n".join(lines)
+
+
+def build_rotation_progress_lines(progress) -> list[str]:
+    """Shared rotation-progress formatting for both rotation and database statistics."""
+    return [
+        f"Total assigned: {format_count(progress.total, 'suggestion')}",
+        f"Presented: {format_count(progress.presented, 'suggestion')}",
+        f"Remaining: {format_count(progress.remaining, 'suggestion')}",
+        f"Retired: {format_count(progress.retired, 'suggestion')}",
+        f"Watched: {format_count(progress.watched, 'suggestion')}",
+        f"Completion: {progress.completion_percentage:.1f}%",
+    ]
+
+
+def build_rotation_statistics_text(stats: RotationStatistics, database_name: str) -> str:
+    """Format FR-034 Section 8's rotation statistics for Discord."""
+    lines = [f"**Rotation Statistics -- {database_name}**", ""]
+    if stats.current_rotation_id is not None:
+        lines.append(f"**Current Rotation #{stats.current_rotation_id}**")
+        lines.append(f"Started: {format_optional_timestamp(stats.current_rotation_started_at)}")
+        lines.extend(build_rotation_progress_lines(stats.current_progress))
+    else:
+        lines.append("**Current Rotation**")
+        lines.append("No rotation has been started for this database yet.")
+    lines.extend(
+        [
+            "",
+            "**History**",
+            f"Total rotations: {stats.total_rotations}",
+            f"Completed rotations: {stats.completed_rotations}",
+            f"Average completed rotation duration: {format_optional_hours(stats.average_completed_rotation_duration_hours)}",
+            f"Average rotation size: {format_optional_average(stats.average_rotation_size)}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def build_database_statistics_text(stats: DatabaseStatistics) -> str:
+    """Format FR-034 Section 9's database statistics for Discord."""
+    lines = [
+        f"**Database Statistics -- {stats.database_name}**",
+        "",
+        f"Active suggestions: {format_count(stats.active_suggestions, 'suggestion')}",
+        f"Archived suggestions: {format_count(stats.archived_suggestions, 'suggestion')}",
+        f"Watched suggestions: {format_count(stats.watched_suggestions, 'suggestion')}",
+        f"Retired suggestions: {format_count(stats.retired_suggestions, 'suggestion')}",
+    ]
+    if stats.rotation is not None:
+        lines.append("")
+        lines.append("**Current Rotation**")
+        if stats.rotation.current_rotation_id is not None:
+            lines.extend(build_rotation_progress_lines(stats.rotation.current_progress))
+        else:
+            lines.append("No rotation has been started for this database yet.")
+        lines.append(f"Completed rotations: {stats.rotation.completed_rotations}")
+    return "\n".join(lines)
+
+
+OnStatsDatabaseResolved = Callable[[discord.Interaction, SuggestionDatabase], Awaitable[None]]
+
+
+async def resolve_stats_database_then(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    guild_id: int,
+    channel_id: Optional[int],
+    show: OnStatsDatabaseResolved,
+) -> None:
+    """Resolve which database a rotation/database statistics request targets, then show it.
+
+    Mirrors /list's exact resolution order (FR-033A): the current
+    channel's configured database first, then the guild's sole active
+    database, then an interactive picker when several exist, then a
+    clear error when none are available.
+    """
+    resolution = bot.suggestion_service.resolve_database_for_channel(guild_id, channel_id)
+    if resolution.database is not None:
+        await show(interaction, resolution.database)
+        return
+
+    active_databases = [database for database in bot.suggestion_service.list_databases(guild_id) if database.active]
+    if len(active_databases) > 1:
+
+        async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
+            database = bot.suggestion_service.get_database(database_id)
+            if database is None:
+                await select_interaction.response.send_message(
+                    "That suggestion database no longer exists.", ephemeral=True
+                )
+                return
+            await show(select_interaction, database)
+
+        options = [(database.database_id, database.name) for database in active_databases]
+        view = ListDatabaseSelectView(options, on_select)
+        await interaction.response.send_message(
+            "Multiple suggestion databases are configured. Choose one:", view=view, ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        resolution.error_message or "No suggestion database is available here.", ephemeral=True
+    )
+
+
+def paginate_stats_text(text: str) -> List[str]:
+    """Split a rendered statistics message into Discord-safe pages.
+
+    Every build_*_statistics_text function renders "**Title**", "",
+    then content lines -- reused as paginate_lines' (header, lines) shape
+    so any statistics view that grows too long for one message
+    (Section 10: "Large result sets should paginate") degrades to
+    Previous/Next pages exactly like /list, instead of failing outright.
+    In practice none of FR-034's fixed-shape summaries are likely to
+    exceed one page, but this keeps that guarantee true regardless.
+    """
+    parts = text.split("\n")
+    header = parts[0]
+    body_lines = parts[2:] if len(parts) > 1 and parts[1] == "" else parts[1:]
+    return paginate_lines(header, body_lines)
+
+
+async def send_paginated_stats(interaction: discord.Interaction, text: str, public: bool) -> None:
+    pages = paginate_stats_text(text)
+    if len(pages) == 1:
+        await interaction.response.send_message(pages[0], ephemeral=not public)
+        return
+    requester_id = getattr(interaction.user, "id", None)
+    view = PaginatedListView(pages, requester_id=requester_id)
+    await interaction.response.send_message(pages[0], view=view, ephemeral=not public)
+
+
+async def send_server_statistics(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, public: bool
+) -> None:
+    total_watch_party_members = None
+    guild = getattr(interaction, "guild", None)
+    role_id = bot.watch_party_member_role_id
+    if guild is not None and role_id is not None:
+        role = guild.get_role(role_id)
+        if role is not None:
+            total_watch_party_members = len(role.members)
+
+    stats = bot.statistics_service.server_statistics(guild_id, total_watch_party_members=total_watch_party_members)
+    await send_paginated_stats(interaction, build_server_statistics_text(stats), public)
+
+
+async def send_member_statistics(interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, public: bool) -> None:
+    user = interaction.user
+    stats = bot.statistics_service.member_statistics(guild_id, user.id)
+    mention = getattr(user, "mention", str(user))
+    await send_paginated_stats(interaction, build_member_statistics_text(stats, mention), public)
+
+
+async def send_suggestion_statistics(
+    interaction: discord.Interaction, bot: "WatchPartyBot", query: str, public: bool
+) -> None:
+    matches = bot.suggestion_service.find_matches_for_removal(query)
+    if not matches:
+        await interaction.response.send_message(f'No suggestion matches "{query}".', ephemeral=True)
+        return
+
+    if len(matches) > 1:
+        options = [(item.id, build_removal_option_label(item, bot.suggestion_service)) for item in matches]
+
+        async def on_select(select_interaction: discord.Interaction, suggestion_id: int) -> None:
+            stats = bot.statistics_service.suggestion_statistics(suggestion_id)
+            if stats is None:
+                await select_interaction.response.send_message("That suggestion no longer exists.", ephemeral=True)
+                return
+            await send_paginated_stats(select_interaction, build_suggestion_statistics_text(stats), public)
+
+        view = RemovalMatchSelectView(options, on_select)
+        await interaction.response.send_message(
+            f'Multiple suggestions match "{query}". Choose one:', view=view, ephemeral=True
+        )
+        return
+
+    stats = bot.statistics_service.suggestion_statistics(matches[0].id)
+    await send_paginated_stats(interaction, build_suggestion_statistics_text(stats), public)
+
+
+async def send_rotation_statistics(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, channel_id: Optional[int], public: bool
+) -> None:
+    async def show(target_interaction: discord.Interaction, database: SuggestionDatabase) -> None:
+        stats = bot.statistics_service.rotation_statistics(database.database_id)
+        if stats is None:
+            await target_interaction.response.send_message(
+                "Rotation statistics are not available.", ephemeral=True
+            )
+            return
+        await send_paginated_stats(target_interaction, build_rotation_statistics_text(stats, database.name), public)
+
+    await resolve_stats_database_then(interaction, bot, guild_id, channel_id, show)
+
+
+async def send_database_statistics(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, channel_id: Optional[int], public: bool
+) -> None:
+    async def show(target_interaction: discord.Interaction, database: SuggestionDatabase) -> None:
+        stats = bot.statistics_service.database_statistics(database.database_id)
+        if stats is None:
+            await target_interaction.response.send_message(
+                "That suggestion database no longer exists.", ephemeral=True
+            )
+            return
+        await send_paginated_stats(target_interaction, build_database_statistics_text(stats), public)
+
+    await resolve_stats_database_then(interaction, bot, guild_id, channel_id, show)
+
+
+async def handle_stats(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    stats_type: str,
+    public: bool,
+    suggestion_query: Optional[str],
+) -> None:
+    """Handle /stats: resolve type, enforce FR-034 Section 4's privacy rules, dispatch.
+
+    Every type requires at least Watch Party membership. Public posting
+    requires WASH Crew for every type except "member" -- a member
+    choosing to reveal their own statistics is a different, self-
+    consenting action than posting an aggregate view, so it needs no
+    elevated permission (Section 4: "users may optionally post their own
+    statistics publicly").
+    """
+    permission = bot.permission_service.require_watch_party_member(interaction.user)
+    if not permission.allowed:
+        await interaction.response.send_message(permission.message, ephemeral=True)
+        return
+
+    guild_id = interaction.guild_id
+    channel_id = interaction.channel_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    try:
+        resolved_type = StatsType(stats_type)
+    except ValueError:
+        await interaction.response.send_message(
+            "Choose Server, Member, Suggestion, Rotation, or Database.", ephemeral=True
+        )
+        return
+
+    is_crew = is_wash_crew_member(interaction.user, bot.wash_crew_role_id)
+    if public and resolved_type is not StatsType.MEMBER and not is_crew:
+        await interaction.response.send_message(
+            "You need the WASH Crew role to post statistics publicly.", ephemeral=True
+        )
+        return
+
+    if resolved_type is StatsType.SERVER:
+        await send_server_statistics(interaction, bot, guild_id, public)
+    elif resolved_type is StatsType.MEMBER:
+        await send_member_statistics(interaction, bot, guild_id, public)
+    elif resolved_type is StatsType.SUGGESTION:
+        if not suggestion_query or not suggestion_query.strip():
+            await interaction.response.send_message(
+                "Provide a suggestion reference number or title with the `suggestion` option.", ephemeral=True
+            )
+            return
+        await send_suggestion_statistics(interaction, bot, suggestion_query.strip(), public)
+    elif resolved_type is StatsType.ROTATION:
+        await send_rotation_statistics(interaction, bot, guild_id, channel_id, public)
+    else:
+        await send_database_statistics(interaction, bot, guild_id, channel_id, public)
 
 
 def build_diagnostics_text(

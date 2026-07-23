@@ -7,6 +7,7 @@ from typing import Optional
 
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
+from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 
 _TRAILING_YEAR_PATTERN = re.compile(r"\s*\(\d{4}\)\s*$")
 
@@ -110,6 +111,7 @@ class SuggestionService:
         imdb_rating: Optional[str] = None,
         poster_url: Optional[str] = None,
         release_year: Optional[int] = None,
+        original_suggester: Optional[str] = None,
     ) -> SuggestionResult:
         """Add a suggestion to the list.
 
@@ -126,6 +128,13 @@ class SuggestionService:
             message_id: The Discord message ID of the suggestion post, if
                 already known. Often not available yet at creation time
                 (see attach_message_reference).
+            original_suggester: FR-034: the submitting member's Discord
+                user ID (as a string), recorded once onto
+                journey.original_suggester at creation time and never
+                touched again afterward -- not by reactivation, editing,
+                or a database move (see reactivate_suggestion/
+                edit_suggestion). Suggestions created before FR-034 have
+                no recorded submitter; this is never backfilled.
 
         Returns:
             SuggestionResult indicating success or failure. On success,
@@ -172,6 +181,10 @@ class SuggestionService:
             imdb_rating=imdb_rating,
             poster_url=poster_url,
             release_year=release_year,
+            journey=WatchItemJourney(
+                original_suggester=original_suggester,
+                suggestion_date=datetime.now(timezone.utc).date(),
+            ),
         )
         self._next_id += 1
         self._suggestions[suggestion_key] = watch_item

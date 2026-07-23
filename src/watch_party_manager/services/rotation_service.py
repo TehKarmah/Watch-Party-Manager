@@ -190,6 +190,28 @@ class RotationService:
         rotation = self.get_or_start_rotation(database_id)
         return self._progress_for(rotation)
 
+    def progress_for_rotation(self, rotation: Rotation) -> RotationProgress:
+        """Compute progress for an already-known rotation, without any bootstrap.
+
+        Public counterpart to rotation_progress() for callers (like
+        FR-034 statistics) that already have a specific Rotation object
+        in hand -- e.g. from list_rotations() -- and must never trigger
+        get_or_start_rotation's side effect of creating one.
+        """
+        return self._progress_for(rotation)
+
+    def list_rotations(self, database_id: int) -> List[Rotation]:
+        """Return every rotation ever recorded for a database, oldest first.
+
+        Read-only, no bootstrap -- an Infinite Pool database (or one that
+        simply never started a rotation yet) correctly returns an empty
+        list rather than having one created for it.
+        """
+        return sorted(
+            (rotation for rotation in self._rotations.values() if rotation.database_id == database_id),
+            key=lambda rotation: rotation.id,
+        )
+
     def remaining_suggestions(self, database_id: int) -> List[WatchItem]:
         """Return the current rotation's not-yet-terminal assigned suggestions."""
         rotation = self.get_or_start_rotation(database_id)

@@ -1,7 +1,7 @@
 import sys
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -35,6 +35,23 @@ class SuggestionServiceTests(unittest.TestCase):
         self.assertIn("Added", result.message)
         self.assertIn("The Matrix", result.message)
         self.assertEqual(self.service.suggestion_count(), 1)
+
+    def test_suggest_records_the_creation_date(self) -> None:
+        # FR-034: suggestion_date is set exactly once, at creation, from
+        # the current date -- never inferred or left for a caller to supply.
+        result = self.service.suggest("The Matrix")
+
+        self.assertEqual(result.watch_item.journey.suggestion_date, datetime.now(timezone.utc).date())
+
+    def test_suggest_without_a_submitter_leaves_original_suggester_unset(self) -> None:
+        result = self.service.suggest("The Matrix")
+
+        self.assertIsNone(result.watch_item.journey.original_suggester)
+
+    def test_suggest_records_the_supplied_original_suggester(self) -> None:
+        result = self.service.suggest("The Matrix", original_suggester="123456")
+
+        self.assertEqual(result.watch_item.journey.original_suggester, "123456")
 
     def test_suggest_rejects_empty_title(self) -> None:
         result = self.service.suggest("")
@@ -1323,6 +1340,21 @@ class ArchiveAndReactivateSuggestionTests(unittest.TestCase):
         self.assertEqual(self.matrix.id, item.id)
         self.assertEqual((1,), item.journey.rejected_by_discord_user_ids)
 
+    def test_reactivate_never_touches_original_suggester_or_creation_date(self) -> None:
+        # FR-034: reactivation must never modify the immutable
+        # submitter/creation-date fields, even implicitly.
+        item = self.service.suggest(
+            "Alien", database_id=self.database.database_id, original_suggester="123"
+        ).watch_item
+        original_date = item.journey.suggestion_date
+        self.service.archive_suggestion(item.id)
+
+        self.service.reactivate_suggestion(item.id)
+
+        refreshed = self.service.get_suggestion(item.id)
+        self.assertEqual(refreshed.journey.original_suggester, "123")
+        self.assertEqual(refreshed.journey.suggestion_date, original_date)
+
     def test_reactivate_rejects_an_already_active_item(self) -> None:
         result = self.service.reactivate_suggestion(self.matrix.id)
 
@@ -1413,10 +1445,29 @@ class EditSuggestionTests(unittest.TestCase):
         )
         self.database = self.service.create_database("Movie Night", guild_id=1, channel_id=100).database
         self.other_database = self.service.create_database("Other DB", guild_id=1, channel_id=200).database
-        self.matrix = self.service.suggest("The Matrix", database_id=self.database.database_id).watch_item
+        self.matrix = self.service.suggest(
+            "The Matrix", database_id=self.database.database_id, original_suggester="123"
+        ).watch_item
 
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
+
+    def test_edit_never_touches_original_suggester_or_creation_date(self) -> None:
+        # FR-034: editing (including a database move) must never modify
+        # the immutable submitter/creation-date fields.
+        original_date = self.matrix.journey.suggestion_date
+
+        result = self.service.edit_suggestion(
+            self.matrix.id,
+            title="The Matrix Reloaded",
+            release_year=None,
+            imdb_url=None,
+            database_id=self.other_database.database_id,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.watch_item.journey.original_suggester, "123")
+        self.assertEqual(result.watch_item.journey.suggestion_date, original_date)
 
     def test_edit_updates_title(self) -> None:
         result = self.service.edit_suggestion(
