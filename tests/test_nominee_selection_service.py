@@ -272,5 +272,121 @@ class NomineeSelectionServiceTests(unittest.TestCase):
         self.assertEqual(len(selected), 2)
 
 
+class FakeCandidateSelectionStrategy:
+    """A minimal CandidateSelectionStrategy for testing NomineeSelectionService's integration."""
+
+    def __init__(self, pool, weights=None) -> None:
+        self._pool = pool
+        self._weights = weights or {}
+        self.presented_calls: list[tuple[int, list[int]]] = []
+
+    def candidate_pool(self, database_id: int):
+        return list(self._pool)
+
+    def weight_for(self, watch_item) -> float:
+        return self._weights.get(watch_item.id, 1.0)
+
+    def on_presented(self, database_id: int, suggestion_ids) -> None:
+        self.presented_calls.append((database_id, list(suggestion_ids)))
+
+
+class NomineeSelectionServiceStrategyIntegrationTests(unittest.TestCase):
+    """FR-033B: NomineeSelectionService consults an optional strategy."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(Path(self._temp_dir.name) / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(
+                Path(self._temp_dir.name) / "suggestion_databases.json"
+            ),
+        )
+        self.vote_service = VoteService(
+            self.suggestion_service, repository=JsonVoteRepository(Path(self._temp_dir.name) / "voting.json")
+        )
+        self.selector = NomineeSelectionService(self.suggestion_service, self.vote_service)
+        self.database_id = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=100, channel_id=200
+        ).database.database_id
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _suggest(self, title: str) -> int:
+        result = self.suggestion_service.suggest(title, database_id=self.database_id)
+        return result.watch_item.id
+
+    def test_strategy_candidate_pool_replaces_the_default_lookup(self) -> None:
+        self._suggest("A")
+        self._suggest("B")
+        only_item_id = self._suggest("C")
+        only_item = self.suggestion_service.get_suggestion(only_item_id)
+        second_item = self.suggestion_service.get_suggestion(self._suggest("D"))
+        strategy = FakeCandidateSelectionStrategy(pool=[only_item, second_item])
+
+        selected = self.selector.select_nominees(self.database_id, 2, rng=random.Random(1), strategy=strategy)
+
+        selected_ids = {item.id for item in selected}
+        self.assertEqual(selected_ids, {only_item.id, second_item.id})
+
+    def test_a_strategy_with_fewer_than_two_candidates_returns_empty(self) -> None:
+        item = self.suggestion_service.get_suggestion(self._suggest("A"))
+        strategy = FakeCandidateSelectionStrategy(pool=[item])
+
+        selected = self.selector.select_nominees(self.database_id, 2, rng=random.Random(1), strategy=strategy)
+
+        self.assertEqual(selected, [])
+
+    def test_on_presented_is_called_with_the_final_selection_low_pool_path(self) -> None:
+        item_a = self.suggestion_service.get_suggestion(self._suggest("A"))
+        item_b = self.suggestion_service.get_suggestion(self._suggest("B"))
+        strategy = FakeCandidateSelectionStrategy(pool=[item_a, item_b])
+
+        selected = self.selector.select_nominees(self.database_id, 5, rng=random.Random(1), strategy=strategy)
+
+        self.assertEqual(len(strategy.presented_calls), 1)
+        called_database_id, called_ids = strategy.presented_calls[0]
+        self.assertEqual(called_database_id, self.database_id)
+        self.assertEqual(set(called_ids), {item.id for item in selected})
+
+    def test_on_presented_is_called_with_the_final_selection_full_pool_path(self) -> None:
+        for title in ("A", "B", "C", "D", "E"):
+            self._suggest(title)
+        pool = [self.suggestion_service.get_suggestion(item_id) for item_id in range(1, 6)]
+        strategy = FakeCandidateSelectionStrategy(pool=pool)
+
+        selected = self.selector.select_nominees(self.database_id, 3, rng=random.Random(1), strategy=strategy)
+
+        self.assertEqual(len(strategy.presented_calls), 1)
+        _, called_ids = strategy.presented_calls[0]
+        self.assertEqual(set(called_ids), {item.id for item in selected})
+
+    def test_a_low_weighted_candidate_is_picked_less_often(self) -> None:
+        for title in ("Favored", "Disfavored"):
+            self._suggest(title)
+        favored = self.suggestion_service.get_suggestion(1)
+        disfavored = self.suggestion_service.get_suggestion(2)
+        strategy = FakeCandidateSelectionStrategy(pool=[favored, disfavored], weights={disfavored.id: 0.0001})
+
+        first_picks = [
+            self.selector.select_nominees(self.database_id, 1, rng=random.Random(seed), strategy=strategy)
+            for seed in range(30)
+        ]
+        # select_nominees only returns the full pool when it's <= count;
+        # here count=1 < pool size 2, so the weighted branch runs and
+        # near-zero-weighted candidates should almost never be first.
+        favored_first_count = sum(1 for picks in first_picks if picks and picks[0].id == favored.id)
+        self.assertGreater(favored_first_count, 20)
+
+    def test_no_strategy_preserves_pre_existing_behavior(self) -> None:
+        for title in ("A", "B", "C"):
+            self._suggest(title)
+
+        with_strategy = self.selector.select_nominees(self.database_id, 2, rng=random.Random(7), strategy=None)
+        without_strategy_param = self.selector.select_nominees(self.database_id, 2, rng=random.Random(7))
+
+        self.assertEqual([item.id for item in with_strategy], [item.id for item in without_strategy_param])
+
+
 if __name__ == "__main__":
     unittest.main()

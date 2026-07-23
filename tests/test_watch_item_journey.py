@@ -1,11 +1,15 @@
 import sys
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.domain import WatchItemJourney
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class WatchItemJourneyModelTests(unittest.TestCase):
@@ -157,6 +161,75 @@ class RemoveRejectionTests(unittest.TestCase):
         journey.remove_rejection(1)
 
         self.assertEqual(journey.rejected_by_discord_user_ids, (2,))
+
+
+class RecordRotationEntryIdempotencyTests(unittest.TestCase):
+    def test_recording_the_same_rotation_twice_does_not_duplicate_it(self) -> None:
+        journey = WatchItemJourney()
+        journey.record_rotation_entry(3)
+
+        journey.record_rotation_entry(3)
+
+        self.assertEqual(journey.rotation_history, (3,))
+
+    def test_recording_a_different_rotation_appends_it(self) -> None:
+        journey = WatchItemJourney()
+        journey.record_rotation_entry(3)
+
+        journey.record_rotation_entry(4)
+
+        self.assertEqual(journey.rotation_history, (3, 4))
+
+
+class RetirementTests(unittest.TestCase):
+    def test_defaults_have_no_retirement_recorded(self) -> None:
+        journey = WatchItemJourney()
+
+        self.assertIsNone(journey.retired_at)
+        self.assertIsNone(journey.retirement_reason)
+        self.assertIsNone(journey.retired_from_rotation_id)
+        self.assertIsNone(journey.retired_from_vote_round_id)
+
+    def test_record_retirement_sets_all_fields(self) -> None:
+        journey = WatchItemJourney()
+        retired_at = utc_now()
+
+        journey.record_retirement(retired_at, "rejection_threshold_reached", rotation_id=5, vote_round_id=2)
+
+        self.assertEqual(journey.retired_at, retired_at)
+        self.assertEqual(journey.retirement_reason, "rejection_threshold_reached")
+        self.assertEqual(journey.retired_from_rotation_id, 5)
+        self.assertEqual(journey.retired_from_vote_round_id, 2)
+
+    def test_record_retirement_works_without_optional_context(self) -> None:
+        journey = WatchItemJourney()
+
+        journey.record_retirement(utc_now(), "rejection_threshold_reached")
+
+        self.assertIsNone(journey.retired_from_rotation_id)
+        self.assertIsNone(journey.retired_from_vote_round_id)
+
+    def test_record_retirement_rejects_a_naive_datetime(self) -> None:
+        journey = WatchItemJourney()
+
+        with self.assertRaises(ValueError):
+            journey.record_retirement(datetime.now(), "reason")
+
+    def test_record_retirement_rejects_a_non_positive_rotation_id(self) -> None:
+        journey = WatchItemJourney()
+
+        with self.assertRaises(ValueError):
+            journey.record_retirement(utc_now(), "reason", rotation_id=0)
+
+    def test_record_retirement_rejects_a_non_positive_vote_round_id(self) -> None:
+        journey = WatchItemJourney()
+
+        with self.assertRaises(ValueError):
+            journey.record_retirement(utc_now(), "reason", vote_round_id=0)
+
+    def test_constructing_with_a_naive_retired_at_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchItemJourney(retired_at=datetime.now())
 
 
 if __name__ == "__main__":

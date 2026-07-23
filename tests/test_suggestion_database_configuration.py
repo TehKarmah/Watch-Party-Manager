@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, TieBehavior
 from watch_party_manager.domain.suggestion_database_configuration import (
     CandidateSelectionMode,
+    SuggestionAdmissionMode,
     SuggestionDatabaseArchiveConfig,
     SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
@@ -245,7 +246,8 @@ class SuggestionRulesConfigTests(unittest.TestCase):
         self.assertTrue(rules.require_unique_active_titles)
         self.assertEqual(rules.rejection_threshold, 2)
         self.assertTrue(rules.allow_resuggestion)
-        self.assertEqual(rules.candidate_selection, CandidateSelectionMode.BALANCED_RANDOM)
+        self.assertEqual(rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
+        self.assertEqual(rules.admission_mode, SuggestionAdmissionMode.NEXT_ROTATION)
 
     def test_requires_at_least_one_input_method(self) -> None:
         with self.assertRaises(ValueError):
@@ -272,12 +274,20 @@ class SuggestionRulesConfigTests(unittest.TestCase):
         self.assertEqual(rules.rejection_threshold, 5)
 
     def test_coerces_a_raw_string_candidate_selection(self) -> None:
-        rules = SuggestionRulesConfig(candidate_selection="random")
-        self.assertEqual(rules.candidate_selection, CandidateSelectionMode.RANDOM)
+        rules = SuggestionRulesConfig(candidate_selection="soft_rotation")
+        self.assertEqual(rules.candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
 
     def test_rejects_an_unsupported_candidate_selection(self) -> None:
         with self.assertRaises(ValueError):
             SuggestionRulesConfig(candidate_selection="not_a_real_mode")
+
+    def test_coerces_a_raw_string_admission_mode(self) -> None:
+        rules = SuggestionRulesConfig(admission_mode="join_current_rotation")
+        self.assertEqual(rules.admission_mode, SuggestionAdmissionMode.JOIN_CURRENT_ROTATION)
+
+    def test_rejects_an_unsupported_admission_mode(self) -> None:
+        with self.assertRaises(ValueError):
+            SuggestionRulesConfig(admission_mode="not_a_real_mode")
 
 
 class SuggestionDatabaseWatchHistoryConfigTests(unittest.TestCase):
@@ -326,6 +336,30 @@ class SuggestionDatabaseNotificationOverridesConfigTests(unittest.TestCase):
     def test_rejects_a_non_positive_threshold(self) -> None:
         with self.assertRaises(ValueError):
             SuggestionDatabaseNotificationOverridesConfig(low_suggestion_pool_threshold=0)
+
+    def test_low_pool_reminder_defaults(self) -> None:
+        # FR-033B Section 7: destination defaults to None (falls back to
+        # the database's suggestion channel at send time) and the minimum
+        # reminder interval defaults to 24 hours.
+        notifications = SuggestionDatabaseNotificationOverridesConfig()
+
+        self.assertIsNone(notifications.low_suggestion_pool_destination_channel_id)
+        self.assertEqual(notifications.low_suggestion_pool_minimum_interval_hours, 24)
+
+    def test_low_pool_reminder_accepts_an_explicit_override(self) -> None:
+        notifications = SuggestionDatabaseNotificationOverridesConfig(
+            low_suggestion_pool_destination_channel_id=555, low_suggestion_pool_minimum_interval_hours=6
+        )
+        self.assertEqual(notifications.low_suggestion_pool_destination_channel_id, 555)
+        self.assertEqual(notifications.low_suggestion_pool_minimum_interval_hours, 6)
+
+    def test_rejects_a_non_positive_destination_channel_id(self) -> None:
+        with self.assertRaises(ValueError):
+            SuggestionDatabaseNotificationOverridesConfig(low_suggestion_pool_destination_channel_id=0)
+
+    def test_rejects_a_non_positive_minimum_interval_hours(self) -> None:
+        with self.assertRaises(ValueError):
+            SuggestionDatabaseNotificationOverridesConfig(low_suggestion_pool_minimum_interval_hours=0)
 
 
 class SuggestionDatabasePermissionsConfigTests(unittest.TestCase):

@@ -154,7 +154,7 @@ class WizardFlowTests(SetupWizardServiceTestCase):
         state, _ = self.service.create_new_database(state, "Movies", DESTINATION_CHANNEL_ID, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.RANDOM
+            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.ROTATION_POOL
         )
         state = self.service.set_reminder_defaults(state, True, 48)
         state = self.service.set_backup_defaults(state, 2, 15)
@@ -320,7 +320,7 @@ class AdminChannelStepTests(SetupWizardServiceTestCase):
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.BALANCED_RANDOM
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
         state = self.service.set_reminder_defaults(state, True, 24)
         state = self.service.set_backup_defaults(state, 1, 30)
@@ -381,12 +381,12 @@ class VotingDefaultsStepTests(SetupWizardServiceTestCase):
     def test_defaults_are_saved_and_restored(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
         updated = self.service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.BALANCED_RANDOM
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
         self.assertEqual(updated.draft.voting_candidate_count, 5)
         self.assertEqual(updated.draft.voting_duration_days, 14)
         self.assertEqual(updated.draft.voting_visibility, GuildVoteVisibility.BLIND)
-        self.assertEqual(updated.draft.voting_candidate_selection, CandidateSelectionMode.BALANCED_RANDOM)
+        self.assertEqual(updated.draft.voting_candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
         self.assertEqual(updated.current_step, SetupWizardStep.REMINDER_DEFAULTS)
 
         reloaded = self.wizard_repository.get(GUILD_ID)
@@ -464,7 +464,7 @@ class CompletionTests(SetupWizardServiceTestCase):
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.RANDOM
+            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.ROTATION_POOL
         )
         state = self.service.set_reminder_defaults(state, True, 24)
         state = self.service.set_backup_defaults(state, 1, 30)

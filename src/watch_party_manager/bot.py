@@ -43,7 +43,10 @@ from watch_party_manager.domain.setup_wizard import (
 )
 from watch_party_manager.domain.membership_request import MembershipRequest
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
-from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+from watch_party_manager.domain.suggestion_database_configuration import (
+    CandidateSelectionMode,
+    SuggestionAdmissionMode,
+)
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_party import WatchParty
 from watch_party_manager.logger_config import configure_logging
@@ -115,6 +118,9 @@ from watch_party_manager.services.membership_service import (
     MembershipService,
 )
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
+from watch_party_manager.services.rotation_service import RotationService
+from watch_party_manager.services.candidate_selection_strategy import build_candidate_selection_strategy
+from watch_party_manager.services.low_pool_reminder_service import LowPoolReminderService
 from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.setup_wizard_service import (
     BACKUP_INTERVAL_DAYS_EXTRA_FIELD,
@@ -240,6 +246,7 @@ class WatchPartyBot(commands.Bot):
         )
         self.vote_service = VoteService(self.suggestion_service)
         self.nominee_selection_service = NomineeSelectionService(self.suggestion_service, self.vote_service)
+        self.rotation_service = RotationService(self.suggestion_service)
         self.statistics_service = StatisticsService(self.suggestion_service)
         self.vote_completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
         self.watch_party_service = WatchPartyService(self.suggestion_service)
@@ -285,6 +292,11 @@ class WatchPartyBot(commands.Bot):
         self.config_service = ConfigService(
             self.guild_configuration_repository,
             self.suggestion_service,
+            self.suggestion_database_configuration_repository,
+        )
+        self.low_pool_reminder_service = LowPoolReminderService(
+            self.rotation_service,
+            self.guild_configuration_repository,
             self.suggestion_database_configuration_repository,
         )
         self.membership_request_repository = MembershipRequestRepository()
@@ -527,6 +539,8 @@ class WatchPartyBot(commands.Bot):
                     default_nominee_count=self.default_nominee_count,
                     scheduler_service=self.scheduler_host.scheduler_service,
                     guild_configuration_repository=self.guild_configuration_repository,
+                    rotation_service=self.rotation_service,
+                    suggestion_database_configuration_repository=self.suggestion_database_configuration_repository,
                 )
 
             async def on_customize(choice_interaction: discord.Interaction) -> None:
@@ -552,6 +566,10 @@ class WatchPartyBot(commands.Bot):
                         reminder_hours_text=reminder_hours_text,
                         scheduler_service=self.scheduler_host.scheduler_service,
                         guild_configuration_repository=self.guild_configuration_repository,
+                        rotation_service=self.rotation_service,
+                        suggestion_database_configuration_repository=(
+                            self.suggestion_database_configuration_repository
+                        ),
                     )
 
                 await choice_interaction.response.send_modal(CustomizeVoteModal(on_modal_submit))
@@ -1314,6 +1332,8 @@ def perform_start_vote(
     channel_id: Optional[int] = None,
     reminder_enabled: Optional[bool] = None,
     reminder_hours_before_close: Optional[int] = None,
+    rotation_service: Optional[RotationService] = None,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
 ) -> tuple[str, bool]:
     """Core logic for /start_vote, kept free of Discord objects except `user`.
 
@@ -1344,6 +1364,15 @@ def perform_start_vote(
         reminder_hours_before_close: FR-027: a per-round override of how
             many hours before closing the reminder fires, or None to use
             the guild default.
+        rotation_service: FR-033B: used, together with
+            suggestion_database_configuration_repository, to resolve the
+            database's configured CandidateSelectionMode into a
+            CandidateSelectionStrategy passed to nominee_selection_service.
+            Optional -- when either is None (e.g. no database context, or
+            a test caller with no rotation service configured), nominee
+            selection proceeds exactly as it did before FR-033B.
+        suggestion_database_configuration_repository: FR-033B: see
+            rotation_service.
 
     Returns:
         A (message, ephemeral) tuple. Errors and permission failures are
@@ -1385,7 +1414,20 @@ def perform_start_vote(
         resolution = suggestion_service.resolve_database_for_channel(guild_id, channel_id)
         if resolution.database is None:
             return resolution.error_message or "No suggestion database is available here.", True
-        candidates = nominee_selection_service.select_nominees(resolution.database.database_id, count)
+        strategy = None
+        if rotation_service is not None and suggestion_database_configuration_repository is not None:
+            database_configuration = suggestion_database_configuration_repository.get(
+                guild_id, resolution.database.database_id
+            )
+            mode = (
+                database_configuration.suggestion_rules.candidate_selection
+                if database_configuration is not None
+                else CandidateSelectionMode.ROTATION_POOL
+            )
+            strategy = build_candidate_selection_strategy(mode, rotation_service, suggestion_service)
+        candidates = nominee_selection_service.select_nominees(
+            resolution.database.database_id, count, strategy=strategy
+        )
     else:
         # No database context (or no selection service configured): fall
         # back to a simple, non-database-scoped pool, same low-pool rule
@@ -1575,7 +1617,9 @@ def parse_setup_candidate_selection(value: str) -> CandidateSelectionMode:
     try:
         return CandidateSelectionMode(normalized)
     except ValueError:
-        raise ValueError("Candidate selection must be 'random' or 'balanced_random'.")
+        raise ValueError(
+            "Candidate selection must be 'rotation_pool', 'soft_rotation', or 'infinite_pool'."
+        )
 
 
 def parse_setup_reminder_enabled(value: str) -> bool:
@@ -2166,7 +2210,7 @@ def _resolve_config_voting_defaults_modal_defaults(
 ) -> Tuple[str, str, str, str]:
     """Pre-fill the Voting Defaults modal with the guild's current values."""
     configuration = bot.config_service.get_configuration(guild_id)
-    candidate_selection = CandidateSelectionMode.BALANCED_RANDOM
+    candidate_selection = CandidateSelectionMode.ROTATION_POOL
     database = bot.config_service.resolve_configured_database(guild_id)
     if database is not None:
         database_configuration = bot.suggestion_database_configuration_repository.get(guild_id, database.database_id)
@@ -2760,6 +2804,8 @@ async def handle_start_vote_completion(
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
     reminder_enabled: Optional[bool] = None,
     reminder_hours_before_close: Optional[int] = None,
+    rotation_service: Optional[RotationService] = None,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
 ) -> None:
     """Create a round and publish its interactive voting post.
 
@@ -2785,6 +2831,8 @@ async def handle_start_vote_completion(
         channel_id=interaction.channel_id,
         reminder_enabled=reminder_enabled,
         reminder_hours_before_close=reminder_hours_before_close,
+        rotation_service=rotation_service,
+        suggestion_database_configuration_repository=suggestion_database_configuration_repository,
     )
     if ephemeral:
         await interaction.response.send_message(message, ephemeral=True)
@@ -2848,6 +2896,8 @@ async def handle_start_vote_use_defaults(
     default_nominee_count: int,
     scheduler_service: Optional[SchedulerService] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
+    rotation_service: Optional[RotationService] = None,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
 ) -> None:
     """Start a visible round using the configured defaults."""
     await handle_start_vote_completion(
@@ -2862,6 +2912,8 @@ async def handle_start_vote_use_defaults(
         default_nominee_count=default_nominee_count,
         scheduler_service=scheduler_service,
         guild_configuration_repository=guild_configuration_repository,
+        rotation_service=rotation_service,
+        suggestion_database_configuration_repository=suggestion_database_configuration_repository,
     )
 
 
@@ -2879,6 +2931,8 @@ async def handle_customize_vote_submit(
     reminder_hours_text: Optional[str] = None,
     scheduler_service: Optional[SchedulerService] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
+    rotation_service: Optional[RotationService] = None,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
 ) -> None:
     """Start a round using optional one-time modal overrides."""
     try:
@@ -2905,6 +2959,8 @@ async def handle_customize_vote_submit(
         guild_configuration_repository=guild_configuration_repository,
         reminder_enabled=reminder_enabled,
         reminder_hours_before_close=reminder_hours_before_close,
+        rotation_service=rotation_service,
+        suggestion_database_configuration_repository=suggestion_database_configuration_repository,
     )
 
 
@@ -4108,6 +4164,57 @@ async def post_suggestion_confirmation(
         )
 
 
+def admit_suggestion_to_rotation(bot: "WatchPartyBot", database: SuggestionDatabase, watch_item: WatchItem) -> None:
+    """FR-033B Section 5: apply the database's configured admission mode.
+
+    Called for both new and reactivated suggestions, since a reactivated
+    item is also (re-)entering the candidate pool. NEXT_ROTATION (the
+    default) is a no-op here -- RotationService picks the item up
+    automatically the next time a rotation is (re)started.
+    """
+    if watch_item.id is None:
+        return
+    configuration = bot.suggestion_database_configuration_repository.get(database.guild_id, database.database_id)
+    admission_mode = (
+        configuration.suggestion_rules.admission_mode
+        if configuration is not None
+        else SuggestionAdmissionMode.NEXT_ROTATION
+    )
+    bot.rotation_service.admit_suggestion(database.database_id, watch_item.id, admission_mode)
+
+
+async def maybe_send_low_pool_reminder(bot: "WatchPartyBot", database: SuggestionDatabase) -> None:
+    """FR-033B Section 7: send the Low Pool Reminder when due, and only when due.
+
+    Evaluated after every successful add/reactivation, since that's the
+    natural moment the pool size may have crossed the configured
+    threshold. LowPoolReminderService itself enforces the enabled flag,
+    threshold, and minimum interval -- this only sends and records the
+    timestamp when told to. A Discord send failure is logged and swallowed
+    without recording the timestamp, so the next opportunity can retry
+    rather than going silent for a full interval over one hiccup.
+    """
+    remaining_count = len(bot.suggestion_service.get_suggestions_for_database(database.database_id))
+    configuration = bot.suggestion_database_configuration_repository.get(database.guild_id, database.database_id)
+    default_channel_id = configuration.channels.suggestion_channel_id if configuration is not None else None
+    decision = bot.low_pool_reminder_service.evaluate(
+        guild_id=database.guild_id,
+        database_id=database.database_id,
+        remaining_count=remaining_count,
+        default_suggestion_channel_id=default_channel_id,
+    )
+    if not decision.should_send or decision.destination_channel_id is None:
+        return
+    try:
+        channel = bot.get_channel(decision.destination_channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(decision.destination_channel_id)
+        await channel.send(decision.message)
+        bot.rotation_service.record_low_pool_reminder_sent(database.database_id, datetime.now(timezone.utc))
+    except Exception:
+        logger.warning("Could not send low pool reminder for database %s", database.database_id, exc_info=True)
+
+
 async def finish_add_or_reactivate(
     interaction: discord.Interaction,
     bot: "WatchPartyBot",
@@ -4128,6 +4235,9 @@ async def finish_add_or_reactivate(
     if note:
         ack += f"\n{note}"
     await interaction.response.send_message(ack, ephemeral=True)
+
+    admit_suggestion_to_rotation(bot, database, watch_item)
+    await maybe_send_low_pool_reminder(bot, database)
 
 
 async def handle_add_suggestion(

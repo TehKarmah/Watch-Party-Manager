@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Optional, Tuple
 
 
@@ -20,6 +20,10 @@ class WatchItemJourney:
     last_nominated_date: Optional[date] = None
     last_won_date: Optional[date] = None
     rejected_by_discord_user_ids: Tuple[int, ...] = field(default_factory=tuple)
+    retired_at: Optional[datetime] = None
+    retirement_reason: Optional[str] = None
+    retired_from_rotation_id: Optional[int] = None
+    retired_from_vote_round_id: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.original_suggester = self._normalize_optional_text(self.original_suggester)
@@ -34,6 +38,16 @@ class WatchItemJourney:
         self.rejected_by_discord_user_ids = self._normalize_discord_user_ids(
             self.rejected_by_discord_user_ids
         )
+        self.retirement_reason = self._normalize_optional_text(self.retirement_reason)
+        self._validate_retirement_fields()
+
+    def _validate_retirement_fields(self) -> None:
+        if self.retired_at is not None and self.retired_at.tzinfo is None:
+            raise ValueError("retired_at must be timezone-aware when provided")
+        if self.retired_from_rotation_id is not None:
+            self._validate_rotation_number(self.retired_from_rotation_id)
+        if self.retired_from_vote_round_id is not None and self.retired_from_vote_round_id <= 0:
+            raise ValueError("retired_from_vote_round_id must be a positive integer when provided")
 
     def _validate_non_negative_counts(self) -> None:
         if self.voting_appearances < 0:
@@ -117,8 +131,48 @@ class WatchItemJourney:
         return tuple(normalized)
 
     def record_rotation_entry(self, rotation_number: int) -> None:
+        """Record that this item was presented (nominated) within a rotation.
+
+        Idempotent per rotation_number -- FR-033B's selection strategies
+        may call this more than once for the same rotation (e.g. a
+        candidate that's already marked presented gets selected again
+        after a rotation is later reset), and rotation_history is used as
+        a set-like "has this ever been presented" signal by
+        SoftRotationStrategy, so silent duplicates would only bloat the
+        record without changing behavior.
+        """
         self._validate_rotation_number(rotation_number)
+        if rotation_number in self.rotation_history:
+            return
         self.rotation_history = (*self.rotation_history, int(rotation_number))
+
+    def record_retirement(
+        self,
+        retired_at: datetime,
+        reason: str,
+        *,
+        rotation_id: Optional[int] = None,
+        vote_round_id: Optional[int] = None,
+    ) -> None:
+        """Record a distinct "retired" lifecycle event (FR-033B Section 8).
+
+        Retirement is deliberately separate from plain archival: it's
+        reserved for suggestions that leave the pool via the "I WILL NOT
+        WATCH" rejection threshold (see SuggestionService.reject_suggestion),
+        never presented-status, but still countable toward rotation
+        completion. rotation_id/vote_round_id are optional context about
+        where the retirement happened, when known.
+        """
+        if retired_at.tzinfo is None:
+            raise ValueError("retired_at must be timezone-aware")
+        if rotation_id is not None:
+            self._validate_rotation_number(rotation_id)
+        if vote_round_id is not None and vote_round_id <= 0:
+            raise ValueError("vote_round_id must be a positive integer when provided")
+        self.retired_at = retired_at
+        self.retirement_reason = self._normalize_optional_text(reason)
+        self.retired_from_rotation_id = rotation_id
+        self.retired_from_vote_round_id = vote_round_id
 
     def record_vote_appearance(self, nominated_date: Optional[date] = None) -> None:
         """Record that this item was nominated in a voting round.

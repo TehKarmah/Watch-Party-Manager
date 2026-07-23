@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from watch_party_manager.bot import (
@@ -14,6 +15,7 @@ from watch_party_manager.bot import (
     handle_add_suggestion,
 )
 from watch_party_manager.domain.suggestion_database_configuration import (
+    SuggestionAdmissionMode,
     SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
 )
@@ -22,10 +24,13 @@ from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
 )
+from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.services.duplicate_detection_service import find_duplicates
+from watch_party_manager.services.low_pool_reminder_service import LowPoolReminderService
 from watch_party_manager.services.permission_service import PermissionService
+from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_service import SuggestionService
 
@@ -147,8 +152,22 @@ class FakeInteraction:
         self.response = FakeResponse()
 
 
+class FakeGuildConfigurationRepository:
+    """Always reports "no guild configuration saved" -- LowPoolReminderService
+    falls back to its documented defaults in that case."""
+
+    def get(self, guild_id: int):
+        return None
+
+
 class FakeBot:
-    def __init__(self, suggestion_service, configuration_repository, wash_crew_role_id=WASH_CREW_ROLE_ID) -> None:
+    def __init__(
+        self,
+        suggestion_service,
+        configuration_repository,
+        wash_crew_role_id=WASH_CREW_ROLE_ID,
+        rotation_repository=None,
+    ) -> None:
         self.suggestion_service = suggestion_service
         self.suggestion_input_service = SuggestionInputService()
         self.suggestion_database_configuration_repository = configuration_repository
@@ -156,6 +175,10 @@ class FakeBot:
             watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=wash_crew_role_id
         )
         self.wash_crew_role_id = wash_crew_role_id
+        self.rotation_service = RotationService(suggestion_service, repository=rotation_repository)
+        self.low_pool_reminder_service = LowPoolReminderService(
+            self.rotation_service, FakeGuildConfigurationRepository(), configuration_repository
+        )
         self._channels = {}
 
     def register_channel(self, channel) -> None:
@@ -210,7 +233,11 @@ class HandleAddSuggestionTestCase(unittest.IsolatedAsyncioTestCase):
         self.configuration_repository = SuggestionDatabaseConfigurationRepository(
             root / "suggestion_database_configurations.json"
         )
-        self.bot = FakeBot(self.suggestion_service, self.configuration_repository)
+        self.bot = FakeBot(
+            self.suggestion_service,
+            self.configuration_repository,
+            rotation_repository=JsonRotationRepository(root / "rotations.json"),
+        )
         self.database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
@@ -261,7 +288,11 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
         await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
 
         self.assertTrue(interaction.response.sent_ephemeral)
-        self.assertEqual(1, len(self.confirmation_channel.sent))
+        # 2, not 1: the confirmation post, plus the FR-033B Low Pool
+        # Reminder (a pool of 1 is below the default threshold of 10),
+        # sent to the same channel since no separate reminder destination
+        # is configured -- see maybe_send_low_pool_reminder.
+        self.assertEqual(2, len(self.confirmation_channel.sent))
 
     async def test_active_duplicate_is_blocked(self) -> None:
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
@@ -270,7 +301,10 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
         await handle_add_suggestion(second_interaction, self.bot, "Alien", None, 1979)
 
         self.assertIn("already on the list", second_interaction.response.sent_message)
-        self.assertEqual(1, len(self.confirmation_channel.sent))  # no second post
+        # 2 (confirmation + low pool reminder from the first, successful
+        # add), not 3: the second, blocked call never reaches
+        # finish_add_or_reactivate at all.
+        self.assertEqual(2, len(self.confirmation_channel.sent))
 
     async def test_possible_duplicate_blocks_regular_member(self) -> None:
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
@@ -355,7 +389,69 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
         confirm_interaction = FakeInteraction(user=self._crew_member())
         await crew_interaction.response.sent_view.children[0].callback(confirm_interaction)
 
-        self.assertEqual(1, len(self.confirmation_channel.sent))  # edited, not a second post
+        # 2 (confirmation + low pool reminder from the first add), not 3:
+        # the reactivation edits the existing post rather than sending a
+        # new one, and its own low-pool-reminder check is suppressed by
+        # the minimum interval (the first reminder was just sent).
+        self.assertEqual(2, len(self.confirmation_channel.sent))
+
+
+class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
+    """FR-033B: Section 5 admission modes and Section 7's Low Pool Reminder,
+    exercised through the real /add flow."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=GUILD_ID,
+                database_id=self.database.database_id,
+                display_name="Movie Night",
+                channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=777),
+            )
+        )
+        self.confirmation_channel = FakeChannel(777)
+        self.bot.register_channel(self.confirmation_channel)
+
+    def _set_admission_mode(self, mode: SuggestionAdmissionMode) -> None:
+        existing = self.configuration_repository.get(GUILD_ID, self.database.database_id)
+        updated = replace(existing, suggestion_rules=replace(existing.suggestion_rules, admission_mode=mode))
+        self.configuration_repository.save(updated)
+
+    async def test_next_rotation_default_leaves_a_new_suggestion_out_of_the_open_rotation(self) -> None:
+        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
+
+        await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
+
+        item = self.suggestion_service.get_suggestions_for_database(self.database.database_id)[0]
+        rotation = self.bot.rotation_service.get_open_rotation(self.database.database_id)
+        self.assertNotIn(item.id, rotation.assigned_suggestion_ids)
+
+    async def test_join_current_rotation_admits_the_new_suggestion_immediately(self) -> None:
+        self._set_admission_mode(SuggestionAdmissionMode.JOIN_CURRENT_ROTATION)
+        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
+
+        await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
+
+        item = self.suggestion_service.get_suggestions_for_database(self.database.database_id)[0]
+        rotation = self.bot.rotation_service.get_open_rotation(self.database.database_id)
+        self.assertIn(item.id, rotation.assigned_suggestion_ids)
+
+    async def test_low_pool_reminder_interval_suppresses_a_second_reminder(self) -> None:
+        await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
+        self.assertEqual(2, len(self.confirmation_channel.sent))  # confirmation + reminder
+
+        await handle_add_suggestion(FakeInteraction(), self.bot, "The Matrix", None, 1999)
+
+        # 3, not 4: the second add's confirmation post is sent, but its
+        # own low-pool-reminder check is suppressed by the minimum
+        # interval (the first reminder was just sent).
+        self.assertEqual(3, len(self.confirmation_channel.sent))
+
+    async def test_low_pool_reminder_timestamp_is_recorded(self) -> None:
+        await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
+
+        self.assertIsNotNone(self.bot.rotation_service.last_low_pool_reminder_sent_at(self.database.database_id))
 
 
 if __name__ == "__main__":

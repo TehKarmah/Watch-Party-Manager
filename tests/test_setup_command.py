@@ -194,7 +194,7 @@ class ParseSetupFieldsTests(unittest.TestCase):
             parse_setup_voting_visibility("secret")
 
     def test_candidate_selection_valid_and_invalid(self):
-        self.assertEqual(parse_setup_candidate_selection("random"), CandidateSelectionMode.RANDOM)
+        self.assertEqual(parse_setup_candidate_selection("rotation_pool"), CandidateSelectionMode.ROTATION_POOL)
         with self.assertRaises(ValueError):
             parse_setup_candidate_selection("weighted")
 
@@ -428,7 +428,7 @@ class SetupCommandFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.BALANCED_RANDOM
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
         state = self.bot.setup_wizard_service.set_reminder_defaults(state, True, 24)
         state = self.bot.setup_wizard_service.set_backup_defaults(state, 1, 30)

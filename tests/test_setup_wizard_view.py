@@ -249,7 +249,7 @@ class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(modal.candidate_count_input.default, "3")
         self.assertEqual(modal.duration_days_input.default, "7")
         self.assertEqual(modal.visibility_input.default, "blind")
-        self.assertEqual(modal.candidate_selection_input.default, "balanced_random")
+        self.assertEqual(modal.candidate_selection_input.default, "rotation_pool")
 
     async def test_submission_forwards_all_four_values(self) -> None:
         calls = []
@@ -261,9 +261,9 @@ class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
         modal.candidate_count_input._value = "4"
         modal.duration_days_input._value = "10"
         modal.visibility_input._value = "visible"
-        modal.candidate_selection_input._value = "random"
+        modal.candidate_selection_input._value = "rotation_pool"
         await modal.on_submit(interaction=object())
-        self.assertEqual(calls, [("4", "10", "visible", "random")])
+        self.assertEqual(calls, [("4", "10", "visible", "rotation_pool")])
 
 
 class ReminderDefaultsModalTests(unittest.IsolatedAsyncioTestCase):

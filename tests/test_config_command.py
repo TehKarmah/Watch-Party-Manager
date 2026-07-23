@@ -397,7 +397,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         modal.candidate_count_input._value = "5"
         modal.duration_days_input._value = "14"
         modal.visibility_input._value = "visible"
-        modal.candidate_selection_input._value = "random"
+        modal.candidate_selection_input._value = "rotation_pool"
 
         submit_interaction = FakeInteraction()
         await modal.on_submit(interaction=submit_interaction)
@@ -418,7 +418,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         modal.candidate_count_input._value = "not-a-number"
         modal.duration_days_input._value = "14"
         modal.visibility_input._value = "visible"
-        modal.candidate_selection_input._value = "random"
+        modal.candidate_selection_input._value = "rotation_pool"
 
         submit_interaction = FakeInteraction()
         await modal.on_submit(interaction=submit_interaction)

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, TieBehavior
 from watch_party_manager.domain.suggestion_database_configuration import (
+    CandidateSelectionMode,
     SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
     SuggestionDatabasePermissionsConfig,
@@ -352,7 +353,10 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
 
     # --- Migration seam --------------------------------------------------------------
 
-    def test_missing_schema_version_defaults_to_version_one(self) -> None:
+    def test_missing_schema_version_defaults_to_version_one_and_migrates(self) -> None:
+        # A missing schema_version is treated as version 1, then migrated
+        # forward to CURRENT_SCHEMA_VERSION like any other v1 entry (see
+        # FR-033B's v1->v2 migration below).
         now_iso = utc_now().isoformat()
         legacy_json = json.dumps(
             {
@@ -377,10 +381,63 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
         loaded = self.repository.get(100, 1)
 
         self.assertIsNotNone(loaded)
-        self.assertEqual(loaded.schema_version, 1)
+        self.assertEqual(loaded.schema_version, 2)
 
-    def test_migration_registry_is_empty_for_the_current_schema_version(self) -> None:
-        self.assertEqual(SuggestionDatabaseConfigurationRepository._MIGRATIONS, {})
+    def test_migration_registry_has_exactly_the_v1_to_v2_migration(self) -> None:
+        self.assertEqual(list(SuggestionDatabaseConfigurationRepository._MIGRATIONS.keys()), [1])
+
+    # --- FR-033B: candidate_selection legacy value migration -------------------------
+
+    def _write_legacy_candidate_selection(self, value: str) -> None:
+        now_iso = utc_now().isoformat()
+        legacy_json = json.dumps(
+            {
+                "guilds": {
+                    "100": {
+                        "databases": {
+                            "1": {
+                                "schema_version": 1,
+                                "guild_id": 100,
+                                "database_id": 1,
+                                "display_name": "Movies",
+                                "created_at": now_iso,
+                                "updated_at": now_iso,
+                                "suggestion_rules": {"candidate_selection": value},
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+    def test_legacy_random_candidate_selection_migrates_to_rotation_pool(self) -> None:
+        self._write_legacy_candidate_selection("random")
+
+        loaded = self.repository.get(100, 1)
+
+        self.assertEqual(loaded.schema_version, 2)
+        self.assertEqual(loaded.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
+
+    def test_legacy_balanced_random_candidate_selection_migrates_to_rotation_pool(self) -> None:
+        # Deliberately NOT soft_rotation -- the legacy value never drove
+        # any behavior, so it must not be mapped to a different-behaving
+        # new mode (see _migrate_v1_to_v2's docstring).
+        self._write_legacy_candidate_selection("balanced_random")
+
+        loaded = self.repository.get(100, 1)
+
+        self.assertEqual(loaded.schema_version, 2)
+        self.assertEqual(loaded.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
+
+    def test_migration_creates_a_pre_migration_backup(self) -> None:
+        self._write_legacy_candidate_selection("random")
+
+        self.repository.get(100, 1)
+
+        backup_path = self.file_path.with_suffix(self.file_path.suffix + ".pre_migration.bak")
+        self.assertTrue(backup_path.exists())
 
     def test_schema_version_below_one_is_rejected(self) -> None:
         now_iso = utc_now().isoformat()

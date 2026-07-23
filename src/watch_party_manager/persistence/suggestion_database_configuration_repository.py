@@ -35,6 +35,7 @@ from typing import Any, Callable, Optional, Union
 from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, TieBehavior
 from watch_party_manager.domain.suggestion_database_configuration import (
     CandidateSelectionMode,
+    SuggestionAdmissionMode,
     SuggestionDatabaseArchiveConfig,
     SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
@@ -51,7 +52,22 @@ DEFAULT_SUGGESTION_DATABASE_CONFIGURATIONS_PATH = Path("data/suggestion_database
 
 # This module's own schema version, independent of Guild Configuration's
 # CURRENT_SCHEMA_VERSION -- the two documents have separate lifecycles.
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
+
+
+def _migrate_v1_to_v2(entry: dict[str, Any]) -> dict[str, Any]:
+    """FR-033B: candidate_selection's legacy random/balanced_random values
+    never drove any selection behavior -- both migrate to the new
+    default (rotation_pool) rather than to a differently-behaving new
+    mode, since mapping either to soft_rotation or infinite_pool would
+    silently change an existing server's future selection behavior for a
+    setting nothing ever read.
+    """
+    rules = entry.get("suggestion_rules")
+    if isinstance(rules, dict) and rules.get("candidate_selection") in ("random", "balanced_random"):
+        rules["candidate_selection"] = CandidateSelectionMode.ROTATION_POOL.value
+    entry["schema_version"] = 2
+    return entry
 
 
 class SuggestionDatabaseConfigurationRepository:
@@ -66,7 +82,7 @@ class SuggestionDatabaseConfigurationRepository:
     need to manage either.
     """
 
-    _MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {}
+    _MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {1: _migrate_v1_to_v2}
 
     def __init__(
         self, file_path: Union[Path, str] = DEFAULT_SUGGESTION_DATABASE_CONFIGURATIONS_PATH
@@ -390,6 +406,7 @@ class SuggestionDatabaseConfigurationRepository:
                         "rejection_threshold": c.suggestion_rules.rejection_threshold,
                         "allow_resuggestion": c.suggestion_rules.allow_resuggestion,
                         "candidate_selection": c.suggestion_rules.candidate_selection.value,
+                        "admission_mode": c.suggestion_rules.admission_mode.value,
                     },
                 ),
                 "watch_history": cls._merge(
@@ -416,6 +433,12 @@ class SuggestionDatabaseConfigurationRepository:
                     {
                         "low_suggestion_pool_alerts": c.notifications.low_suggestion_pool_alerts,
                         "low_suggestion_pool_threshold": c.notifications.low_suggestion_pool_threshold,
+                        "low_suggestion_pool_destination_channel_id": (
+                            c.notifications.low_suggestion_pool_destination_channel_id
+                        ),
+                        "low_suggestion_pool_minimum_interval_hours": (
+                            c.notifications.low_suggestion_pool_minimum_interval_hours
+                        ),
                     },
                 ),
                 "permissions": cls._merge(
@@ -504,7 +527,10 @@ class SuggestionDatabaseConfigurationRepository:
                 rejection_threshold=rules.get("rejection_threshold", 2),
                 allow_resuggestion=rules.get("allow_resuggestion", True),
                 candidate_selection=CandidateSelectionMode(
-                    rules.get("candidate_selection", CandidateSelectionMode.BALANCED_RANDOM.value)
+                    rules.get("candidate_selection", CandidateSelectionMode.ROTATION_POOL.value)
+                ),
+                admission_mode=SuggestionAdmissionMode(
+                    rules.get("admission_mode", SuggestionAdmissionMode.NEXT_ROTATION.value)
                 ),
                 extra_fields=cls._split_known(
                     rules,
@@ -515,6 +541,7 @@ class SuggestionDatabaseConfigurationRepository:
                         "rejection_threshold",
                         "allow_resuggestion",
                         "candidate_selection",
+                        "admission_mode",
                     },
                 ),
             ),
@@ -553,8 +580,20 @@ class SuggestionDatabaseConfigurationRepository:
             notifications=SuggestionDatabaseNotificationOverridesConfig(
                 low_suggestion_pool_alerts=notifications.get("low_suggestion_pool_alerts"),
                 low_suggestion_pool_threshold=notifications.get("low_suggestion_pool_threshold"),
+                low_suggestion_pool_destination_channel_id=notifications.get(
+                    "low_suggestion_pool_destination_channel_id"
+                ),
+                low_suggestion_pool_minimum_interval_hours=notifications.get(
+                    "low_suggestion_pool_minimum_interval_hours", 24
+                ),
                 extra_fields=cls._split_known(
-                    notifications, {"low_suggestion_pool_alerts", "low_suggestion_pool_threshold"}
+                    notifications,
+                    {
+                        "low_suggestion_pool_alerts",
+                        "low_suggestion_pool_threshold",
+                        "low_suggestion_pool_destination_channel_id",
+                        "low_suggestion_pool_minimum_interval_hours",
+                    },
                 ),
             ),
             permissions=SuggestionDatabasePermissionsConfig(

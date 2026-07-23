@@ -11,9 +11,12 @@ out of both individual services and out of the Discord layer entirely.
 from __future__ import annotations
 
 import random
-from typing import List, Optional, Protocol, Set, Tuple
+from typing import TYPE_CHECKING, List, Optional, Protocol, Sequence, Set, Tuple
 
 from watch_party_manager.domain.watch_item import WatchItem
+
+if TYPE_CHECKING:
+    from watch_party_manager.services.candidate_selection_strategy import CandidateSelectionStrategy
 
 # How many of the most recent closed rounds to consider when
 # deprioritizing recently-rotated titles.
@@ -93,19 +96,32 @@ class NomineeSelectionService:
         self._recent_rounds_considered = recent_rounds_considered
 
     def select_nominees(
-        self, database_id: int, count: int, rng: Optional[random.Random] = None
+        self,
+        database_id: int,
+        count: int,
+        rng: Optional[random.Random] = None,
+        strategy: Optional["CandidateSelectionStrategy"] = None,
     ) -> List[WatchItem]:
         """Select nominees for a new voting round from one database's suggestions.
 
         Never mixes databases -- only suggestions already scoped to
-        database_id (via SuggestionService.get_suggestions_for_database)
-        are ever considered.
+        database_id (via SuggestionService.get_suggestions_for_database, or
+        via `strategy`'s own candidate_pool when one is supplied) are ever
+        considered.
 
         Args:
             database_id: The suggestion database to select nominees from.
             count: The desired number of nominees.
             rng: Optional random source for deterministic testing.
                 Defaults to random.SystemRandom() in production.
+            strategy: FR-033B's optional CandidateSelectionStrategy
+                (see services/candidate_selection_strategy.py). When
+                given, it determines the candidate pool and contributes a
+                per-candidate weight multiplier alongside this service's
+                own existing recent-nominee/winner weighting, and is
+                notified of the final selection afterward (e.g. so
+                Rotation Pool can record presentation). When omitted
+                (the default), behavior is identical to before FR-033B.
 
         Returns:
             - Exactly `count` nominees if the database has at least that
@@ -119,12 +135,19 @@ class NomineeSelectionService:
         if count <= 0:
             raise ValueError("count must be positive")
 
-        candidates = self._suggestion_service.get_suggestions_for_database(database_id)
+        candidates = (
+            strategy.candidate_pool(database_id)
+            if strategy is not None
+            else self._suggestion_service.get_suggestions_for_database(database_id)
+        )
         if len(candidates) < 2:
             return []
         if len(candidates) <= count:
             # Low pool: use everything rather than rejecting outright.
-            return list(candidates)
+            selected_all = list(candidates)
+            if strategy is not None:
+                strategy.on_presented(database_id, [item.id for item in selected_all])
+            return selected_all
 
         recent_nominee_ids, recent_winner_ids = self._recent_rotation_context(database_id)
         chooser = rng if rng is not None else random.SystemRandom()
@@ -139,10 +162,14 @@ class NomineeSelectionService:
         def rotation_weight(item: WatchItem) -> float:
             penalty = rotation_penalty(item)
             if penalty >= RECENT_WINNER_PENALTY:
-                return RECENT_WINNER_WEIGHT
-            if penalty >= RECENT_NOMINEE_PENALTY:
-                return RECENT_NOMINEE_WEIGHT
-            return NEUTRAL_WEIGHT
+                base_weight = RECENT_WINNER_WEIGHT
+            elif penalty >= RECENT_NOMINEE_PENALTY:
+                base_weight = RECENT_NOMINEE_WEIGHT
+            else:
+                base_weight = NEUTRAL_WEIGHT
+            if strategy is not None:
+                base_weight *= strategy.weight_for(item)
+            return base_weight
 
         remaining = list(candidates)
         weights = [rotation_weight(item) for item in remaining]
@@ -166,6 +193,8 @@ class NomineeSelectionService:
             seen_genres.update(genre.lower() for genre in chosen.genres)
             seen_media_types.add(chosen.media_type)
 
+        if strategy is not None:
+            strategy.on_presented(database_id, [item.id for item in selected])
         return selected
 
     def _recent_rotation_context(self, database_id: int) -> Tuple[Set[int], Set[int]]:

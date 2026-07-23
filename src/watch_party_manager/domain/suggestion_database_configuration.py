@@ -37,14 +37,40 @@ from watch_party_manager.domain.guild_configuration import (
 
 
 class CandidateSelectionMode(str, Enum):
-    """How nominees are chosen for a voting round.
+    """How nominees are chosen for a voting round (FR-033B).
 
-    Only the selection method's *name* is validated here -- no selection
-    algorithm is implemented by this configuration-only milestone.
+    ROTATION_POOL (the default) excludes a suggestion from selection once
+    presented, until a fresh rotation begins. SOFT_ROTATION keeps
+    presented suggestions eligible but weights them down. INFINITE_POOL
+    applies no rotation-based exclusion or weighting at all. See
+    services/candidate_selection_strategy.py for the algorithms.
+
+    Superseded RANDOM/BALANCED_RANDOM values (pre-FR-033B) never drove
+    any selection behavior -- both are migrated to ROTATION_POOL on load
+    (see SuggestionDatabaseConfigurationRepository's schema migration)
+    rather than to a differently-behaving mode, since mapping them to
+    SOFT_ROTATION or INFINITE_POOL would silently change an existing
+    server's future selection behavior for a setting nothing ever read.
     """
 
-    RANDOM = "random"
-    BALANCED_RANDOM = "balanced_random"
+    ROTATION_POOL = "rotation_pool"
+    SOFT_ROTATION = "soft_rotation"
+    INFINITE_POOL = "infinite_pool"
+
+
+class SuggestionAdmissionMode(str, Enum):
+    """When a newly created (or reactivated) suggestion joins a rotation.
+
+    NEXT_ROTATION (the default) leaves a new suggestion unassigned to any
+    in-progress rotation -- it's picked up automatically the next time a
+    fresh rotation begins. JOIN_CURRENT_ROTATION immediately assigns it
+    to whichever rotation is currently open, expanding it live. Only
+    meaningful for databases using CandidateSelectionMode.ROTATION_POOL
+    or SOFT_ROTATION -- INFINITE_POOL has no rotation concept to join.
+    """
+
+    NEXT_ROTATION = "next_rotation"
+    JOIN_CURRENT_ROTATION = "join_current_rotation"
 
 
 @dataclass(slots=True)
@@ -120,7 +146,8 @@ class SuggestionRulesConfig:
     require_unique_active_titles: bool = True
     rejection_threshold: int = 2
     allow_resuggestion: bool = True
-    candidate_selection: CandidateSelectionMode = CandidateSelectionMode.BALANCED_RANDOM
+    candidate_selection: CandidateSelectionMode = CandidateSelectionMode.ROTATION_POOL
+    admission_mode: SuggestionAdmissionMode = SuggestionAdmissionMode.NEXT_ROTATION
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
@@ -132,6 +159,9 @@ class SuggestionRulesConfig:
             raise ValueError("rejection_threshold must be a positive integer")
         self.candidate_selection = _coerce_enum(  # type: ignore[assignment]
             self.candidate_selection, CandidateSelectionMode, "candidate_selection"
+        )
+        self.admission_mode = _coerce_enum(  # type: ignore[assignment]
+            self.admission_mode, SuggestionAdmissionMode, "admission_mode"
         )
         _validate_extra_fields(self.extra_fields)
 
@@ -169,15 +199,26 @@ class SuggestionDatabaseArchiveConfig:
 
 @dataclass(slots=True)
 class SuggestionDatabaseNotificationOverridesConfig:
-    """Per-database notification overrides.
+    """Per-database notification overrides, including the Low Pool Reminder
+    (FR-033B Section 7).
 
-    Both fields default to None, meaning "inherit Guild Configuration".
+    low_suggestion_pool_alerts/low_suggestion_pool_threshold default to
+    None, meaning "inherit Guild Configuration"
+    (AdministrativeNotificationsConfig.low_suggestion_pool /
+    low_suggestion_pool_threshold, both enabled/10 by default -- matching
+    this milestone's documented default). destination_channel_id and
+    minimum_interval_hours have no guild-level equivalent to inherit, so
+    they take concrete defaults directly: a None destination falls back
+    to the database's configured suggestion channel (see
+    SuggestionDatabaseChannelsConfig.suggestion_channel_id) at send time.
     Member-level notification preferences are explicitly out of scope --
     this section only ever holds database-wide settings.
     """
 
     low_suggestion_pool_alerts: Optional[bool] = None
     low_suggestion_pool_threshold: Optional[int] = None
+    low_suggestion_pool_destination_channel_id: Optional[int] = None
+    low_suggestion_pool_minimum_interval_hours: int = 24
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
@@ -185,6 +226,12 @@ class SuggestionDatabaseNotificationOverridesConfig:
             _validate_positive_int(
                 self.low_suggestion_pool_threshold, "low_suggestion_pool_threshold", 1, 1000
             )
+        _validate_optional_snowflake(
+            self.low_suggestion_pool_destination_channel_id, "low_suggestion_pool_destination_channel_id"
+        )
+        _validate_positive_int(
+            self.low_suggestion_pool_minimum_interval_hours, "low_suggestion_pool_minimum_interval_hours", 1, 720
+        )
         _validate_extra_fields(self.extra_fields)
 
 

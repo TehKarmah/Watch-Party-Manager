@@ -66,8 +66,9 @@ class ModalTextInputLabelLengthTests(unittest.TestCase):
     def test_voting_defaults_modal_preserves_guidance_in_the_placeholder(self) -> None:
         # The wording removed from the label must still reach the user.
         modal = VotingDefaultsModal(_noop)
-        self.assertIn("random", modal.candidate_selection_input.placeholder or "")
-        self.assertIn("balanced_random", modal.candidate_selection_input.placeholder or "")
+        self.assertIn("rotation_pool", modal.candidate_selection_input.placeholder or "")
+        self.assertIn("soft_rotation", modal.candidate_selection_input.placeholder or "")
+        self.assertIn("infinite_pool", modal.candidate_selection_input.placeholder or "")
 
     def test_reminder_defaults_modal_labels_are_within_limit(self) -> None:
         self._assert_all_labels_within_limit(ReminderDefaultsModal(_noop))

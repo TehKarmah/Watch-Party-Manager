@@ -1,0 +1,60 @@
+{
+  "guilds": {
+    "517036762271580172": {
+      "databases": {
+        "1": {
+          "schema_version": 1,
+          "guild_id": 517036762271580172,
+          "database_id": 1,
+          "display_name": "test movies",
+          "active": true,
+          "created_at": "2026-07-22T16:24:09.910294+00:00",
+          "updated_at": "2026-07-22T16:24:09.910294+00:00",
+          "configuration_version": 1,
+          "channels": {
+            "suggestion_channel_id": null,
+            "voting_channel_id": null,
+            "watch_history_channel_id": null,
+            "archive_channel_id": null
+          },
+          "voting_overrides": {
+            "candidate_count": null,
+            "duration_hours": null,
+            "visibility": null,
+            "max_vote_changes": null,
+            "tie_behavior": null
+          },
+          "suggestion_rules": {
+            "allow_imdb_links": true,
+            "allow_manual_titles": true,
+            "require_unique_active_titles": true,
+            "rejection_threshold": 2,
+            "allow_resuggestion": true,
+            "candidate_selection": "balanced_random"
+          },
+          "watch_history": {
+            "enabled": true,
+            "allow_retroactive_entries": true,
+            "allow_repeat_watches": true,
+            "include_watch_date": true,
+            "include_vote_result": true
+          },
+          "archive": {
+            "enabled": true,
+            "archive_winner_after_watch": true,
+            "archive_rejected_suggestions": true,
+            "allow_resuggestion": true
+          },
+          "notifications": {
+            "low_suggestion_pool_alerts": null,
+            "low_suggestion_pool_threshold": null
+          },
+          "permissions": {
+            "moderator_role_ids": [],
+            "use_guild_watch_party_role": true
+          }
+        }
+      }
+    }
+  }
+}

@@ -254,11 +254,29 @@ class SuggestionService:
         self._save()
         return True
 
+    def record_rotation_presentation(self, suggestion_id: int, rotation_id: int) -> bool:
+        """Record that a suggestion was presented within a rotation, then persist.
+
+        Used by RotationService (see services/rotation_service.py) as the
+        single source of truth for "has this item been presented in this
+        rotation" -- appends rotation_id to the item's own
+        journey.rotation_history rather than tracking presentation state
+        a second time on the Rotation record itself.
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return False
+        watch_item.journey.record_rotation_entry(rotation_id)
+        self._save()
+        return True
+
     def reject_suggestion(
         self,
         suggestion_id: int,
         discord_user_id: int,
         rejection_threshold: int = DEFAULT_REJECTION_THRESHOLD,
+        *,
+        rotation_id: Optional[int] = None,
     ) -> SuggestionResult:
         """Record a Watch Party member's "I will not watch" rejection.
 
@@ -277,6 +295,10 @@ class SuggestionService:
                 configured value when available (see
                 SuggestionRulesConfig.rejection_threshold) and pass it
                 here; defaults to this project's documented default of 2.
+            rotation_id: FR-033B Section 8: the suggestion's current
+                rotation, when known, recorded onto the retirement event
+                if this rejection crosses the threshold. Optional --
+                callers without rotation context simply omit it.
 
         Returns:
             SuggestionResult indicating success or failure. Fails if the
@@ -302,6 +324,15 @@ class SuggestionService:
         archived = len(watch_item.journey.rejected_by_discord_user_ids) >= rejection_threshold
         if archived:
             watch_item.status = WatchItemStatus.ARCHIVED
+            # FR-033B Section 8: the "I WILL NOT WATCH" rejection-threshold
+            # archive is the distinct "retired" lifecycle -- never applied
+            # to WASH Crew-initiated archival (see archive_suggestion),
+            # which duplicate_detection_service categorizes separately.
+            watch_item.journey.record_retirement(
+                datetime.now(timezone.utc),
+                "rejection_threshold_reached",
+                rotation_id=rotation_id,
+            )
 
         self._save()
 

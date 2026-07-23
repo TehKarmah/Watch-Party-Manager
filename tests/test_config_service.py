@@ -355,7 +355,7 @@ class VotingDefaultsSectionTests(ConfigServiceTestCase):
     def test_nominee_count_duration_and_visibility_are_updated(self) -> None:
         self._seed_completed_setup()
         result = self.service.set_voting_defaults(
-            GUILD_ID, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.RANDOM
+            GUILD_ID, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.ROTATION_POOL
         )
         self.assertTrue(result.success)
         voting_defaults = self.guild_configuration_repository.get(GUILD_ID).voting_defaults
@@ -367,15 +367,15 @@ class VotingDefaultsSectionTests(ConfigServiceTestCase):
         self._seed_completed_setup()
         self._create_database()
         self.service.set_voting_defaults(
-            GUILD_ID, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.RANDOM
+            GUILD_ID, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.ROTATION_POOL
         )
         database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, 1)
-        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.RANDOM)
+        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
 
     def test_existing_max_vote_changes_and_tie_behavior_are_preserved(self) -> None:
         configuration = self._seed_completed_setup()
         self.service.set_voting_defaults(
-            GUILD_ID, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.RANDOM
+            GUILD_ID, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.ROTATION_POOL
         )
         updated = self.guild_configuration_repository.get(GUILD_ID).voting_defaults
         self.assertEqual(updated.max_vote_changes, configuration.voting_defaults.max_vote_changes)

@@ -100,6 +100,15 @@ Database selection follows the same automatic-then-selector pattern used elsewhe
 
 `/edit_suggestion reference:<text> [title] [release_year] [imdb_url] [database_id]` is WASH Crew only. `reference` is matched the same way `/remove` matches (reference number or exact title); any field left blank keeps its current value. A supplied IMDb link is normalized the same way `/add` normalizes one. Moving a suggestion to another database requires that database to exist, be active, and belong to the same guild. Whenever the title, release year, IMDb link, or database changes, the same duplicate check `/add` uses runs again against the destination database (excluding the suggestion's own record) -- a definite duplicate blocks the edit, a possible one requires confirmation. The stable ID, journey, and history are always preserved; only the edited fields (and an internal "last updated" timestamp) change.
 
+### New suggestion admission
+
+Each database's `suggestion_rules.admission_mode` setting controls when a newly added (or reactivated) suggestion becomes selectable for voting:
+
+- **Next Rotation** (the default) -- the suggestion is saved immediately but does not join whichever rotation is currently in progress. It's picked up automatically the next time a fresh rotation begins for that database.
+- **Join Current Rotation** -- the suggestion is added to the in-progress rotation immediately, as unpresented, expanding the active pool live.
+
+This setting only has a visible effect for databases using the Rotation Pool or Soft Rotation candidate-selection modes (see "Candidate selection and rotation management" below) -- Infinite Pool has no rotation concept for it to interact with.
+
 ### Known limitation: identical titles within one database
 
 A "possible duplicate" warning is only ever raised because a candidate's title already matches an existing item's title (that's what makes it a candidate). Suggestion storage has always been keyed by (database, normalized title), so two records can never share an exactly-matching title in the same database. In practice this means confirming "add/save anyway" on a possible-duplicate warning succeeds only when the new title differs at all from every matched title -- confirming with a byte-for-byte identical title still reports the pre-existing "a suggestion with that title already exists" message instead of creating a second record. Changing this would mean changing how suggestions are identified in storage, which this milestone intentionally leaves alone.
@@ -116,6 +125,28 @@ WASH offers:
 WASH selects nominees from the applicable suggestion database and creates an interactive voting post. Candidate availability is validated before the round is created.
 
 Only one open round is supported by the current voting service behavior.
+
+### Candidate selection and rotation management
+
+Each database's `suggestion_rules.candidate_selection` setting (configurable through the setup wizard or `/config`'s Voting Defaults screen) chooses how `/start_vote` picks nominees from that database's eligible suggestions:
+
+- **Rotation Pool** (the default) -- every eligible suggestion belongs to a rotation. Once presented in a vote, a suggestion is excluded from selection until the rotation is exhausted and a fresh one begins automatically.
+- **Soft Rotation** -- unpresented suggestions are strongly preferred, but a previously presented suggestion remains technically eligible at a much lower selection weight rather than being excluded outright.
+- **Infinite Pool** -- every eligible suggestion is always available; no rotation state is created or tracked for a database using this mode.
+
+Within whichever pool a mode produces, WASH still applies its existing genre/media-type diversity pass and its existing deprioritization of recently nominated or recently won suggestions -- candidate-selection mode and diversity are independent, layered concerns.
+
+**Rotation lifecycle.** A rotation tracks an identifier, its start and completion time, which suggestions were assigned to it, and which of those have been presented. A rotation completes once every assigned suggestion has reached one of: presented, watched, retired, or administratively archived/removed. Retired suggestions (see below) count toward completing a rotation but are never counted as presented. Rotation state is stored in its own JSON file under `data/` and is therefore covered automatically by `/backup`, `/restore`, and bot restarts, the same as every other repository.
+
+**Retired suggestions.** A suggestion reaching the "I WILL NOT WATCH" rejection threshold is *retired*, a distinct lifecycle from a WASH Crew-initiated `/remove` archive: WASH records a retirement date, reason, and (when known) the rotation it retired from. Retired suggestions leave the active rotation and are excluded from further selection, but remain visible through `/list status:Archived` and may later be reactivated through `/add`, exactly like any other archived suggestion.
+
+**Low Pool Reminder.** When a database's active suggestion count falls to (or below) a configured threshold -- enabled by default, threshold 10 -- WASH posts a reminder to the database's suggestion channel (or a separately configured destination) naming the remaining count, the current rotation's completion percentage, and a nudge to use `/add`. The reminder respects a configurable minimum interval (24 hours by default) so it never fires more than once per interval regardless of how many suggestions are added or removed in between. It's currently evaluated only after a successful `/add`, since that's the moment a database's pool size most naturally changes.
+
+### Known limitations: candidate selection
+
+- **Retirement's originating rotation is usually unset.** The retirement record's rotation reference is only populated when rejection happens through the `/reject` command; the suggestion post's own "I WILL NOT WATCH" button (the primary way members reject a suggestion) doesn't yet carry rotation context through to it, so `retired_from_rotation_id` is `None` in the common case. The field itself is still recorded and available for a future milestone to populate more completely.
+- **The Watched status is not yet produced anywhere.** Nothing in the current codebase ever transitions a suggestion to Watched, so a rotation can never actually complete via that path today, and the Low Pool Reminder's rotation-progress percentage will never show a nonzero watched count until a future watch-history milestone starts marking items watched. The consumer logic (rotation completion, `/list status:Watched`, progress reporting) is already built and tested against this state so nothing further needs to change once it starts being produced.
+- **Likes, cooldowns, genre/runtime/franchise weighting, and statistics are not implemented.** The weighting architecture (`CompositeWeighting`/`WeightingFactor` in `services/candidate_selection_strategy.py`) exists specifically so a future milestone can add these without redesigning Soft Rotation or the selection pipeline, but no such factor exists yet beyond "has this been presented before."
 
 ## 5. Voting Operations
 
