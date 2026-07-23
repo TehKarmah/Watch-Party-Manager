@@ -89,6 +89,20 @@ Start WASH:
 .\.venv\Scripts\python.exe -m watch_party_manager.bot
 ```
 
+### Resetting Local Data
+
+`scripts/reset_dev_data.ps1` is a **developer-only** utility for repeated fresh-install testing. It permanently deletes local WASH runtime data under `data/` -- guild configuration, suggestions, suggestion databases, votes, rotations, scheduled jobs, setup wizard state, migration `.bak` artifacts, and everything inside `data/backups/` -- while preserving the `data/` and `data/backups/` directories themselves.
+
+Run it from the repository root (or anywhere; it resolves paths relative to its own location):
+
+```powershell
+.\scripts\reset_dev_data.ps1
+```
+
+It prints a clear warning and requires typing `RESET` exactly before deleting anything; any other input cancels safely with nothing deleted. It never fails on missing files or folders, and prints a summary of what it removed.
+
+This is never part of end-user installation -- it exists purely so a developer can repeatedly exercise `/setup` and first-run behavior without manually hunting down and deleting files. Local runtime data under `data/` is already excluded from Git (see `.gitignore`), so none of it is ever committed regardless of whether the script is used.
+
 ## 5. Testing
 
 Run the complete suite before handing off or committing work:

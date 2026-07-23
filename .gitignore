@@ -20,8 +20,12 @@ data/*.sqlite
 data/*.sqlite3
 data/*.json
 data/*.bak
-data/backups/
 data/logs/
+
+# Ignore data/backups/ contents but keep the directory itself trackable
+# (via data/backups/.gitkeep) so it exists in a fresh clone.
+data/backups/*
+!data/backups/.gitkeep
 
 # Logs
 *.log
@@ -44,5 +48,6 @@ htmlcov/
 # Graphic Assets
 WatchPartyManager.ai
 
-# Claude
+# Claude (local permission-history files only -- keep .claude/ itself tracked)
 .claude/settings.json
+.claude/settings.local.json
