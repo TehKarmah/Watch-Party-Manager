@@ -13,8 +13,9 @@
 
 ## Start Here
 
+- [README](../README.md), for a concise project overview, Quick Start, and command list.
+- [Installation Guide](09-Installation-Guide.md), for a complete first-time setup walkthrough: environment setup, Discord bot creation, `.env` configuration, the Setup Wizard, verification, and troubleshooting.
 - [Current Project State](project_state.md), for the implemented status, current milestone, test baseline, and next work.
-- [README](../README.md), for installation, commands, and a concise project overview.
 
 ## Foundation
 

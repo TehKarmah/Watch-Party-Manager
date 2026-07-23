@@ -12,34 +12,30 @@
 | Authors | TehKarmah & ChatGPT |
 
 > [!NOTE]
-> This document distinguishes administration available in the current 0.1.0 development build from the broader Version 1 administration plan.
+> This document distinguishes administration available in the current 0.1.0 build from the broader Version 1 administration plan. For a complete first-time installation walkthrough, see the [Installation Guide](09-Installation-Guide.md).
 
 ## 1. Current Administrative Model
 
-WASH currently uses a configured Discord role named **WASH Crew** for restricted operations. Set the role ID with `WASH_CREW_ROLE_ID`.
+WASH uses two configured Discord roles: **WASH Crew** for restricted administrative operations, and **Watch Party member** for participant commands (WASH Crew automatically inherit member permissions). Both can be set via `WASH_CREW_ROLE_ID`/`WATCH_PARTY_MEMBER_ROLE_ID` in `.env`, or interactively through the guided `/setup` wizard.
 
-Restricted commands fail closed. When no WASH Crew role is configured, no user can run those commands.
+Restricted commands fail closed. When a required role isn't configured, no user can run the commands that depend on it -- including server administrators, unless they also happen to hold the configured role.
 
-Current WASH Crew commands:
+For the exact, current, permission-scoped command list, run `/help` in Discord -- it always reflects exactly what the requesting user can do. See the [README](../README.md) for a grouped summary, or [Expanded Help](08-Expanded-Help.md) for the same reference `/help` links to.
 
-- `/start_vote`
-- `/database_add`
-- `/database_list`
-- `/database_remove`
-- `/diagnostics`
-
-The final setup wizard and broader Discord-based configuration system are not yet implemented.
+The guided setup wizard (`/setup`) and the always-available configuration menu (`/config`) are both implemented -- see Section 3's "Adding suggestions" onward for the workflows they enable, and the [Installation Guide](09-Installation-Guide.md) for a full first-run walkthrough.
 
 ## 2. Environment Configuration
 
-Copy `env.example` to `.env` and configure the values needed for the installation.
+Copy `env.example` to `.env` and configure the values needed for the installation. See the [Installation Guide](09-Installation-Guide.md) for how to obtain a Discord bot token and an OMDb API key.
 
 | Setting | Required | Purpose |
 | --- | --- | --- |
 | `DISCORD_TOKEN` | Yes | Authenticates the Discord bot. |
 | `DISCORD_GUILD_ID` | No | Synchronizes commands to one development guild for faster testing. |
-| `WASH_CREW_ROLE_ID` | Strongly recommended | Authorizes restricted administration commands. |
+| `WASH_CREW_ROLE_ID` | No -- can also be set via `/setup` | Authorizes restricted administration commands. |
+| `WATCH_PARTY_MEMBER_ROLE_ID` | No -- can also be set via `/setup` | Authorizes participant commands (`/add`, `/list`, `/stats`, etc.). |
 | `DEFAULT_VOTE_NOMINEE_COUNT` | No | Sets the default nominee count from 2 through 10. The default is 3. |
+| `OMDB_API_KEY` | No | Enables resolving pasted IMDb links into title/runtime/genre/poster metadata for `/add`. Plain-title suggestions work without it. |
 
 Do not commit the populated `.env` file.
 
@@ -323,11 +319,10 @@ Member and suggestion statistics that depend on "who submitted this" or "when wa
 
 ## 11. Planned Version 1 Administration
 
-The Version 1 plan includes:
+Guided setup (`/setup`, rerunnable), rotation administration, and statistics/reporting are implemented -- see the sections above. The remaining Version 1 plan includes:
 
-- Guided setup and rerunnable configuration
 - Existing, newly created, or deferred watch-history destinations
-- Rotation and event-series administration
+- Event-series administration (the richer recurring-schedule/Discord Event model `docs/04-Data-Model.md` describes; scheduled watch parties today are a simpler, single-occurrence foundation -- see `domain/watch_party.py`)
 - Scheduling and Discord Event publishing
 - Historical corrections and retroactive watch-history entry
 - Configurable scheduled backup execution (the retention/interval settings already exist in `/config`; the scheduler does not yet act on them)

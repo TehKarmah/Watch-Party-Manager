@@ -71,6 +71,8 @@ Preserve these rules when adding features:
 
 ## 4. Local Setup
 
+For a full first-time walkthrough (Discord bot creation, permissions, `.env` configuration, and the Setup Wizard), see the [Installation Guide](09-Installation-Guide.md). The quick version, for those already familiar with the project:
+
 PowerShell:
 
 ```powershell
@@ -99,7 +101,7 @@ Run the complete suite before handing off or committing work:
 Current baseline:
 
 ```text
-Ran 569 tests
+Ran 2426 tests
 
 OK
 ```
@@ -177,12 +179,10 @@ Before a milestone handoff:
 
 ## 10. Current Development Priorities
 
-The active sequence is:
+Voting lifecycle completion, watch-item journey/rotation tracking, setup/configuration workflows, statistics, and backup/restore/import are implemented. Remaining Version 1 priorities:
 
-1. Complete automatic voting lifecycle behavior.
-2. Record winners in watch history and Watch Item Journey.
-3. Build scheduling and Discord Event foundations.
-4. Add setup and broader configuration workflows.
-5. Add backup, restore, import, export, and migration support.
+1. Wire automatic execution of the existing scheduled-backup interval/retention settings.
+2. Build the richer Event Series/Discord Event scheduling foundation.
+3. Add retroactive watch-history correction.
 
 See `project_state.md` for the authoritative current milestone and known limitations.
