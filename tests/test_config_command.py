@@ -42,6 +42,7 @@ from watch_party_manager.config_view import (
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
     ConfigRoleSectionView,
+    ConfigSuggestionDestinationSectionView,
     ConfigWatchDestinationSectionView,
 )
 
@@ -279,6 +280,39 @@ class SectionRenderingTests(ConfigCommandTestCase):
         interaction = FakeInteraction()
         await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.WATCH_DESTINATION, edit=False)
         self.assertIsInstance(interaction.response.sent_view, ConfigWatchDestinationSectionView)
+
+    async def test_suggestion_destination_section_shows_the_channel_picker(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.SUGGESTION_DESTINATION, edit=False)
+        self.assertIsInstance(interaction.response.sent_view, ConfigSuggestionDestinationSectionView)
+
+    async def test_selecting_a_suggestion_destination_saves_immediately(self) -> None:
+        self._seed_completed_setup()
+        self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.SUGGESTION_DESTINATION, edit=False)
+        select = interaction.response.sent_view.children[0]
+        select._values = [_FakeChannelValue(DESTINATION_CHANNEL_ID)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+
+        self.assertIn("Suggestion post destination updated", select_interaction.response.edited_content)
+        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, 1)
+        self.assertEqual(database_configuration.channels.suggestion_channel_id, DESTINATION_CHANNEL_ID)
+
+    async def test_clearing_a_suggestion_destination(self) -> None:
+        self._seed_completed_setup()
+        self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.SUGGESTION_DESTINATION, edit=False)
+        clear_button = interaction.response.sent_view.children[1]
+
+        clear_interaction = FakeInteraction()
+        await clear_button.callback(interaction=clear_interaction)
+
+        self.assertIn("Suggestion post destination cleared", clear_interaction.response.edited_content)
 
     async def test_selecting_a_database_saves_immediately_and_shows_result(self) -> None:
         self._seed_completed_setup()

@@ -351,6 +351,93 @@ class WatchDestinationSectionTests(ConfigServiceTestCase):
         self.assertFalse(result.success)
 
 
+class SuggestionDestinationSectionTests(ConfigServiceTestCase):
+    def test_channel_is_selected(self) -> None:
+        self._seed_completed_setup()
+        self._create_database()
+        result = self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        self.assertTrue(result.success)
+        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, 1)
+        self.assertEqual(database_configuration.channels.suggestion_channel_id, DESTINATION_CHANNEL_ID)
+
+    def test_thread_is_selected_the_same_way_as_a_channel(self) -> None:
+        self._seed_completed_setup()
+        self._create_database()
+        thread_id = 987654321
+        guild = FakeGuild(channel_ids={thread_id})
+        result = self.service.set_suggestion_destination(GUILD_ID, thread_id, guild)
+        self.assertTrue(result.success)
+
+    def test_destination_can_be_cleared(self) -> None:
+        self._seed_completed_setup()
+        self._create_database()
+        self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        result = self.service.skip_suggestion_destination(GUILD_ID)
+        self.assertTrue(result.success)
+        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, 1)
+        self.assertIsNone(database_configuration.channels.suggestion_channel_id)
+
+    def test_missing_resource_is_rejected(self) -> None:
+        self._seed_completed_setup()
+        self._create_database()
+        guild = FakeGuild(channel_ids=set())
+        result = self.service.set_suggestion_destination(GUILD_ID, 555, guild)
+        self.assertFalse(result.success)
+
+    def test_insufficient_bot_permissions_is_rejected(self) -> None:
+        self._seed_completed_setup()
+        self._create_database()
+        guild = FakeGuild(
+            channel_ids={DESTINATION_CHANNEL_ID},
+            channel_permissions={DESTINATION_CHANNEL_ID: FakePermissions(send_messages=False)},
+        )
+        result = self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, guild)
+        self.assertFalse(result.success)
+
+    def test_requires_an_unambiguous_active_database_first(self) -> None:
+        self._seed_completed_setup()
+        result = self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        self.assertFalse(result.success)
+
+    def test_setting_suggestion_destination_does_not_change_watch_destination(self) -> None:
+        self._seed_completed_setup()
+        self._create_database()
+        self.service.set_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        other_channel_id = 401
+        guild = self._full_guild(extra_channel_ids=[other_channel_id])
+        self.service.set_suggestion_destination(GUILD_ID, other_channel_id, guild)
+
+        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, 1)
+        self.assertEqual(database_configuration.channels.watch_history_channel_id, DESTINATION_CHANNEL_ID)
+        self.assertEqual(database_configuration.channels.suggestion_channel_id, other_channel_id)
+
+    def test_summary_reports_not_configured_when_unset(self) -> None:
+        self._seed_completed_setup()
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertIn("Suggestion Post Destination: Not configured", lines)
+
+    def test_summary_reports_skipped_once_a_database_is_active(self) -> None:
+        self._seed_completed_setup()
+        self._create_database()
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertIn("Suggestion Post Destination: Skipped", lines)
+
+    def test_summary_reports_configured_when_set(self) -> None:
+        self._seed_completed_setup()
+        self._create_database()
+        self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertIn(f"Suggestion Post Destination: Configured (<#{DESTINATION_CHANNEL_ID}>)", lines)
+
+    def test_summary_reports_invalid_when_channel_no_longer_usable(self) -> None:
+        self._seed_completed_setup()
+        self._create_database()
+        self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        guild = FakeGuild(channel_ids=set())
+        lines = self.service.build_summary_lines(GUILD_ID, guild)
+        self.assertTrue(any(line.startswith("Suggestion Post Destination: Invalid") for line in lines))
+
+
 class VotingDefaultsSectionTests(ConfigServiceTestCase):
     def test_nominee_count_duration_and_visibility_are_updated(self) -> None:
         self._seed_completed_setup()

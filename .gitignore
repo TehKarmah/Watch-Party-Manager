@@ -43,3 +43,6 @@ htmlcov/
 
 # Graphic Assets
 WatchPartyManager.ai
+
+# Claude
+.claude/settings.json

@@ -1,5 +1,8 @@
-"""Tests for FR-033A's /list rewiring: permissions, database selection,
-status filters, richer entries, and pagination."""
+"""Tests for /list's Release Polish Priority 2 rework: default-to-Available
+output, the Available/Watched/Retired filter set, terse title/year/
+original-suggestion-link entries (no reference number, no status, no
+IMDb link), embed suppression, and pagination.
+"""
 
 from __future__ import annotations
 
@@ -29,18 +32,19 @@ class FilterItemsByStatusTests(unittest.TestCase):
     def _item(self, status: WatchItemStatus) -> WatchItem:
         return WatchItem(title="Alien", media_type=MediaType.MOVIE, status=status)
 
-    def test_active_excludes_archived_and_watched(self) -> None:
+    def test_available_excludes_retired_and_watched(self) -> None:
         items = [
             self._item(WatchItemStatus.SUGGESTED),
             self._item(WatchItemStatus.ARCHIVED),
             self._item(WatchItemStatus.WATCHED),
         ]
-        result = filter_items_by_status(items, SuggestionListStatusFilter.ACTIVE)
+        result = filter_items_by_status(items, SuggestionListStatusFilter.AVAILABLE)
         self.assertEqual(1, len(result))
+        self.assertEqual(WatchItemStatus.SUGGESTED, result[0].status)
 
-    def test_archived_only_shows_archived(self) -> None:
+    def test_retired_only_shows_archived_items(self) -> None:
         items = [self._item(WatchItemStatus.SUGGESTED), self._item(WatchItemStatus.ARCHIVED)]
-        result = filter_items_by_status(items, SuggestionListStatusFilter.ARCHIVED)
+        result = filter_items_by_status(items, SuggestionListStatusFilter.RETIRED)
         self.assertEqual(1, len(result))
         self.assertEqual(WatchItemStatus.ARCHIVED, result[0].status)
 
@@ -50,50 +54,65 @@ class FilterItemsByStatusTests(unittest.TestCase):
         self.assertEqual(1, len(result))
         self.assertEqual(WatchItemStatus.WATCHED, result[0].status)
 
-    def test_all_shows_everything(self) -> None:
-        items = [
-            self._item(WatchItemStatus.SUGGESTED),
-            self._item(WatchItemStatus.ARCHIVED),
-            self._item(WatchItemStatus.WATCHED),
-        ]
-        result = filter_items_by_status(items, SuggestionListStatusFilter.ALL)
-        self.assertEqual(3, len(result))
+    def test_watched_and_retired_are_never_combined(self) -> None:
+        items = [self._item(WatchItemStatus.ARCHIVED), self._item(WatchItemStatus.WATCHED)]
+        self.assertEqual(1, len(filter_items_by_status(items, SuggestionListStatusFilter.WATCHED)))
+        self.assertEqual(1, len(filter_items_by_status(items, SuggestionListStatusFilter.RETIRED)))
+
+    def test_only_three_modes_exist(self) -> None:
+        self.assertEqual(
+            {"available", "watched", "retired"}, {member.value for member in SuggestionListStatusFilter}
+        )
 
 
 class BuildSuggestionEntryLineTests(unittest.TestCase):
-    def test_includes_reference_and_title(self) -> None:
-        item = WatchItem(title="Alien", media_type=MediaType.MOVIE, id=7)
-        line = build_suggestion_entry_line(item)
-        self.assertIn("#0007", line)
-        self.assertIn("Alien", line)
-
-    def test_includes_release_year_when_present(self) -> None:
-        item = WatchItem(title="Alien", media_type=MediaType.MOVIE, id=1, release_year=1979)
-        self.assertIn("1979", build_suggestion_entry_line(item))
+    def test_shows_title_and_year_only_when_there_is_no_original_post(self) -> None:
+        item = WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=7, release_year=1999)
+        self.assertEqual("The Matrix (1999)", build_suggestion_entry_line(item))
 
     def test_omits_release_year_when_absent(self) -> None:
-        item = WatchItem(title="Alien", media_type=MediaType.MOVIE, id=1)
-        line = build_suggestion_entry_line(item)
-        self.assertNotIn("(", line)
+        item = WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=1)
+        self.assertEqual("The Matrix", build_suggestion_entry_line(item))
 
-    def test_includes_imdb_link_when_present(self) -> None:
+    def test_includes_a_clean_original_suggestion_link_when_available(self) -> None:
         item = WatchItem(
-            title="Alien",
+            title="The Matrix",
             media_type=MediaType.MOVIE,
             id=1,
-            metadata_ids={MetadataProvider.IMDB: "https://www.imdb.com/title/tt0078748/"},
+            release_year=1999,
+            guild_id=1,
+            channel_id=2,
+            message_id=3,
         )
-        self.assertIn("tt0078748", build_suggestion_entry_line(item))
+        line = build_suggestion_entry_line(item)
+        self.assertEqual("The Matrix (1999) | [Original suggestion](https://discord.com/channels/1/2/3)", line)
 
-    def test_includes_original_post_link_when_available(self) -> None:
+    def test_never_includes_a_reference_number(self) -> None:
+        item = WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=42, release_year=1999)
+        self.assertNotIn("#", build_suggestion_entry_line(item))
+        self.assertNotIn("0042", build_suggestion_entry_line(item))
+
+    def test_never_includes_a_status_label(self) -> None:
         item = WatchItem(
-            title="Alien", media_type=MediaType.MOVIE, id=1, guild_id=1, channel_id=2, message_id=3
+            title="The Matrix", media_type=MediaType.MOVIE, id=1, status=WatchItemStatus.ARCHIVED
         )
-        self.assertIn("discord.com/channels/1/2/3", build_suggestion_entry_line(item))
+        self.assertNotIn("Status", build_suggestion_entry_line(item))
+        self.assertNotIn("Archived", build_suggestion_entry_line(item))
 
-    def test_always_includes_status(self) -> None:
-        item = WatchItem(title="Alien", media_type=MediaType.MOVIE, id=1, status=WatchItemStatus.ARCHIVED)
-        self.assertIn("Status: Archived", build_suggestion_entry_line(item))
+    def test_never_includes_an_imdb_link(self) -> None:
+        item = WatchItem(
+            title="The Matrix",
+            media_type=MediaType.MOVIE,
+            id=1,
+            metadata_ids={MetadataProvider.IMDB: "https://www.imdb.com/title/tt0133093/"},
+        )
+        self.assertNotIn("imdb", build_suggestion_entry_line(item).lower())
+
+    def test_item_without_an_original_post_has_no_broken_link_placeholder(self) -> None:
+        item = WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=1, release_year=1999)
+        line = build_suggestion_entry_line(item)
+        self.assertNotIn("[", line)
+        self.assertNotIn("None", line)
 
 
 class FakeRole:
@@ -112,11 +131,13 @@ class FakeResponse:
         self.sent_message = None
         self.sent_ephemeral = None
         self.sent_view = None
+        self.sent_suppress_embeds = None
 
-    async def send_message(self, content, ephemeral=False, view=None) -> None:
+    async def send_message(self, content, ephemeral=False, view=None, suppress_embeds=False) -> None:
         self.sent_message = content
         self.sent_ephemeral = ephemeral
         self.sent_view = view
+        self.sent_suppress_embeds = suppress_embeds
 
 
 class FakeInteraction:
@@ -157,7 +178,7 @@ class ListPermissionTests(HandleListSuggestionsTestCase):
     async def test_non_watch_party_member_is_rejected(self) -> None:
         interaction = FakeInteraction(user=FakeMember([]))
 
-        await handle_list_suggestions(interaction, self.bot, "active", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
 
         self.assertIn("Watch Party", interaction.response.sent_message)
 
@@ -165,7 +186,7 @@ class ListPermissionTests(HandleListSuggestionsTestCase):
         self.suggestion_service.create_database("Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID)
         interaction = FakeInteraction()
 
-        await handle_list_suggestions(interaction, self.bot, "active", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
 
         self.assertTrue(interaction.response.sent_ephemeral)
 
@@ -173,7 +194,7 @@ class ListPermissionTests(HandleListSuggestionsTestCase):
         self.suggestion_service.create_database("Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID)
         interaction = FakeInteraction()
 
-        await handle_list_suggestions(interaction, self.bot, "active", True)
+        await handle_list_suggestions(interaction, self.bot, "available", True)
 
         self.assertIn("WASH Crew", interaction.response.sent_message)
 
@@ -182,11 +203,11 @@ class ListPermissionTests(HandleListSuggestionsTestCase):
         self.suggestion_service.suggest("Alien", database_id=1)
         interaction = FakeInteraction(user=self._crew_member())
 
-        await handle_list_suggestions(interaction, self.bot, "active", True)
+        await handle_list_suggestions(interaction, self.bot, "available", True)
 
         self.assertFalse(interaction.response.sent_ephemeral)
 
-    async def test_crew_can_view_archived_privately(self) -> None:
+    async def test_crew_can_view_retired_privately(self) -> None:
         database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
@@ -194,12 +215,12 @@ class ListPermissionTests(HandleListSuggestionsTestCase):
         self.suggestion_service.archive_suggestion(item.id)
         interaction = FakeInteraction(user=self._crew_member())
 
-        await handle_list_suggestions(interaction, self.bot, "archived", False)
+        await handle_list_suggestions(interaction, self.bot, "retired", False)
 
         self.assertTrue(interaction.response.sent_ephemeral)
         self.assertIn("Alien", interaction.response.sent_message)
 
-    async def test_member_can_view_archived_privately(self) -> None:
+    async def test_member_can_view_retired_privately(self) -> None:
         database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
@@ -207,7 +228,7 @@ class ListPermissionTests(HandleListSuggestionsTestCase):
         self.suggestion_service.archive_suggestion(item.id)
         interaction = FakeInteraction()
 
-        await handle_list_suggestions(interaction, self.bot, "archived", False)
+        await handle_list_suggestions(interaction, self.bot, "retired", False)
 
         self.assertTrue(interaction.response.sent_ephemeral)
         self.assertIn("Alien", interaction.response.sent_message)
@@ -219,7 +240,7 @@ class ListDatabaseSelectionTests(HandleListSuggestionsTestCase):
         self.suggestion_service.suggest("Alien", database_id=1)
         interaction = FakeInteraction()
 
-        await handle_list_suggestions(interaction, self.bot, "active", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
 
         self.assertIn("Movie Night", interaction.response.sent_message)
 
@@ -228,7 +249,7 @@ class ListDatabaseSelectionTests(HandleListSuggestionsTestCase):
         self.suggestion_service.suggest("Alien", database_id=1)
         interaction = FakeInteraction(channel_id=999)
 
-        await handle_list_suggestions(interaction, self.bot, "active", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
 
         self.assertIn("Movie Night", interaction.response.sent_message)
 
@@ -237,7 +258,7 @@ class ListDatabaseSelectionTests(HandleListSuggestionsTestCase):
         self.suggestion_service.create_database("Anime Night", guild_id=GUILD_ID, channel_id=556)
         interaction = FakeInteraction(channel_id=999)
 
-        await handle_list_suggestions(interaction, self.bot, "active", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
 
         self.assertIsNotNone(interaction.response.sent_view)
 
@@ -246,7 +267,7 @@ class ListDatabaseSelectionTests(HandleListSuggestionsTestCase):
         self.suggestion_service.create_database("Anime Night", guild_id=GUILD_ID, channel_id=556)
         self.suggestion_service.suggest("Alien", database_id=1)
         interaction = FakeInteraction(channel_id=999)
-        await handle_list_suggestions(interaction, self.bot, "active", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
         select = interaction.response.sent_view.children[0]
         select._values = ["1"]
 
@@ -258,7 +279,7 @@ class ListDatabaseSelectionTests(HandleListSuggestionsTestCase):
     async def test_reports_a_clear_error_when_no_database_is_configured(self) -> None:
         interaction = FakeInteraction()
 
-        await handle_list_suggestions(interaction, self.bot, "active", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
 
         self.assertIsNotNone(interaction.response.sent_message)
 
@@ -269,29 +290,87 @@ class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
 
         await handle_list_suggestions(interaction, self.bot, "not-a-status", False)
 
-        self.assertIn("Active", interaction.response.sent_message)
+        self.assertIn("Available", interaction.response.sent_message)
 
-    async def test_empty_active_list_reports_clearly(self) -> None:
+    async def test_empty_available_list_reports_clearly(self) -> None:
         self.suggestion_service.create_database("Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID)
         interaction = FakeInteraction()
 
-        await handle_list_suggestions(interaction, self.bot, "active", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
 
-        self.assertIn("no active watch items", interaction.response.sent_message)
+        self.assertIn("no available watch items", interaction.response.sent_message)
 
-    async def test_all_filter_includes_archived_and_watched(self) -> None:
+    async def test_default_status_is_available(self) -> None:
+        database = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        active = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
+        retired = self.suggestion_service.suggest("Aliens", database_id=database.database_id).watch_item
+        self.suggestion_service.archive_suggestion(retired.id)
+        interaction = FakeInteraction()
+
+        # Mirrors the /list command's own default: status defaults to "available".
+        await handle_list_suggestions(interaction, self.bot, "available", False)
+
+        self.assertIn("Alien", interaction.response.sent_message)
+        self.assertNotIn("Aliens", interaction.response.sent_message)
+
+    async def test_watched_mode_excludes_available_and_retired_items(self) -> None:
+        database = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        self.suggestion_service.suggest("Available Movie", database_id=database.database_id)
+        retired = self.suggestion_service.suggest("Retired Movie", database_id=database.database_id).watch_item
+        self.suggestion_service.archive_suggestion(retired.id)
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "watched", False)
+
+        self.assertIn("no watched watch items", interaction.response.sent_message)
+
+    async def test_retired_mode_shows_only_retired_items(self) -> None:
+        database = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        self.suggestion_service.suggest("Available Movie", database_id=database.database_id)
+        retired = self.suggestion_service.suggest("Retired Movie", database_id=database.database_id).watch_item
+        self.suggestion_service.archive_suggestion(retired.id)
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "retired", False)
+
+        self.assertIn("Retired Movie", interaction.response.sent_message)
+        self.assertNotIn("Available Movie", interaction.response.sent_message)
+
+    async def test_entries_have_no_reference_number_or_status_label(self) -> None:
         database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
         self.suggestion_service.suggest("Alien", database_id=database.database_id)
-        archived = self.suggestion_service.suggest("Aliens", database_id=database.database_id).watch_item
-        self.suggestion_service.archive_suggestion(archived.id)
         interaction = FakeInteraction()
 
-        await handle_list_suggestions(interaction, self.bot, "all", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
 
-        self.assertIn("Alien", interaction.response.sent_message)
-        self.assertIn("Aliens", interaction.response.sent_message)
+        message = interaction.response.sent_message
+        self.assertNotIn("#0001", message)
+        self.assertNotIn("Status:", message)
+
+    async def test_response_suppresses_link_preview_embeds(self) -> None:
+        self.suggestion_service.create_database("Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID)
+        self.suggestion_service.suggest("Alien", database_id=1)
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "available", False)
+
+        self.assertTrue(interaction.response.sent_suppress_embeds)
+
+    async def test_empty_result_also_suppresses_embeds(self) -> None:
+        self.suggestion_service.create_database("Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID)
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "available", False)
+
+        self.assertTrue(interaction.response.sent_suppress_embeds)
 
     async def test_deterministic_ordering_by_id(self) -> None:
         database = self.suggestion_service.create_database(
@@ -301,7 +380,7 @@ class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
         self.suggestion_service.suggest("Alpha", database_id=database.database_id)
         interaction = FakeInteraction()
 
-        await handle_list_suggestions(interaction, self.bot, "active", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
 
         message = interaction.response.sent_message
         self.assertLess(message.index("Zeta"), message.index("Alpha"))
@@ -310,11 +389,13 @@ class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
         database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
-        for index in range(40):
-            self.suggestion_service.suggest(f"Movie Number {index:03d} With A Long Title", database_id=database.database_id)
+        for index in range(120):
+            self.suggestion_service.suggest(
+                f"Movie Number {index:03d} With A Reasonably Long Padded Title", database_id=database.database_id
+            )
         interaction = FakeInteraction()
 
-        await handle_list_suggestions(interaction, self.bot, "active", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
 
         self.assertLessEqual(len(interaction.response.sent_message), 2000)
         self.assertIsNotNone(interaction.response.sent_view)
@@ -327,7 +408,7 @@ class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
             self.suggestion_service.suggest(f"Movie Number {index:03d} With Extra Padding Text Here", database_id=database.database_id)
         interaction = FakeInteraction()
 
-        await handle_list_suggestions(interaction, self.bot, "active", False)
+        await handle_list_suggestions(interaction, self.bot, "available", False)
 
         self.assertLessEqual(len(interaction.response.sent_message), 2000)
 

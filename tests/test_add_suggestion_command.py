@@ -407,6 +407,71 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
         self.assertEqual(2, len(self.confirmation_channel.sent))
 
 
+class AddWithThreadDestinationTests(HandleAddSuggestionTestCase):
+    """A configured suggestion destination may be a public thread rather
+    than a text channel -- from /add's perspective these are the same
+    kind of Discord messageable, so the confirmation post is created the
+    same way either way (see post_suggestion_confirmation)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=GUILD_ID,
+                database_id=self.database.database_id,
+                display_name="Movie Night",
+                channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=888),
+            )
+        )
+        self.confirmation_thread = FakeChannel(888)
+        self.bot.register_channel(self.confirmation_thread)
+
+    async def test_add_posts_a_public_confirmation_to_the_configured_thread(self) -> None:
+        interaction = FakeInteraction()
+
+        await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
+
+        self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertGreaterEqual(len(self.confirmation_thread.sent), 1)
+
+
+class AddWithInaccessibleDestinationTests(HandleAddSuggestionTestCase):
+    """The configured suggestion channel/thread may no longer be reachable
+    (deleted, WASH kicked from it, permissions revoked). The suggestion
+    must still be saved, and the member must get a clear, non-technical
+    explanation -- never a raw exception."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=GUILD_ID,
+                database_id=self.database.database_id,
+                display_name="Movie Night",
+                channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=999999),
+            )
+        )
+        # Deliberately not registered with the bot, so get_channel/fetch_channel
+        # behave as they would for a deleted or inaccessible channel.
+
+    async def test_suggestion_is_saved_despite_the_inaccessible_destination(self) -> None:
+        interaction = FakeInteraction()
+
+        await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
+
+        self.assertEqual(1, len(self.suggestion_service.get_suggestions_for_database(self.database.database_id)))
+
+    async def test_member_sees_a_clear_actionable_warning_not_a_raw_exception(self) -> None:
+        interaction = FakeInteraction()
+
+        await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
+
+        message = interaction.response.sent_message
+        self.assertIn("could not post the public confirmation", message)
+        self.assertNotIn("Traceback", message)
+        self.assertNotIn("RuntimeError", message)
+
+
 class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
     """FR-033B: Section 5 admission modes and Section 7's Low Pool Reminder,
     exercised through the real /add flow."""

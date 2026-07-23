@@ -85,13 +85,20 @@ class PaginatedListView(discord.ui.View):
     current and disables Previous/Next at the boundaries.
     """
 
-    def __init__(self, pages: Sequence[str], *, requester_id: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        pages: Sequence[str],
+        *,
+        requester_id: Optional[int] = None,
+        suppress_embeds: bool = False,
+    ) -> None:
         if not pages:
             raise ValueError("pages must contain at least one page")
         super().__init__(timeout=PAGINATION_VIEW_TIMEOUT_SECONDS)
         self._pages = list(pages)
         self._index = 0
         self._requester_id = requester_id
+        self._suppress_embeds = suppress_embeds
         self._previous_button = PaginationButton("Previous", self._go_previous)
         self._next_button = PaginationButton("Next", self._go_next)
         self.add_item(self._previous_button)
@@ -141,4 +148,6 @@ class PaginatedListView(discord.ui.View):
 
     async def _refresh(self, interaction: discord.Interaction) -> None:
         self._sync_button_state()
-        await interaction.response.edit_message(content=self.current_page, view=self)
+        await interaction.response.edit_message(
+            content=self.current_page, view=self, suppress_embeds=self._suppress_embeds
+        )

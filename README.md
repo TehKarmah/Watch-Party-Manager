@@ -102,6 +102,7 @@ Everything else -- suggestion databases, voting defaults, reminders, backup sche
 - [Administration](docs/05-Administration.md)
 - [Developer Guide](docs/06-Developer-Guide.md)
 - [Implementation Checklist](docs/07-Implementation-Checklist.md)
+- [Commands Reference](docs/10-Command-Reference.md)
 - [Expanded Help](docs/08-Expanded-Help.md)
 - [Glossary](docs/98-Glossary.md)
 - [Current Project State](docs/project_state.md)

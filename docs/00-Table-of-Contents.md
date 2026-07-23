@@ -41,6 +41,7 @@ These documents distinguish currently available administration from planned Vers
 
 ## Help & Reference
 
+- [Commands Reference](10-Command-Reference.md), every implemented slash command grouped by required role -- the link `/help` points to in Discord.
 - [Expanded Help](08-Expanded-Help.md)
 - [Glossary](98-Glossary.md)
 - [Decision Log](99-Decision-Log.md)

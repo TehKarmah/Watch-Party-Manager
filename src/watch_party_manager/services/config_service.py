@@ -64,6 +64,7 @@ class ConfigSection(str, Enum):
     WATCH_PARTY_JOIN_MODE = "watch_party_join_mode"
     ADMIN_CHANNEL = "admin_channel"
     SUGGESTION_DATABASE = "suggestion_database"
+    SUGGESTION_DESTINATION = "suggestion_destination"
     WATCH_DESTINATION = "watch_destination"
     VOTING_DEFAULTS = "voting_defaults"
     REMINDER_DEFAULTS = "reminder_defaults"
@@ -76,6 +77,7 @@ CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
     ConfigSection.WATCH_PARTY_JOIN_MODE,
     ConfigSection.ADMIN_CHANNEL,
     ConfigSection.SUGGESTION_DATABASE,
+    ConfigSection.SUGGESTION_DESTINATION,
     ConfigSection.WATCH_DESTINATION,
     ConfigSection.VOTING_DEFAULTS,
     ConfigSection.REMINDER_DEFAULTS,
@@ -88,6 +90,7 @@ CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
     ConfigSection.WATCH_PARTY_JOIN_MODE: "Watch Party Join Mode",
     ConfigSection.ADMIN_CHANNEL: "Admin Channel",
     ConfigSection.SUGGESTION_DATABASE: "Active Suggestion Database",
+    ConfigSection.SUGGESTION_DESTINATION: "Suggestion Post Destination",
     ConfigSection.WATCH_DESTINATION: "Watched-Movie Destination",
     ConfigSection.VOTING_DEFAULTS: "Voting Defaults",
     ConfigSection.REMINDER_DEFAULTS: "Reminder Defaults",
@@ -206,6 +209,19 @@ class ConfigService:
         else:
             lines.append("Active Suggestion Database: Invalid (multiple active databases; select one below)")
 
+        suggestion_destination_channel_id = self._resolve_suggestion_destination_channel_id(guild_id)
+        if suggestion_destination_channel_id is None:
+            if len(active_databases) == 1:
+                lines.append("Suggestion Post Destination: Skipped")
+            else:
+                lines.append("Suggestion Post Destination: Not configured")
+        elif validate_channel_usable(suggestion_destination_channel_id, guild):
+            lines.append(
+                f"Suggestion Post Destination: Invalid (<#{suggestion_destination_channel_id}> no longer usable)"
+            )
+        else:
+            lines.append(f"Suggestion Post Destination: Configured (<#{suggestion_destination_channel_id}>)")
+
         destination_channel_id = self._resolve_watch_destination_channel_id(guild_id)
         if destination_channel_id is None:
             if len(active_databases) == 1:
@@ -251,6 +267,17 @@ class ConfigService:
         if database_configuration is None:
             return None
         return database_configuration.channels.watch_history_channel_id
+
+    def _resolve_suggestion_destination_channel_id(self, guild_id: int) -> Optional[int]:
+        database = self.resolve_configured_database(guild_id)
+        if database is None:
+            return None
+        database_configuration = self._suggestion_database_configuration_repository.get(
+            guild_id, database.database_id
+        )
+        if database_configuration is None:
+            return None
+        return database_configuration.channels.suggestion_channel_id
 
     # --- WASH Crew Role ------------------------------------------------------------
 
@@ -346,6 +373,32 @@ class ConfigService:
             True, f'"{database.name}" is now the active suggestion database.', configuration
         )
 
+    # --- Suggestion Post Destination ------------------------------------------------------------
+
+    def set_suggestion_destination(self, guild_id: int, channel_id: int, guild: GuildLookup) -> ConfigUpdateResult:
+        database = self.resolve_configured_database(guild_id)
+        if database is None:
+            return ConfigUpdateResult(False, NO_DATABASE_CONFIGURED_MESSAGE)
+
+        error = validate_channel_usable(channel_id, guild)
+        if error:
+            return ConfigUpdateResult(False, error)
+
+        self._save_database_channel(guild_id, database, channel_id, field_name="suggestion_channel_id")
+        return ConfigUpdateResult(
+            True, f"Suggestion post destination updated to <#{channel_id}>.", self.get_configuration(guild_id)
+        )
+
+    def skip_suggestion_destination(self, guild_id: int) -> ConfigUpdateResult:
+        database = self.resolve_configured_database(guild_id)
+        if database is None:
+            return ConfigUpdateResult(False, NO_DATABASE_CONFIGURED_MESSAGE)
+
+        self._save_database_channel(guild_id, database, None, field_name="suggestion_channel_id")
+        return ConfigUpdateResult(
+            True, "Suggestion post destination cleared.", self.get_configuration(guild_id)
+        )
+
     # --- Watched-Movie Destination ------------------------------------------------------------
 
     def set_watch_destination(self, guild_id: int, channel_id: int, guild: GuildLookup) -> ConfigUpdateResult:
@@ -357,7 +410,7 @@ class ConfigService:
         if error:
             return ConfigUpdateResult(False, error)
 
-        self._save_database_channel(guild_id, database, channel_id)
+        self._save_database_channel(guild_id, database, channel_id, field_name="watch_history_channel_id")
         return ConfigUpdateResult(
             True, f"Watched-movie destination updated to <#{channel_id}>.", self.get_configuration(guild_id)
         )
@@ -367,21 +420,19 @@ class ConfigService:
         if database is None:
             return ConfigUpdateResult(False, NO_DATABASE_CONFIGURED_MESSAGE)
 
-        self._save_database_channel(guild_id, database, None)
+        self._save_database_channel(guild_id, database, None, field_name="watch_history_channel_id")
         return ConfigUpdateResult(
             True, "Watched-movie destination cleared.", self.get_configuration(guild_id)
         )
 
     def _save_database_channel(
-        self, guild_id: int, database: SuggestionDatabase, channel_id: Optional[int]
+        self, guild_id: int, database: SuggestionDatabase, channel_id: Optional[int], *, field_name: str
     ) -> None:
         existing = self._suggestion_database_configuration_repository.get(guild_id, database.database_id)
         base = existing or SuggestionDatabaseConfiguration(
             guild_id=guild_id, database_id=database.database_id, display_name=database.name
         )
-        updated = replace(
-            base, channels=replace(base.channels, watch_history_channel_id=channel_id)
-        )
+        updated = replace(base, channels=replace(base.channels, **{field_name: channel_id}))
         self._suggestion_database_configuration_repository.save(updated)
 
     # --- Voting Defaults ------------------------------------------------------------

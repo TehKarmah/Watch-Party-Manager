@@ -109,6 +109,7 @@ from watch_party_manager.services.config_service import (
 from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
 )
+from watch_party_manager.services.embed_factory import EmbedFactory
 from watch_party_manager.services.help_service import HelpResponse, build_help_response
 from watch_party_manager.services.membership_service import (
     JoinOutcomeKind,
@@ -182,6 +183,7 @@ from watch_party_manager.config_view import (
     ConfigMainMenuView,
     ConfigModalRetryView,
     ConfigRoleSectionView,
+    ConfigSuggestionDestinationSectionView,
     ConfigWatchDestinationSectionView,
     OnBackToMenu,
 )
@@ -429,20 +431,19 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="list")
         @discord.app_commands.describe(
-            status="Which suggestions to show.",
+            status="Which watch items to show (defaults to Available).",
             public="Post the list publicly instead of showing it only to you (WASH Crew only).",
         )
         @discord.app_commands.choices(
             status=[
-                discord.app_commands.Choice(name="Active", value="active"),
-                discord.app_commands.Choice(name="Archived", value="archived"),
+                discord.app_commands.Choice(name="Available (eligible for future voting)", value="available"),
                 discord.app_commands.Choice(name="Watched", value="watched"),
-                discord.app_commands.Choice(name="All", value="all"),
+                discord.app_commands.Choice(name="Retired (removed from consideration)", value="retired"),
             ]
         )
         async def suggestions(
             interaction: discord.Interaction,
-            status: str = "active",
+            status: str = "available",
             public: bool = False,
         ) -> None:
             await handle_list_suggestions(interaction, self, status, public)
@@ -2155,6 +2156,22 @@ async def send_config_section(
         body += (
             "\n\nSelect the channel where Approval-Required membership requests should be "
             "posted for WASH Crew, or clear it."
+        )
+
+    elif section == ConfigSection.SUGGESTION_DESTINATION:
+
+        async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
+            result = config_service.set_suggestion_destination(guild_id, channel_id, select_interaction.guild)
+            await send_config_result(select_interaction, bot, guild_id, result)
+
+        async def on_skip(skip_interaction: discord.Interaction) -> None:
+            result = config_service.skip_suggestion_destination(guild_id)
+            await send_config_result(skip_interaction, bot, guild_id, result)
+
+        view = ConfigSuggestionDestinationSectionView(on_select, on_skip, on_back)
+        body += (
+            "\n\nChoose the channel or public thread where new-suggestion confirmation posts "
+            "should be created, or clear it."
         )
 
     else:  # ConfigSection.WATCH_DESTINATION
@@ -5254,18 +5271,20 @@ def perform_list_suggestions(
 
 
 class SuggestionListStatusFilter(str, Enum):
-    """Which suggestions /list should include."""
+    """Which suggestions /list should include.
 
-    ACTIVE = "active"
-    ARCHIVED = "archived"
+    AVAILABLE (the default) is the pool currently eligible for future
+    voting; WATCHED and RETIRED are separate, explicitly-selected views
+    -- never combined with each other or with AVAILABLE.
+    """
+
+    AVAILABLE = "available"
     WATCHED = "watched"
-    ALL = "all"
+    RETIRED = "retired"
 
 
 def filter_items_by_status(items: List[WatchItem], status_filter: SuggestionListStatusFilter) -> List[WatchItem]:
-    if status_filter is SuggestionListStatusFilter.ALL:
-        return items
-    if status_filter is SuggestionListStatusFilter.ARCHIVED:
+    if status_filter is SuggestionListStatusFilter.RETIRED:
         return [item for item in items if item.status is WatchItemStatus.ARCHIVED]
     if status_filter is SuggestionListStatusFilter.WATCHED:
         return [item for item in items if item.status is WatchItemStatus.WATCHED]
@@ -5273,23 +5292,23 @@ def filter_items_by_status(items: List[WatchItem], status_filter: SuggestionList
 
 
 def build_suggestion_entry_line(item: WatchItem) -> str:
-    """Render one /list entry: reference, title, year, IMDb link, post
-    link, and status -- each shown only when available (Section 4).
+    """Render one /list entry: title, year, and (when available) a clean
+    link back to the original public suggestion post -- nothing else.
+
+    Deliberately excludes the internal reference number, status label,
+    and IMDb link that the old /list rendering showed: the default view
+    is meant to be a terse, at-a-glance pool of what's available for
+    future voting, not a diagnostic record (Release Polish Priority 2).
     """
-    heading = item.reference + " " + item.title
+    heading = item.title
     if item.release_year:
         heading += f" ({item.release_year})"
 
-    details = []
-    imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
-    if imdb_url:
-        details.append(f"[IMDb]({imdb_url})")
     if item.guild_id is not None and item.channel_id is not None and item.message_id is not None:
         message_url = f"https://discord.com/channels/{item.guild_id}/{item.channel_id}/{item.message_id}"
-        details.append(f"[Original post]({message_url})")
-    details.append(f"Status: {item.status.value.replace('_', ' ').title()}")
+        return f"{heading} | [Original suggestion]({message_url})"
 
-    return f"- {heading} -- " + " | ".join(details)
+    return heading
 
 
 async def send_suggestion_list(
@@ -5307,7 +5326,9 @@ async def send_suggestion_list(
 
     if not filtered:
         await interaction.response.send_message(
-            f'"{database.name}" has no {status_filter.value} watch items.', ephemeral=not public
+            f'"{database.name}" has no {status_filter.value} watch items.',
+            ephemeral=not public,
+            suppress_embeds=True,
         )
         return
 
@@ -5316,12 +5337,12 @@ async def send_suggestion_list(
     pages = paginate_lines(header, lines)
 
     if len(pages) == 1:
-        await interaction.response.send_message(pages[0], ephemeral=not public)
+        await interaction.response.send_message(pages[0], ephemeral=not public, suppress_embeds=True)
         return
 
     requester_id = getattr(interaction.user, "id", None)
-    view = PaginatedListView(pages, requester_id=requester_id)
-    await interaction.response.send_message(pages[0], view=view, ephemeral=not public)
+    view = PaginatedListView(pages, requester_id=requester_id, suppress_embeds=True)
+    await interaction.response.send_message(pages[0], view=view, ephemeral=not public, suppress_embeds=True)
 
 
 async def handle_list_suggestions(
@@ -5355,7 +5376,7 @@ async def handle_list_suggestions(
     try:
         status_filter = SuggestionListStatusFilter(status)
     except ValueError:
-        await interaction.response.send_message("Choose Active, Archived, Watched, or All.", ephemeral=True)
+        await interaction.response.send_message("Choose Available, Watched, or Retired.", ephemeral=True)
         return
 
     resolution = bot.suggestion_service.resolve_database_for_channel(guild_id, channel_id)
@@ -6953,24 +6974,31 @@ def perform_diagnostics(
 def build_help_text(show_admin: bool = True, show_member: bool = False) -> str:
     """Build the complete role-aware help response as a single string.
 
-    This compatibility helper delegates to :mod:`help_service`. WASH Crew
-    help is sent as two Discord messages, but this helper preserves its
+    This compatibility helper delegates to :mod:`help_service`, folding
+    the Commands Reference link (an embed when actually sent to Discord,
+    see send_help_response) into a plain-text footer so it preserves its
     original single-string contract for existing callers. show_member
     reflects FR-029's three-tier permission model (everyone / Watch Party
     member / WASH Crew); show_admin implies show_member, matching
     build_help_response's own inheritance.
     """
     response = build_help_response(show_wash_crew=show_admin, show_watch_party_member=show_member)
-    return "\n\n".join(response.messages)
+    reference_text = "\n".join(
+        (f"**{response.reference_title}**", response.reference_description, response.reference_url)
+    )
+    return "\n\n".join((response.command_text, reference_text))
 
 
 async def send_help_response(interaction: discord.Interaction, response: HelpResponse) -> None:
-    """Send the initial help message followed by any additional messages."""
-    await interaction.response.send_message(
-        response.messages[0], ephemeral=response.ephemeral
-    )
-    for message in response.messages[1:]:
-        await interaction.followup.send(message, ephemeral=response.ephemeral)
+    """Send /help's command list and Commands Reference link as one message.
+
+    The reference link is presented as an embed rather than plain message
+    content -- Discord only auto-generates a link-preview card (here, a
+    large GitHub repository card) for links in a message's plain content,
+    never for a link inside an embed's own title/description.
+    """
+    embed = EmbedFactory.info(response.reference_title, response.reference_description, url=response.reference_url)
+    await interaction.response.send_message(response.command_text, embed=embed, ephemeral=response.ephemeral)
 
 
 def build_ping_text(latency_ms: float, started_at: datetime, now: datetime) -> str:

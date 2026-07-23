@@ -206,6 +206,40 @@ class ConfigDatabaseSectionView(discord.ui.View):
         self.add_item(BackToMenuButton(on_back))
 
 
+# --- Suggestion Post Destination ------------------------------------------------------------
+
+
+class ConfigClearSuggestionDestinationButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigSkip) -> None:
+        super().__init__(
+            label="Clear Destination",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_config_suggestion_destination_clear",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigSuggestionDestinationSectionView(discord.ui.View):
+    """Reuses setup_wizard_view.py's generic DestinationChannelSelect, exactly
+    like ConfigWatchDestinationSectionView.
+    """
+
+    def __init__(self, on_select: OnConfigChannelSelected, on_clear: OnConfigSkip, on_back: OnBackToMenu) -> None:
+        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
+        self.add_item(
+            DestinationChannelSelect(
+                on_select,
+                custom_id="wpm_config_suggestion_destination_channel_select",
+                placeholder="Select an existing channel or thread",
+            )
+        )
+        self.add_item(ConfigClearSuggestionDestinationButton(on_clear))
+        self.add_item(BackToMenuButton(on_back))
+
+
 # --- Watched-Movie Destination -------------------------------------------------------------
 
 

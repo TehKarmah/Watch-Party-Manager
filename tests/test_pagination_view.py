@@ -11,12 +11,14 @@ class FakeResponse:
     def __init__(self) -> None:
         self.edited_content = None
         self.edited_view = None
+        self.edited_suppress_embeds = None
         self.sent_message = None
         self.sent_ephemeral = None
 
-    async def edit_message(self, content=None, view=None) -> None:
+    async def edit_message(self, content=None, view=None, suppress_embeds=False) -> None:
         self.edited_content = content
         self.edited_view = view
+        self.edited_suppress_embeds = suppress_embeds
 
     async def send_message(self, content, ephemeral=False) -> None:
         self.sent_message = content
@@ -168,6 +170,22 @@ class PaginatedListViewTests(unittest.IsolatedAsyncioTestCase):
         allowed = await view.interaction_check(interaction)
 
         self.assertTrue(allowed)
+
+    async def test_suppress_embeds_defaults_to_false(self) -> None:
+        view = PaginatedListView(["page 1", "page 2"])
+        interaction = FakeInteraction()
+
+        await view.children[1].callback(interaction)
+
+        self.assertFalse(interaction.response.edited_suppress_embeds)
+
+    async def test_suppress_embeds_is_passed_through_on_page_turns(self) -> None:
+        view = PaginatedListView(["page 1", "page 2"], suppress_embeds=True)
+        interaction = FakeInteraction()
+
+        await view.children[1].callback(interaction)
+
+        self.assertTrue(interaction.response.edited_suppress_embeds)
 
 
 if __name__ == "__main__":

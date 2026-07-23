@@ -79,7 +79,10 @@ class BotHelperTests(unittest.TestCase):
     def test_help_text_links_to_reference_documentation(self) -> None:
         help_text = build_help_text(show_admin=False)
 
-        self.assertIn("**Expanded Help Documentation**", help_text)
+        self.assertIn("**Commands Reference**", help_text)
+        self.assertIn("10-Command-Reference.md", help_text)
+        # The Commands Reference cross-links the Expanded Help Guide for
+        # deeper conceptual explanations (Release Polish Priority 3).
         self.assertIn("08-Expanded-Help.md", help_text)
         self.assertNotIn("**WASH Definitions**", help_text)
         self.assertNotIn("**Watch Item** -", help_text)

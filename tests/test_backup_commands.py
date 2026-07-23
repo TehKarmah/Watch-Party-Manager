@@ -21,7 +21,7 @@ from watch_party_manager.services.backup_service import (
     BackupService,
     BackupType,
 )
-from watch_party_manager.services.help_service import build_help_response
+from watch_party_manager.services.help_service import COMMANDS_REFERENCE_URL, build_help_response
 
 WASH_CREW_ROLE_ID = 999
 
@@ -40,10 +40,12 @@ class FakeResponse:
     def __init__(self) -> None:
         self.sent_messages = []
         self.sent_ephemeral = []
+        self.sent_embeds = []
 
-    async def send_message(self, content, ephemeral=False, view=None) -> None:
+    async def send_message(self, content, ephemeral=False, view=None, embed=None) -> None:
         self.sent_messages.append(content)
         self.sent_ephemeral.append(ephemeral)
+        self.sent_embeds.append(embed)
 
 
 class FakeFollowup:
@@ -63,33 +65,50 @@ class FakeInteraction:
 
 
 class SendHelpResponseTests(unittest.IsolatedAsyncioTestCase):
+    """/help always sends exactly one message: the command list as plain
+    content, plus the Commands Reference link as an embed (Release
+    Polish Priority 3) -- never a second followup message, and never the
+    reference URL as raw message content (which would trigger a GitHub
+    link-preview card).
+    """
+
     async def test_member_response_sends_a_single_message_via_response(self) -> None:
         interaction = FakeInteraction()
         response = build_help_response(show_wash_crew=False)
 
         await send_help_response(interaction, response)
 
-        self.assertEqual(interaction.response.sent_messages, [response.messages[0]])
+        self.assertEqual(interaction.response.sent_messages, [response.command_text])
         self.assertEqual(interaction.followup.sent_messages, [])
 
-    async def test_wash_crew_receives_both_messages(self) -> None:
+    async def test_wash_crew_response_is_also_a_single_message(self) -> None:
         interaction = FakeInteraction()
         response = build_help_response(show_wash_crew=True)
 
         await send_help_response(interaction, response)
 
-        self.assertEqual(interaction.response.sent_messages, [response.messages[0]])
-        self.assertEqual(interaction.followup.sent_messages, [response.messages[1]])
+        self.assertEqual(interaction.response.sent_messages, [response.command_text])
+        self.assertEqual(interaction.followup.sent_messages, [])
 
-    async def test_wash_crew_messages_are_sent_in_order(self) -> None:
+    async def test_reference_link_is_an_embed_not_raw_message_content(self) -> None:
+        interaction = FakeInteraction()
+        response = build_help_response(show_wash_crew=True)
+
+        await send_help_response(interaction, response)
+
+        self.assertNotIn(COMMANDS_REFERENCE_URL, interaction.response.sent_messages[0])
+        embed = interaction.response.sent_embeds[0]
+        self.assertIsNotNone(embed)
+        self.assertEqual(embed.title, response.reference_title)
+        self.assertEqual(embed.url, response.reference_url)
+
+    async def test_command_list_is_sent_as_plain_content(self) -> None:
         interaction = FakeInteraction()
         response = build_help_response(show_wash_crew=True)
 
         await send_help_response(interaction, response)
 
         self.assertIn("**WASH Commands**", interaction.response.sent_messages[0])
-        self.assertIn("**Expanded Help Documentation**", interaction.followup.sent_messages[0])
-        self.assertIn("08-Expanded-Help.md", interaction.followup.sent_messages[0])
 
     async def test_all_messages_are_ephemeral(self) -> None:
         interaction = FakeInteraction()
@@ -98,7 +117,6 @@ class SendHelpResponseTests(unittest.IsolatedAsyncioTestCase):
         await send_help_response(interaction, response)
 
         self.assertEqual(interaction.response.sent_ephemeral, [True])
-        self.assertEqual(interaction.followup.sent_ephemeral, [True])
 
     async def test_non_wash_crew_behavior_is_a_single_ephemeral_message(self) -> None:
         interaction = FakeInteraction()
