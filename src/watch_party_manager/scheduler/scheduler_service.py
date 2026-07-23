@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from .job_handler import JobHandler, RetryableJobError
 from .retry_policy import RetryPolicy
-from .scheduled_job import JobResult, ScheduledJob
+from .scheduled_job import ScheduledJob
 from .scheduler_repository import SchedulerRepository
 
 Clock = Callable[[], datetime]

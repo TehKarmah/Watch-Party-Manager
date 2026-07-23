@@ -19,7 +19,7 @@ from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import VoteService
-from watch_party_manager.voting_view import MAX_NOMINEE_BUTTONS, VotingView
+from watch_party_manager.voting_view import VotingView
 
 WASH_CREW_ROLE_ID = 999
 

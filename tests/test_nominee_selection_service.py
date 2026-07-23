@@ -39,8 +39,6 @@ class NomineeSelectionServiceTests(unittest.TestCase):
         self._temp_dir.cleanup()
 
     def _suggest(self, title: str, genres=(), media_type=None) -> int:
-        from watch_party_manager.domain.watch_item import MediaType
-
         result = self.suggestion_service.suggest(title, database_id=self.database_id)
         watch_item = result.watch_item
         # suggest() doesn't take genres/media_type directly; set them

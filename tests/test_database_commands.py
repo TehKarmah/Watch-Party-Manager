@@ -247,9 +247,9 @@ class DatabaseCommandTests(unittest.TestCase):
 
 
     def test_database_list_sorts_active_databases_alphabetically_then_inactive(self) -> None:
-        zulu = self.suggestion_service.create_database(
+        self.suggestion_service.create_database(
             "Zulu", guild_id=GUILD_ID, channel_id=CHANNEL_ID
-        ).database
+        )
         inactive = self.suggestion_service.create_database(
             "Alpha Inactive", guild_id=GUILD_ID, channel_id=OTHER_CHANNEL_ID
         ).database

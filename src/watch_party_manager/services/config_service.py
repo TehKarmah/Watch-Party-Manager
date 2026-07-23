@@ -32,7 +32,6 @@ from watch_party_manager.domain.guild_configuration import (
     GuildVoteVisibility,
     JoinMode,
     VotingDefaultsConfig,
-    WatchPartyRoleConfig,
 )
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.suggestion_database_configuration import (

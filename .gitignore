@@ -19,6 +19,7 @@ data/*.db
 data/*.sqlite
 data/*.sqlite3
 data/*.json
+data/*.bak
 data/backups/
 data/logs/
 

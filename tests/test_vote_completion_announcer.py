@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from watch_party_manager.domain.vote import VoteRoundStatus, VoteVisibility
+from watch_party_manager.domain.vote import VoteVisibility
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )

@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from watch_party_manager.domain.guild_configuration import GuildConfiguration, GuildChannelsConfig, WatchPartyRoleConfig
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
-from watch_party_manager.domain.suggestion_database_configuration import SuggestionDatabaseConfiguration
-from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus, VoteVisibility
 from watch_party_manager.domain.watch_item import MediaType, WatchItem
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
@@ -207,7 +204,7 @@ class MergeImportTests(ImportServiceTestCase):
         self.assertEqual(9, imported_suggestion.database_id)
 
     async def test_conflicting_suggestion_titles_are_skipped_not_overwritten(self) -> None:
-        destination_database = self._seed_dest_database(database_id=9, name="Movie Night", channel_id=777)
+        self._seed_dest_database(database_id=9, name="Movie Night", channel_id=777)
         self.dest_suggestion_repository.save(
             [WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=9, guild_id=DEST_GUILD_ID)], next_id=2
         )

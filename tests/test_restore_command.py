@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 
 from watch_party_manager.bot import (
@@ -27,7 +26,7 @@ from watch_party_manager.persistence.suggestion_database_configuration_repositor
 )
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
-from watch_party_manager.services.backup_service import BackupKind, BackupScheduleSettings, BackupService, BackupType
+from watch_party_manager.services.backup_service import BackupKind, BackupScheduleSettings, BackupService
 from watch_party_manager.services.database_backup_service import create_database_backup
 
 GUILD_ID = 100

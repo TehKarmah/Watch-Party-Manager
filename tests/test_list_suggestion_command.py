@@ -283,7 +283,7 @@ class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
         database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
-        active = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
+        self.suggestion_service.suggest("Alien", database_id=database.database_id)
         archived = self.suggestion_service.suggest("Aliens", database_id=database.database_id).watch_item
         self.suggestion_service.archive_suggestion(archived.id)
         interaction = FakeInteraction()

@@ -8,7 +8,6 @@ are threaded straight through to it.
 
 from __future__ import annotations
 
-import random
 import tempfile
 import unittest
 from pathlib import Path

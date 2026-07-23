@@ -25,7 +25,7 @@ from watch_party_manager.persistence.suggestion_repository import JsonSuggestion
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.persistence.watch_party_repository import JsonWatchPartyRepository
 from watch_party_manager.scheduler.json_scheduler_repository import JsonSchedulerRepository
-from watch_party_manager.services.backup_service import BackupKind, BackupScheduleSettings, BackupService, BackupType
+from watch_party_manager.services.backup_service import BackupScheduleSettings, BackupService
 from watch_party_manager.services.database_backup_service import create_database_backup
 
 GUILD_ID = 100

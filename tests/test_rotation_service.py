@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from watch_party_manager.domain.rotation import RotationStatus
 from watch_party_manager.domain.suggestion_database_configuration import SuggestionAdmissionMode
-from watch_party_manager.domain.watch_item import MediaType, WatchItem, WatchItemStatus
+from watch_party_manager.domain.watch_item import WatchItem, WatchItemStatus
 from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository

@@ -33,7 +33,6 @@ Watch-Party-Manager/
 ├── docs/
 ├── src/watch_party_manager/
 │   ├── domain/
-│   ├── engine/
 │   ├── persistence/
 │   ├── services/
 │   ├── bot.py

@@ -25,7 +25,7 @@ from watch_party_manager.bot import (
     send_config_section,
     send_config_voting_defaults_modal,
 )
-from watch_party_manager.domain.guild_configuration import GuildConfiguration, JoinMode
+from watch_party_manager.domain.guild_configuration import GuildConfiguration
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,

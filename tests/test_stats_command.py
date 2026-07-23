@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 
 from watch_party_manager.bot import handle_stats
-from watch_party_manager.domain.suggestion_database_configuration import SuggestionDatabaseConfiguration
 from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,

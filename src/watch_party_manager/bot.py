@@ -81,7 +81,6 @@ from watch_party_manager.scheduler import (
 )
 from watch_party_manager.services.about_service import build_about_content
 from watch_party_manager.services.backup_service import (
-    BackupCreationResult,
     BackupError,
     BackupKind,
     BackupService,
@@ -107,7 +106,6 @@ from watch_party_manager.services.config_service import (
     ConfigService,
     ConfigUpdateResult,
 )
-from watch_party_manager.services.discord_message_link import build_discord_message_link
 from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
 )
@@ -6976,7 +6974,7 @@ async def send_help_response(interaction: discord.Interaction, response: HelpRes
 
 
 def build_ping_text(latency_ms: float, started_at: datetime, now: datetime) -> str:
-    """Build a compact /ping response with gateway latency and uptime."""
+    """Build a compact gateway-latency-and-uptime summary, used by /diagnostics."""
     if started_at.tzinfo is None or started_at.utcoffset() is None:
         raise ValueError("started_at must be timezone-aware")
     if now.tzinfo is None or now.utcoffset() is None:

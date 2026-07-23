@@ -1,9 +1,8 @@
 """Tests for FR-028's /setup wizard domain model (domain/setup_wizard.py)."""
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime
 
-from watch_party_manager.domain.guild_configuration import JoinMode
 from watch_party_manager.domain.setup_wizard import (
     SETUP_WIZARD_STEP_ORDER,
     SetupWizardDraft,

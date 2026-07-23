@@ -206,7 +206,7 @@ class PersistentSuggestionViewsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(message.edited_view, SuggestionView)
 
     async def test_missing_channel_is_skipped_without_raising(self) -> None:
-        watch_item = self._suggest_with_full_metadata("The Matrix")
+        self._suggest_with_full_metadata("The Matrix")
         bot = FakeBot(channel=None, fetch_channel_error=SimulatedDiscordError("channel gone"))
 
         restored = await restore_persistent_suggestion_views(bot, self.suggestion_service)
@@ -215,7 +215,7 @@ class PersistentSuggestionViewsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.calls, [])
 
     async def test_deleted_message_is_skipped_without_raising(self) -> None:
-        watch_item = self._suggest_with_full_metadata("The Matrix")
+        self._suggest_with_full_metadata("The Matrix")
         channel = FakeSuggestionChannel(
             FakeSuggestionMessage(), fetch_message_error=SimulatedDiscordError("message deleted")
         )
@@ -227,7 +227,7 @@ class PersistentSuggestionViewsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.calls, [])
 
     async def test_inaccessible_message_is_skipped_without_raising(self) -> None:
-        watch_item = self._suggest_with_full_metadata("The Matrix")
+        self._suggest_with_full_metadata("The Matrix")
         channel = FakeSuggestionChannel(
             FakeSuggestionMessage(), fetch_message_error=SimulatedDiscordError("forbidden")
         )
@@ -238,7 +238,7 @@ class PersistentSuggestionViewsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored, 0)
 
     async def test_edit_failure_on_a_legacy_message_is_skipped_without_raising(self) -> None:
-        watch_item = self._suggest_with_full_metadata("The Matrix")
+        self._suggest_with_full_metadata("The Matrix")
         message = FakeSuggestionMessage(components=[], edit_error=SimulatedDiscordError("cannot edit"))
         bot = FakeBot(channel=FakeSuggestionChannel(message))
 
@@ -248,8 +248,8 @@ class PersistentSuggestionViewsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.calls, [])
 
     async def test_one_failing_suggestion_does_not_block_another(self) -> None:
-        broken = self._suggest_with_full_metadata("Broken", channel_id=201, message_id=501)
-        working = self._suggest_with_full_metadata("Working", channel_id=202, message_id=502)
+        self._suggest_with_full_metadata("Broken", channel_id=201, message_id=501)
+        self._suggest_with_full_metadata("Working", channel_id=202, message_id=502)
 
         class MultiChannelBot:
             def __init__(self) -> None:

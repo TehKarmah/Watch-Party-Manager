@@ -18,7 +18,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus, VoteVisibility
+from watch_party_manager.domain.vote import VoteRound, VoteVisibility
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )

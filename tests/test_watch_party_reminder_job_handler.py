@@ -14,7 +14,6 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from watch_party_manager.domain.watch_party import WatchPartyStatus
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )

@@ -6,7 +6,6 @@ to support file logging in the future.
 """
 
 import logging
-from typing import Optional
 
 
 def configure_logging(level: int = logging.INFO) -> None:

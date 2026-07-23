@@ -9,7 +9,6 @@ from pathlib import Path
 
 from watch_party_manager.domain.guild_configuration import GuildConfiguration
 from watch_party_manager.domain.suggestion_database_configuration import (
-    SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
     SuggestionDatabaseNotificationOverridesConfig,
 )

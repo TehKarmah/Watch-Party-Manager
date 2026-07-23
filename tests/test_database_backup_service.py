@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
-from watch_party_manager.domain.suggestion_database_configuration import SuggestionDatabaseConfiguration
 from watch_party_manager.domain.watch_item import MediaType, WatchItem
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,

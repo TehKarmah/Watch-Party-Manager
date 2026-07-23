@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, JoinMode
-from watch_party_manager.domain.setup_wizard import SetupWizardState, SetupWizardStatus, SetupWizardStep
+from watch_party_manager.domain.setup_wizard import SetupWizardStep
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.setup_wizard_repository import SetupWizardRepository

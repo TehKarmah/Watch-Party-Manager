@@ -17,7 +17,7 @@ from datetime import date, datetime
 from statistics import mean
 from typing import Optional, Protocol, Sequence
 
-from watch_party_manager.domain.rotation import Rotation, RotationStatus
+from watch_party_manager.domain.rotation import RotationStatus
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus, VoteVisibility
 from watch_party_manager.domain.watch_item import WatchItem, WatchItemStatus

@@ -11,7 +11,7 @@ out of both individual services and out of the Discord layer entirely.
 from __future__ import annotations
 
 import random
-from typing import TYPE_CHECKING, List, Optional, Protocol, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, List, Optional, Protocol, Set, Tuple
 
 from watch_party_manager.domain.watch_item import WatchItem
 
