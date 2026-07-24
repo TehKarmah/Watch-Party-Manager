@@ -1,4 +1,8 @@
-"""Tests for FR-032C's /database_reset, /factory_reset, and /import wiring in bot.py."""
+"""Tests for FR-032C's /database_reset, /factory_reset, and /import wiring
+in bot.py, plus /database_remove (Release Polish: Discord-native UX) --
+co-located here since it shares the exact same database-picker fixtures
+already built out for /database_reset.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,7 @@ import unittest
 from pathlib import Path
 
 from watch_party_manager.bot import (
+    handle_database_remove,
     handle_database_reset,
     handle_factory_reset,
     handle_import,
@@ -27,6 +32,7 @@ from watch_party_manager.persistence.watch_party_repository import JsonWatchPart
 from watch_party_manager.scheduler.json_scheduler_repository import JsonSchedulerRepository
 from watch_party_manager.services.backup_service import BackupScheduleSettings, BackupService
 from watch_party_manager.services.database_backup_service import create_database_backup
+from watch_party_manager.services.suggestion_service import SuggestionService
 
 GUILD_ID = 100
 WASH_CREW_ROLE_ID = 999
@@ -101,6 +107,9 @@ class FakeBot:
         self.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository(
             self.data_directory / "suggestion_database_configurations.json"
         )
+        self.suggestion_service = SuggestionService(
+            repository=self.suggestion_repository, database_repository=self.suggestion_database_repository
+        )
         self.guild_configuration_repository = GuildConfigurationRepository(
             self.data_directory / "guild_configurations.json"
         )
@@ -141,9 +150,26 @@ class ResetImportCommandTestCase(unittest.IsolatedAsyncioTestCase):
         return FakeMember(1, roles=[FakeRole(WASH_CREW_ROLE_ID)])
 
     def _seed_database(self, database_id=1, name="Movie Night", channel_id=555) -> SuggestionDatabase:
-        database = SuggestionDatabase(database_id=database_id, name=name, guild_id=GUILD_ID, channel_id=channel_id)
-        self.bot.suggestion_database_repository.save([database], next_id=database_id + 1)
-        return database
+        # Goes through suggestion_service (rather than writing straight to
+        # suggestion_database_repository) so the service's in-memory cache
+        # -- which handle_database_reset/handle_database_backup now read
+        # from to populate their database picker -- stays consistent with
+        # what's on disk.
+        result = self.bot.suggestion_service.create_database(name, guild_id=GUILD_ID, channel_id=channel_id)
+        assert result.success, result.message
+        assert result.database.database_id == database_id
+        return result.database
+
+
+async def _select_database(view, database_id: int = 1) -> "FakeInteraction":
+    """Simulate picking a database from a DatabaseAdminSelectView -- returns
+    the fresh interaction its on_select callback produced.
+    """
+    select = view.children[0]
+    select._values = [str(database_id)]
+    select_interaction = FakeInteraction(user=FakeMember(1, roles=[FakeRole(WASH_CREW_ROLE_ID)]))
+    await select.callback(interaction=select_interaction)
+    return select_interaction
 
 
 class HandleDatabaseResetTests(ResetImportCommandTestCase):
@@ -151,25 +177,37 @@ class HandleDatabaseResetTests(ResetImportCommandTestCase):
         self._seed_database()
         interaction = FakeInteraction(user=FakeMember(1, roles=[]))
 
-        await handle_database_reset(interaction, self.bot, 1)
+        await handle_database_reset(interaction, self.bot)
 
         self.assertIn("WASH Crew", interaction.response.sent_message)
 
-    async def test_unknown_database_is_rejected(self) -> None:
+    async def test_no_databases_configured_shows_a_clear_message(self) -> None:
         interaction = FakeInteraction(user=self._wash_crew_member())
 
-        await handle_database_reset(interaction, self.bot, 999)
+        await handle_database_reset(interaction, self.bot)
 
-        self.assertIn("No suggestion database", interaction.response.sent_message)
+        self.assertIn("No suggestion databases", interaction.response.sent_message)
 
-    async def test_shows_a_summary_and_confirmation_view(self) -> None:
+    async def test_shows_a_database_picker_naming_each_database(self) -> None:
         self._seed_database(name="Movie Night")
         interaction = FakeInteraction(user=self._wash_crew_member())
 
-        await handle_database_reset(interaction, self.bot, 1)
+        await handle_database_reset(interaction, self.bot)
 
-        self.assertIn("Movie Night", interaction.response.sent_message)
         self.assertIsNotNone(interaction.response.sent_view)
+        select = interaction.response.sent_view.children[0]
+        self.assertEqual(1, len(select.options))
+        self.assertEqual("Movie Night", select.options[0].label)
+
+    async def test_selecting_a_database_shows_a_summary_and_confirmation_view(self) -> None:
+        self._seed_database(name="Movie Night")
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_reset(interaction, self.bot)
+
+        select_interaction = await _select_database(interaction.response.sent_view)
+
+        self.assertIn("Movie Night", select_interaction.response.sent_message)
+        self.assertIsNotNone(select_interaction.response.sent_view)
 
     async def test_typing_reset_performs_the_reset(self) -> None:
         self._seed_database(name="Movie Night")
@@ -177,8 +215,9 @@ class HandleDatabaseResetTests(ResetImportCommandTestCase):
             [WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
         )
         interaction = FakeInteraction(user=self._wash_crew_member())
-        await handle_database_reset(interaction, self.bot, 1)
-        view = interaction.response.sent_view
+        await handle_database_reset(interaction, self.bot)
+        select_interaction = await _select_database(interaction.response.sent_view)
+        view = select_interaction.response.sent_view
 
         confirm_interaction = await _submit_modal(view, 0, "RESET")
 
@@ -191,8 +230,9 @@ class HandleDatabaseResetTests(ResetImportCommandTestCase):
             [WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
         )
         interaction = FakeInteraction(user=self._wash_crew_member())
-        await handle_database_reset(interaction, self.bot, 1)
-        view = interaction.response.sent_view
+        await handle_database_reset(interaction, self.bot)
+        select_interaction = await _select_database(interaction.response.sent_view)
+        view = select_interaction.response.sent_view
 
         await _submit_modal(view, 0, "reset")  # wrong case
 
@@ -204,13 +244,66 @@ class HandleDatabaseResetTests(ResetImportCommandTestCase):
             [WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
         )
         interaction = FakeInteraction(user=self._wash_crew_member())
-        await handle_database_reset(interaction, self.bot, 1)
-        view = interaction.response.sent_view
+        await handle_database_reset(interaction, self.bot)
+        select_interaction = await _select_database(interaction.response.sent_view)
+        view = select_interaction.response.sent_view
 
         cancel_interaction = FakeInteraction(user=self._wash_crew_member())
         await view.children[1].callback(cancel_interaction)
 
         self.assertIn("cancelled", cancel_interaction.response.sent_message.lower())
+        self.assertEqual(1, len(self.bot.suggestion_repository.load().watch_items))
+
+
+class HandleDatabaseRemoveTests(ResetImportCommandTestCase):
+    async def test_non_wash_crew_is_rejected(self) -> None:
+        self._seed_database()
+        interaction = FakeInteraction(user=FakeMember(1, roles=[]))
+
+        await handle_database_remove(interaction, self.bot)
+
+        self.assertIn("WASH Crew", interaction.response.sent_message)
+
+    async def test_no_databases_configured_shows_a_clear_message(self) -> None:
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_database_remove(interaction, self.bot)
+
+        self.assertIsNone(interaction.response.sent_view)
+        self.assertIn("No suggestion databases", interaction.response.sent_message)
+
+    async def test_shows_a_database_picker_naming_each_database(self) -> None:
+        self._seed_database(name="Movie Night")
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_database_remove(interaction, self.bot)
+
+        self.assertIsNotNone(interaction.response.sent_view)
+        select = interaction.response.sent_view.children[0]
+        self.assertEqual(1, len(select.options))
+        self.assertEqual("Movie Night", select.options[0].label)
+
+    async def test_selecting_a_database_deactivates_it(self) -> None:
+        self._seed_database(name="Movie Night")
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_remove(interaction, self.bot)
+
+        select_interaction = await _select_database(interaction.response.sent_view)
+
+        self.assertIn("deactivated", select_interaction.response.sent_message)
+        self.assertTrue(select_interaction.response.sent_ephemeral)
+        self.assertFalse(self.bot.suggestion_service.get_database(1).active)
+
+    async def test_selecting_a_database_preserves_its_suggestions(self) -> None:
+        self._seed_database(name="Movie Night")
+        self.bot.suggestion_repository.save(
+            [WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
+        )
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_remove(interaction, self.bot)
+
+        await _select_database(interaction.response.sent_view)
+
         self.assertEqual(1, len(self.bot.suggestion_repository.load().watch_items))
 
 

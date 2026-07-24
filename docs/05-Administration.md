@@ -53,7 +53,7 @@ Use `/database_list` to review databases available to the current guild.
 
 ### Remove a database
 
-Use `/database_remove` with its database ID. The command applies the repository's safety and ownership validation.
+Run `/database_remove`, then choose the database from the picker that appears -- each option shows the database's name, whether it's Active or Inactive, and its current watch-item count, so there's no need to look up an internal ID first. The command applies the repository's safety and ownership validation.
 
 Database operations are guild-scoped. A guild must not access or change another guild's databases.
 
@@ -229,7 +229,7 @@ Immediately before restoring, WASH creates a full safety backup of the current d
 
 ### `/database_backup` and `/database_restore`
 
-Back up or restore a single suggestion database instead of everything. `/database_backup database_id:<id>` produces a scoped backup containing only that database's record, its suggestions, and its configuration (not its vote history), attached as `Watch_Party_Manager_Database_Backup_<safe-database-name>_YYYY-MM-DD_HH-MM-SS.zip`.
+Back up or restore a single suggestion database instead of everything. Run `/database_backup`, then choose the database from the picker that appears (name, Active/Inactive status, and watch-item count are all shown) -- WASH produces a scoped backup containing only that database's record, its suggestions, and its configuration (not its vote history), attached as `Watch_Party_Manager_Database_Backup_<safe-database-name>_YYYY-MM-DD_HH-MM-SS.zip`.
 
 `/database_restore` requires choosing **Merge** or **Replace** explicitly -- WASH never infers which one you meant:
 
@@ -242,7 +242,7 @@ A single-database backup can only be restored back into the guild it came from; 
 
 Clears every suggestion (active and archived alike -- there is no separate archive store; both are just `WatchItem` records in the same file) from one suggestion database. The database record itself, its ID, its name, and its configuration are never touched, and no other database is affected.
 
-Flow: select the database (`/database_reset database_id:<id>`) -> WASH shows how many suggestions would be removed -> click **Reset** -> a modal asks you to type `RESET` exactly (case-sensitive) -> WASH creates a full safety backup, then performs the reset. Clicking **Cancel**, or submitting anything other than `RESET`, leaves all data unchanged.
+Flow: run `/database_reset` -> choose the database from the picker that appears (name, Active/Inactive status, and watch-item count are all shown) -> WASH shows how many suggestions would be removed -> click **Reset** -> a modal asks you to type `RESET` exactly (case-sensitive) -> WASH creates a full safety backup, then performs the reset. Clicking **Cancel**, or submitting anything other than `RESET`, leaves all data unchanged.
 
 ### `/factory_reset`
 

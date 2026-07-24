@@ -1,9 +1,17 @@
-"""Discord selectors for FR-033A's /list database picking and /remove match disambiguation.
+"""Discord selectors for suggestion-database and suggestion picking.
 
-Both mirror config_view.py's ConfigDatabaseSelect: options built from
-(id, label) pairs, capped at 25, labels truncated to 100 characters --
-reusing the established selection pattern rather than inventing a new
-one.
+/list's database picker and /remove's match disambiguation (from
+FR-033A) mirror config_view.py's ConfigDatabaseSelect: options built
+from (id, label) pairs, capped at 25, labels truncated to 100
+characters -- reusing the established selection pattern rather than
+inventing a new one.
+
+DatabaseAdminSelect/DatabaseAdminSelectView (Release Polish: Discord-
+native UX) extend that same pattern with a description line (Active/
+Inactive status and watch-item count) for /database_backup,
+/database_reset, and /database_remove -- administrative actions where
+seeing exactly what a destructive action targets matters more than for
+/list's read-only picker.
 """
 
 from __future__ import annotations
@@ -47,6 +55,51 @@ class ListDatabaseSelectView(discord.ui.View):
     def __init__(self, databases: List[Tuple[int, str]], on_select: OnDatabaseSelected) -> None:
         super().__init__(timeout=SUGGESTION_SELECTION_VIEW_TIMEOUT_SECONDS)
         self.add_item(ListDatabaseSelect(databases, on_select))
+
+
+class DatabaseAdminSelect(discord.ui.Select):
+    """Lets WASH Crew pick which suggestion database an admin action
+    (backup, reset, remove) should target.
+
+    Each option's description line shows Active/Inactive status and
+    watch-item count, so the target of a destructive action is always
+    visible rather than guessed from a bare ID.
+    """
+
+    def __init__(
+        self,
+        options: List[Tuple[int, str, str]],
+        on_select: OnDatabaseSelected,
+        *,
+        custom_id: str,
+        placeholder: str,
+    ) -> None:
+        select_options = [
+            discord.SelectOption(label=label[:100], description=description[:100], value=str(database_id))
+            for database_id, label, description in options[:25]
+        ]
+        super().__init__(placeholder=placeholder, options=select_options, custom_id=custom_id)
+        self._on_select = on_select
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_select(interaction, int(self.values[0]))
+
+
+class DatabaseAdminSelectView(discord.ui.View):
+    """A one-shot "which database?" picker for /database_backup,
+    /database_reset, and /database_remove.
+    """
+
+    def __init__(
+        self,
+        options: List[Tuple[int, str, str]],
+        on_select: OnDatabaseSelected,
+        *,
+        custom_id: str,
+        placeholder: str,
+    ) -> None:
+        super().__init__(timeout=SUGGESTION_SELECTION_VIEW_TIMEOUT_SECONDS)
+        self.add_item(DatabaseAdminSelect(options, on_select, custom_id=custom_id, placeholder=placeholder))
 
 
 class RemovalMatchSelect(discord.ui.Select):

@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import (
+    build_database_admin_options,
     perform_database_add,
     perform_database_list,
     perform_database_remove,
@@ -164,7 +165,7 @@ class DatabaseCommandTests(unittest.TestCase):
 
         self.assertTrue(ephemeral)
         self.assertIn("Sunday Watch Party", message)
-        self.assertIn("[1]", message)
+        self.assertIn("Database ID: 1", message)
         self.assertIn(f"<#{CHANNEL_ID}>", message)
 
     def test_database_list_with_multiple_databases(self) -> None:
@@ -227,7 +228,8 @@ class DatabaseCommandTests(unittest.TestCase):
         )
 
         self.assertTrue(message.startswith("Suggestion Databases\n\n"))
-        self.assertIn("[1] Sunday Watch Party\n", message)
+        self.assertIn("Database ID: 1\n", message)
+        self.assertIn("Name: Sunday Watch Party\n", message)
         self.assertIn("Status: Active\n", message)
         self.assertIn(f"Channel: <#{CHANNEL_ID}>\n", message)
         self.assertIn("Watch items: 1 watch item", message)
@@ -421,6 +423,82 @@ class DatabaseCommandTests(unittest.TestCase):
         self.assertTrue(ephemeral)
         self.assertIn("Discord server", message)
         self.assertTrue(self.suggestion_service.get_database(created.database.database_id).active)
+
+
+    # --- Database selector options (Release Polish: Discord-native UX) --------------
+
+    def test_admin_options_show_the_database_name_as_the_label(self) -> None:
+        self.suggestion_service.create_database("Sunday Watch Party", guild_id=GUILD_ID, channel_id=CHANNEL_ID)
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+
+        options = build_database_admin_options(self.suggestion_service, databases)
+
+        self.assertEqual(1, len(options))
+        database_id, label, description = options[0]
+        self.assertEqual("Sunday Watch Party", label)
+
+    def test_admin_options_clearly_indicate_which_database_is_active(self) -> None:
+        active = self.suggestion_service.create_database(
+            "Active Party", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        inactive = self.suggestion_service.create_database(
+            "Inactive Party", guild_id=GUILD_ID, channel_id=OTHER_CHANNEL_ID
+        ).database
+        self.suggestion_service.deactivate_database(inactive.database_id, guild_id=GUILD_ID)
+
+        options = build_database_admin_options(
+            self.suggestion_service, self.suggestion_service.list_databases(GUILD_ID)
+        )
+
+        by_id = {database_id: description for database_id, _, description in options}
+        self.assertIn("Active", by_id[active.database_id])
+        self.assertIn("Inactive", by_id[inactive.database_id])
+        self.assertNotIn("Active", by_id[inactive.database_id].replace("Inactive", ""))
+
+    def test_admin_options_include_watch_item_counts(self) -> None:
+        database = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        self.suggestion_service.suggest("The Matrix", database_id=database.database_id)
+        self.suggestion_service.suggest("Inception", database_id=database.database_id)
+
+        options = build_database_admin_options(
+            self.suggestion_service, self.suggestion_service.list_databases(GUILD_ID)
+        )
+
+        self.assertIn("2 watch items", options[0][2])
+
+    def test_admin_options_use_the_same_ordering_as_database_list(self) -> None:
+        self.suggestion_service.create_database("Zulu", guild_id=GUILD_ID, channel_id=CHANNEL_ID)
+        inactive = self.suggestion_service.create_database(
+            "Alpha Inactive", guild_id=GUILD_ID, channel_id=OTHER_CHANNEL_ID
+        ).database
+        self.suggestion_service.create_database(
+            "Alpha Active", guild_id=GUILD_ID, channel_id=OTHER_CHANNEL_ID + 1
+        )
+        self.suggestion_service.deactivate_database(inactive.database_id, guild_id=GUILD_ID)
+
+        options = build_database_admin_options(
+            self.suggestion_service, self.suggestion_service.list_databases(GUILD_ID)
+        )
+
+        labels = [label for _, label, _ in options]
+        self.assertEqual(["Alpha Active", "Zulu", "Alpha Inactive"], labels)
+
+    def test_admin_options_cap_at_twenty_five_and_include_no_bare_ids_in_the_label(self) -> None:
+        for index in range(30):
+            self.suggestion_service.create_database(f"Database {index}", guild_id=GUILD_ID, channel_id=1000 + index)
+
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        options = build_database_admin_options(self.suggestion_service, databases)
+
+        self.assertEqual(30, len(databases))
+        # build_database_admin_options itself doesn't truncate -- DatabaseAdminSelect
+        # does, at Discord's own 25-option ceiling -- but every option must still be
+        # a clean (id, label, description) triple with no id embedded in the label.
+        self.assertEqual(30, len(options))
+        for _, label, _ in options:
+            self.assertFalse(label.startswith("["))
 
 
 if __name__ == "__main__":

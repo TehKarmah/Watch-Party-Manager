@@ -48,7 +48,7 @@ from watch_party_manager.domain.suggestion_database_configuration import (
     SuggestionAdmissionMode,
 )
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem, WatchItemStatus
-from watch_party_manager.domain.watch_party import WatchParty
+from watch_party_manager.domain.watch_party import WatchParty, WatchPartyStatus
 from watch_party_manager.logger_config import configure_logging
 from watch_party_manager.persistence.guild_configuration_repository import (
     GuildConfigurationRepository,
@@ -192,10 +192,12 @@ from watch_party_manager.membership_view import MembershipApprovalView, PendingR
 from watch_party_manager.pagination_view import PaginatedListView, paginate_lines
 from watch_party_manager.restore_confirmation_view import RestoreConfirmationView
 from watch_party_manager.suggestion_selection_view import (
+    DatabaseAdminSelectView,
     ListDatabaseSelectView,
     RemovalMatchSelectView,
 )
 from watch_party_manager.type_to_confirm_view import DestructiveConfirmationView
+from watch_party_manager.watch_party_selection_view import WatchPartySelectView
 from watch_party_manager.setup_wizard_view import (
     AdminChannelStepView,
     BackupDefaultsModal,
@@ -484,9 +486,8 @@ class WatchPartyBot(commands.Bot):
             await handle_restore(interaction, self, backup_filename, backup_file)
 
         @self.tree.command(name="database_backup")
-        @discord.app_commands.describe(database_id="The suggestion database's ID (see /database_list).")
-        async def database_backup(interaction: discord.Interaction, database_id: int) -> None:
-            await handle_database_backup(interaction, self, database_id)
+        async def database_backup(interaction: discord.Interaction) -> None:
+            await handle_database_backup(interaction, self)
 
         @self.tree.command(name="database_restore")
         @discord.app_commands.describe(
@@ -510,9 +511,8 @@ class WatchPartyBot(commands.Bot):
             await handle_database_restore(interaction, self, mode, backup_filename, backup_file)
 
         @self.tree.command(name="database_reset")
-        @discord.app_commands.describe(database_id="The suggestion database's ID (see /database_list).")
-        async def database_reset(interaction: discord.Interaction, database_id: int) -> None:
-            await handle_database_reset(interaction, self, database_id)
+        async def database_reset(interaction: discord.Interaction) -> None:
+            await handle_database_reset(interaction, self)
 
         @self.tree.command(name="factory_reset")
         async def factory_reset_command(interaction: discord.Interaction) -> None:
@@ -753,15 +753,8 @@ class WatchPartyBot(commands.Bot):
             await interaction.response.send_message(message, ephemeral=ephemeral)
 
         @self.tree.command(name="database_remove")
-        async def database_remove(interaction: discord.Interaction, database_id: int) -> None:
-            message, ephemeral = perform_database_remove(
-                suggestion_service=self.suggestion_service,
-                user=interaction.user,
-                wash_crew_role_id=self.wash_crew_role_id,
-                guild_id=interaction.guild_id,
-                database_id=database_id,
-            )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
+        async def database_remove(interaction: discord.Interaction) -> None:
+            await handle_database_remove(interaction, self)
 
         @self.tree.command(name="schedule_watch_party")
         async def schedule_watch_party(
@@ -779,27 +772,25 @@ class WatchPartyBot(commands.Bot):
             )
 
         @self.tree.command(name="reschedule_watch_party")
-        async def reschedule_watch_party(
-            interaction: discord.Interaction, watch_party_id: int, when: str
-        ) -> None:
+        async def reschedule_watch_party(interaction: discord.Interaction, when: str) -> None:
             await handle_reschedule_watch_party_completion(
                 interaction,
                 watch_party_service=self.watch_party_service,
                 wash_crew_role_id=self.wash_crew_role_id,
-                watch_party_id=watch_party_id,
                 when=when,
                 scheduler_service=self.scheduler_host.scheduler_service,
                 guild_configuration_repository=self.guild_configuration_repository,
+                suggestion_service=self.suggestion_service,
             )
 
         @self.tree.command(name="cancel_watch_party")
-        async def cancel_watch_party(interaction: discord.Interaction, watch_party_id: int) -> None:
+        async def cancel_watch_party(interaction: discord.Interaction) -> None:
             await handle_cancel_watch_party_completion(
                 interaction,
                 watch_party_service=self.watch_party_service,
                 wash_crew_role_id=self.wash_crew_role_id,
-                watch_party_id=watch_party_id,
                 scheduler_service=self.scheduler_host.scheduler_service,
+                suggestion_service=self.suggestion_service,
             )
 
         @self.tree.command(name="watch_party_status")
@@ -4712,7 +4703,14 @@ async def handle_restore(
     await interaction.followup.send(message, view=view, ephemeral=True)
 
 
-async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPartyBot", database_id: int) -> None:
+async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """Show a "which database?" picker, then back up the chosen one.
+
+    Release Polish (Discord-native UX): database_id is no longer a
+    command parameter -- WASH Crew picks the target from a selector
+    showing each database's name, Active/Inactive status, and watch-item
+    count instead of typing an internal ID.
+    """
     if bot.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
@@ -4730,20 +4728,32 @@ async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPa
         await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
         return
 
-    result = create_database_backup(
-        bot.backup_service,
-        bot.suggestion_database_repository,
-        bot.suggestion_repository,
-        bot.suggestion_database_configuration_repository,
-        guild_id,
-        database_id,
-    )
-    if not result.success or result.creation is None or result.display_filename is None:
-        await interaction.response.send_message(result.message, ephemeral=True)
+    databases = bot.suggestion_service.list_databases(guild_id)
+    if not databases:
+        await interaction.response.send_message("No suggestion databases are configured yet.", ephemeral=True)
         return
 
-    file = discord.File(result.creation.archive_path, filename=result.display_filename)
-    await interaction.response.send_message(result.message, file=file, ephemeral=True)
+    async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
+        result = create_database_backup(
+            bot.backup_service,
+            bot.suggestion_database_repository,
+            bot.suggestion_repository,
+            bot.suggestion_database_configuration_repository,
+            guild_id,
+            database_id,
+        )
+        if not result.success or result.creation is None or result.display_filename is None:
+            await select_interaction.response.send_message(result.message, ephemeral=True)
+            return
+
+        file = discord.File(result.creation.archive_path, filename=result.display_filename)
+        await select_interaction.response.send_message(result.message, file=file, ephemeral=True)
+
+    options = build_database_admin_options(bot.suggestion_service, databases)
+    view = DatabaseAdminSelectView(
+        options, on_select, custom_id="wpm_database_backup_select", placeholder="Choose a suggestion database to back up..."
+    )
+    await interaction.response.send_message("Choose which suggestion database to back up:", view=view, ephemeral=True)
 
 
 async def handle_database_restore(
@@ -4860,7 +4870,15 @@ def build_database_reset_summary_text(summary) -> str:
     )
 
 
-async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPartyBot", database_id: int) -> None:
+async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """Show a "which database?" picker, then the existing RESET
+    confirmation flow for the chosen one.
+
+    Release Polish (Discord-native UX): database_id is no longer a
+    command parameter -- WASH Crew picks the target from a selector
+    showing each database's name, Active/Inactive status, and watch-item
+    count instead of typing an internal ID.
+    """
     if bot.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
@@ -4878,40 +4896,54 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
         await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
         return
 
-    summary = build_database_reset_summary(
-        bot.suggestion_database_repository, bot.suggestion_repository, guild_id, database_id
-    )
-    if summary is None:
-        await interaction.response.send_message(
-            "No suggestion database with that ID exists in this server.", ephemeral=True
-        )
+    databases = bot.suggestion_service.list_databases(guild_id)
+    if not databases:
+        await interaction.response.send_message("No suggestion databases are configured yet.", ephemeral=True)
         return
 
-    async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-        if bot.wash_crew_role_id is None or not is_wash_crew_member(
-            confirm_interaction.user, bot.wash_crew_role_id
-        ):
-            await confirm_interaction.response.send_message(
-                "You need the WASH Crew role to reset a suggestion database.", ephemeral=True
+    async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
+        summary = build_database_reset_summary(
+            bot.suggestion_database_repository, bot.suggestion_repository, guild_id, database_id
+        )
+        if summary is None:
+            await select_interaction.response.send_message(
+                "No suggestion database with that ID exists in this server.", ephemeral=True
             )
             return
-        result = reset_suggestion_database(
-            bot.backup_service, bot.suggestion_database_repository, bot.suggestion_repository, guild_id, database_id
+
+        async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+            if bot.wash_crew_role_id is None or not is_wash_crew_member(
+                confirm_interaction.user, bot.wash_crew_role_id
+            ):
+                await confirm_interaction.response.send_message(
+                    "You need the WASH Crew role to reset a suggestion database.", ephemeral=True
+                )
+                return
+            result = reset_suggestion_database(
+                bot.backup_service, bot.suggestion_database_repository, bot.suggestion_repository, guild_id, database_id
+            )
+            await confirm_interaction.response.send_message(result.message, ephemeral=True)
+
+        async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+            await cancel_interaction.response.send_message("Reset cancelled. No data was changed.", ephemeral=True)
+
+        confirmation_view = DestructiveConfirmationView(
+            button_label="Reset",
+            required_text="RESET",
+            modal_title="Reset Suggestion Database",
+            custom_id_prefix="database_reset",
+            on_confirm=on_confirm,
+            on_cancel=on_cancel,
         )
-        await confirm_interaction.response.send_message(result.message, ephemeral=True)
+        await select_interaction.response.send_message(
+            build_database_reset_summary_text(summary), view=confirmation_view, ephemeral=True
+        )
 
-    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
-        await cancel_interaction.response.send_message("Reset cancelled. No data was changed.", ephemeral=True)
-
-    view = DestructiveConfirmationView(
-        button_label="Reset",
-        required_text="RESET",
-        modal_title="Reset Suggestion Database",
-        custom_id_prefix="database_reset",
-        on_confirm=on_confirm,
-        on_cancel=on_cancel,
+    options = build_database_admin_options(bot.suggestion_service, databases)
+    view = DatabaseAdminSelectView(
+        options, on_select, custom_id="wpm_database_reset_select", placeholder="Choose a suggestion database to reset..."
     )
-    await interaction.response.send_message(build_database_reset_summary_text(summary), view=view, ephemeral=True)
+    await interaction.response.send_message("Choose which suggestion database to reset:", view=view, ephemeral=True)
 
 
 # --- FR-032C: factory reset -----------------------------------------------------------
@@ -5656,7 +5688,9 @@ def build_database_list_text(
 
     Returns:
         A readable multi-line block per database with its ID, name, status,
-        Discord channel mention, and current watch-item count.
+        Discord channel mention, and current watch-item count. The ID is
+        labeled explicitly ("Database ID: 1") rather than shown as a bare
+        "[1]" prefix, which read as ambiguous (Release Polish Priority 2).
     """
     sections = ["Suggestion Databases"]
     ordered_databases = sorted(
@@ -5668,12 +5702,44 @@ def build_database_list_text(
         suggestion_count = suggestion_service.suggestion_count_for_database(database.database_id)
         item_word = "watch item" if suggestion_count == 1 else "watch items"
         sections.append(
-            f"[{database.database_id}] {database.name}\n"
+            f"Database ID: {database.database_id}\n"
+            f"Name: {database.name}\n"
             f"Status: {status}\n"
             f"Channel: <#{database.channel_id}>\n"
             f"Watch items: {suggestion_count} {item_word}"
         )
     return "\n\n".join(sections)
+
+
+def build_database_admin_options(
+    suggestion_service: SuggestionService, databases: List[SuggestionDatabase]
+) -> List[Tuple[int, str, str]]:
+    """Build (id, label, description) options for DatabaseAdminSelectView.
+
+    Shared by /database_backup, /database_reset, and /database_remove
+    (Release Polish: Discord-native UX) so a destructive/administrative
+    action's target is always shown by name, Active/Inactive status, and
+    watch-item count -- never picked by a bare, easy-to-mistype ID.
+
+    Args:
+        suggestion_service: Used to look up each database's watch-item count.
+        databases: The databases to build options for.
+
+    Returns:
+        Options ordered the same way as build_database_list_text (Active
+        first, then alphabetically by name).
+    """
+    ordered_databases = sorted(
+        databases,
+        key=lambda database: (not database.active, database.name.casefold(), database.database_id),
+    )
+    options: List[Tuple[int, str, str]] = []
+    for database in ordered_databases:
+        status = "Active" if database.active else "Inactive"
+        suggestion_count = suggestion_service.suggestion_count_for_database(database.database_id)
+        item_word = "watch item" if suggestion_count == 1 else "watch items"
+        options.append((database.database_id, database.name, f"{status} - {suggestion_count} {item_word}"))
+    return options
 
 
 def perform_remove_suggestion(
@@ -6072,6 +6138,55 @@ def perform_database_remove(
     return result.message, True
 
 
+async def handle_database_remove(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """Show a "which database?" picker, then deactivate the chosen one.
+
+    Release Polish (Discord-native UX): database_id is no longer a
+    command parameter -- WASH Crew picks the target from a selector
+    showing each database's name, Active/Inactive status, and watch-item
+    count instead of typing an internal ID. perform_database_remove
+    itself is unchanged (still the single source of truth for the
+    permission checks and deactivation rule).
+    """
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message(
+            "You need the WASH Crew role to remove a suggestion database.", ephemeral=True
+        )
+        return
+
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    databases = bot.suggestion_service.list_databases(guild_id)
+    if not databases:
+        await interaction.response.send_message("No suggestion databases are configured yet.", ephemeral=True)
+        return
+
+    async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
+        message, ephemeral = perform_database_remove(
+            suggestion_service=bot.suggestion_service,
+            user=select_interaction.user,
+            wash_crew_role_id=bot.wash_crew_role_id,
+            guild_id=guild_id,
+            database_id=database_id,
+        )
+        await select_interaction.response.send_message(message, ephemeral=ephemeral)
+
+    options = build_database_admin_options(bot.suggestion_service, databases)
+    view = DatabaseAdminSelectView(
+        options, on_select, custom_id="wpm_database_remove_select", placeholder="Choose a suggestion database to remove..."
+    )
+    await interaction.response.send_message("Choose which suggestion database to remove:", view=view, ephemeral=True)
+
+
 def parse_watch_party_schedule_time(value: str) -> datetime:
     """Parse a watch party's scheduled date/time into a UTC-aware datetime.
 
@@ -6142,6 +6257,40 @@ def build_schedule_watch_party_confirmation(
         f'Watch party #{watch_party.id} scheduled for "{title}".\n'
         f"Starts: {format_datetime_for_display(watch_party.scheduled_at)}"
     )
+
+
+def build_watch_party_select_options(
+    watch_parties: List[WatchParty], suggestion_service: Optional[SuggestionService]
+) -> List[Tuple[int, str, str]]:
+    """Build (id, label, description) options for WatchPartySelectView.
+
+    label is the watch item's title (falling back to a "Watch item #N"
+    placeholder if it can no longer be resolved, or if no
+    suggestion_service was given at all); description is the scheduled
+    date/time as plain text -- SelectOption fields are rendered as
+    literal text by Discord, so this deliberately does not use
+    format_datetime_for_display's `<t:...>` markup, which would show up
+    unparsed in the picker.
+
+    Args:
+        watch_parties: The watch parties to build options for.
+        suggestion_service: Used to resolve each watch item's title.
+
+    Returns:
+        Options ordered soonest-scheduled first.
+    """
+    ordered = sorted(watch_parties, key=lambda watch_party: watch_party.scheduled_at)
+    options: List[Tuple[int, str, str]] = []
+    for watch_party in ordered:
+        watch_item = (
+            suggestion_service.get_suggestion(watch_party.watch_item_id)
+            if suggestion_service is not None
+            else None
+        )
+        title = watch_item.title if watch_item is not None else f"Watch item #{watch_party.watch_item_id}"
+        scheduled_text = watch_party.scheduled_at.strftime("%Y-%m-%d %H:%M UTC")
+        options.append((watch_party.id, title, f"Scheduled {scheduled_text}"))
+    return options
 
 
 def build_reschedule_watch_party_confirmation(watch_party: WatchParty) -> str:
@@ -6337,38 +6486,82 @@ async def handle_reschedule_watch_party_completion(
     interaction: discord.Interaction,
     watch_party_service: WatchPartyService,
     wash_crew_role_id: Optional[int],
-    watch_party_id: int,
     when: str,
     scheduler_service: Optional[SchedulerService] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
+    suggestion_service: Optional[SuggestionService] = None,
 ) -> None:
-    """Reschedule a watch party and replace its reminder job.
+    """Show a "which watch party?" picker, then reschedule the chosen one
+    and replace its reminder job.
 
-    scheduler_service/guild_configuration_repository default to None so
-    callers/tests that don't pass them keep working unchanged.
+    Release Polish (Discord-native UX): watch_party_id is no longer a
+    command parameter -- WASH Crew picks the target from a selector of
+    currently scheduled watch parties instead of typing an internal ID.
+    `when` still applies to whichever watch party is selected.
+
+    scheduler_service/guild_configuration_repository/suggestion_service
+    default to None so callers/tests that don't pass them keep working
+    unchanged (suggestion_service absent just falls back to a
+    "Watch item #N" label -- see build_watch_party_select_options).
     """
-    message, ephemeral, watch_party = perform_reschedule_watch_party(
-        watch_party_service=watch_party_service,
-        user=interaction.user,
-        wash_crew_role_id=wash_crew_role_id,
-        watch_party_id=watch_party_id,
-        when=when,
-    )
-    await interaction.response.send_message(message, ephemeral=ephemeral)
-    if ephemeral or watch_party is None:
+    if wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, wash_crew_role_id):
+        await interaction.response.send_message(
+            "You need the WASH Crew role to reschedule a watch party.", ephemeral=True
+        )
         return
 
-    # FR-021: replace the reminder job to reflect the new scheduled_at --
-    # reschedule_watch_party_reminder cancels whatever job is currently
-    # active for this watch party and schedules a fresh one, mirroring the
-    # scheduler's documented rescheduling policy (see
-    # docs/architecture/scheduler.md, "Cancellation & Rescheduling").
-    await reschedule_watch_party_reminder(
-        scheduler_service,
-        watch_party,
-        watch_party.guild_id,
-        guild_configuration_repository=guild_configuration_repository,
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    scheduled = [
+        watch_party
+        for watch_party in watch_party_service.list_watch_parties(guild_id)
+        if watch_party.status == WatchPartyStatus.SCHEDULED
+    ]
+    if not scheduled:
+        await interaction.response.send_message("No watch parties are currently scheduled.", ephemeral=True)
+        return
+
+    async def on_select(select_interaction: discord.Interaction, watch_party_id: int) -> None:
+        message, ephemeral, watch_party = perform_reschedule_watch_party(
+            watch_party_service=watch_party_service,
+            user=select_interaction.user,
+            wash_crew_role_id=wash_crew_role_id,
+            watch_party_id=watch_party_id,
+            when=when,
+        )
+        await select_interaction.response.send_message(message, ephemeral=ephemeral)
+        if ephemeral or watch_party is None:
+            return
+
+        # FR-021: replace the reminder job to reflect the new scheduled_at --
+        # reschedule_watch_party_reminder cancels whatever job is currently
+        # active for this watch party and schedules a fresh one, mirroring the
+        # scheduler's documented rescheduling policy (see
+        # docs/architecture/scheduler.md, "Cancellation & Rescheduling").
+        await reschedule_watch_party_reminder(
+            scheduler_service,
+            watch_party,
+            watch_party.guild_id,
+            guild_configuration_repository=guild_configuration_repository,
+        )
+
+    options = build_watch_party_select_options(scheduled, suggestion_service)
+    view = WatchPartySelectView(
+        options,
+        on_select,
+        custom_id="wpm_reschedule_watch_party_select",
+        placeholder="Choose a watch party to reschedule...",
     )
+    await interaction.response.send_message("Choose which watch party to reschedule:", view=view, ephemeral=True)
 
 
 def perform_cancel_watch_party(
@@ -6407,29 +6600,73 @@ async def handle_cancel_watch_party_completion(
     interaction: discord.Interaction,
     watch_party_service: WatchPartyService,
     wash_crew_role_id: Optional[int],
-    watch_party_id: int,
     scheduler_service: Optional[SchedulerService] = None,
+    suggestion_service: Optional[SuggestionService] = None,
 ) -> None:
-    """Cancel a watch party and remove its pending reminder job.
+    """Show a "which watch party?" picker, then cancel the chosen one and
+    remove its pending reminder job.
 
-    scheduler_service defaults to None so callers/tests that don't pass
-    one keep working unchanged; passing None simply skips cancellation
-    (see cancel_watch_party_reminder).
+    Release Polish (Discord-native UX): watch_party_id is no longer a
+    command parameter -- WASH Crew picks the target from a selector of
+    currently scheduled watch parties instead of typing an internal ID.
+
+    scheduler_service/suggestion_service default to None so callers/
+    tests that don't pass them keep working unchanged; a missing
+    scheduler_service simply skips reminder-job cancellation (see
+    cancel_watch_party_reminder), and a missing suggestion_service just
+    falls back to a "Watch item #N" label (see
+    build_watch_party_select_options).
     """
-    message, ephemeral = perform_cancel_watch_party(
-        watch_party_service=watch_party_service,
-        user=interaction.user,
-        wash_crew_role_id=wash_crew_role_id,
-        watch_party_id=watch_party_id,
-    )
-    await interaction.response.send_message(message, ephemeral=ephemeral)
-    if ephemeral:
+    if wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, wash_crew_role_id):
+        await interaction.response.send_message(
+            "You need the WASH Crew role to cancel a watch party.", ephemeral=True
+        )
         return
 
-    # FR-021: remove any pending reminder job now that the watch party is
-    # cancelled -- a no-op if none is active (e.g. reminders were
-    # disabled, or it already fired).
-    await cancel_watch_party_reminder(scheduler_service, watch_party_id)
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    scheduled = [
+        watch_party
+        for watch_party in watch_party_service.list_watch_parties(guild_id)
+        if watch_party.status == WatchPartyStatus.SCHEDULED
+    ]
+    if not scheduled:
+        await interaction.response.send_message("No watch parties are currently scheduled.", ephemeral=True)
+        return
+
+    async def on_select(select_interaction: discord.Interaction, watch_party_id: int) -> None:
+        message, ephemeral = perform_cancel_watch_party(
+            watch_party_service=watch_party_service,
+            user=select_interaction.user,
+            wash_crew_role_id=wash_crew_role_id,
+            watch_party_id=watch_party_id,
+        )
+        await select_interaction.response.send_message(message, ephemeral=ephemeral)
+        if ephemeral:
+            return
+
+        # FR-021: remove any pending reminder job now that the watch party is
+        # cancelled -- a no-op if none is active (e.g. reminders were
+        # disabled, or it already fired).
+        await cancel_watch_party_reminder(scheduler_service, watch_party_id)
+
+    options = build_watch_party_select_options(scheduled, suggestion_service)
+    view = WatchPartySelectView(
+        options,
+        on_select,
+        custom_id="wpm_cancel_watch_party_select",
+        placeholder="Choose a watch party to cancel...",
+    )
+    await interaction.response.send_message("Choose which watch party to cancel:", view=view, ephemeral=True)
 
 
 def perform_watch_party_status(

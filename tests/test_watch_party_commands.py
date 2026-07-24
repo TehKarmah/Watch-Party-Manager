@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import (
+    build_watch_party_select_options,
     build_watch_party_status_text,
     handle_cancel_watch_party_completion,
     handle_reschedule_watch_party_completion,
@@ -57,10 +58,12 @@ class FakeResponse:
     def __init__(self) -> None:
         self.sent_message = None
         self.sent_ephemeral = None
+        self.sent_view = None
 
-    async def send_message(self, content, ephemeral: bool = False) -> None:
+    async def send_message(self, content, ephemeral: bool = False, view=None) -> None:
         self.sent_message = content
         self.sent_ephemeral = ephemeral
+        self.sent_view = view
 
 
 class FakeInteraction:
@@ -442,6 +445,58 @@ class BuildWatchPartyStatusTextTests(unittest.TestCase):
         self.assertIn("Watch item #1", text)
 
 
+class BuildWatchPartySelectOptionsTests(WatchPartyCommandTestCase):
+    """Release Polish (Discord-native UX): the shared option builder behind
+    WatchPartySelectView, used by /cancel_watch_party and
+    /reschedule_watch_party."""
+
+    def test_label_is_the_watch_items_title(self) -> None:
+        watch_party = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=1), guild_id=100
+        ).watch_party
+
+        options = build_watch_party_select_options([watch_party], self.suggestion_service)
+
+        self.assertEqual(1, len(options))
+        watch_party_id, label, description = options[0]
+        self.assertEqual(watch_party.id, watch_party_id)
+        self.assertEqual("The Matrix", label)
+
+    def test_description_shows_the_scheduled_date_and_time_as_plain_text(self) -> None:
+        scheduled_at = datetime(2026, 8, 1, 20, 0, tzinfo=timezone.utc)
+        watch_party = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=scheduled_at, guild_id=100
+        ).watch_party
+
+        options = build_watch_party_select_options([watch_party], self.suggestion_service)
+
+        # Deliberately not format_datetime_for_display's <t:...> markup --
+        # SelectOption fields render as literal text, not Discord markup.
+        self.assertEqual("Scheduled 2026-08-01 20:00 UTC", options[0][2])
+        self.assertNotIn("<t:", options[0][2])
+
+    def test_falls_back_to_a_watch_item_placeholder_without_a_suggestion_service(self) -> None:
+        watch_party = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=1), guild_id=100
+        ).watch_party
+
+        options = build_watch_party_select_options([watch_party], None)
+
+        self.assertEqual(f"Watch item #{self.matrix.id}", options[0][1])
+
+    def test_orders_soonest_scheduled_first(self) -> None:
+        later = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=10), guild_id=100
+        ).watch_party
+        sooner = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=1), guild_id=100
+        ).watch_party
+
+        options = build_watch_party_select_options([later, sooner], self.suggestion_service)
+
+        self.assertEqual([sooner.id, later.id], [watch_party_id for watch_party_id, _, _ in options])
+
+
 class PerformWatchPartyStatusTests(WatchPartyCommandTestCase):
     def test_reports_no_watch_party_scheduled(self) -> None:
         message = perform_watch_party_status(self.watch_party_service, self.suggestion_service)
@@ -544,6 +599,17 @@ class HandleScheduleWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(interaction.response.sent_ephemeral)
 
 
+async def _select_watch_party(view, watch_party_id: int) -> FakeInteraction:
+    """Simulate picking a watch party from a WatchPartySelectView -- returns
+    the fresh interaction its on_select callback produced.
+    """
+    select = view.children[0]
+    select._values = [str(watch_party_id)]
+    select_interaction = FakeInteraction(is_wash_crew=True)
+    await select.callback(interaction=select_interaction)
+    return select_interaction
+
+
 class HandleRescheduleWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
@@ -575,21 +641,75 @@ class HandleRescheduleWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase
         )
         return self.watch_party_service.get_current_watch_party()
 
-    async def test_replaces_the_reminder_job_after_rescheduling(self) -> None:
+    async def _reschedule(self, watch_party: WatchParty, when: str) -> FakeInteraction:
+        """Run /reschedule_watch_party end-to-end: show the picker, then
+        select `watch_party` and return the interaction that produced.
+        """
+        interaction = FakeInteraction(is_wash_crew=True)
+        await handle_reschedule_watch_party_completion(
+            interaction,
+            watch_party_service=self.watch_party_service,
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            when=when,
+            scheduler_service=self.scheduler_service,
+            suggestion_service=self.suggestion_service,
+        )
+        return await _select_watch_party(interaction.response.sent_view, watch_party.id)
+
+    async def test_shows_a_watch_party_picker_naming_each_watch_party(self) -> None:
         watch_party = await self._schedule()
-        original_job = next(iter(self.scheduler_repository.jobs.values()))
         interaction = FakeInteraction(is_wash_crew=True)
 
         await handle_reschedule_watch_party_completion(
             interaction,
             watch_party_service=self.watch_party_service,
             wash_crew_role_id=WASH_CREW_ROLE_ID,
-            watch_party_id=watch_party.id,
+            when="2026-09-01 20:00",
+            scheduler_service=self.scheduler_service,
+            suggestion_service=self.suggestion_service,
+        )
+
+        self.assertIsNotNone(interaction.response.sent_view)
+        select = interaction.response.sent_view.children[0]
+        self.assertEqual(1, len(select.options))
+        self.assertEqual("The Matrix", select.options[0].label)
+        self.assertEqual(str(watch_party.id), select.options[0].value)
+
+    async def test_selecting_one_of_several_only_reschedules_that_one(self) -> None:
+        first = await self._schedule()
+        second_item = self.suggestion_service.suggest("Inception").watch_item
+        second = self.watch_party_service.schedule_watch_party(
+            watch_item_id=second_item.id, scheduled_at=first.scheduled_at + timedelta(days=1), guild_id=100
+        ).watch_party
+
+        await self._reschedule(second, "2026-10-01 20:00")
+
+        untouched = self.watch_party_service.get_watch_party(first.id)
+        rescheduled = self.watch_party_service.get_watch_party(second.id)
+        self.assertEqual(first.scheduled_at, untouched.scheduled_at)
+        self.assertEqual(datetime(2026, 10, 1, 20, 0, tzinfo=timezone.utc), rescheduled.scheduled_at)
+
+    async def test_no_watch_parties_scheduled_shows_a_clear_message(self) -> None:
+        interaction = FakeInteraction(is_wash_crew=True)
+
+        await handle_reschedule_watch_party_completion(
+            interaction,
+            watch_party_service=self.watch_party_service,
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
             when="2026-09-01 20:00",
             scheduler_service=self.scheduler_service,
         )
 
-        self.assertFalse(interaction.response.sent_ephemeral)
+        self.assertIsNone(interaction.response.sent_view)
+        self.assertIn("No watch parties", interaction.response.sent_message)
+
+    async def test_replaces_the_reminder_job_after_rescheduling(self) -> None:
+        watch_party = await self._schedule()
+        original_job = next(iter(self.scheduler_repository.jobs.values()))
+
+        select_interaction = await self._reschedule(watch_party, "2026-09-01 20:00")
+
+        self.assertFalse(select_interaction.response.sent_ephemeral)
         self.assertEqual(self.scheduler_repository.jobs[original_job.job_id].status, JobStatus.CANCELLED)
         active_jobs = [job for job in self.scheduler_repository.jobs.values() if job.is_active]
         self.assertEqual(len(active_jobs), 1)
@@ -600,38 +720,22 @@ class HandleRescheduleWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase
 
     async def test_updates_the_watch_partys_scheduled_time(self) -> None:
         watch_party = await self._schedule()
-        interaction = FakeInteraction(is_wash_crew=True)
 
-        await handle_reschedule_watch_party_completion(
-            interaction,
-            watch_party_service=self.watch_party_service,
-            wash_crew_role_id=WASH_CREW_ROLE_ID,
-            watch_party_id=watch_party.id,
-            when="2026-09-01 20:00",
-            scheduler_service=self.scheduler_service,
-        )
+        await self._reschedule(watch_party, "2026-09-01 20:00")
 
         updated = self.watch_party_service.get_watch_party(watch_party.id)
         self.assertEqual(updated.scheduled_at, datetime(2026, 9, 1, 20, 0, tzinfo=timezone.utc))
 
     async def test_preserves_the_watch_partys_identity(self) -> None:
         watch_party = await self._schedule()
-        interaction = FakeInteraction(is_wash_crew=True)
 
-        await handle_reschedule_watch_party_completion(
-            interaction,
-            watch_party_service=self.watch_party_service,
-            wash_crew_role_id=WASH_CREW_ROLE_ID,
-            watch_party_id=watch_party.id,
-            when="2026-09-01 20:00",
-            scheduler_service=self.scheduler_service,
-        )
+        await self._reschedule(watch_party, "2026-09-01 20:00")
 
         updated = self.watch_party_service.get_watch_party(watch_party.id)
         self.assertEqual(updated.id, watch_party.id)
         self.assertEqual(updated.watch_item_id, watch_party.watch_item_id)
 
-    async def test_permission_failure_does_not_touch_the_reminder_job(self) -> None:
+    async def test_permission_failure_does_not_show_a_picker_or_touch_the_reminder_job(self) -> None:
         watch_party = await self._schedule()
         original_job = next(iter(self.scheduler_repository.jobs.values()))
         interaction = FakeInteraction(is_wash_crew=False)
@@ -640,12 +744,13 @@ class HandleRescheduleWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase
             interaction,
             watch_party_service=self.watch_party_service,
             wash_crew_role_id=WASH_CREW_ROLE_ID,
-            watch_party_id=watch_party.id,
             when="2026-09-01 20:00",
             scheduler_service=self.scheduler_service,
+            suggestion_service=self.suggestion_service,
         )
 
         self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertIsNone(interaction.response.sent_view)
         self.assertEqual(self.scheduler_repository.jobs[original_job.job_id].status, JobStatus.PENDING)
 
 
@@ -680,7 +785,21 @@ class HandleCancelWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase):
         )
         return self.watch_party_service.get_current_watch_party()
 
-    async def test_marks_the_watch_party_cancelled(self) -> None:
+    async def _cancel(self, watch_party: WatchParty) -> FakeInteraction:
+        """Run /cancel_watch_party end-to-end: show the picker, then
+        select `watch_party` and return the interaction that produced.
+        """
+        interaction = FakeInteraction(is_wash_crew=True)
+        await handle_cancel_watch_party_completion(
+            interaction,
+            watch_party_service=self.watch_party_service,
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            scheduler_service=self.scheduler_service,
+            suggestion_service=self.suggestion_service,
+        )
+        return await _select_watch_party(interaction.response.sent_view, watch_party.id)
+
+    async def test_shows_a_watch_party_picker_naming_each_watch_party(self) -> None:
         watch_party = await self._schedule()
         interaction = FakeInteraction(is_wash_crew=True)
 
@@ -688,11 +807,47 @@ class HandleCancelWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase):
             interaction,
             watch_party_service=self.watch_party_service,
             wash_crew_role_id=WASH_CREW_ROLE_ID,
-            watch_party_id=watch_party.id,
+            scheduler_service=self.scheduler_service,
+            suggestion_service=self.suggestion_service,
+        )
+
+        self.assertIsNotNone(interaction.response.sent_view)
+        select = interaction.response.sent_view.children[0]
+        self.assertEqual(1, len(select.options))
+        self.assertEqual("The Matrix", select.options[0].label)
+        self.assertEqual(str(watch_party.id), select.options[0].value)
+
+    async def test_selecting_one_of_several_only_cancels_that_one(self) -> None:
+        first = await self._schedule()
+        second_item = self.suggestion_service.suggest("Inception").watch_item
+        second = self.watch_party_service.schedule_watch_party(
+            watch_item_id=second_item.id, scheduled_at=first.scheduled_at + timedelta(days=1), guild_id=100
+        ).watch_party
+
+        await self._cancel(second)
+
+        self.assertEqual(WatchPartyStatus.SCHEDULED, self.watch_party_service.get_watch_party(first.id).status)
+        self.assertEqual(WatchPartyStatus.CANCELLED, self.watch_party_service.get_watch_party(second.id).status)
+
+    async def test_no_watch_parties_scheduled_shows_a_clear_message(self) -> None:
+        interaction = FakeInteraction(is_wash_crew=True)
+
+        await handle_cancel_watch_party_completion(
+            interaction,
+            watch_party_service=self.watch_party_service,
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
             scheduler_service=self.scheduler_service,
         )
 
-        self.assertFalse(interaction.response.sent_ephemeral)
+        self.assertIsNone(interaction.response.sent_view)
+        self.assertIn("No watch parties", interaction.response.sent_message)
+
+    async def test_marks_the_watch_party_cancelled(self) -> None:
+        watch_party = await self._schedule()
+
+        select_interaction = await self._cancel(watch_party)
+
+        self.assertFalse(select_interaction.response.sent_ephemeral)
         self.assertEqual(
             self.watch_party_service.get_watch_party(watch_party.id).status, WatchPartyStatus.CANCELLED
         )
@@ -700,34 +855,20 @@ class HandleCancelWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase):
     async def test_removes_the_pending_reminder_job(self) -> None:
         watch_party = await self._schedule()
         job = next(iter(self.scheduler_repository.jobs.values()))
-        interaction = FakeInteraction(is_wash_crew=True)
 
-        await handle_cancel_watch_party_completion(
-            interaction,
-            watch_party_service=self.watch_party_service,
-            wash_crew_role_id=WASH_CREW_ROLE_ID,
-            watch_party_id=watch_party.id,
-            scheduler_service=self.scheduler_service,
-        )
+        await self._cancel(watch_party)
 
         self.assertEqual(self.scheduler_repository.jobs[job.job_id].status, JobStatus.CANCELLED)
 
     async def test_preserves_historical_data(self) -> None:
         # Cancelling must never delete the record -- only flip its status.
         watch_party = await self._schedule()
-        interaction = FakeInteraction(is_wash_crew=True)
 
-        await handle_cancel_watch_party_completion(
-            interaction,
-            watch_party_service=self.watch_party_service,
-            wash_crew_role_id=WASH_CREW_ROLE_ID,
-            watch_party_id=watch_party.id,
-            scheduler_service=self.scheduler_service,
-        )
+        await self._cancel(watch_party)
 
         self.assertIsNotNone(self.watch_party_service.get_watch_party(watch_party.id))
 
-    async def test_permission_failure_does_not_cancel_the_reminder_job(self) -> None:
+    async def test_permission_failure_does_not_show_a_picker_or_cancel_the_reminder_job(self) -> None:
         watch_party = await self._schedule()
         job = next(iter(self.scheduler_repository.jobs.values()))
         interaction = FakeInteraction(is_wash_crew=False)
@@ -736,29 +877,36 @@ class HandleCancelWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase):
             interaction,
             watch_party_service=self.watch_party_service,
             wash_crew_role_id=WASH_CREW_ROLE_ID,
-            watch_party_id=watch_party.id,
             scheduler_service=self.scheduler_service,
+            suggestion_service=self.suggestion_service,
         )
 
         self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertIsNone(interaction.response.sent_view)
         self.assertEqual(self.scheduler_repository.jobs[job.job_id].status, JobStatus.PENDING)
         self.assertEqual(
             self.watch_party_service.get_watch_party(watch_party.id).status, WatchPartyStatus.SCHEDULED
         )
 
-    async def test_graceful_for_a_nonexistent_watch_party(self) -> None:
+    async def test_selecting_an_already_cancelled_watch_party_is_graceful(self) -> None:
+        # Simulates a race: the picker was built while the watch party was
+        # still scheduled, but it was cancelled by someone else before this
+        # selection was submitted.
+        watch_party = await self._schedule()
         interaction = FakeInteraction(is_wash_crew=True)
-
         await handle_cancel_watch_party_completion(
             interaction,
             watch_party_service=self.watch_party_service,
             wash_crew_role_id=WASH_CREW_ROLE_ID,
-            watch_party_id=999,
             scheduler_service=self.scheduler_service,
+            suggestion_service=self.suggestion_service,
         )
+        self.watch_party_service.cancel_watch_party(watch_party.id)
 
-        self.assertTrue(interaction.response.sent_ephemeral)
-        self.assertIn("doesn't exist", interaction.response.sent_message)
+        select_interaction = await _select_watch_party(interaction.response.sent_view, watch_party.id)
+
+        self.assertTrue(select_interaction.response.sent_ephemeral)
+        self.assertIn("already cancelled", select_interaction.response.sent_message)
 
 
 if __name__ == "__main__":

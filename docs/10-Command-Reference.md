@@ -77,6 +77,8 @@ Casting a vote itself happens through the interactive buttons on the voting post
 | `/database_restore` | WASH Crew | Restore a database backup. |
 | `/database_reset` | WASH Crew | Clear one database's suggestions. |
 
+`/database_backup`, `/database_reset`, and `/database_remove` take no ID parameter -- running the command shows a picker of this server's suggestion databases (name, Active/Inactive status, and watch-item count) to choose from instead.
+
 ## WASH Crew: Watch Parties
 
 | Command | Required Role | Description |
@@ -85,6 +87,8 @@ Casting a vote itself happens through the interactive buttons on the voting post
 | `/schedule_watch_party` | WASH Crew | Schedule a watch party. |
 | `/reschedule_watch_party` | WASH Crew | Change a watch party's start. |
 | `/cancel_watch_party` | WASH Crew | Cancel a scheduled watch party. |
+
+`/reschedule_watch_party` takes a `when` option; `/cancel_watch_party` takes none. Neither takes a watch party ID -- both show a picker of currently scheduled watch parties (title and scheduled date/time) to choose from instead.
 
 ## WASH Crew: Maintenance
 

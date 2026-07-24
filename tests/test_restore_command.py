@@ -28,6 +28,7 @@ from watch_party_manager.persistence.suggestion_database_repository import JsonS
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.services.backup_service import BackupKind, BackupScheduleSettings, BackupService
 from watch_party_manager.services.database_backup_service import create_database_backup
+from watch_party_manager.services.suggestion_service import SuggestionService
 
 GUILD_ID = 100
 WASH_CREW_ROLE_ID = 999
@@ -93,6 +94,9 @@ class FakeBot:
         self.suggestion_database_repository = database_repository
         self.suggestion_repository = suggestion_repository
         self.suggestion_database_configuration_repository = configuration_repository
+        self.suggestion_service = SuggestionService(
+            repository=suggestion_repository, database_repository=database_repository
+        )
         self.wash_crew_role_id = wash_crew_role_id
 
 
@@ -217,35 +221,63 @@ class HandleRestoreTests(RestoreCommandTestCase):
         self.assertIn("Current", content)
 
 
+async def _select_database(view, database_id: int = 1) -> "FakeInteraction":
+    """Simulate picking a database from a DatabaseAdminSelectView -- returns
+    the fresh interaction its on_select callback produced.
+    """
+    select = view.children[0]
+    select._values = [str(database_id)]
+    select_interaction = FakeInteraction(user=FakeMember(1, roles=[FakeRole(WASH_CREW_ROLE_ID)]))
+    await select.callback(interaction=select_interaction)
+    return select_interaction
+
+
 class HandleDatabaseBackupTests(RestoreCommandTestCase):
     def _seed_database(self) -> SuggestionDatabase:
-        database = SuggestionDatabase(database_id=1, name="Movie Night", guild_id=GUILD_ID, channel_id=555)
-        self.database_repository.save([database], next_id=2)
-        return database
+        # Goes through suggestion_service (rather than writing straight to
+        # database_repository) so the service's in-memory cache -- which
+        # handle_database_backup now reads from to populate its database
+        # picker -- stays consistent with what's on disk.
+        result = self.bot.suggestion_service.create_database("Movie Night", guild_id=GUILD_ID, channel_id=555)
+        assert result.success, result.message
+        return result.database
 
-    async def test_creates_and_attaches_a_scoped_backup(self) -> None:
+    async def test_shows_a_database_picker_naming_each_database(self) -> None:
         self._seed_database()
         interaction = FakeInteraction(user=self._wash_crew_member())
 
-        await handle_database_backup(interaction, self.bot, 1)
+        await handle_database_backup(interaction, self.bot)
 
-        self.assertIsNotNone(interaction.response.sent_file)
-        self.assertIn("Movie Night", interaction.response.sent_message)
-        self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertIsNotNone(interaction.response.sent_view)
+        select = interaction.response.sent_view.children[0]
+        self.assertEqual(1, len(select.options))
+        self.assertEqual("Movie Night", select.options[0].label)
 
-    async def test_rejects_an_unknown_database(self) -> None:
+    async def test_selecting_a_database_creates_and_attaches_a_scoped_backup(self) -> None:
+        self._seed_database()
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_backup(interaction, self.bot)
+
+        select_interaction = await _select_database(interaction.response.sent_view)
+
+        self.assertIsNotNone(select_interaction.response.sent_file)
+        self.assertIn("Movie Night", select_interaction.response.sent_message)
+        self.assertTrue(select_interaction.response.sent_ephemeral)
+
+    async def test_no_databases_configured_shows_a_clear_message(self) -> None:
         interaction = FakeInteraction(user=self._wash_crew_member())
 
-        await handle_database_backup(interaction, self.bot, 999)
+        await handle_database_backup(interaction, self.bot)
 
         self.assertIsNone(interaction.response.sent_file)
-        self.assertIn("No suggestion database", interaction.response.sent_message)
+        self.assertIsNone(interaction.response.sent_view)
+        self.assertIn("No suggestion databases", interaction.response.sent_message)
 
     async def test_non_wash_crew_is_rejected(self) -> None:
         self._seed_database()
         interaction = FakeInteraction(user=FakeMember(1, roles=[]))
 
-        await handle_database_backup(interaction, self.bot, 1)
+        await handle_database_backup(interaction, self.bot)
 
         self.assertIn("WASH Crew", interaction.response.sent_message)
         self.assertIsNone(interaction.response.sent_file)
