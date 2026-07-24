@@ -4,8 +4,9 @@ Covers the FR-029 testing checklist: main configuration view (current
 values, missing, skipped, invalid), section-based editing (each section:
 existing value, valid change saved, invalid change preserves old value,
 unrelated configuration remains unchanged), WASH Crew Role change
-specifics, Watch Party Role & Join Mode, Suggestion Database, Watched-
-Movie Destination, Voting/Reminder/Backup Defaults.
+specifics, Watch Party Role & Join Mode, Manage Databases (per-database
+destinations and candidate selection, replacing the old "Active
+Suggestion Database" model), Voting/Reminder/Backup Defaults.
 """
 
 import tempfile
@@ -126,11 +127,29 @@ class MainSummaryTests(ConfigServiceTestCase):
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
         self.assertIn("WASH Crew Role: Not configured", lines)
 
-    def test_skipped_watch_destination_is_reported_as_skipped(self) -> None:
+    def test_manage_collections_reports_not_configured_when_none_exist(self) -> None:
         self._seed_completed_setup()
-        self._create_database()
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn("Watched Movie Destination: Skipped", lines)
+        self.assertIn("Manage Collections: Not configured", lines)
+
+    def test_manage_collections_reports_active_and_total_counts(self) -> None:
+        self._seed_completed_setup()
+        first = self._create_database(channel_id=400, name="Movies")
+        self._create_database(channel_id=401, name="TV Shows")
+        self.suggestion_service.deactivate_database(first.database_id, GUILD_ID)
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild(extra_channel_ids=[401]))
+        self.assertTrue(any("Manage Collections: Configured (1 active of 2 total" in line for line in lines))
+
+    def test_watch_destination_default_reports_not_configured_when_unset(self) -> None:
+        self._seed_completed_setup()
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertIn("Watched Movie Destination (Default): Not configured", lines)
+
+    def test_watch_destination_default_reports_configured_when_set(self) -> None:
+        self._seed_completed_setup()
+        self.service.set_guild_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertIn(f"Watched Movie Destination (Default): Configured (<#{DESTINATION_CHANNEL_ID}>)", lines)
 
     def test_invalid_role_no_longer_existing_is_reported_as_invalid(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=999999)
@@ -138,12 +157,13 @@ class MainSummaryTests(ConfigServiceTestCase):
         lines = self.service.build_summary_lines(GUILD_ID, guild)
         self.assertTrue(any(line.startswith("WASH Crew Role: Invalid") for line in lines))
 
-    def test_multiple_active_databases_is_reported_as_invalid(self) -> None:
+    def test_voting_defaults_summary_no_longer_mentions_candidate_selection(self) -> None:
+        # Candidate selection is per-database now (Manage Databases); the
+        # guild-wide Voting Defaults line only covers count/duration/visibility.
         self._seed_completed_setup()
-        self._create_database(channel_id=400, name="Movies")
-        self._create_database(channel_id=401, name="TV Shows")
-        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild(extra_channel_ids=[401]))
-        self.assertTrue(any(line.startswith("Active Suggestion Database: Invalid") for line in lines))
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        voting_line = next(line for line in lines if line.startswith("Voting Defaults:"))
+        self.assertNotIn("candidate selection", voting_line)
 
     def test_summary_never_exposes_raw_channel_or_database_ids_as_bare_numbers(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
@@ -224,37 +244,6 @@ class WatchPartyRoleAndJoinModeSectionTests(ConfigServiceTestCase):
         self.assertEqual(configuration.watch_party_role.join_mode, JoinMode.APPROVAL)
 
 
-class SuggestionDatabaseSectionTests(ConfigServiceTestCase):
-    def test_existing_database_is_selected(self) -> None:
-        self._seed_completed_setup()
-        database = self._create_database()
-        result = self.service.set_active_suggestion_database(GUILD_ID, database.database_id)
-        self.assertTrue(result.success)
-
-    def test_missing_database_is_rejected(self) -> None:
-        self._seed_completed_setup()
-        result = self.service.set_active_suggestion_database(GUILD_ID, 999999)
-        self.assertFalse(result.success)
-
-    def test_activating_one_database_does_not_modify_others(self) -> None:
-        self._seed_completed_setup()
-        first = self._create_database(channel_id=400, name="Movies")
-        second = self._create_database(channel_id=401, name="TV Shows")
-        self.suggestion_service.deactivate_database(first.database_id, GUILD_ID)
-        self.suggestion_service.deactivate_database(second.database_id, GUILD_ID)
-
-        self.service.set_active_suggestion_database(GUILD_ID, first.database_id)
-
-        self.assertTrue(self.suggestion_service.get_database(first.database_id).active)
-        self.assertFalse(self.suggestion_service.get_database(second.database_id).active)
-
-    def test_database_from_another_guild_is_rejected(self) -> None:
-        self._seed_completed_setup()
-        database = self._create_database(guild_id=OTHER_GUILD_ID)
-        result = self.service.set_active_suggestion_database(GUILD_ID, database.database_id)
-        self.assertFalse(result.success)
-
-
 class AdminChannelSectionTests(ConfigServiceTestCase):
     def test_channel_is_selected(self) -> None:
         self._seed_completed_setup()
@@ -306,167 +295,293 @@ class AdminChannelSectionTests(ConfigServiceTestCase):
         self.assertTrue(any(line.startswith("Admin Channel: Invalid") for line in lines))
 
 
-class WatchDestinationSectionTests(ConfigServiceTestCase):
-    def test_channel_is_selected(self) -> None:
-        self._seed_completed_setup()
-        self._create_database()
-        result = self.service.set_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
-        self.assertTrue(result.success)
+class ManageDatabasesSectionTests(ConfigServiceTestCase):
+    """Contextual Database Resolution / Collections refinement: replaces
+    the old "Active Suggestion Database" model. Each collection owns its
+    own destination/candidate-selection settings, edited directly by
+    database_id -- no "exactly one active database" requirement anywhere
+    in this section, and every collection always has exactly one
+    suggestion destination (settable, but never clearable).
+    """
 
-    def test_thread_is_selected_the_same_way_as_a_channel(self) -> None:
+    def test_get_database_configuration_returns_a_fresh_default_when_none_saved_yet(self) -> None:
         self._seed_completed_setup()
-        self._create_database()
-        thread_id = 987654321
-        guild = FakeGuild(channel_ids={thread_id})
-        result = self.service.set_watch_destination(GUILD_ID, thread_id, guild)
-        self.assertTrue(result.success)
+        database = self._create_database()
+        configuration = self.service.get_database_configuration(GUILD_ID, database.database_id)
+        self.assertIsNone(configuration.channels.suggestion_channel_id)
+        self.assertEqual(configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
 
-    def test_destination_can_be_cleared(self) -> None:
+    def test_multiple_simultaneously_active_databases_are_both_directly_editable(self) -> None:
+        # Unlike the old model, having more than one active database is
+        # never "Invalid" -- both are independently, directly editable.
         self._seed_completed_setup()
-        self._create_database()
-        self.service.set_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
-        result = self.service.skip_watch_destination(GUILD_ID)
-        self.assertTrue(result.success)
+        first = self._create_database(channel_id=400, name="Movies")
+        second = self._create_database(channel_id=401, name="TV Shows")
+        guild = self._full_guild(extra_channel_ids=[401, 500, 501])
 
-    def test_missing_resource_is_rejected(self) -> None:
+        first_result = self.service.set_database_suggestion_destination(GUILD_ID, first.database_id, 500, guild)
+        second_result = self.service.set_database_suggestion_destination(GUILD_ID, second.database_id, 501, guild)
+
+        self.assertTrue(first_result.success, first_result.message)
+        self.assertTrue(second_result.success, second_result.message)
+
+    def test_suggestion_destination_is_set_for_the_specific_database(self) -> None:
         self._seed_completed_setup()
-        self._create_database()
+        database = self._create_database()
+        other_channel = 401
+        guild = self._full_guild(extra_channel_ids=[other_channel])
+
+        result = self.service.set_database_suggestion_destination(GUILD_ID, database.database_id, other_channel, guild)
+
+        self.assertTrue(result.success)
+        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, database.database_id)
+        self.assertEqual(database_configuration.channels.suggestion_channel_id, other_channel)
+
+    def test_suggestion_destination_has_no_clear_capability(self) -> None:
+        # Every collection MUST have exactly one dedicated suggestion
+        # destination -- unlike watch destinations, there is no
+        # clear_database_suggestion_destination method at all.
+        self.assertFalse(hasattr(self.service, "clear_database_suggestion_destination"))
+
+    def test_suggestion_destination_always_resolves_to_exactly_one_channel(self) -> None:
+        # Even before any override is configured, the collection's home
+        # channel (set at creation, always required) is the effective
+        # suggestion destination -- never None.
+        database = self._create_database()
+        channel_id = self.suggestion_service.resolve_collection_channel_id(
+            database, self.suggestion_database_configuration_repository
+        )
+        self.assertEqual(channel_id, database.channel_id)
+
+    def test_suggestion_destination_missing_channel_is_rejected(self) -> None:
+        self._seed_completed_setup()
+        database = self._create_database()
         guild = FakeGuild(channel_ids=set())
-        result = self.service.set_watch_destination(GUILD_ID, 555, guild)
+        result = self.service.set_database_suggestion_destination(GUILD_ID, database.database_id, 555, guild)
         self.assertFalse(result.success)
 
-    def test_insufficient_bot_permissions_is_rejected(self) -> None:
+    def test_suggestion_destination_for_unknown_database_is_rejected(self) -> None:
         self._seed_completed_setup()
-        self._create_database()
+        result = self.service.set_database_suggestion_destination(GUILD_ID, 999999, DESTINATION_CHANNEL_ID, self._full_guild())
+        self.assertFalse(result.success)
+
+    def test_suggestion_destination_for_another_guilds_database_is_rejected(self) -> None:
+        self._seed_completed_setup()
+        database = self._create_database(guild_id=OTHER_GUILD_ID)
+        result = self.service.set_database_suggestion_destination(
+            GUILD_ID, database.database_id, DESTINATION_CHANNEL_ID, self._full_guild()
+        )
+        self.assertFalse(result.success)
+
+    def test_suggestion_destination_already_used_by_another_database_is_rejected(self) -> None:
+        # Conflict Prevention: a channel/thread can never route to two
+        # databases at once.
+        self._seed_completed_setup()
+        first = self._create_database(channel_id=400, name="Movies")
+        second = self._create_database(channel_id=401, name="TV Shows")
+        guild = self._full_guild(extra_channel_ids=[401, 500])
+        self.service.set_database_suggestion_destination(GUILD_ID, first.database_id, 500, guild)
+
+        result = self.service.set_database_suggestion_destination(GUILD_ID, second.database_id, 500, guild)
+
+        self.assertFalse(result.success)
+        self.assertIn("already routed", result.message)
+        # Nothing was persisted for the rejected database at all.
+        self.assertIsNone(self.suggestion_database_configuration_repository.get(GUILD_ID, second.database_id))
+
+    def test_suggestion_destination_matching_another_databases_home_channel_is_rejected(self) -> None:
+        self._seed_completed_setup()
+        self._create_database(channel_id=400, name="Movies")
+        second = self._create_database(channel_id=401, name="TV Shows")
+        guild = self._full_guild(extra_channel_ids=[401])
+
+        result = self.service.set_database_suggestion_destination(GUILD_ID, second.database_id, 400, guild)
+
+        self.assertFalse(result.success)
+
+    def test_watch_destination_is_set_for_the_specific_database(self) -> None:
+        self._seed_completed_setup()
+        database = self._create_database()
+        result = self.service.set_database_watch_destination(GUILD_ID, database.database_id, DESTINATION_CHANNEL_ID, self._full_guild())
+        self.assertTrue(result.success)
+        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, database.database_id)
+        self.assertEqual(database_configuration.channels.watch_history_channel_id, DESTINATION_CHANNEL_ID)
+
+    def test_watch_destination_thread_is_selected_the_same_way_as_a_channel(self) -> None:
+        self._seed_completed_setup()
+        database = self._create_database()
+        thread_id = 987654321
+        guild = FakeGuild(channel_ids={thread_id})
+        result = self.service.set_database_watch_destination(GUILD_ID, database.database_id, thread_id, guild)
+        self.assertTrue(result.success)
+
+    def test_watch_destination_can_be_cleared(self) -> None:
+        self._seed_completed_setup()
+        database = self._create_database()
+        self.service.set_database_watch_destination(GUILD_ID, database.database_id, DESTINATION_CHANNEL_ID, self._full_guild())
+        result = self.service.clear_database_watch_destination(GUILD_ID, database.database_id)
+        self.assertTrue(result.success)
+        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, database.database_id)
+        self.assertIsNone(database_configuration.channels.watch_history_channel_id)
+
+    def test_watch_destination_missing_resource_is_rejected(self) -> None:
+        self._seed_completed_setup()
+        database = self._create_database()
+        guild = FakeGuild(channel_ids=set())
+        result = self.service.set_database_watch_destination(GUILD_ID, database.database_id, 555, guild)
+        self.assertFalse(result.success)
+
+    def test_watch_destination_insufficient_bot_permissions_is_rejected(self) -> None:
+        self._seed_completed_setup()
+        database = self._create_database()
         guild = FakeGuild(
             channel_ids={DESTINATION_CHANNEL_ID},
             channel_permissions={DESTINATION_CHANNEL_ID: FakePermissions(send_messages=False)},
         )
-        result = self.service.set_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, guild)
-        self.assertFalse(result.success)
-
-    def test_requires_an_unambiguous_active_database_first(self) -> None:
-        self._seed_completed_setup()
-        result = self.service.set_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
-        self.assertFalse(result.success)
-
-
-class SuggestionDestinationSectionTests(ConfigServiceTestCase):
-    def test_channel_is_selected(self) -> None:
-        self._seed_completed_setup()
-        self._create_database()
-        result = self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
-        self.assertTrue(result.success)
-        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, 1)
-        self.assertEqual(database_configuration.channels.suggestion_channel_id, DESTINATION_CHANNEL_ID)
-
-    def test_thread_is_selected_the_same_way_as_a_channel(self) -> None:
-        self._seed_completed_setup()
-        self._create_database()
-        thread_id = 987654321
-        guild = FakeGuild(channel_ids={thread_id})
-        result = self.service.set_suggestion_destination(GUILD_ID, thread_id, guild)
-        self.assertTrue(result.success)
-
-    def test_destination_can_be_cleared(self) -> None:
-        self._seed_completed_setup()
-        self._create_database()
-        self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
-        result = self.service.skip_suggestion_destination(GUILD_ID)
-        self.assertTrue(result.success)
-        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, 1)
-        self.assertIsNone(database_configuration.channels.suggestion_channel_id)
-
-    def test_missing_resource_is_rejected(self) -> None:
-        self._seed_completed_setup()
-        self._create_database()
-        guild = FakeGuild(channel_ids=set())
-        result = self.service.set_suggestion_destination(GUILD_ID, 555, guild)
-        self.assertFalse(result.success)
-
-    def test_insufficient_bot_permissions_is_rejected(self) -> None:
-        self._seed_completed_setup()
-        self._create_database()
-        guild = FakeGuild(
-            channel_ids={DESTINATION_CHANNEL_ID},
-            channel_permissions={DESTINATION_CHANNEL_ID: FakePermissions(send_messages=False)},
-        )
-        result = self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, guild)
-        self.assertFalse(result.success)
-
-    def test_requires_an_unambiguous_active_database_first(self) -> None:
-        self._seed_completed_setup()
-        result = self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        result = self.service.set_database_watch_destination(GUILD_ID, database.database_id, DESTINATION_CHANNEL_ID, guild)
         self.assertFalse(result.success)
 
     def test_setting_suggestion_destination_does_not_change_watch_destination(self) -> None:
         self._seed_completed_setup()
-        self._create_database()
-        self.service.set_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        database = self._create_database()
+        self.service.set_database_watch_destination(GUILD_ID, database.database_id, DESTINATION_CHANNEL_ID, self._full_guild())
         other_channel_id = 401
         guild = self._full_guild(extra_channel_ids=[other_channel_id])
-        self.service.set_suggestion_destination(GUILD_ID, other_channel_id, guild)
+        self.service.set_database_suggestion_destination(GUILD_ID, database.database_id, other_channel_id, guild)
 
-        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, 1)
+        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, database.database_id)
         self.assertEqual(database_configuration.channels.watch_history_channel_id, DESTINATION_CHANNEL_ID)
         self.assertEqual(database_configuration.channels.suggestion_channel_id, other_channel_id)
 
-    def test_summary_reports_not_configured_when_unset(self) -> None:
+    def test_candidate_selection_is_saved_for_the_specific_database(self) -> None:
         self._seed_completed_setup()
-        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn("Suggestion Post Destination: Not configured", lines)
+        database = self._create_database()
+        result = self.service.set_database_candidate_selection(GUILD_ID, database.database_id, CandidateSelectionMode.SOFT_ROTATION)
+        self.assertTrue(result.success)
+        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, database.database_id)
+        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
 
-    def test_summary_reports_skipped_once_a_database_is_active(self) -> None:
+    def test_candidate_selection_for_one_database_does_not_affect_another(self) -> None:
         self._seed_completed_setup()
-        self._create_database()
-        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn("Suggestion Post Destination: Skipped", lines)
+        first = self._create_database(channel_id=400, name="Movies")
+        second = self._create_database(channel_id=401, name="TV Shows")
 
-    def test_summary_reports_configured_when_set(self) -> None:
-        self._seed_completed_setup()
-        self._create_database()
-        self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
-        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn(f"Suggestion Post Destination: Configured (<#{DESTINATION_CHANNEL_ID}>)", lines)
+        self.service.set_database_candidate_selection(GUILD_ID, first.database_id, CandidateSelectionMode.INFINITE_POOL)
 
-    def test_summary_reports_invalid_when_channel_no_longer_usable(self) -> None:
+        second_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, second.database_id)
+        second_mode = (
+            second_configuration.suggestion_rules.candidate_selection
+            if second_configuration is not None
+            else CandidateSelectionMode.ROTATION_POOL
+        )
+        self.assertEqual(second_mode, CandidateSelectionMode.ROTATION_POOL)
+
+    def test_candidate_selection_for_unknown_database_is_rejected(self) -> None:
         self._seed_completed_setup()
-        self._create_database()
-        self.service.set_suggestion_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
-        guild = FakeGuild(channel_ids=set())
-        lines = self.service.build_summary_lines(GUILD_ID, guild)
-        self.assertTrue(any(line.startswith("Suggestion Post Destination: Invalid") for line in lines))
+        result = self.service.set_database_candidate_selection(GUILD_ID, 999999, CandidateSelectionMode.SOFT_ROTATION)
+        self.assertFalse(result.success)
+
+
+class WatchDestinationSectionTests(ConfigServiceTestCase):
+    """Design refinement: watched destinations remain optional and may be
+    shared freely. Supported configurations: none, one universal
+    (guild-wide) destination, or per-collection overrides -- a
+    per-collection override always wins over the universal default.
+    """
+
+    def test_guild_wide_default_is_set_and_read_back(self) -> None:
+        self._seed_completed_setup()
+        result = self.service.set_guild_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        self.assertTrue(result.success)
+        self.assertEqual(
+            self.guild_configuration_repository.get(GUILD_ID).channels.watch_history_channel_id, DESTINATION_CHANNEL_ID
+        )
+
+    def test_guild_wide_default_can_be_cleared(self) -> None:
+        self._seed_completed_setup()
+        self.service.set_guild_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        result = self.service.clear_guild_watch_destination(GUILD_ID)
+        self.assertTrue(result.success)
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID).channels.watch_history_channel_id)
+
+    def test_effective_destination_is_none_when_neither_is_set(self) -> None:
+        self._seed_completed_setup()
+        database = self._create_database()
+        effective = self.service.resolve_effective_watch_destination(GUILD_ID, database.database_id)
+        self.assertIsNone(effective)
+
+    def test_effective_destination_falls_back_to_guild_default(self) -> None:
+        self._seed_completed_setup()
+        database = self._create_database()
+        self.service.set_guild_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+
+        effective = self.service.resolve_effective_watch_destination(GUILD_ID, database.database_id)
+
+        self.assertEqual(effective, DESTINATION_CHANNEL_ID)
+
+    def test_per_collection_override_wins_over_guild_default(self) -> None:
+        self._seed_completed_setup()
+        database = self._create_database()
+        other_channel = 401
+        guild = self._full_guild(extra_channel_ids=[other_channel])
+        self.service.set_guild_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, guild)
+        self.service.set_database_watch_destination(GUILD_ID, database.database_id, other_channel, guild)
+
+        effective = self.service.resolve_effective_watch_destination(GUILD_ID, database.database_id)
+
+        self.assertEqual(effective, other_channel)
+
+    def test_watch_destination_may_be_shared_by_two_collections(self) -> None:
+        # Unlike suggestion destinations, watch destinations are never
+        # checked for conflicts -- any number of collections (and/or the
+        # guild default) may share the same channel.
+        self._seed_completed_setup()
+        first = self._create_database(channel_id=400, name="Movies")
+        second = self._create_database(channel_id=401, name="TV Shows")
+        guild = self._full_guild(extra_channel_ids=[401])
+
+        first_result = self.service.set_database_watch_destination(GUILD_ID, first.database_id, DESTINATION_CHANNEL_ID, guild)
+        second_result = self.service.set_database_watch_destination(GUILD_ID, second.database_id, DESTINATION_CHANNEL_ID, guild)
+
+        self.assertTrue(first_result.success)
+        self.assertTrue(second_result.success)
+        self.assertEqual(
+            self.service.resolve_effective_watch_destination(GUILD_ID, first.database_id), DESTINATION_CHANNEL_ID
+        )
+        self.assertEqual(
+            self.service.resolve_effective_watch_destination(GUILD_ID, second.database_id), DESTINATION_CHANNEL_ID
+        )
 
 
 class VotingDefaultsSectionTests(ConfigServiceTestCase):
     def test_nominee_count_duration_and_visibility_are_updated(self) -> None:
         self._seed_completed_setup()
-        result = self.service.set_voting_defaults(
-            GUILD_ID, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.ROTATION_POOL
-        )
+        result = self.service.set_voting_defaults(GUILD_ID, 5, 14, GuildVoteVisibility.VISIBLE)
         self.assertTrue(result.success)
         voting_defaults = self.guild_configuration_repository.get(GUILD_ID).voting_defaults
         self.assertEqual(voting_defaults.candidate_count, 5)
         self.assertEqual(voting_defaults.duration_hours, 14)
         self.assertEqual(voting_defaults.visibility, GuildVoteVisibility.VISIBLE)
 
-    def test_candidate_selection_is_saved_to_the_active_database(self) -> None:
-        self._seed_completed_setup()
-        self._create_database()
-        self.service.set_voting_defaults(
-            GUILD_ID, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.ROTATION_POOL
-        )
-        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, 1)
-        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
-
     def test_existing_max_vote_changes_and_tie_behavior_are_preserved(self) -> None:
         configuration = self._seed_completed_setup()
-        self.service.set_voting_defaults(
-            GUILD_ID, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.ROTATION_POOL
-        )
+        self.service.set_voting_defaults(GUILD_ID, 5, 14, GuildVoteVisibility.VISIBLE)
         updated = self.guild_configuration_repository.get(GUILD_ID).voting_defaults
         self.assertEqual(updated.max_vote_changes, configuration.voting_defaults.max_vote_changes)
         self.assertEqual(updated.tie_behavior, configuration.voting_defaults.tie_behavior)
+
+    def test_does_not_touch_any_databases_candidate_selection(self) -> None:
+        # Candidate selection moved to Manage Databases -- Voting Defaults
+        # is guild-wide only now and must never reach into per-database
+        # configuration.
+        self._seed_completed_setup()
+        database = self._create_database()
+        self.service.set_database_candidate_selection(GUILD_ID, database.database_id, CandidateSelectionMode.SOFT_ROTATION)
+
+        self.service.set_voting_defaults(GUILD_ID, 5, 14, GuildVoteVisibility.VISIBLE)
+
+        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, database.database_id)
+        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
 
 
 class ReminderDefaultsSectionTests(ConfigServiceTestCase):

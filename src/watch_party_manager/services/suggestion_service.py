@@ -47,13 +47,19 @@ class DatabaseResolution:
     """Result of figuring out which suggestion database a command should use.
 
     database is set when resolution succeeded (a channel-matched database,
-    the sole configured database, etc). error_message is set instead when
-    no usable database could be determined, with user-facing text
-    explaining why.
+    or the guild's sole configured database). error_message is set
+    instead when no usable database could be determined at all (no
+    database configured in the guild yet), with user-facing text
+    explaining why. ambiguous_candidates is populated instead of either
+    when more than one active database exists and none matches the
+    current channel -- contextual resolution never guesses in that case;
+    the caller should present these as a picker and let the member
+    choose, then continue the original command with that choice.
     """
 
     database: Optional[SuggestionDatabase] = None
     error_message: Optional[str] = None
+    ambiguous_candidates: tuple[SuggestionDatabase, ...] = ()
 
 
 class SuggestionService:
@@ -750,6 +756,7 @@ class SuggestionService:
         guild_id: int,
         channel_id: int,
         active: bool = True,
+        suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
     ) -> SuggestionDatabaseResult:
         """Create a new suggestion database.
 
@@ -767,6 +774,16 @@ class SuggestionService:
             active: Whether the database starts active. Defaults to True.
                 Nothing in this service filters on this flag yet -- it's
                 groundwork for future archive behavior.
+            suggestion_database_configuration_repository: Optional; when
+                supplied, channel_id is also checked against every other
+                guild database's *configured* suggestion post destination
+                (SuggestionDatabaseConfiguration.channels.suggestion_channel_id),
+                not just each database's operational home channel --
+                contextual command resolution (resolve_database_for_channel)
+                considers both, so both must be kept collision-free.
+                Omitted by callers that don't have this repository in
+                scope, in which case only the operational-channel check
+                below runs.
 
         Returns:
             SuggestionDatabaseResult indicating success or failure.
@@ -793,6 +810,13 @@ class SuggestionService:
                     success=False,
                     message="This channel already has a suggestion database.",
                 )
+            if suggestion_database_configuration_repository is not None:
+                configuration = suggestion_database_configuration_repository.get(guild_id, database.database_id)
+                if configuration is not None and configuration.channels.suggestion_channel_id == channel_id:
+                    return SuggestionDatabaseResult(
+                        success=False,
+                        message="This channel is already the suggestion post destination for another database.",
+                    )
 
         is_first_database = len(self._databases) == 0
 
@@ -852,6 +876,24 @@ class SuggestionService:
             databases = [database for database in databases if database.guild_id == guild_id]
         return databases
 
+    def resolve_collection_channel_id(
+        self,
+        database: SuggestionDatabase,
+        suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
+    ) -> int:
+        """The one channel/thread this collection's suggestion destination
+        resolves to: its configured override if set, otherwise its
+        original home channel -- always exactly one value, matching
+        resolve_database_for_channel's own resolution order. Every
+        collection has exactly one suggestion destination, so this never
+        returns None.
+        """
+        if suggestion_database_configuration_repository is not None:
+            configuration = suggestion_database_configuration_repository.get(database.guild_id, database.database_id)
+            if configuration is not None and configuration.channels.suggestion_channel_id is not None:
+                return configuration.channels.suggestion_channel_id
+        return database.channel_id
+
     def database_exists(self, database_id: int) -> bool:
         """Check whether a suggestion database with the given ID currently exists.
 
@@ -862,6 +904,48 @@ class SuggestionService:
             True if a database with this ID currently exists.
         """
         return database_id in self._databases
+
+    def find_database_using_channel(
+        self,
+        guild_id: int,
+        channel_id: int,
+        suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
+        *,
+        exclude_database_id: Optional[int] = None,
+    ) -> Optional[SuggestionDatabase]:
+        """Return the database (if any) already routing channel_id in this guild.
+
+        Checks both a database's operational home channel (channel_id)
+        and, when suggestion_database_configuration_repository is
+        supplied, its configured suggestion post destination
+        (SuggestionDatabaseConfiguration.channels.suggestion_channel_id)
+        -- the same two properties resolve_database_for_channel consults.
+        Used to keep a channel/thread from ever routing ambiguously to
+        more than one database.
+
+        Args:
+            guild_id: The Discord guild to search within.
+            channel_id: The channel or thread ID to check.
+            suggestion_database_configuration_repository: Optional; when
+                omitted, only the operational-channel check runs.
+            exclude_database_id: Skip this database (used when checking a
+                channel against every *other* database while editing this
+                one's own destination).
+
+        Returns:
+            The conflicting SuggestionDatabase, or None if channel_id is
+            free.
+        """
+        for database in self.list_databases(guild_id):
+            if database.database_id == exclude_database_id:
+                continue
+            if database.channel_id == channel_id:
+                return database
+            if suggestion_database_configuration_repository is not None:
+                configuration = suggestion_database_configuration_repository.get(guild_id, database.database_id)
+                if configuration is not None and configuration.channels.suggestion_channel_id == channel_id:
+                    return database
+        return None
 
     def deactivate_database(
         self, database_id: int, guild_id: int
@@ -981,7 +1065,8 @@ class SuggestionService:
              fix, not a second parallel one.
           3. If none matches but exactly one database exists in the guild, use it.
           4. If multiple databases exist in the guild and none match, resolution
-             is ambiguous until interactive selection is implemented.
+             is ambiguous -- returned via ambiguous_candidates for the caller to
+             present as a picker, never guessed.
           5. If the guild has no (active) databases, WASH Crew needs to configure one.
 
         Args:
@@ -1014,12 +1099,7 @@ class SuggestionService:
             return DatabaseResolution(database=databases[0])
 
         if len(databases) > 1:
-            return DatabaseResolution(
-                error_message=(
-                    "Multiple suggestion databases are configured. Database "
-                    "selection will be implemented in a future milestone."
-                )
-            )
+            return DatabaseResolution(ambiguous_candidates=tuple(databases))
 
         return DatabaseResolution(
             error_message="WASH Crew must configure a suggestion database first."

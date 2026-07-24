@@ -633,6 +633,22 @@ class SuggestionServiceDatabaseTests(unittest.TestCase):
         self.assertTrue(self.service.database_exists(created.database.database_id))
         self.assertIn(created.database.database_id, [db.database_id for db in self.service.list_databases()])
 
+    def test_deactivate_database_never_touches_its_discord_channel(self) -> None:
+        # Contextual Collection Model: deleting a collection must NEVER
+        # delete the underlying Discord channel/thread -- deactivate_database
+        # only flips the active flag on the domain record and never calls
+        # into any Discord API, so the collection's channel_id (its
+        # required suggestion destination) is guaranteed to survive intact.
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        self.service.deactivate_database(created.database.database_id, guild_id=100)
+
+        deactivated = next(
+            db for db in self.service.list_databases() if db.database_id == created.database.database_id
+        )
+        self.assertEqual(deactivated.channel_id, 200)
+        self.assertFalse(deactivated.active)
+
     def test_deactivate_database_preserves_its_suggestions(self) -> None:
         created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
         self.service.suggest("The Matrix", database_id=created.database.database_id)
@@ -803,7 +819,11 @@ class SuggestionServiceDatabaseAssociationTests(unittest.TestCase):
 
         resolution = self.service.resolve_database_for_channel(100, 999)
         self.assertIsNone(resolution.database)
-        self.assertIn("Multiple suggestion databases", resolution.error_message)
+        self.assertIsNone(resolution.error_message)
+        self.assertEqual(
+            {database.name for database in resolution.ambiguous_candidates},
+            {"Sunday Watch Party", "Kung Fu Movies"},
+        )
 
     def test_resolve_database_for_channel_fails_when_no_databases_exist(self) -> None:
         resolution = self.service.resolve_database_for_channel(100, 999)
@@ -909,7 +929,7 @@ class ResolveDatabaseForChannelWithConfiguredDestinationTests(unittest.TestCase)
         resolution = self.service.resolve_database_for_channel(100, thread_id)
 
         self.assertIsNone(resolution.database)
-        self.assertIn("Multiple suggestion databases", resolution.error_message)
+        self.assertEqual(len(resolution.ambiguous_candidates), 2)
 
     def test_home_channel_match_takes_priority_over_a_configured_destination_match(self) -> None:
         # If two different databases end up matching by different rules
@@ -944,6 +964,112 @@ class ResolveDatabaseForChannelWithConfiguredDestinationTests(unittest.TestCase)
 
         self.assertIsNotNone(resolution.database)  # falls back to the sole active database
         self.assertEqual(resolution.database.name, "Sunday Watch Party")
+
+    def test_find_database_using_channel_matches_home_channel(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        match = self.service.find_database_using_channel(100, 200, self.configuration_repository)
+        self.assertEqual(match.database_id, created.database.database_id)
+
+    def test_find_database_using_channel_matches_configured_destination(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self._configure_destination(created.database.database_id, 555)
+        match = self.service.find_database_using_channel(100, 555, self.configuration_repository)
+        self.assertEqual(match.database_id, created.database.database_id)
+
+    def test_find_database_using_channel_returns_none_when_free(self) -> None:
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        match = self.service.find_database_using_channel(100, 999, self.configuration_repository)
+        self.assertIsNone(match)
+
+    def test_find_database_using_channel_excludes_the_given_database_id(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        match = self.service.find_database_using_channel(
+            100, 200, self.configuration_repository, exclude_database_id=created.database.database_id
+        )
+        self.assertIsNone(match)
+
+    def test_create_database_rejects_a_channel_already_used_as_another_databases_destination(self) -> None:
+        # Conflict Prevention: create_database's own duplicate-channel
+        # check already covers home-channel collisions; this confirms it
+        # also covers a channel already claimed as another database's
+        # *configured* suggestion destination when the configuration
+        # repository is supplied.
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self._configure_destination(created.database.database_id, 555)
+
+        result = self.service.create_database(
+            "Kung Fu Movies", guild_id=100, channel_id=555,
+            suggestion_database_configuration_repository=self.configuration_repository,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("already the suggestion post destination", result.message)
+
+
+class DatabaseCreationRestartSafetyTests(unittest.TestCase):
+    """Contextual Database Resolution: a database created (via any path --
+    /database_add or the Setup Wizard's guided flow both call
+    create_database() unchanged) resolves correctly for future commands
+    after a simulated restart, since resolution is derived fresh from
+    persisted SuggestionDatabase/SuggestionDatabaseConfiguration records
+    on every call rather than cached in memory.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self._temp_dir.name)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _new_service(self) -> SuggestionService:
+        return SuggestionService(
+            repository=JsonSuggestionRepository(self.root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(self.root / "suggestion_databases.json"),
+        )
+
+    def test_a_created_database_still_resolves_by_home_channel_after_restart(self) -> None:
+        first_process = self._new_service()
+        first_process.create_database("Movies", guild_id=100, channel_id=200)
+
+        second_process = self._new_service()  # fresh instance, same JSON files -- simulates a restart
+        resolution = second_process.resolve_database_for_channel(100, 200)
+
+        self.assertIsNotNone(resolution.database)
+        self.assertEqual(resolution.database.name, "Movies")
+
+    def test_a_configured_destination_still_resolves_by_thread_after_restart(self) -> None:
+        configuration_repository = SuggestionDatabaseConfigurationRepository(
+            self.root / "suggestion_database_configurations.json"
+        )
+        first_process = self._new_service()
+        result = first_process.create_database("Movies", guild_id=100, channel_id=200)
+        configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=100,
+                database_id=result.database.database_id,
+                display_name="Movies",
+                channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=777),
+            )
+        )
+
+        second_process = self._new_service()
+        resolution = second_process.resolve_database_for_channel(100, 777, configuration_repository)
+
+        self.assertIsNotNone(resolution.database)
+        self.assertEqual(resolution.database.name, "Movies")
+
+    def test_two_databases_created_before_a_restart_both_remain_independently_resolvable(self) -> None:
+        first_process = self._new_service()
+        first_process.create_database("Movies", guild_id=100, channel_id=200)
+        first_process.create_database("TV Shows", guild_id=100, channel_id=201)
+
+        second_process = self._new_service()
+
+        movies_resolution = second_process.resolve_database_for_channel(100, 200)
+        tv_resolution = second_process.resolve_database_for_channel(100, 201)
+        self.assertEqual(movies_resolution.database.name, "Movies")
+        self.assertEqual(tv_resolution.database.name, "TV Shows")
 
 
 if __name__ == "__main__":

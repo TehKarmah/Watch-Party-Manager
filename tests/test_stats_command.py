@@ -348,7 +348,7 @@ class RotationTypeTests(HandleStatsTestCase):
         await handle_stats(interaction, self.bot, "rotation", False, None)
 
         self.assertIsNotNone(interaction.response.sent_view)
-        self.assertIn("Multiple suggestion databases are configured", interaction.response.sent_message)
+        self.assertIn("Which collection would you like to use?", interaction.response.sent_message)
 
 
 class DatabaseTypeTests(HandleStatsTestCase):

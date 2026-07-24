@@ -227,7 +227,7 @@ class DatabaseCommandTests(unittest.TestCase):
             self.suggestion_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, GUILD_ID
         )
 
-        self.assertTrue(message.startswith("Suggestion Databases\n\n"))
+        self.assertTrue(message.startswith("Collections\n\n"))
         self.assertIn("Database ID: 1\n", message)
         self.assertIn("Name: Sunday Watch Party\n", message)
         self.assertIn("Status: Active\n", message)

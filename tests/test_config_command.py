@@ -20,6 +20,7 @@ from watch_party_manager.bot import (
     handle_config_wash_crew_role_selected,
     send_config_backup_defaults_modal,
     send_config_main_menu,
+    send_config_manage_databases,
     send_config_reminder_defaults_modal,
     send_config_result,
     send_config_section,
@@ -39,13 +40,18 @@ from watch_party_manager.services.config_service import ConfigSection, ConfigSer
 from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.config_view import (
+    BackToMenuOnlyView,
+    ConfigDatabaseCandidateSelectionView,
     ConfigDatabaseSectionView,
+    ConfigDatabaseSettingsMenuView,
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
     ConfigRoleSectionView,
     ConfigSuggestionDestinationSectionView,
-    ConfigVotingDefaultsIntroView,
     ConfigWatchDestinationSectionView,
+    DATABASE_SETTING_CANDIDATE_SELECTION,
+    DATABASE_SETTING_SUGGESTION_DESTINATION,
+    DATABASE_SETTING_WATCH_DESTINATION,
 )
 
 GUILD_ID = 100
@@ -264,70 +270,326 @@ class SectionRenderingTests(ConfigCommandTestCase):
             self.guild_configuration_repository.get(GUILD_ID).channels.admin_channel_id, DESTINATION_CHANNEL_ID
         )
 
-    async def test_database_section_lists_existing_databases(self) -> None:
+    async def test_manage_databases_section_shows_the_database_picker(self) -> None:
         self._seed_completed_setup()
         self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
         interaction = FakeInteraction()
-        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.SUGGESTION_DATABASE, edit=False)
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.MANAGE_COLLECTIONS, edit=False)
         self.assertIsInstance(interaction.response.sent_view, ConfigDatabaseSectionView)
 
-    async def test_database_section_with_no_databases_shows_back_only(self) -> None:
+    async def test_manage_databases_section_with_no_databases_shows_back_only(self) -> None:
         self._seed_completed_setup()
         interaction = FakeInteraction()
-        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.SUGGESTION_DATABASE, edit=False)
-        self.assertEqual(len(interaction.response.sent_view.children), 1)
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.MANAGE_COLLECTIONS, edit=False)
+        self.assertIsInstance(interaction.response.sent_view, BackToMenuOnlyView)
 
-    async def test_watch_destination_section_shows_the_channel_picker(self) -> None:
-        self._seed_completed_setup()
-        interaction = FakeInteraction()
-        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.WATCH_DESTINATION, edit=False)
-        self.assertIsInstance(interaction.response.sent_view, ConfigWatchDestinationSectionView)
-
-    async def test_suggestion_destination_section_shows_the_channel_picker(self) -> None:
-        self._seed_completed_setup()
-        interaction = FakeInteraction()
-        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.SUGGESTION_DESTINATION, edit=False)
-        self.assertIsInstance(interaction.response.sent_view, ConfigSuggestionDestinationSectionView)
-
-    async def test_selecting_a_suggestion_destination_saves_immediately(self) -> None:
-        self._seed_completed_setup()
-        self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
-        interaction = FakeInteraction()
-        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.SUGGESTION_DESTINATION, edit=False)
-        select = interaction.response.sent_view.children[0]
-        select._values = [_FakeChannelValue(DESTINATION_CHANNEL_ID)]
-
-        select_interaction = FakeInteraction()
-        await select.callback(interaction=select_interaction)
-
-        self.assertIn("Suggestion post destination updated", select_interaction.response.edited_content)
-        database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, 1)
-        self.assertEqual(database_configuration.channels.suggestion_channel_id, DESTINATION_CHANNEL_ID)
-
-    async def test_clearing_a_suggestion_destination(self) -> None:
-        self._seed_completed_setup()
-        self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
-        interaction = FakeInteraction()
-        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.SUGGESTION_DESTINATION, edit=False)
-        clear_button = interaction.response.sent_view.children[1]
-
-        clear_interaction = FakeInteraction()
-        await clear_button.callback(interaction=clear_interaction)
-
-        self.assertIn("Suggestion post destination cleared", clear_interaction.response.edited_content)
-
-    async def test_selecting_a_database_saves_immediately_and_shows_result(self) -> None:
+    async def test_selecting_a_database_opens_its_settings_menu(self) -> None:
         self._seed_completed_setup()
         database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
         interaction = FakeInteraction()
-        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.SUGGESTION_DATABASE, edit=False)
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.MANAGE_COLLECTIONS, edit=False)
         select = interaction.response.sent_view.children[0]
         select._values = [str(database_result.database.database_id)]
 
         select_interaction = FakeInteraction()
         await select.callback(interaction=select_interaction)
 
-        self.assertIn("active suggestion database", select_interaction.response.edited_content)
+        self.assertIn("Movies", select_interaction.response.edited_content)
+        self.assertIsInstance(select_interaction.response.edited_view, ConfigDatabaseSettingsMenuView)
+
+    async def test_database_settings_menu_shows_current_values(self) -> None:
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        database_id = database_result.database.database_id
+        self.bot.config_service.set_database_suggestion_destination(
+            GUILD_ID, database_id, DESTINATION_CHANNEL_ID, FakeGuildForValidation(channel_ids={DESTINATION_CHANNEL_ID})
+        )
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_settings_menu
+
+        await send_config_database_settings_menu(interaction, self.bot, GUILD_ID, database_id, on_back)
+
+        self.assertIn(f"<#{DESTINATION_CHANNEL_ID}>", interaction.response.edited_content)
+        self.assertIn("Balanced Random", interaction.response.edited_content)
+
+    async def test_choosing_suggestion_destination_shows_the_channel_picker(self) -> None:
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_settings_menu
+
+        await send_config_database_settings_menu(
+            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        )
+        setting_select = interaction.response.edited_view.children[0]
+        setting_select._values = [DATABASE_SETTING_SUGGESTION_DESTINATION]
+
+        setting_interaction = FakeInteraction()
+        await setting_select.callback(interaction=setting_interaction)
+
+        self.assertIsInstance(setting_interaction.response.edited_view, ConfigSuggestionDestinationSectionView)
+
+    async def test_choosing_watch_destination_shows_the_channel_picker(self) -> None:
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_settings_menu
+
+        await send_config_database_settings_menu(
+            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        )
+        setting_select = interaction.response.edited_view.children[0]
+        setting_select._values = [DATABASE_SETTING_WATCH_DESTINATION]
+
+        setting_interaction = FakeInteraction()
+        await setting_select.callback(interaction=setting_interaction)
+
+        self.assertIsInstance(setting_interaction.response.edited_view, ConfigWatchDestinationSectionView)
+
+    async def test_choosing_candidate_selection_shows_the_dropdown(self) -> None:
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_settings_menu
+
+        await send_config_database_settings_menu(
+            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        )
+        setting_select = interaction.response.edited_view.children[0]
+        setting_select._values = [DATABASE_SETTING_CANDIDATE_SELECTION]
+
+        setting_interaction = FakeInteraction()
+        await setting_select.callback(interaction=setting_interaction)
+
+        self.assertIsInstance(setting_interaction.response.edited_view, ConfigDatabaseCandidateSelectionView)
+        self.assertEqual(
+            setting_interaction.response.edited_view.candidate_selection_select.selected,
+            CandidateSelectionMode.ROTATION_POOL,
+        )
+
+    async def test_selecting_a_suggestion_destination_saves_immediately(self) -> None:
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_suggestion_destination
+
+        await send_config_database_suggestion_destination(
+            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        )
+        select = interaction.response.edited_view.children[0]
+        select._values = [_FakeChannelValue(DESTINATION_CHANNEL_ID)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+
+        self.assertIn("Suggestion post destination updated", select_interaction.response.edited_content)
+        database_configuration = self.suggestion_database_configuration_repository.get(
+            GUILD_ID, database_result.database.database_id
+        )
+        self.assertEqual(database_configuration.channels.suggestion_channel_id, DESTINATION_CHANNEL_ID)
+
+    async def test_suggestion_destination_screen_has_no_clear_button(self) -> None:
+        # Every collection MUST have exactly one dedicated suggestion
+        # destination -- this screen can only change it, never clear it.
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_suggestion_destination
+
+        await send_config_database_suggestion_destination(
+            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        )
+
+        self.assertEqual(len(interaction.response.edited_view.children), 2)  # channel select + Back to Menu only
+
+    async def test_selecting_a_watch_destination_saves_immediately(self) -> None:
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_watch_destination
+
+        await send_config_database_watch_destination(
+            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        )
+        select = interaction.response.edited_view.children[0]
+        select._values = [_FakeChannelValue(DESTINATION_CHANNEL_ID)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+
+        self.assertIn("Watched movie destination updated", select_interaction.response.edited_content)
+        database_configuration = self.suggestion_database_configuration_repository.get(
+            GUILD_ID, database_result.database.database_id
+        )
+        self.assertEqual(database_configuration.channels.watch_history_channel_id, DESTINATION_CHANNEL_ID)
+
+    async def test_saving_candidate_selection_persists_the_chosen_mode(self) -> None:
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_candidate_selection
+
+        await send_config_database_candidate_selection(
+            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        )
+        select_view = interaction.response.edited_view
+        select_view.candidate_selection_select._values = [CandidateSelectionMode.SOFT_ROTATION.value]
+
+        save_interaction = FakeInteraction()
+        await select_view.children[1].callback(interaction=save_interaction)
+
+        self.assertIn("Soft Rotation", save_interaction.response.edited_content)
+        database_configuration = self.suggestion_database_configuration_repository.get(
+            GUILD_ID, database_result.database.database_id
+        )
+        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
+
+    async def test_two_databases_can_be_managed_independently(self) -> None:
+        self._seed_completed_setup()
+        first = self.suggestion_service.create_database("Movies", GUILD_ID, 400).database
+        second = self.suggestion_service.create_database("TV Shows", GUILD_ID, 401).database
+        guild = FakeGuildForValidation(channel_ids={500, 501})
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_suggestion_destination
+
+        first_interaction = FakeInteraction(guild=guild)
+        await send_config_database_suggestion_destination(first_interaction, self.bot, GUILD_ID, first.database_id, on_back)
+        first_select = first_interaction.response.edited_view.children[0]
+        first_select._values = [_FakeChannelValue(500)]
+        first_select_interaction = FakeInteraction(guild=guild)
+        await first_select.callback(interaction=first_select_interaction)
+
+        second_interaction = FakeInteraction(guild=guild)
+        await send_config_database_suggestion_destination(second_interaction, self.bot, GUILD_ID, second.database_id, on_back)
+        second_select = second_interaction.response.edited_view.children[0]
+        second_select._values = [_FakeChannelValue(501)]
+        second_select_interaction = FakeInteraction(guild=guild)
+        await second_select.callback(interaction=second_select_interaction)
+
+        self.assertTrue(first_select_interaction.response.edited_content.startswith("Suggestion post destination updated"))
+        self.assertTrue(second_select_interaction.response.edited_content.startswith("Suggestion post destination updated"))
+        first_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, first.database_id)
+        second_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, second.database_id)
+        self.assertEqual(first_configuration.channels.suggestion_channel_id, 500)
+        self.assertEqual(second_configuration.channels.suggestion_channel_id, 501)
+
+    async def test_duplicate_destination_is_rejected_with_a_clear_error(self) -> None:
+        self._seed_completed_setup()
+        first = self.suggestion_service.create_database("Movies", GUILD_ID, 400).database
+        second = self.suggestion_service.create_database("TV Shows", GUILD_ID, 401).database
+        guild = FakeGuildForValidation(channel_ids={500})
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_suggestion_destination
+
+        first_interaction = FakeInteraction(guild=guild)
+        await send_config_database_suggestion_destination(first_interaction, self.bot, GUILD_ID, first.database_id, on_back)
+        first_select = first_interaction.response.edited_view.children[0]
+        first_select._values = [_FakeChannelValue(500)]
+        await first_select.callback(interaction=FakeInteraction(guild=guild))
+
+        second_interaction = FakeInteraction(guild=guild)
+        await send_config_database_suggestion_destination(second_interaction, self.bot, GUILD_ID, second.database_id, on_back)
+        second_select = second_interaction.response.edited_view.children[0]
+        second_select._values = [_FakeChannelValue(500)]
+        second_select_interaction = FakeInteraction(guild=guild)
+        await second_select.callback(interaction=second_select_interaction)
+
+        self.assertIn("already routed", second_select_interaction.response.edited_content)
+        second_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, second.database_id)
+        self.assertIsNone(second_configuration)
+
+
+class GuildWideWatchDestinationSectionTests(ConfigCommandTestCase):
+    """Design refinement: a guild-wide default watched-movie destination,
+    distinct from -- and overridden by -- any per-collection setting
+    inside Manage Collections.
+    """
+
+    async def test_section_shows_the_channel_picker(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.WATCH_DESTINATION, edit=False)
+        self.assertIsInstance(interaction.response.sent_view, ConfigWatchDestinationSectionView)
+
+    async def test_selecting_a_channel_saves_the_guild_wide_default(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.WATCH_DESTINATION, edit=False)
+        select = interaction.response.sent_view.children[0]
+        select._values = [_FakeChannelValue(DESTINATION_CHANNEL_ID)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+
+        self.assertIn("Default watched movie destination updated", select_interaction.response.edited_content)
+        self.assertEqual(
+            self.guild_configuration_repository.get(GUILD_ID).channels.watch_history_channel_id, DESTINATION_CHANNEL_ID
+        )
+
+    async def test_clearing_the_guild_wide_default(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.WATCH_DESTINATION, edit=False)
+        clear_button = interaction.response.sent_view.children[1]
+
+        clear_interaction = FakeInteraction()
+        await clear_button.callback(interaction=clear_interaction)
+
+        self.assertIn("Default watched movie destination cleared", clear_interaction.response.edited_content)
+
+    async def test_a_collections_own_override_wins_over_the_guild_default(self) -> None:
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        other_channel = 401
+        guild = FakeGuildForValidation(channel_ids={DESTINATION_CHANNEL_ID, other_channel})
+        self.bot.config_service.set_guild_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, guild)
+        self.bot.config_service.set_database_watch_destination(
+            GUILD_ID, database_result.database.database_id, other_channel, guild
+        )
+
+        effective = self.bot.config_service.resolve_effective_watch_destination(
+            GUILD_ID, database_result.database.database_id
+        )
+
+        self.assertEqual(effective, other_channel)
 
 
 class WashCrewRoleConfirmationTests(ConfigCommandTestCase):
@@ -407,20 +669,10 @@ class WashCrewRoleConfirmationTests(ConfigCommandTestCase):
 
 
 class ModalDefaultsSectionTests(ConfigCommandTestCase):
-    async def test_voting_defaults_intro_shows_the_candidate_selection_dropdown(self) -> None:
-        self._seed_completed_setup()
-        interaction = FakeInteraction()
-
-        async def on_back(back_interaction) -> None:
-            pass
-
-        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-
-        intro_view = interaction.response.edited_view
-        self.assertIsInstance(intro_view, ConfigVotingDefaultsIntroView)
-        self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.ROTATION_POOL)
-
     async def test_voting_defaults_modal_is_prefilled_with_current_values(self) -> None:
+        # Guild-wide only now -- candidate selection moved to Manage
+        # Databases, so /config's Voting Defaults goes straight to the
+        # modal again (no intermediate dropdown screen).
         self._seed_completed_setup()
         interaction = FakeInteraction()
 
@@ -428,11 +680,8 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
             pass
 
         await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        intro_view = interaction.response.edited_view
-        configure_interaction = FakeInteraction()
-        await intro_view.children[1].callback(interaction=configure_interaction)
 
-        modal = configure_interaction.response.sent_modal
+        modal = interaction.response.sent_modal
         self.assertEqual(modal.candidate_count_input.default, "3")
         self.assertEqual(modal.duration_input.default, "1 day")
         self.assertEqual(modal.visibility_input.default, "visible")
@@ -445,11 +694,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
             pass
 
         await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        intro_view = interaction.response.edited_view
-        intro_view.candidate_selection_select._values = [CandidateSelectionMode.SOFT_ROTATION.value]
-        configure_interaction = FakeInteraction()
-        await intro_view.children[1].callback(interaction=configure_interaction)
-        modal = configure_interaction.response.sent_modal
+        modal = interaction.response.sent_modal
         modal.candidate_count_input._value = "5"
         modal.duration_input._value = "14"
         modal.visibility_input._value = "visible"
@@ -469,10 +714,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
             pass
 
         await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        intro_view = interaction.response.edited_view
-        configure_interaction = FakeInteraction()
-        await intro_view.children[1].callback(interaction=configure_interaction)
-        modal = configure_interaction.response.sent_modal
+        modal = interaction.response.sent_modal
         modal.candidate_count_input._value = "not-a-number"
         modal.duration_input._value = "14"
         modal.visibility_input._value = "visible"

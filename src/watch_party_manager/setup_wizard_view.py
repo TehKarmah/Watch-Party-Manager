@@ -35,6 +35,7 @@ OnExistingDatabaseSelected = Callable[[discord.Interaction, int], Awaitable[None
 OnDatabaseNameSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnThreadNameSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnChannelSelected = Callable[[discord.Interaction, int], Awaitable[None]]
+OnDestinationNameChosen = Callable[[discord.Interaction, str], Awaitable[None]]
 OnSkip = Callable[[discord.Interaction], Awaitable[None]]
 OnCreateThreadClicked = Callable[[discord.Interaction], Awaitable[None]]
 OnVotingDefaultsSubmit = Callable[[discord.Interaction, str, str, str], Awaitable[None]]
@@ -371,6 +372,86 @@ class CreateNewDatabaseButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
+class CollectionTypeButton(discord.ui.Button):
+    def __init__(
+        self,
+        on_click: OnDatabaseChoiceButton,
+        *,
+        label: str,
+        custom_id: str,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+    ) -> None:
+        super().__init__(label=label, style=style, custom_id=custom_id)
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class CollectionTypeChoiceView(SetupWizardStepView):
+    """Step 4, part 2 (reached from Create New): "What type of collection
+    would you like to create?"
+
+    Contextual Database Resolution: guides WASH Crew through creating
+    their first suggestion database without exposing implementation
+    details like "Create a Suggestion Database" as a prompt. Every option
+    still produces the exact same SuggestionDatabase object via
+    SetupWizardService.create_new_database -- Movies/TV Shows pre-fill
+    the name, Special Collection/Custom collect it through a friendlier
+    modal, Import Existing points at the standalone /import command
+    (Discord has no way to attach a file from within this wizard's own
+    interaction flow). Mirrors ExistingDatabaseSelectView's convention
+    for transient sub-screens: Cancel only, no Back/Save & Finish Later.
+    """
+
+    def __init__(
+        self,
+        on_movies: OnDatabaseChoiceButton,
+        on_tv_shows: OnDatabaseChoiceButton,
+        on_special_collection: OnDatabaseChoiceButton,
+        on_custom: OnDatabaseChoiceButton,
+        on_import_existing: OnDatabaseChoiceButton,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(
+            CollectionTypeButton(
+                on_movies,
+                label="Movies (Recommended)",
+                custom_id="wpm_setup_database_type_movies",
+                style=discord.ButtonStyle.primary,
+            )
+        )
+        self.add_item(CollectionTypeButton(on_tv_shows, label="TV Shows", custom_id="wpm_setup_database_type_tv_shows"))
+        self.add_item(
+            CollectionTypeButton(
+                on_special_collection, label="Special Collection", custom_id="wpm_setup_database_type_special"
+            )
+        )
+        self.add_item(CollectionTypeButton(on_custom, label="Custom", custom_id="wpm_setup_database_type_custom"))
+        self.add_item(
+            CollectionTypeButton(
+                on_import_existing, label="Import Existing Database", custom_id="wpm_setup_database_type_import"
+            )
+        )
+        self.add_item(SetupCancelButton(on_cancel))
+
+
+class ImportExistingDatabaseNoticeView(SetupWizardStepView):
+    """Shown after choosing Import Existing Database. Discord does not
+    allow attaching a file from within an existing interaction flow, so
+    this points at running /import directly instead of faking an
+    in-wizard upload.
+    """
+
+    def __init__(self, on_back: OnBack, on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupCancelButton(on_cancel))
+
+
 class SuggestionDatabaseChoiceView(SetupWizardStepView):
     """Step 4, part 1: select an existing suggestion database, or create one."""
 
@@ -398,7 +479,7 @@ class ExistingDatabaseSelect(discord.ui.Select):
             discord.SelectOption(label=name[:100], value=str(database_id))
             for database_id, name in databases[:25]
         ]
-        super().__init__(placeholder="Choose a suggestion database", options=options, custom_id="wpm_setup_database_select")
+        super().__init__(placeholder="Choose a collection", options=options, custom_id="wpm_setup_database_select")
         self._on_select = on_select
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -428,12 +509,25 @@ class ExistingDatabaseSelectView(SetupWizardStepView):
 
 
 class CreateDatabaseNameModal(discord.ui.Modal):
-    """Step 4, part 2b (1 of 2): collect the new database's name."""
+    """Step 4, part 2b (1 of 2): collect the new collection's name.
 
-    def __init__(self, on_submit: OnDatabaseNameSubmit) -> None:
-        super().__init__(title="New Suggestion Database")
+    title/label/placeholder default to the original generic wording so
+    every existing caller keeps working unchanged; CollectionTypeChoiceView's
+    Special Collection and Custom options pass friendlier wording instead
+    (see their callbacks in bot.py).
+    """
+
+    def __init__(
+        self,
+        on_submit: OnDatabaseNameSubmit,
+        *,
+        title: str = "New Suggestion Database",
+        label: str = "Database name",
+        placeholder: Optional[str] = None,
+    ) -> None:
+        super().__init__(title=title)
         self._submit_callback = on_submit
-        self.name_input = discord.ui.TextInput(label="Database name", required=True)
+        self.name_input = discord.ui.TextInput(label=label, required=True, placeholder=placeholder)
         self.add_item(self.name_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -462,8 +556,80 @@ class DestinationChannelSelect(discord.ui.ChannelSelect):
         await self._on_select(interaction, self.values[0].id)
 
 
-class CreateDatabaseChannelSelectView(SetupWizardStepView):
-    """Step 4, part 2b (2 of 2): pick the new database's channel or thread."""
+# --- Suggestion Destination Creation --------------------------------------------------------
+#
+# Every collection MUST have exactly one dedicated suggestion destination
+# (a text channel or public thread). Rather than only offering a single
+# unified "pick an existing channel or thread" select, this offers a
+# genuine choice: create a brand-new channel (with a suggested or custom
+# name), or pick from existing channels/threads separately -- never
+# forced into a default.
+
+_DESTINATION_NAME_SUGGESTIONS = ["Movie Suggestions", "TV Suggestions", "Halloween"]
+CUSTOM_DESTINATION_NAME_VALUE = "__custom_name__"
+
+_EXISTING_CHANNEL_TYPES = [discord.ChannelType.text]
+_EXISTING_THREAD_TYPES = [discord.ChannelType.public_thread, discord.ChannelType.private_thread]
+
+
+class CreateNewChannelButton(discord.ui.Button):
+    def __init__(self, on_click: OnDatabaseChoiceButton) -> None:
+        super().__init__(
+            label="Create New Channel (Recommended)",
+            style=discord.ButtonStyle.primary,
+            custom_id="wpm_setup_destination_create_channel",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class UseExistingChannelButton(discord.ui.Button):
+    def __init__(self, on_click: OnDatabaseChoiceButton) -> None:
+        super().__init__(
+            label="Use Existing Channel", style=discord.ButtonStyle.secondary, custom_id="wpm_setup_destination_existing_channel"
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class UseExistingThreadButton(discord.ui.Button):
+    def __init__(self, on_click: OnDatabaseChoiceButton) -> None:
+        super().__init__(
+            label="Use Existing Thread", style=discord.ButtonStyle.secondary, custom_id="wpm_setup_destination_existing_thread"
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class DestinationCreationChoiceView(SetupWizardStepView):
+    """Step 4, part 2b (2 of 2, new): choose how this collection's one
+    required suggestion destination is obtained.
+    """
+
+    def __init__(
+        self,
+        on_create_channel: OnDatabaseChoiceButton,
+        on_existing_channel: OnDatabaseChoiceButton,
+        on_existing_thread: OnDatabaseChoiceButton,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(CreateNewChannelButton(on_create_channel))
+        self.add_item(UseExistingChannelButton(on_existing_channel))
+        self.add_item(UseExistingThreadButton(on_existing_thread))
+        self.add_item(SetupCancelButton(on_cancel))
+
+
+class ExistingChannelSelectView(SetupWizardStepView):
+    """Use Existing Channel: text channels only."""
 
     def __init__(
         self, on_select: OnChannelSelected, on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None
@@ -472,10 +638,58 @@ class CreateDatabaseChannelSelectView(SetupWizardStepView):
         self.add_item(
             DestinationChannelSelect(
                 on_select,
-                custom_id="wpm_setup_database_channel_select",
-                placeholder="Choose the channel or thread for this database",
+                custom_id="wpm_setup_destination_existing_channel_select",
+                placeholder="Choose an existing text channel",
+                channel_types=_EXISTING_CHANNEL_TYPES,
             )
         )
+        self.add_item(SetupCancelButton(on_cancel))
+
+
+class ExistingThreadSelectView(SetupWizardStepView):
+    """Use Existing Thread: public or private threads only."""
+
+    def __init__(
+        self, on_select: OnChannelSelected, on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None
+    ) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(
+            DestinationChannelSelect(
+                on_select,
+                custom_id="wpm_setup_destination_existing_thread_select",
+                placeholder="Choose an existing thread",
+                channel_types=_EXISTING_THREAD_TYPES,
+            )
+        )
+        self.add_item(SetupCancelButton(on_cancel))
+
+
+class DestinationNameSelect(discord.ui.Select):
+    def __init__(self, on_select: "OnDestinationNameChosen") -> None:
+        options = [discord.SelectOption(label=name, value=name) for name in _DESTINATION_NAME_SUGGESTIONS] + [
+            discord.SelectOption(label="Custom Name", value=CUSTOM_DESTINATION_NAME_VALUE)
+        ]
+        super().__init__(
+            placeholder="Choose a name for the new channel",
+            options=options,
+            custom_id="wpm_setup_destination_name_select",
+        )
+        self._on_select = on_select
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_select(interaction, self.values[0])
+
+
+class DestinationNameChoiceView(SetupWizardStepView):
+    """Suggested default names for the new channel, or Custom Name --
+    administrators are never forced into a default.
+    """
+
+    def __init__(
+        self, on_select: "OnDestinationNameChosen", on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None
+    ) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(DestinationNameSelect(on_select))
         self.add_item(SetupCancelButton(on_cancel))
 
 
@@ -655,10 +869,13 @@ class ModalStepIntroView(SetupWizardStepView):
 class VotingDefaultsModal(discord.ui.Modal):
     """Default nominee count, duration, and visibility.
 
-    Candidate selection is chosen separately, via CandidateSelectionSelectComponent
-    on VotingDefaultsIntroView/ConfigVotingDefaultsIntroView -- Discord
-    modals cannot contain Select menus, so it can no longer live here as
-    a free-text field once it became a dropdown.
+    Candidate selection is per-database (Contextual Database Resolution)
+    and is chosen separately, via CandidateSelectionSelectComponent on
+    VotingDefaultsIntroView (/setup, where exactly one database exists
+    so far) or /config's Manage Databases -> a specific database ->
+    Candidate Selection screen -- Discord modals cannot contain Select
+    menus, so it can no longer live here as a free-text field once it
+    became a dropdown.
     """
 
     def __init__(self, on_submit: OnVotingDefaultsSubmit, *, defaults: Optional[Tuple[str, str, str]] = None) -> None:
@@ -694,8 +911,9 @@ class CandidateSelectionSelectComponent(discord.ui.Select):
 
     Persists exactly the same CandidateSelectionMode values as before
     (option value == CandidateSelectionMode.value); only the input
-    mechanism changed. Reused, unchanged, by both /setup's
-    VotingDefaultsIntroView and /config's ConfigVotingDefaultsIntroView.
+    mechanism changed. Reused, unchanged, by /setup's
+    VotingDefaultsIntroView and /config's
+    ConfigDatabaseCandidateSelectionView (config_view.py).
     """
 
     def __init__(self, *, default: CandidateSelectionMode) -> None:

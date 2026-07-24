@@ -65,8 +65,7 @@ class ConfigSection(str, Enum):
     WATCH_PARTY_ROLE = "watch_party_role"
     WATCH_PARTY_JOIN_MODE = "watch_party_join_mode"
     ADMIN_CHANNEL = "admin_channel"
-    SUGGESTION_DATABASE = "suggestion_database"
-    SUGGESTION_DESTINATION = "suggestion_destination"
+    MANAGE_COLLECTIONS = "manage_collections"
     WATCH_DESTINATION = "watch_destination"
     VOTING_DEFAULTS = "voting_defaults"
     REMINDER_DEFAULTS = "reminder_defaults"
@@ -78,8 +77,7 @@ CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
     ConfigSection.WATCH_PARTY_ROLE,
     ConfigSection.WATCH_PARTY_JOIN_MODE,
     ConfigSection.ADMIN_CHANNEL,
-    ConfigSection.SUGGESTION_DATABASE,
-    ConfigSection.SUGGESTION_DESTINATION,
+    ConfigSection.MANAGE_COLLECTIONS,
     ConfigSection.WATCH_DESTINATION,
     ConfigSection.VOTING_DEFAULTS,
     ConfigSection.REMINDER_DEFAULTS,
@@ -91,18 +89,12 @@ CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
     ConfigSection.WATCH_PARTY_ROLE: "Watch Party Role",
     ConfigSection.WATCH_PARTY_JOIN_MODE: "Watch Party Join Mode",
     ConfigSection.ADMIN_CHANNEL: "Admin Channel",
-    ConfigSection.SUGGESTION_DATABASE: "Active Suggestion Database",
-    ConfigSection.SUGGESTION_DESTINATION: "Suggestion Post Destination",
-    ConfigSection.WATCH_DESTINATION: "Watched Movie Destination",
+    ConfigSection.MANAGE_COLLECTIONS: "Manage Collections",
+    ConfigSection.WATCH_DESTINATION: "Watched Movie Destination (Default)",
     ConfigSection.VOTING_DEFAULTS: "Voting Defaults",
     ConfigSection.REMINDER_DEFAULTS: "Reminder Defaults",
     ConfigSection.BACKUP_DEFAULTS: "Backup Defaults",
 }
-
-NO_DATABASE_CONFIGURED_MESSAGE = (
-    "Select an Active Suggestion Database first (exactly one active "
-    "database is required before this section can be edited)."
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,25 +132,6 @@ class ConfigService:
     def get_configuration(self, guild_id: int) -> Optional[GuildConfiguration]:
         """Return the guild's saved configuration, or None if setup was never completed."""
         return self._guild_configuration_repository.get(guild_id)
-
-    def resolve_configured_database(self, guild_id: int) -> Optional[SuggestionDatabase]:
-        """Return "the" active suggestion database for this guild, if unambiguous.
-
-        Watched Movie Destination and Voting Defaults' candidate-selection
-        both live on a specific database's SuggestionDatabaseConfiguration
-        (see docs/guild_configuration_spec.md's deferred-reconciliation
-        note, also honored by setup_wizard_service.py). Multiple databases
-        may be simultaneously active (SuggestionDatabase.active is a plain
-        per-database flag, not an exclusive selector -- see
-        SuggestionService.resolve_database_for_channel's own docstring),
-        so this only resolves when exactly one active database exists;
-        otherwise the caller should direct WASH Crew to the Active
-        Suggestion Database section first.
-        """
-        active = [database for database in self._suggestion_service.list_databases(guild_id) if database.active]
-        if len(active) == 1:
-            return active[0]
-        return None
 
     def build_summary_lines(self, guild_id: int, guild: GuildLookup) -> List[str]:
         """Build one status-prefixed summary line per section for the main menu.
@@ -201,48 +174,31 @@ class ConfigService:
         else:
             lines.append(f"Admin Channel: Configured (<#{admin_channel_id}>)")
 
-        active_databases = [
-            database for database in self._suggestion_service.list_databases(guild_id) if database.active
-        ]
-        if len(active_databases) == 1:
-            lines.append(f'Active Suggestion Database: Configured ("{active_databases[0].name}")')
-        elif len(active_databases) == 0:
-            lines.append("Active Suggestion Database: Not configured")
+        databases = self._suggestion_service.list_databases(guild_id)
+        active_databases = [database for database in databases if database.active]
+        if not databases:
+            lines.append("Manage Collections: Not configured")
         else:
-            lines.append("Active Suggestion Database: Invalid (multiple active databases; select one below)")
-
-        suggestion_destination_channel_id = self._resolve_suggestion_destination_channel_id(guild_id)
-        if suggestion_destination_channel_id is None:
-            if len(active_databases) == 1:
-                lines.append("Suggestion Post Destination: Skipped")
-            else:
-                lines.append("Suggestion Post Destination: Not configured")
-        elif validate_channel_usable(suggestion_destination_channel_id, guild):
             lines.append(
-                f"Suggestion Post Destination: Invalid (<#{suggestion_destination_channel_id}> no longer usable)"
+                f"Manage Collections: Configured ({len(active_databases)} active of {len(databases)} total -- "
+                "select below to edit each collection's destination and candidate selection)"
+            )
+
+        watch_destination_channel_id = configuration.channels.watch_history_channel_id
+        if watch_destination_channel_id is None:
+            lines.append("Watched Movie Destination (Default): Not configured")
+        elif validate_channel_usable(watch_destination_channel_id, guild):
+            lines.append(
+                f"Watched Movie Destination (Default): Invalid (<#{watch_destination_channel_id}> no longer usable)"
             )
         else:
-            lines.append(f"Suggestion Post Destination: Configured (<#{suggestion_destination_channel_id}>)")
-
-        destination_channel_id = self._resolve_watch_destination_channel_id(guild_id)
-        if destination_channel_id is None:
-            if len(active_databases) == 1:
-                lines.append("Watched Movie Destination: Skipped")
-            else:
-                lines.append("Watched Movie Destination: Not configured")
-        elif validate_channel_usable(destination_channel_id, guild):
-            lines.append(f"Watched Movie Destination: Invalid (<#{destination_channel_id}> no longer usable)")
-        else:
-            lines.append(f"Watched Movie Destination: Configured (<#{destination_channel_id}>)")
+            lines.append(f"Watched Movie Destination (Default): Configured (<#{watch_destination_channel_id}>)")
 
         voting_defaults = configuration.voting_defaults
-        candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[
-            self._resolve_candidate_selection(guild_id)
-        ]
         lines.append(
             "Voting Defaults: Configured "
             f"({voting_defaults.candidate_count} candidates, {format_duration_hours(voting_defaults.duration_hours)}, "
-            f"{voting_defaults.visibility.value}, candidate selection: {candidate_selection_label})"
+            f"{voting_defaults.visibility.value})"
         )
 
         vote_notifications = configuration.notifications.vote
@@ -262,44 +218,23 @@ class ConfigService:
 
         return lines
 
-    def _resolve_watch_destination_channel_id(self, guild_id: int) -> Optional[int]:
-        database = self.resolve_configured_database(guild_id)
-        if database is None:
-            return None
-        database_configuration = self._suggestion_database_configuration_repository.get(
-            guild_id, database.database_id
-        )
-        if database_configuration is None:
-            return None
-        return database_configuration.channels.watch_history_channel_id
-
-    def _resolve_suggestion_destination_channel_id(self, guild_id: int) -> Optional[int]:
-        database = self.resolve_configured_database(guild_id)
-        if database is None:
-            return None
-        database_configuration = self._suggestion_database_configuration_repository.get(
-            guild_id, database.database_id
-        )
-        if database_configuration is None:
-            return None
-        return database_configuration.channels.suggestion_channel_id
-
-    def _resolve_candidate_selection(self, guild_id: int) -> CandidateSelectionMode:
-        """The active database's candidate-selection mode, or the documented
-        default (ROTATION_POOL) when no single active database or saved
-        configuration exists yet -- mirrors SuggestionRulesConfig's own
-        default so the summary never shows a value nothing has actually
-        set.
+    def resolve_effective_watch_destination(self, guild_id: int, database_id: int) -> Optional[int]:
+        """The channel where a collection's watched-movie history should
+        post: its own override if set, otherwise the guild-wide default
+        (Watched Movie Destination (Default) section), otherwise None
+        (nothing posted). Unlike a suggestion destination, this may
+        legitimately be None, and the same channel may be shared by any
+        number of collections and/or the guild default -- never checked
+        for conflicts.
         """
-        database = self.resolve_configured_database(guild_id)
-        if database is None:
-            return CandidateSelectionMode.ROTATION_POOL
-        database_configuration = self._suggestion_database_configuration_repository.get(
-            guild_id, database.database_id
-        )
-        if database_configuration is None:
-            return CandidateSelectionMode.ROTATION_POOL
-        return database_configuration.suggestion_rules.candidate_selection
+        database_configuration = self._suggestion_database_configuration_repository.get(guild_id, database_id)
+        if database_configuration is not None and database_configuration.channels.watch_history_channel_id is not None:
+            return database_configuration.channels.watch_history_channel_id
+
+        configuration = self.get_configuration(guild_id)
+        if configuration is None:
+            return None
+        return configuration.channels.watch_history_channel_id
 
     # --- WASH Crew Role ------------------------------------------------------------
 
@@ -377,56 +312,95 @@ class ConfigService:
         self._guild_configuration_repository.save(updated)
         return ConfigUpdateResult(True, "Admin channel cleared.", updated)
 
-    # --- Active Suggestion Database ------------------------------------------------------------
+    # --- Watched Movie Destination (guild-wide default) -----------------------------------
 
-    def set_active_suggestion_database(self, guild_id: int, database_id: int) -> ConfigUpdateResult:
+    def set_guild_watch_destination(self, guild_id: int, channel_id: int, guild: GuildLookup) -> ConfigUpdateResult:
         configuration = self.get_configuration(guild_id)
         if configuration is None:
             return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
 
+        error = validate_channel_usable(channel_id, guild)
+        if error:
+            return ConfigUpdateResult(False, error)
+
+        updated = replace(configuration, channels=replace(configuration.channels, watch_history_channel_id=channel_id))
+        self._guild_configuration_repository.save(updated)
+        return ConfigUpdateResult(True, f"Default watched movie destination updated to <#{channel_id}>.", updated)
+
+    def clear_guild_watch_destination(self, guild_id: int) -> ConfigUpdateResult:
+        configuration = self.get_configuration(guild_id)
+        if configuration is None:
+            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
+
+        updated = replace(configuration, channels=replace(configuration.channels, watch_history_channel_id=None))
+        self._guild_configuration_repository.save(updated)
+        return ConfigUpdateResult(True, "Default watched movie destination cleared.", updated)
+
+    # --- Manage Collections ------------------------------------------------------------
+    #
+    # Replaces the old "Active Suggestion Database" section (which required
+    # picking exactly one database before any of its settings could be
+    # edited) with direct, per-collection management: WASH Crew picks which
+    # collection to edit (see bot.py's picker, shown whenever more than one
+    # collection exists -- never guessed), then edits that collection's own
+    # settings. No collection is ever "the" active one. Every collection
+    # always has exactly one suggestion destination -- it can be changed,
+    # but never cleared (see set_database_suggestion_destination); a
+    # watched-movie destination remains optional and may be shared freely
+    # (see resolve_effective_watch_destination above).
+
+    def _get_database_for_guild(self, guild_id: int, database_id: int) -> Optional[SuggestionDatabase]:
         database = self._suggestion_service.get_database(database_id)
         if database is None or database.guild_id != guild_id:
-            return ConfigUpdateResult(False, "That suggestion database doesn't exist.")
+            return None
+        return database
 
-        if not database.active:
-            self._suggestion_service.activate_database(database_id, guild_id)
-
-        return ConfigUpdateResult(
-            True, f'"{database.name}" is now the active suggestion database.', configuration
+    def get_database_configuration(self, guild_id: int, database_id: int) -> SuggestionDatabaseConfiguration:
+        """Return this database's saved configuration, or a fresh default
+        (never persisted until something is actually changed) if none
+        exists yet -- so callers always have a concrete object to read
+        current values from.
+        """
+        database = self._suggestion_service.get_database(database_id)
+        display_name = database.name if database is not None else ""
+        existing = self._suggestion_database_configuration_repository.get(guild_id, database_id)
+        return existing or SuggestionDatabaseConfiguration(
+            guild_id=guild_id, database_id=database_id, display_name=display_name
         )
 
-    # --- Suggestion Post Destination ------------------------------------------------------------
-
-    def set_suggestion_destination(self, guild_id: int, channel_id: int, guild: GuildLookup) -> ConfigUpdateResult:
-        database = self.resolve_configured_database(guild_id)
+    def set_database_suggestion_destination(
+        self, guild_id: int, database_id: int, channel_id: int, guild: GuildLookup
+    ) -> ConfigUpdateResult:
+        database = self._get_database_for_guild(guild_id, database_id)
         if database is None:
-            return ConfigUpdateResult(False, NO_DATABASE_CONFIGURED_MESSAGE)
+            return ConfigUpdateResult(False, "That suggestion database doesn't exist.")
 
         error = validate_channel_usable(channel_id, guild)
         if error:
             return ConfigUpdateResult(False, error)
+
+        conflict = self._suggestion_service.find_database_using_channel(
+            guild_id,
+            channel_id,
+            self._suggestion_database_configuration_repository,
+            exclude_database_id=database_id,
+        )
+        if conflict is not None:
+            return ConfigUpdateResult(
+                False, f'<#{channel_id}> is already routed to "{conflict.name}". Choose a different channel or thread.'
+            )
 
         self._save_database_channel(guild_id, database, channel_id, field_name="suggestion_channel_id")
         return ConfigUpdateResult(
             True, f"Suggestion post destination updated to <#{channel_id}>.", self.get_configuration(guild_id)
         )
 
-    def skip_suggestion_destination(self, guild_id: int) -> ConfigUpdateResult:
-        database = self.resolve_configured_database(guild_id)
+    def set_database_watch_destination(
+        self, guild_id: int, database_id: int, channel_id: int, guild: GuildLookup
+    ) -> ConfigUpdateResult:
+        database = self._get_database_for_guild(guild_id, database_id)
         if database is None:
-            return ConfigUpdateResult(False, NO_DATABASE_CONFIGURED_MESSAGE)
-
-        self._save_database_channel(guild_id, database, None, field_name="suggestion_channel_id")
-        return ConfigUpdateResult(
-            True, "Suggestion post destination cleared.", self.get_configuration(guild_id)
-        )
-
-    # --- Watched Movie Destination ------------------------------------------------------------
-
-    def set_watch_destination(self, guild_id: int, channel_id: int, guild: GuildLookup) -> ConfigUpdateResult:
-        database = self.resolve_configured_database(guild_id)
-        if database is None:
-            return ConfigUpdateResult(False, NO_DATABASE_CONFIGURED_MESSAGE)
+            return ConfigUpdateResult(False, "That suggestion database doesn't exist.")
 
         error = validate_channel_usable(channel_id, guild)
         if error:
@@ -437,23 +411,36 @@ class ConfigService:
             True, f"Watched movie destination updated to <#{channel_id}>.", self.get_configuration(guild_id)
         )
 
-    def skip_watch_destination(self, guild_id: int) -> ConfigUpdateResult:
-        database = self.resolve_configured_database(guild_id)
+    def clear_database_watch_destination(self, guild_id: int, database_id: int) -> ConfigUpdateResult:
+        database = self._get_database_for_guild(guild_id, database_id)
         if database is None:
-            return ConfigUpdateResult(False, NO_DATABASE_CONFIGURED_MESSAGE)
+            return ConfigUpdateResult(False, "That suggestion database doesn't exist.")
 
         self._save_database_channel(guild_id, database, None, field_name="watch_history_channel_id")
         return ConfigUpdateResult(
             True, "Watched movie destination cleared.", self.get_configuration(guild_id)
         )
 
+    def set_database_candidate_selection(
+        self, guild_id: int, database_id: int, candidate_selection: CandidateSelectionMode
+    ) -> ConfigUpdateResult:
+        database = self._get_database_for_guild(guild_id, database_id)
+        if database is None:
+            return ConfigUpdateResult(False, "That suggestion database doesn't exist.")
+
+        base = self.get_database_configuration(guild_id, database_id)
+        self._suggestion_database_configuration_repository.save(
+            replace(base, suggestion_rules=replace(base.suggestion_rules, candidate_selection=candidate_selection))
+        )
+        label = CANDIDATE_SELECTION_DISPLAY_LABELS[candidate_selection]
+        return ConfigUpdateResult(
+            True, f'Candidate selection for "{database.name}" updated to {label}.', self.get_configuration(guild_id)
+        )
+
     def _save_database_channel(
         self, guild_id: int, database: SuggestionDatabase, channel_id: Optional[int], *, field_name: str
     ) -> None:
-        existing = self._suggestion_database_configuration_repository.get(guild_id, database.database_id)
-        base = existing or SuggestionDatabaseConfiguration(
-            guild_id=guild_id, database_id=database.database_id, display_name=database.name
-        )
+        base = self.get_database_configuration(guild_id, database.database_id)
         updated = replace(base, channels=replace(base.channels, **{field_name: channel_id}))
         self._suggestion_database_configuration_repository.save(updated)
 
@@ -465,7 +452,6 @@ class ConfigService:
         candidate_count: int,
         duration_hours: int,
         visibility: GuildVoteVisibility,
-        candidate_selection: CandidateSelectionMode,
     ) -> ConfigUpdateResult:
         configuration = self.get_configuration(guild_id)
         if configuration is None:
@@ -482,23 +468,6 @@ class ConfigService:
             ),
         )
         self._guild_configuration_repository.save(updated)
-
-        database = self.resolve_configured_database(guild_id)
-        if database is None:
-            return ConfigUpdateResult(
-                True,
-                "Voting defaults updated. Candidate selection was not saved: "
-                "no single active suggestion database is configured.",
-                updated,
-            )
-
-        existing = self._suggestion_database_configuration_repository.get(guild_id, database.database_id)
-        base = existing or SuggestionDatabaseConfiguration(
-            guild_id=guild_id, database_id=database.database_id, display_name=database.name
-        )
-        self._suggestion_database_configuration_repository.save(
-            replace(base, suggestion_rules=replace(base.suggestion_rules, candidate_selection=candidate_selection))
-        )
         return ConfigUpdateResult(True, "Voting defaults updated.", updated)
 
     # --- Reminder Defaults ------------------------------------------------------------

@@ -187,15 +187,28 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 2.5 Suggestion database (post destination)
+### 2.5 Collection (suggestion destination)
 
-- **Objective:** Confirm a suggestion database can be created and tied to a channel or public thread during setup.
-- **Preconditions:** Test 2.1 in progress, reached the Suggestion Database step.
+- **Objective:** Confirm a collection (internally an ordinary `SuggestionDatabase` record) can be created with exactly one dedicated suggestion destination during setup, via the guided collection-type flow, and that administrators are never forced into a default channel name.
+- **Preconditions:** Test 2.1 in progress, reached the Collection step.
 - **Steps:**
-  1. Choose **Create New**.
-  2. Name the database.
-  3. Select a text channel (repeat this test later with a public thread instead, if time allows).
-- **Expected Result:** The database is created and associated with the chosen channel/thread; this becomes the suggestion post destination.
+  1. Choose **Create New**; confirm a "What type of collection would you like to create?" screen appears with **Movies (Recommended)**, **TV Shows**, **Special Collection**, **Custom**, and **Import Existing Database**.
+  2. Choose **Movies**; confirm no name prompt appears and a "How should ... get its suggestion destination?" screen opens with **Create New Channel (Recommended)**, **Use Existing Channel**, and **Use Existing Thread**.
+  3. Choose **Create New Channel**; confirm suggested names (e.g. "Movie Suggestions", "TV Suggestions", "Halloween") plus a **Custom Name** option appear, and that choosing **Custom Name** opens a modal instead of forcing one of the suggestions. Confirm the new text channel is actually created in the server.
+  4. Separately, repeat choosing **Use Existing Channel**, then **Use Existing Thread**; confirm each shows a picker filtered to that type only.
+  5. Separately, repeat with **Special Collection** or **Custom**; confirm a name prompt appears before the destination-creation choice.
+  6. Separately, click **Import Existing Database**; confirm WASH explains that `/import` must be run as its own command (Discord does not allow attaching a file from inside this wizard) and offers a way back to the type-choice screen.
+- **Expected Result:** Movies/TV Shows create a collection named exactly that with no name prompt; Special Collection/Custom collect a name first; every creation path ends with the collection associated with the chosen or newly-created channel/thread, which becomes its one required suggestion destination (and, internally, all remain ordinary `SuggestionDatabase` records). Import Existing never fakes an in-wizard upload.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 2.5b Duplicate destination is rejected (Conflict Prevention)
+
+- **Objective:** Confirm a channel or thread already used by one database cannot be assigned to a second one.
+- **Preconditions:** At least one suggestion database already exists, tied to a known channel.
+- **Steps:**
+  1. Create a second database (via the Setup Wizard's Create New flow, or `/database_add`) and attempt to select the same channel already used by the first database.
+- **Expected Result:** WASH shows a clear error naming the conflict and does not create the second database (or does not save the destination change); routing never becomes ambiguous.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -206,6 +219,20 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Select a destination channel, or click **Skip for Now**.
 - **Expected Result:** The choice advances the wizard and is reflected correctly on the Review step.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 2.6b Guild-wide default Watched Movie Destination (`/config`)
+
+- **Objective:** Confirm `/config`'s Watched Movie Destination (Default) section sets a guild-wide fallback, and that a collection's own override takes precedence when both are set.
+- **Preconditions:** Setup completed; at least one collection exists.
+- **Steps:**
+  1. Run `/config` -> **Watched Movie Destination (Default)**; set it to a channel, or clear it.
+  2. Run `/config` -> **Manage Collections** -> a collection -> its Watched Movie Destination; confirm the screen shows both "This collection's own override" and "Currently effective" values.
+  3. With no per-collection override set, confirm "Currently effective" matches the guild default from step 1.
+  4. Set a per-collection override to a different channel; confirm "Currently effective" now shows the override, not the guild default.
+  5. Clear the per-collection override; confirm "Currently effective" falls back to the guild default again.
+- **Expected Result:** The guild-wide default may be unset (None) or shared across any number of collections -- unlike a suggestion destination, watched destinations are never checked for conflicts. A collection's own override, when set, always wins over the guild default.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -289,7 +316,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** Section 2 completed.
 - **Steps:**
   1. Run `/config` as WASH Crew.
-- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Active Suggestion Database, Suggestion Post Destination, Watched Movie Destination, Voting Defaults, Reminder Defaults, Backup Defaults) appears, each showing its current status (Configured/Not configured/Skipped/Invalid).
+- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Manage Collections, Watched Movie Destination (Default), Voting Defaults, Reminder Defaults, Backup Defaults) appears, each showing its current status.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -328,14 +355,15 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 3.5 Active database with multiple databases configured
+### 3.5 Contextual resolution with multiple databases configured
 
-- **Objective:** Confirm behavior is well-defined when more than one suggestion database exists.
-- **Preconditions:** At least two active suggestion databases in the same guild.
+- **Objective:** Confirm behavior is well-defined when more than one suggestion database exists -- WASH resolves the database from context (channel/thread), never from a guild-wide "active" pointer.
+- **Preconditions:** At least two active suggestion databases in the same guild, each tied to a different channel.
 - **Steps:**
-  1. Run `/config`'s Active Suggestion Database section and confirm it reports the ambiguity (rather than silently picking one) or lets you select one explicitly.
-  2. Run `/add` in a channel not tied to either database and confirm WASH shows a picker instead of guessing.
-- **Expected Result:** WASH never silently guesses between multiple active databases; it always asks or reports the ambiguity clearly.
+  1. Run `/add`, `/list`, `/start_vote`, or `/stats type:Rotation`/`type:Database` inside one database's configured channel or thread; confirm WASH uses that database automatically, with no prompt.
+  2. Run the same command in a channel not tied to either database; confirm WASH asks "Which collection would you like to use?" with a picker listing both instead of guessing.
+  3. Run `/config` -> **Manage Collections**; confirm both collections are listed and each is directly, independently editable (destinations and candidate selection) -- neither is reported as "Invalid" for being simultaneously active.
+- **Expected Result:** WASH never silently guesses between multiple databases; a matching channel resolves automatically, and an unmatched channel always shows a picker.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -388,7 +416,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 ### 4.5 Suggestion posting to a public thread destination
 
 - **Objective:** Confirm a public thread works identically to a text channel as a suggestion destination, and that `/add` run *inside* that thread resolves the same database `/config` reports for it.
-- **Preconditions:** A suggestion database whose configured post destination is a public thread (change it via `/config`'s Suggestion Post Destination section if the database's original channel differs).
+- **Preconditions:** A suggestion database whose configured post destination is a public thread (change it via `/config` -> Manage Collections -> the collection -> Suggestion Destination, if the database's original channel differs).
 - **Steps:**
   1. Confirm `/config` reports the thread as the configured Suggestion Post Destination.
   2. Run `/add` from inside that thread.

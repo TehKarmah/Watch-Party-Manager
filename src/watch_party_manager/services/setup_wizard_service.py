@@ -249,9 +249,12 @@ class SetupWizardService:
 
         Reuses SuggestionService.create_database() unchanged -- the
         wizard never duplicates its validation (duplicate names,
-        one-database-per-channel, etc.).
+        one-database-per-channel, one-database-per-configured-suggestion-
+        destination, etc.).
         """
-        result = self._suggestion_service.create_database(name, guild_id, channel_id)
+        result = self._suggestion_service.create_database(
+            name, guild_id, channel_id, suggestion_database_configuration_repository=self._suggestion_database_configuration_repository
+        )
         if not result.success:
             return state, result.message
 
@@ -349,11 +352,11 @@ class SetupWizardService:
         if draft.suggestion_database_id is not None:
             action = "created" if draft.suggestion_database_is_new else "selected"
             lines.append(
-                f'Suggestion Database: Configured ({action} "{draft.suggestion_database_name}" '
+                f'Collection: Configured ({action} "{draft.suggestion_database_name}" '
                 f"#{draft.suggestion_database_id})"
             )
         else:
-            lines.append("Suggestion Database: Incomplete")
+            lines.append("Collection: Incomplete")
 
         if draft.watch_destination_skipped:
             lines.append("Watched Movie Destination: Skipped")

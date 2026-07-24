@@ -81,9 +81,10 @@ class FakeResponse:
 
 
 class FakeInteraction:
-    def __init__(self, user=None, guild_id=GUILD_ID) -> None:
+    def __init__(self, user=None, guild_id=GUILD_ID, guild=None) -> None:
         self.user = user if user is not None else FakeMember(1)
         self.guild_id = guild_id
+        self.guild = guild
         self.response = FakeResponse()
         self.followup = FakeFollowup()
 

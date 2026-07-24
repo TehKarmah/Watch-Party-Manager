@@ -414,7 +414,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
         self.assertIn(f"WASH Crew Role: Configured (<@&{WASH_CREW_ROLE_ID}>)", interaction.response.sent_message)
-        self.assertIn("Suggestion Database: Incomplete", interaction.response.sent_message)
+        self.assertIn("Collection: Incomplete", interaction.response.sent_message)
         self.assertIsInstance(interaction.response.sent_view, ReviewStepView)
 
     async def test_save_with_incomplete_draft_shows_issues_and_returns_to_the_failing_step(self) -> None:
@@ -604,7 +604,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         back_button = next(c for c in view.children if isinstance(c, SetupBackButton))
         back_interaction = FakeInteraction()
         await back_button.callback(interaction=back_interaction)
-        self.assertIn("Suggestion Database", back_interaction.response.edited_content)
+        self.assertIn("Collection", back_interaction.response.edited_content)
 
     async def test_unauthorized_user_cannot_use_another_administrators_wizard_controls(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
@@ -1019,14 +1019,19 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         result = self.bot.setup_wizard_service.finalize(state, GUILD_ID, "Test Guild", FakeGuild())
         self.assertTrue(result.success, result.message)
 
+        # Candidate selection is per-database (Manage Databases), not a
+        # guild-wide summary line -- read it back the same way /config's
+        # Manage Databases screen would, by database_id.
         config_service = ConfigService(
             self.guild_configuration_repository,
             self.suggestion_service,
             self.suggestion_database_configuration_repository,
         )
-        lines = config_service.build_summary_lines(GUILD_ID, FakeGuild())
+        database_configuration = config_service.get_database_configuration(
+            GUILD_ID, database_result.database.database_id
+        )
 
-        self.assertTrue(any("Soft Rotation" in line for line in lines))
+        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
 
     async def test_older_persisted_database_configuration_defaults_to_balanced_random(self) -> None:
         # A database configuration saved before candidate_selection existed
@@ -1061,14 +1066,16 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         self.assertTrue(result.success, result.message)
 
         # No explicit /config edit ever touched suggestion_rules -- the
-        # active database's configuration still resolves cleanly.
+        # database's configuration still resolves cleanly.
         config_service = ConfigService(
             self.guild_configuration_repository,
             self.suggestion_service,
             self.suggestion_database_configuration_repository,
         )
-        lines = config_service.build_summary_lines(GUILD_ID, FakeGuild())
-        self.assertTrue(any("Balanced Random" in line for line in lines))
+        database_configuration = config_service.get_database_configuration(
+            GUILD_ID, database_result.database.database_id
+        )
+        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
 
 
 class SetupPreparationScreenIntegrationTests(SetupCommandTestCase):
@@ -1274,6 +1281,353 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
 
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertTrue(persisted.draft.watch_destination_skipped)
+
+
+class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
+    """Contextual Database Resolution: Setup Wizard's guided "what type of
+    collection" flow, replacing the old direct "Create a Suggestion
+    Database" name prompt. Every option still ends up calling
+    SetupWizardService.create_new_database() unchanged.
+    """
+
+    async def _reach_collection_type_choice(self):
+        from watch_party_manager.setup_wizard_view import CollectionTypeChoiceView, SuggestionDatabaseChoiceView
+
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.SUGGESTION_DATABASE)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        self.assertIsInstance(interaction.response.sent_view, SuggestionDatabaseChoiceView)
+        create_new_button = interaction.response.sent_view.children[1]
+
+        type_interaction = FakeInteraction()
+        await create_new_button.callback(interaction=type_interaction)
+        self.assertIsInstance(type_interaction.response.edited_view, CollectionTypeChoiceView)
+        return type_interaction.response.edited_view
+
+    async def _reach_channel_select_from_creation_choice(self, creation_choice_view):
+        # DestinationCreationChoiceView: [Create New Channel, Use Existing
+        # Channel, Use Existing Thread, Cancel]. Tests exercise the
+        # existing-channel branch, matching the old single-step flow.
+        existing_channel_button = creation_choice_view.children[1]
+        self.assertEqual(existing_channel_button.label, "Use Existing Channel")
+        existing_interaction = FakeInteraction()
+        await existing_channel_button.callback(interaction=existing_interaction)
+        return existing_interaction.response.edited_view.children[0]
+
+    async def test_movies_option_creates_a_database_named_movies(self) -> None:
+        type_view = await self._reach_collection_type_choice()
+        movies_button = type_view.children[0]
+        self.assertEqual(movies_button.label, "Movies (Recommended)")
+
+        movies_interaction = FakeInteraction()
+        await movies_button.callback(interaction=movies_interaction)
+        channel_select = await self._reach_channel_select_from_creation_choice(
+            movies_interaction.response.edited_view
+        )
+
+        class FakeChannelValue:
+            id = DESTINATION_CHANNEL_ID
+
+        channel_select._values = [FakeChannelValue()]
+        channel_interaction = FakeInteraction()
+        await channel_select.callback(interaction=channel_interaction)
+
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.suggestion_database_name, "Movies")
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        self.assertEqual(databases[0].name, "Movies")
+
+    async def test_tv_shows_option_creates_a_database_named_tv_shows(self) -> None:
+        type_view = await self._reach_collection_type_choice()
+        tv_shows_button = type_view.children[1]
+        self.assertEqual(tv_shows_button.label, "TV Shows")
+
+        tv_interaction = FakeInteraction()
+        await tv_shows_button.callback(interaction=tv_interaction)
+        channel_select = await self._reach_channel_select_from_creation_choice(
+            tv_interaction.response.edited_view
+        )
+
+        class FakeChannelValue:
+            id = DESTINATION_CHANNEL_ID
+
+        channel_select._values = [FakeChannelValue()]
+        channel_interaction = FakeInteraction()
+        await channel_select.callback(interaction=channel_interaction)
+
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        self.assertEqual(databases[0].name, "TV Shows")
+
+    async def test_special_collection_option_asks_for_a_name_first(self) -> None:
+        from watch_party_manager.setup_wizard_view import CreateDatabaseNameModal
+
+        type_view = await self._reach_collection_type_choice()
+        special_button = type_view.children[2]
+        self.assertEqual(special_button.label, "Special Collection")
+
+        special_interaction = FakeInteraction()
+        await special_button.callback(interaction=special_interaction)
+
+        modal = special_interaction.response.sent_modal
+        self.assertIsInstance(modal, CreateDatabaseNameModal)
+        modal.name_input._value = "Horror Movies"
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+        channel_select = await self._reach_channel_select_from_creation_choice(
+            submit_interaction.response.edited_view
+        )
+
+        class FakeChannelValue:
+            id = DESTINATION_CHANNEL_ID
+
+        channel_select._values = [FakeChannelValue()]
+        channel_interaction = FakeInteraction()
+        await channel_select.callback(interaction=channel_interaction)
+
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        self.assertEqual(databases[0].name, "Horror Movies")
+
+    async def test_custom_option_asks_for_any_name(self) -> None:
+        from watch_party_manager.setup_wizard_view import CreateDatabaseNameModal
+
+        type_view = await self._reach_collection_type_choice()
+        custom_button = type_view.children[3]
+        self.assertEqual(custom_button.label, "Custom")
+
+        custom_interaction = FakeInteraction()
+        await custom_button.callback(interaction=custom_interaction)
+
+        modal = custom_interaction.response.sent_modal
+        self.assertIsInstance(modal, CreateDatabaseNameModal)
+        modal.name_input._value = "Book Club Adaptations"
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+        channel_select = await self._reach_channel_select_from_creation_choice(
+            submit_interaction.response.edited_view
+        )
+
+        class FakeChannelValue:
+            id = DESTINATION_CHANNEL_ID
+
+        channel_select._values = [FakeChannelValue()]
+        channel_interaction = FakeInteraction()
+        await channel_select.callback(interaction=channel_interaction)
+
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        self.assertEqual(databases[0].name, "Book Club Adaptations")
+
+    async def test_import_existing_explains_running_import_separately(self) -> None:
+        from watch_party_manager.setup_wizard_view import ImportExistingDatabaseNoticeView
+
+        type_view = await self._reach_collection_type_choice()
+        import_button = type_view.children[4]
+        self.assertEqual(import_button.label, "Import Existing Database")
+
+        import_interaction = FakeInteraction()
+        await import_button.callback(interaction=import_interaction)
+
+        self.assertIn("/import", import_interaction.response.edited_content)
+        self.assertIsInstance(import_interaction.response.edited_view, ImportExistingDatabaseNoticeView)
+
+    async def test_import_existing_back_button_returns_to_collection_type_choice(self) -> None:
+        from watch_party_manager.setup_wizard_view import CollectionTypeChoiceView
+
+        type_view = await self._reach_collection_type_choice()
+        import_button = type_view.children[4]
+        import_interaction = FakeInteraction()
+        await import_button.callback(interaction=import_interaction)
+        back_button = next(c for c in import_interaction.response.edited_view.children if getattr(c, "label", None) == "Back")
+
+        back_interaction = FakeInteraction()
+        await back_button.callback(interaction=back_interaction)
+
+        self.assertIsInstance(back_interaction.response.edited_view, CollectionTypeChoiceView)
+
+    async def test_creating_a_second_database_on_an_already_used_channel_is_rejected(self) -> None:
+        # Conflict Prevention: a channel/thread can never route to two
+        # databases at once, even when the second one is created through
+        # the guided flow during setup.
+        self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        type_view = await self._reach_collection_type_choice()
+        tv_shows_button = type_view.children[1]
+
+        tv_interaction = FakeInteraction()
+        await tv_shows_button.callback(interaction=tv_interaction)
+        channel_select = await self._reach_channel_select_from_creation_choice(
+            tv_interaction.response.edited_view
+        )
+
+        class FakeChannelValue:
+            id = DESTINATION_CHANNEL_ID
+
+        channel_select._values = [FakeChannelValue()]
+        channel_interaction = FakeInteraction()
+        await channel_select.callback(interaction=channel_interaction)
+
+        # create_new_database's failure re-renders the current step with
+        # a clear error rather than silently advancing.
+        self.assertIn("already has a suggestion database", channel_interaction.response.edited_content)
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        self.assertEqual(len(databases), 1)
+        self.assertEqual(databases[0].name, "Movies")
+
+
+class SuggestionDestinationCreationIntegrationTests(SetupCommandTestCase):
+    """Contextual Collection Model Refinement: after choosing a collection
+    type, administrators choose HOW the one required suggestion
+    destination is obtained -- create a new channel (with a suggested or
+    custom name), or pick an existing channel/thread -- never forced into
+    a default.
+    """
+
+    class FakeChannel:
+        def __init__(self, channel_id: int) -> None:
+            self.id = channel_id
+
+    class FakeHTTPResponse:
+        status = 403
+        reason = "Forbidden"
+
+    class FakeGuild:
+        def __init__(self, *, channel_id: int = 888, fail: bool = False) -> None:
+            self._channel_id = channel_id
+            self._fail = fail
+            self.created_with = None
+
+        async def create_text_channel(self, *, name):
+            self.created_with = name
+            if self._fail:
+                import discord
+
+                raise discord.HTTPException(
+                    response=SuggestionDestinationCreationIntegrationTests.FakeHTTPResponse(), message="boom"
+                )
+            return SuggestionDestinationCreationIntegrationTests.FakeChannel(self._channel_id)
+
+    async def _reach_creation_choice(self):
+        from watch_party_manager.setup_wizard_view import CollectionTypeChoiceView, SuggestionDatabaseChoiceView
+
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.SUGGESTION_DATABASE)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        self.assertIsInstance(interaction.response.sent_view, SuggestionDatabaseChoiceView)
+        create_new_button = interaction.response.sent_view.children[1]
+
+        type_interaction = FakeInteraction()
+        await create_new_button.callback(interaction=type_interaction)
+        self.assertIsInstance(type_interaction.response.edited_view, CollectionTypeChoiceView)
+
+        tv_shows_button = type_interaction.response.edited_view.children[1]
+        tv_interaction = FakeInteraction()
+        await tv_shows_button.callback(interaction=tv_interaction)
+        return tv_interaction.response.edited_view
+
+    async def test_creation_choice_offers_create_existing_channel_and_existing_thread(self) -> None:
+        from watch_party_manager.setup_wizard_view import DestinationCreationChoiceView
+
+        creation_choice_view = await self._reach_creation_choice()
+        self.assertIsInstance(creation_choice_view, DestinationCreationChoiceView)
+        labels = [getattr(c, "label", None) for c in creation_choice_view.children]
+        self.assertIn("Create New Channel (Recommended)", labels)
+        self.assertIn("Use Existing Channel", labels)
+        self.assertIn("Use Existing Thread", labels)
+
+    async def test_use_existing_thread_offers_a_thread_only_picker(self) -> None:
+        import discord
+
+        creation_choice_view = await self._reach_creation_choice()
+        use_thread_button = creation_choice_view.children[2]
+        self.assertEqual(use_thread_button.label, "Use Existing Thread")
+
+        thread_interaction = FakeInteraction()
+        await use_thread_button.callback(interaction=thread_interaction)
+        thread_select = thread_interaction.response.edited_view.children[0]
+        self.assertEqual(
+            set(thread_select.channel_types),
+            {discord.ChannelType.public_thread, discord.ChannelType.private_thread},
+        )
+
+    async def test_create_new_channel_offers_suggested_names_and_custom_name(self) -> None:
+        from watch_party_manager.setup_wizard_view import (
+            CUSTOM_DESTINATION_NAME_VALUE,
+            DestinationNameChoiceView,
+        )
+
+        creation_choice_view = await self._reach_creation_choice()
+        create_button = creation_choice_view.children[0]
+        self.assertEqual(create_button.label, "Create New Channel (Recommended)")
+
+        create_interaction = FakeInteraction()
+        await create_button.callback(interaction=create_interaction)
+        self.assertIsInstance(create_interaction.response.edited_view, DestinationNameChoiceView)
+        name_select = create_interaction.response.edited_view.children[0]
+        values = [option.value for option in name_select.options]
+        self.assertIn("TV Suggestions", values)
+        self.assertIn("Movie Suggestions", values)
+        self.assertIn("Halloween", values)
+        self.assertIn(CUSTOM_DESTINATION_NAME_VALUE, values)
+
+    async def test_choosing_a_suggested_name_creates_the_channel_and_the_collection(self) -> None:
+        creation_choice_view = await self._reach_creation_choice()
+        create_button = creation_choice_view.children[0]
+        create_interaction = FakeInteraction()
+        await create_button.callback(interaction=create_interaction)
+        name_select = create_interaction.response.edited_view.children[0]
+
+        fake_guild = self.FakeGuild(channel_id=4242)
+        name_select._values = ["TV Suggestions"]
+        name_interaction = FakeInteraction(guild=fake_guild)
+        await name_select.callback(interaction=name_interaction)
+
+        self.assertEqual(fake_guild.created_with, "TV Suggestions")
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        self.assertEqual(databases[0].name, "TV Shows")
+        self.assertEqual(databases[0].channel_id, 4242)
+
+    async def test_choosing_custom_name_asks_for_a_name_then_creates_the_channel(self) -> None:
+        from watch_party_manager.setup_wizard_view import CUSTOM_DESTINATION_NAME_VALUE, CreateDatabaseNameModal
+
+        creation_choice_view = await self._reach_creation_choice()
+        create_button = creation_choice_view.children[0]
+        create_interaction = FakeInteraction()
+        await create_button.callback(interaction=create_interaction)
+        name_select = create_interaction.response.edited_view.children[0]
+
+        name_select._values = [CUSTOM_DESTINATION_NAME_VALUE]
+        custom_interaction = FakeInteraction()
+        await name_select.callback(interaction=custom_interaction)
+        modal = custom_interaction.response.sent_modal
+        self.assertIsInstance(modal, CreateDatabaseNameModal)
+
+        fake_guild = self.FakeGuild(channel_id=5150)
+        modal.name_input._value = "Season Premieres"
+        submit_interaction = FakeInteraction(guild=fake_guild)
+        await modal.on_submit(interaction=submit_interaction)
+
+        self.assertEqual(fake_guild.created_with, "Season Premieres")
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        self.assertEqual(databases[0].channel_id, 5150)
+
+    async def test_channel_creation_failure_shows_an_error_and_stays_recoverable(self) -> None:
+        from watch_party_manager.setup_wizard_view import DestinationCreationChoiceView
+
+        creation_choice_view = await self._reach_creation_choice()
+        create_button = creation_choice_view.children[0]
+        create_interaction = FakeInteraction()
+        await create_button.callback(interaction=create_interaction)
+        name_select = create_interaction.response.edited_view.children[0]
+
+        fake_guild = self.FakeGuild(fail=True)
+        name_select._values = ["Halloween"]
+        name_interaction = FakeInteraction(guild=fake_guild)
+        await name_select.callback(interaction=name_interaction)
+
+        self.assertIn("Could not create the channel", name_interaction.response.edited_content)
+        self.assertIsInstance(name_interaction.response.edited_view, DestinationCreationChoiceView)
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        self.assertEqual(databases, [])
 
 
 if __name__ == "__main__":

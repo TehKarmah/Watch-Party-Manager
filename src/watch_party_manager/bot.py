@@ -147,6 +147,7 @@ from watch_party_manager.services.imdb_metadata_service import ImdbMetadataServi
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_service import (
     DEFAULT_REJECTION_THRESHOLD,
+    DatabaseResolution,
     SuggestionService,
 )
 from watch_party_manager.services.suggestion_repair_service import SuggestionRepairService
@@ -180,15 +181,18 @@ from watch_party_manager.edit_vote_view import (
     EditVoteManagementView,
 )
 from watch_party_manager.config_view import (
+    DATABASE_SETTING_SUGGESTION_DESTINATION,
+    DATABASE_SETTING_WATCH_DESTINATION,
     BackToMenuOnlyView,
     ConfigAdminChannelSectionView,
+    ConfigDatabaseCandidateSelectionView,
     ConfigDatabaseSectionView,
+    ConfigDatabaseSettingsMenuView,
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
     ConfigModalRetryView,
     ConfigRoleSectionView,
     ConfigSuggestionDestinationSectionView,
-    ConfigVotingDefaultsIntroView,
     ConfigWatchDestinationSectionView,
     OnBackToMenu,
 )
@@ -206,11 +210,17 @@ from watch_party_manager.watch_party_selection_view import WatchPartySelectView
 from watch_party_manager.setup_wizard_view import (
     AdminChannelStepView,
     BackupDefaultsModal,
-    CreateDatabaseChannelSelectView,
+    CollectionTypeChoiceView,
     CreateDatabaseNameModal,
     CreateThreadNameModal,
     CreateThreadParentChannelSelectView,
+    DestinationCreationChoiceView,
+    DestinationNameChoiceView,
+    CUSTOM_DESTINATION_NAME_VALUE,
+    ExistingChannelSelectView,
     ExistingDatabaseSelectView,
+    ExistingThreadSelectView,
+    ImportExistingDatabaseNoticeView,
     ModalStepIntroView,
     ReminderDefaultsModal,
     ReviewStepView,
@@ -506,14 +516,32 @@ class WatchPartyBot(commands.Bot):
         async def remove_suggestion(interaction: discord.Interaction, query: str) -> None:
             await handle_remove_suggestion(interaction, self, query)
 
+        async def edit_suggestion_database_autocomplete(
+            interaction: discord.Interaction, current: str
+        ) -> List[discord.app_commands.Choice[int]]:
+            # Database IDs are an internal reference administrators should
+            # almost never type; this is the "practical alternative" that
+            # lets /edit_suggestion's database_id stay a picker instead.
+            if interaction.guild_id is None:
+                return []
+            matches = build_database_autocomplete_choices(
+                self.suggestion_service,
+                self.suggestion_database_configuration_repository,
+                interaction.guild_id,
+                interaction.guild,
+                current,
+            )
+            return [discord.app_commands.Choice(name=name, value=database_id) for name, database_id in matches]
+
         @self.tree.command(name="edit_suggestion")
         @discord.app_commands.describe(
             reference="The suggestion's reference number (e.g. #0007) or its current exact title.",
             title="New title (leave blank to keep the current title).",
             release_year="New release year (leave blank to keep the current value).",
             imdb_url="New IMDb link (leave blank to keep the current value).",
-            database_id="Move to a different suggestion database (leave blank to keep the current one).",
+            database_id="Move to a different collection (leave blank to keep the current one).",
         )
+        @discord.app_commands.autocomplete(database_id=edit_suggestion_database_autocomplete)
         async def edit_suggestion_command(
             interaction: discord.Interaction,
             reference: str,
@@ -713,6 +741,7 @@ class WatchPartyBot(commands.Bot):
                 guild_id=interaction.guild_id,
                 channel_id=interaction.channel_id,
                 name=name,
+                suggestion_database_configuration_repository=self.suggestion_database_configuration_repository,
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
 
@@ -1399,6 +1428,7 @@ def perform_start_vote(
     rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
+    resolved_database_id: Optional[int] = None,
 ) -> tuple[str, bool]:
     """Core logic for /start_vote, kept free of Discord objects except `user`.
 
@@ -1450,6 +1480,13 @@ def perform_start_vote(
             when visibility_str is None. Optional -- when unset (e.g. a
             test caller with no guild configuration to resolve),
             visibility_str's own default of VISIBLE applies.
+        resolved_database_id: Contextual Database Resolution: when the
+            channel context was ambiguous (more than one database, none
+            matching), the Discord layer already showed a picker and the
+            WASH Crew member already chose -- pass that choice here to
+            use it directly instead of re-resolving by channel. None
+            (the default) preserves the normal channel-based resolution
+            below, unchanged.
 
     Returns:
         A (message, ephemeral) tuple. Errors and permission failures are
@@ -1495,12 +1532,24 @@ def perform_start_vote(
         return str(exc), True
 
     resolution = None
-    if guild_id is not None and channel_id is not None and nominee_selection_service is not None:
+    if resolved_database_id is not None and nominee_selection_service is not None:
+        chosen = suggestion_service.get_database(resolved_database_id)
+        if chosen is None or (guild_id is not None and chosen.guild_id != guild_id):
+            return "That suggestion database no longer exists.", True
+        resolution = DatabaseResolution(database=chosen)
+    elif guild_id is not None and channel_id is not None and nominee_selection_service is not None:
         resolution = suggestion_service.resolve_database_for_channel(
             guild_id, channel_id, suggestion_database_configuration_repository
         )
         if resolution.database is None:
-            return resolution.error_message or "No suggestion database is available here.", True
+            return (
+                resolution.error_message
+                or "Which collection would you like to use? Run this in the channel or thread "
+                "configured for the one you mean.",
+                True,
+            )
+
+    if resolution is not None:
         strategy = None
         if rotation_service is not None and suggestion_database_configuration_repository is not None:
             database_configuration = suggestion_database_configuration_repository.get(
@@ -1656,7 +1705,7 @@ SETUP_WIZARD_STEP_TITLES: dict[SetupWizardStep, str] = {
     SetupWizardStep.WASH_CREW_ROLE: "WASH Crew Role",
     SetupWizardStep.WATCH_PARTY_ROLE: "Watch Party Role",
     SetupWizardStep.ADMIN_CHANNEL: "Admin Channel",
-    SetupWizardStep.SUGGESTION_DATABASE: "Suggestion Database",
+    SetupWizardStep.SUGGESTION_DATABASE: "Collection",
     SetupWizardStep.WATCH_DESTINATION: "Watched Movie Destination",
     SetupWizardStep.VOTING_DEFAULTS: "Voting Defaults",
     SetupWizardStep.REMINDER_DEFAULTS: "Reminder Defaults",
@@ -1791,7 +1840,7 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
         )
     else:
         lines.append("Watch Party Role: Not set")
-    lines.append(f'Suggestion Database: "{draft.suggestion_database_name}" (#{draft.suggestion_database_id})')
+    lines.append(f'Collection: "{draft.suggestion_database_name}" (#{draft.suggestion_database_id})')
     if draft.watch_destination_skipped:
         lines.append("Watched Movie Destination: Skipped (configure later)")
     elif draft.watch_destination_channel_id is not None:
@@ -1965,10 +2014,18 @@ async def send_setup_wizard_step(
     elif step == SetupWizardStep.SUGGESTION_DATABASE:
 
         async def on_select_existing(choice_interaction: discord.Interaction) -> None:
-            databases = [(d.database_id, d.name) for d in suggestion_service.list_databases(guild_id)]
+            databases = [
+                (
+                    d.database_id,
+                    _resolve_collection_name(
+                        suggestion_service, d, choice_interaction.guild, bot.suggestion_database_configuration_repository
+                    ),
+                )
+                for d in suggestion_service.list_databases(guild_id)
+            ]
             if not databases:
                 await choice_interaction.response.edit_message(
-                    content=body + "\n\nNo suggestion databases exist yet in this server. Choose Create New instead.",
+                    content=body + "\n\nNo collections exist yet in this server. Choose Create New instead.",
                     view=SuggestionDatabaseChoiceView(
                         on_select_existing, on_create_new, on_back, on_save_for_later, on_cancel,
                         requester_id=requester_id,
@@ -1983,33 +2040,151 @@ async def send_setup_wizard_step(
                 await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
 
             await choice_interaction.response.edit_message(
-                content=body + "\n\nChoose a suggestion database.",
+                content=body + "\n\nChoose a collection.",
                 view=ExistingDatabaseSelectView(
                     databases, on_database_selected, on_cancel, requester_id=requester_id
                 ),
             )
 
-        async def on_create_new(choice_interaction: discord.Interaction) -> None:
-            async def on_name_submit(modal_interaction: discord.Interaction, name: str) -> None:
-                async def on_channel_selected(channel_interaction: discord.Interaction, channel_id: int) -> None:
-                    updated, message = setup_wizard_service.create_new_database(
-                        state, name, channel_id, guild_id=guild_id
-                    )
-                    await send_setup_wizard_step(
-                        channel_interaction, bot, updated, edit=True, requester_id=requester_id
-                    )
+        async def show_collection_type_choice(type_interaction: discord.Interaction) -> None:
+            await type_interaction.response.edit_message(
+                content=body + "\n\nWhat type of collection would you like to create?",
+                view=CollectionTypeChoiceView(
+                    on_movies, on_tv_shows, on_special_collection, on_custom, on_import_existing, on_cancel,
+                    requester_id=requester_id,
+                ),
+            )
 
-                await modal_interaction.response.edit_message(
-                    content=body + f'\n\nWhich channel or thread should "{name}" use?',
-                    view=CreateDatabaseChannelSelectView(on_channel_selected, on_cancel, requester_id=requester_id),
+        async def continue_with_channel_select(interaction_for_edit: discord.Interaction, name: str) -> None:
+            async def on_channel_chosen(channel_interaction: discord.Interaction, channel_id: int) -> None:
+                updated, message = setup_wizard_service.create_new_database(
+                    state, name, channel_id, guild_id=guild_id
+                )
+                if updated.current_step == SetupWizardStep.SUGGESTION_DATABASE:
+                    # create_new_database() didn't advance -- creation
+                    # failed (duplicate name, or Conflict Prevention:
+                    # this channel/thread already routes to another
+                    # database). Show why, rather than silently
+                    # re-rendering the step with no explanation.
+                    await send_setup_wizard_step(
+                        channel_interaction, bot, updated, edit=True, error_message=message, requester_id=requester_id
+                    )
+                    return
+                await send_setup_wizard_step(
+                    channel_interaction, bot, updated, edit=True, requester_id=requester_id
                 )
 
-            await choice_interaction.response.send_modal(CreateDatabaseNameModal(on_name_submit))
+            async def show_destination_creation_choice(choice_interaction: discord.Interaction) -> None:
+                await choice_interaction.response.edit_message(
+                    content=body + f'\n\nHow should "{name}" get its suggestion destination?',
+                    view=DestinationCreationChoiceView(
+                        on_create_channel, on_use_existing_channel, on_use_existing_thread, on_cancel,
+                        requester_id=requester_id,
+                    ),
+                )
+
+            async def on_use_existing_channel(existing_interaction: discord.Interaction) -> None:
+                await existing_interaction.response.edit_message(
+                    content=body + f'\n\nWhich channel should "{name}" use?',
+                    view=ExistingChannelSelectView(on_channel_chosen, on_cancel, requester_id=requester_id),
+                )
+
+            async def on_use_existing_thread(existing_interaction: discord.Interaction) -> None:
+                await existing_interaction.response.edit_message(
+                    content=body + f'\n\nWhich thread should "{name}" use?',
+                    view=ExistingThreadSelectView(on_channel_chosen, on_cancel, requester_id=requester_id),
+                )
+
+            async def on_create_channel(create_interaction: discord.Interaction) -> None:
+                async def create_channel_with_name(named_interaction: discord.Interaction, channel_name: str) -> None:
+                    if named_interaction.guild is None:
+                        await named_interaction.response.edit_message(
+                            content=body + "\n\n⚠ That server is no longer available. Choose another option.",
+                            view=DestinationCreationChoiceView(
+                                on_create_channel, on_use_existing_channel, on_use_existing_thread, on_cancel,
+                                requester_id=requester_id,
+                            ),
+                        )
+                        return
+                    try:
+                        channel = await named_interaction.guild.create_text_channel(name=channel_name)
+                    except (discord.Forbidden, discord.HTTPException) as exc:
+                        await named_interaction.response.edit_message(
+                            content=body + f"\n\n⚠ Could not create the channel: {exc}",
+                            view=DestinationCreationChoiceView(
+                                on_create_channel, on_use_existing_channel, on_use_existing_thread, on_cancel,
+                                requester_id=requester_id,
+                            ),
+                        )
+                        return
+                    await on_channel_chosen(named_interaction, channel.id)
+
+                async def on_name_chosen(name_interaction: discord.Interaction, chosen_name: str) -> None:
+                    if chosen_name == CUSTOM_DESTINATION_NAME_VALUE:
+                        async def on_custom_name_submit(modal_interaction: discord.Interaction, custom_name: str) -> None:
+                            await create_channel_with_name(modal_interaction, custom_name)
+
+                        await name_interaction.response.send_modal(
+                            CreateDatabaseNameModal(
+                                on_custom_name_submit,
+                                title="Name the New Channel",
+                                label="Channel name",
+                            )
+                        )
+                        return
+                    await create_channel_with_name(name_interaction, chosen_name)
+
+                await create_interaction.response.edit_message(
+                    content=body + f'\n\nWhat should the new channel for "{name}" be called?',
+                    view=DestinationNameChoiceView(on_name_chosen, on_cancel, requester_id=requester_id),
+                )
+
+            await show_destination_creation_choice(interaction_for_edit)
+
+        async def on_movies(movies_interaction: discord.Interaction) -> None:
+            await continue_with_channel_select(movies_interaction, "Movies")
+
+        async def on_tv_shows(tv_shows_interaction: discord.Interaction) -> None:
+            await continue_with_channel_select(tv_shows_interaction, "TV Shows")
+
+        async def on_special_collection(special_interaction: discord.Interaction) -> None:
+            async def on_name_submit(modal_interaction: discord.Interaction, name: str) -> None:
+                await continue_with_channel_select(modal_interaction, name)
+
+            await special_interaction.response.send_modal(
+                CreateDatabaseNameModal(
+                    on_name_submit,
+                    title="Name Your Special Collection",
+                    label="Collection name",
+                    placeholder="e.g. Horror Movies, Anime, Documentaries",
+                )
+            )
+
+        async def on_custom(custom_interaction: discord.Interaction) -> None:
+            async def on_name_submit(modal_interaction: discord.Interaction, name: str) -> None:
+                await continue_with_channel_select(modal_interaction, name)
+
+            await custom_interaction.response.send_modal(
+                CreateDatabaseNameModal(on_name_submit, title="Name Your Collection", label="Collection name")
+            )
+
+        async def on_import_existing(import_interaction: discord.Interaction) -> None:
+            await import_interaction.response.edit_message(
+                content=(
+                    body + "\n\nRun `/import` in this server to bring in another WASH instance's backup -- "
+                    "Discord doesn't allow attaching a file from inside this wizard. Once it's imported, "
+                    "come back here and choose **Select Existing** to pick it up."
+                ),
+                view=ImportExistingDatabaseNoticeView(
+                    show_collection_type_choice, on_cancel, requester_id=requester_id
+                ),
+            )
 
         view = SuggestionDatabaseChoiceView(
-            on_select_existing, on_create_new, on_back, on_save_for_later, on_cancel, requester_id=requester_id
+            on_select_existing, show_collection_type_choice, on_back, on_save_for_later, on_cancel,
+            requester_id=requester_id,
         )
-        body += "\n\nSelect an existing suggestion database or create a new one."
+        body += "\n\nSelect an existing collection or create a new one."
 
     elif step == SetupWizardStep.WATCH_DESTINATION:
 
@@ -2403,18 +2578,9 @@ async def send_config_section(
         view = ConfigJoinModeSectionView(on_select, on_back)
         body += "\n\nSelect the Watch Party role's join mode."
 
-    elif section == ConfigSection.SUGGESTION_DATABASE:
-        databases = [(database.database_id, database.name) for database in bot.suggestion_service.list_databases(guild_id)]
-        if not databases:
-            view = BackToMenuOnlyView(on_back)
-            body += "\n\nNo suggestion databases exist in this server yet."
-        else:
-            async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
-                result = config_service.set_active_suggestion_database(guild_id, database_id)
-                await send_config_result(select_interaction, bot, guild_id, result)
-
-            view = ConfigDatabaseSectionView(databases, on_select, on_back)
-            body += "\n\nSelect the suggestion database that should be active."
+    elif section == ConfigSection.MANAGE_COLLECTIONS:
+        await send_config_manage_databases(interaction, bot, guild_id, on_back, edit=edit)
+        return
 
     elif section == ConfigSection.ADMIN_CHANNEL:
 
@@ -2432,39 +2598,226 @@ async def send_config_section(
             "posted for WASH Crew, or clear it."
         )
 
-    elif section == ConfigSection.SUGGESTION_DESTINATION:
+    else:  # ConfigSection.WATCH_DESTINATION (guild-wide default)
 
         async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
-            result = config_service.set_suggestion_destination(guild_id, channel_id, select_interaction.guild)
+            result = config_service.set_guild_watch_destination(guild_id, channel_id, select_interaction.guild)
             await send_config_result(select_interaction, bot, guild_id, result)
 
         async def on_skip(skip_interaction: discord.Interaction) -> None:
-            result = config_service.skip_suggestion_destination(guild_id)
-            await send_config_result(skip_interaction, bot, guild_id, result)
-
-        view = ConfigSuggestionDestinationSectionView(on_select, on_skip, on_back)
-        body += (
-            "\n\nChoose the channel or public thread where new-suggestion confirmation posts "
-            "should be created, or clear it."
-        )
-
-    else:  # ConfigSection.WATCH_DESTINATION
-
-        async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
-            result = config_service.set_watch_destination(guild_id, channel_id, select_interaction.guild)
-            await send_config_result(select_interaction, bot, guild_id, result)
-
-        async def on_skip(skip_interaction: discord.Interaction) -> None:
-            result = config_service.skip_watch_destination(guild_id)
+            result = config_service.clear_guild_watch_destination(guild_id)
             await send_config_result(skip_interaction, bot, guild_id, result)
 
         view = ConfigWatchDestinationSectionView(on_select, on_skip, on_back)
-        body += "\n\nChoose where watched-movie history should be posted, or clear it."
+        body += (
+            "\n\nChoose the default channel or thread where watched-movie history should be "
+            "posted when a collection has no destination of its own configured, or clear it. "
+            "Any collection can override this individually via Manage Collections."
+        )
 
     if edit:
         await interaction.response.edit_message(content=body, view=view)
     else:
         await interaction.response.send_message(body, view=view, ephemeral=True)
+
+
+# --- Manage Databases (replaces "Active Suggestion Database") -----------------------------
+
+
+async def send_config_manage_databases(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    guild_id: int,
+    on_back_to_menu: OnBackToMenu,
+    *,
+    edit: bool = True,
+) -> None:
+    """Manage Databases section: pick which database to edit, then edit
+    that database's own destination/candidate-selection settings
+    directly. Replaces the old "Active Suggestion Database" model, which
+    required picking exactly one active database before any per-database
+    setting could be touched at all.
+
+    edit defaults to True since every production call site reaches this
+    by editing /config's existing ephemeral message (matching every other
+    section); accepting the flag keeps this consistent with
+    send_config_section's own edit/send contract for any caller that
+    still needs a fresh message.
+    """
+    databases = bot.suggestion_service.list_databases(guild_id)
+    header = "**WASH Configuration -- Manage Collections**"
+
+    if not databases:
+        body = header + "\n\nNo collections exist in this server yet. Create one with `/database_add`."
+        view = BackToMenuOnlyView(on_back_to_menu)
+        if edit:
+            await interaction.response.edit_message(content=body, view=view)
+        else:
+            await interaction.response.send_message(body, view=view, ephemeral=True)
+        return
+
+    async def on_database_selected(select_interaction: discord.Interaction, database_id: int) -> None:
+        await send_config_database_settings_menu(select_interaction, bot, guild_id, database_id, on_back_to_menu)
+
+    options = [
+        (
+            database.database_id,
+            _resolve_collection_name(
+                bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+            ),
+        )
+        for database in databases
+    ]
+    view = ConfigDatabaseSectionView(options, on_database_selected, on_back_to_menu)
+    body = header + "\n\nSelect a collection to manage its own destination and candidate selection."
+    if edit:
+        await interaction.response.edit_message(content=body, view=view)
+    else:
+        await interaction.response.send_message(body, view=view, ephemeral=True)
+
+
+async def send_config_database_settings_menu(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    guild_id: int,
+    database_id: int,
+    on_back_to_menu: OnBackToMenu,
+) -> None:
+    """One database's settings menu -- pick which of its own settings to edit."""
+    database = bot.suggestion_service.get_database(database_id)
+    if database is None or database.guild_id != guild_id:
+        await send_config_manage_databases(interaction, bot, guild_id, on_back_to_menu)
+        return
+
+    async def on_back(back_interaction: discord.Interaction) -> None:
+        await send_config_manage_databases(back_interaction, bot, guild_id, on_back_to_menu)
+
+    collection_name = _resolve_collection_name(
+        bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+    )
+    suggestion_destination = bot.suggestion_service.resolve_collection_channel_id(
+        database, bot.suggestion_database_configuration_repository
+    )
+    watch_destination = bot.config_service.resolve_effective_watch_destination(guild_id, database_id)
+    database_configuration = bot.config_service.get_database_configuration(guild_id, database_id)
+    candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[
+        database_configuration.suggestion_rules.candidate_selection
+    ]
+
+    body = (
+        f'**WASH Configuration -- "{collection_name}" Settings**\n\n'
+        f"Suggestion Destination: <#{suggestion_destination}>\n"
+        f"Watched Movie Destination: {f'<#{watch_destination}>' if watch_destination else 'Not configured (no per-collection override or guild default set)'}\n"
+        f"Candidate Selection: {candidate_selection_label}"
+    )
+
+    async def on_setting_chosen(select_interaction: discord.Interaction, setting: str) -> None:
+        if setting == DATABASE_SETTING_SUGGESTION_DESTINATION:
+            await send_config_database_suggestion_destination(select_interaction, bot, guild_id, database_id, on_back)
+        elif setting == DATABASE_SETTING_WATCH_DESTINATION:
+            await send_config_database_watch_destination(select_interaction, bot, guild_id, database_id, on_back)
+        else:
+            await send_config_database_candidate_selection(select_interaction, bot, guild_id, database_id, on_back)
+
+    view = ConfigDatabaseSettingsMenuView(on_setting_chosen, on_back)
+    await interaction.response.edit_message(content=body + "\n\nChoose a setting to edit.", view=view)
+
+
+async def send_config_database_suggestion_destination(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    guild_id: int,
+    database_id: int,
+    on_back: OnBackToMenu,
+) -> None:
+    config_service = bot.config_service
+    database = bot.suggestion_service.get_database(database_id)
+    collection_name = _resolve_collection_name(
+        bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+    )
+    current = bot.suggestion_service.resolve_collection_channel_id(
+        database, bot.suggestion_database_configuration_repository
+    )
+    body = (
+        f'**WASH Configuration -- "{collection_name}" Suggestion Destination**\n\n'
+        f"Current value -- <#{current}>\n\n"
+        "Every collection must have exactly one dedicated suggestion destination -- choose the "
+        "channel or public thread new-suggestion confirmation posts should use instead."
+    )
+
+    async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
+        result = config_service.set_database_suggestion_destination(
+            guild_id, database_id, channel_id, select_interaction.guild
+        )
+        await send_config_result(select_interaction, bot, guild_id, result)
+
+    view = ConfigSuggestionDestinationSectionView(on_select, on_back)
+    await interaction.response.edit_message(content=body, view=view)
+
+
+async def send_config_database_watch_destination(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    guild_id: int,
+    database_id: int,
+    on_back: OnBackToMenu,
+) -> None:
+    config_service = bot.config_service
+    database = bot.suggestion_service.get_database(database_id)
+    collection_name = _resolve_collection_name(
+        bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+    )
+    database_configuration = config_service.get_database_configuration(guild_id, database_id)
+    current = database_configuration.channels.watch_history_channel_id
+    effective = config_service.resolve_effective_watch_destination(guild_id, database_id)
+    body = (
+        f'**WASH Configuration -- "{collection_name}" Watched Movie Destination**\n\n'
+        f"This collection's own override -- {f'<#{current}>' if current else 'Not set (using the guild default)'}\n"
+        f"Currently effective -- {f'<#{effective}>' if effective else 'None'}\n\n"
+        "Choose where this collection's watched-movie history should be posted, overriding the "
+        "guild default, or clear it to go back to using the guild default."
+    )
+
+    async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
+        result = config_service.set_database_watch_destination(
+            guild_id, database_id, channel_id, select_interaction.guild
+        )
+        await send_config_result(select_interaction, bot, guild_id, result)
+
+    async def on_clear(clear_interaction: discord.Interaction) -> None:
+        result = config_service.clear_database_watch_destination(guild_id, database_id)
+        await send_config_result(clear_interaction, bot, guild_id, result)
+
+    view = ConfigWatchDestinationSectionView(on_select, on_clear, on_back)
+    await interaction.response.edit_message(content=body, view=view)
+
+
+async def send_config_database_candidate_selection(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    guild_id: int,
+    database_id: int,
+    on_back: OnBackToMenu,
+) -> None:
+    config_service = bot.config_service
+    database = bot.suggestion_service.get_database(database_id)
+    collection_name = _resolve_collection_name(
+        bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+    )
+    database_configuration = config_service.get_database_configuration(guild_id, database_id)
+    current = database_configuration.suggestion_rules.candidate_selection
+    body = (
+        f'**WASH Configuration -- "{collection_name}" Candidate Selection**\n\n'
+        f"Current value -- {CANDIDATE_SELECTION_DISPLAY_LABELS[current]}\n\n"
+        "Choose the candidate selection mode below, then press Save."
+    )
+
+    async def on_save(save_interaction: discord.Interaction, candidate_selection: CandidateSelectionMode) -> None:
+        result = config_service.set_database_candidate_selection(guild_id, database_id, candidate_selection)
+        await send_config_result(save_interaction, bot, guild_id, result)
+
+    view = ConfigDatabaseCandidateSelectionView(on_save, on_back, default_candidate_selection=current)
+    await interaction.response.edit_message(content=body, view=view)
 
 
 async def handle_config_wash_crew_role_selected(
@@ -2528,66 +2881,46 @@ def _resolve_config_voting_defaults_modal_defaults(bot: "WatchPartyBot", guild_i
     )
 
 
-def _resolve_config_candidate_selection_default(bot: "WatchPartyBot", guild_id: int) -> CandidateSelectionMode:
-    """Pre-select the guild's currently configured candidate selection mode."""
-    database = bot.config_service.resolve_configured_database(guild_id)
-    if database is not None:
-        database_configuration = bot.suggestion_database_configuration_repository.get(guild_id, database.database_id)
-        if database_configuration is not None:
-            return database_configuration.suggestion_rules.candidate_selection
-    return CandidateSelectionMode.ROTATION_POOL
-
-
-_CONFIG_VOTING_DEFAULTS_BODY = (
-    "**WASH Configuration -- Voting Defaults**\n\n"
-    "Choose the candidate selection mode below, then press Set Voting Defaults to configure "
-    "the nominee count, vote duration, and visibility."
-)
-
-
 async def send_config_voting_defaults_modal(
     interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, on_back: OnBackToMenu
 ) -> None:
+    """Guild-wide default nominee count, vote duration, and visibility.
+
+    Candidate selection is per-database (Contextual Database Resolution)
+    and lives under Manage Databases -> a specific database ->
+    Candidate Selection instead -- it is no longer bundled here, since
+    bundling it into this guild-wide section is exactly the "which
+    database does this apply to?" ambiguity this model removes.
+    """
     config_service = bot.config_service
 
-    async def on_configure(
-        configure_interaction: discord.Interaction, candidate_selection: CandidateSelectionMode
+    async def on_retry(retry_interaction: discord.Interaction) -> None:
+        await send_config_voting_defaults_modal(retry_interaction, bot, guild_id, on_back)
+
+    async def on_submit(
+        modal_interaction: discord.Interaction,
+        candidate_count_text: str,
+        duration_text: str,
+        visibility_text: str,
     ) -> None:
-        async def on_retry(retry_interaction: discord.Interaction) -> None:
-            await send_config_voting_defaults_modal(retry_interaction, bot, guild_id, on_back)
-
-        async def on_submit(
-            modal_interaction: discord.Interaction,
-            candidate_count_text: str,
-            duration_text: str,
-            visibility_text: str,
-        ) -> None:
-            try:
-                candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
-                duration_hours = parse_setup_voting_duration_hours(duration_text)
-                visibility = parse_setup_voting_visibility(visibility_text)
-            except ValueError as exc:
-                view = ConfigModalRetryView(
-                    on_retry, on_back, button_label="Try Again", custom_id="wpm_config_voting_defaults_retry"
-                )
-                await modal_interaction.response.edit_message(
-                    content=f"**WASH Configuration -- Voting Defaults**\n\n⚠ {exc}", view=view
-                )
-                return
-
-            result = config_service.set_voting_defaults(
-                guild_id, candidate_count, duration_hours, visibility, candidate_selection
+        try:
+            candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
+            duration_hours = parse_setup_voting_duration_hours(duration_text)
+            visibility = parse_setup_voting_visibility(visibility_text)
+        except ValueError as exc:
+            view = ConfigModalRetryView(
+                on_retry, on_back, button_label="Try Again", custom_id="wpm_config_voting_defaults_retry"
             )
-            await send_config_result(modal_interaction, bot, guild_id, result)
+            await modal_interaction.response.edit_message(
+                content=f"**WASH Configuration -- Voting Defaults**\n\n⚠ {exc}", view=view
+            )
+            return
 
-        defaults = _resolve_config_voting_defaults_modal_defaults(bot, guild_id)
-        await configure_interaction.response.send_modal(VotingDefaultsModal(on_submit, defaults=defaults))
+        result = config_service.set_voting_defaults(guild_id, candidate_count, duration_hours, visibility)
+        await send_config_result(modal_interaction, bot, guild_id, result)
 
-    default_candidate_selection = _resolve_config_candidate_selection_default(bot, guild_id)
-    view = ConfigVotingDefaultsIntroView(
-        on_configure, on_back, default_candidate_selection=default_candidate_selection
-    )
-    await interaction.response.edit_message(content=_CONFIG_VOTING_DEFAULTS_BODY, view=view)
+    defaults = _resolve_config_voting_defaults_modal_defaults(bot, guild_id)
+    await interaction.response.send_modal(VotingDefaultsModal(on_submit, defaults=defaults))
 
 
 async def send_config_reminder_defaults_modal(
@@ -3140,6 +3473,7 @@ async def handle_start_vote_completion(
     reminder_hours_before_close: Optional[int] = None,
     rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
+    resolved_database_id: Optional[int] = None,
 ) -> None:
     """Create a round and publish its interactive voting post.
 
@@ -3150,7 +3484,58 @@ async def handle_start_vote_completion(
     existing callers keep working unchanged too; passing None uses the
     guild's configured reminder default (see FR-027's
     resolve_vote_reminder_settings).
+    resolved_database_id defaults to None so existing callers keep
+    working unchanged. Contextual Database Resolution: when unset and
+    the invoking channel's database context is ambiguous (more than one
+    database configured, none matching this channel), a picker is shown
+    first and this function recurses with the WASH Crew member's choice
+    once made -- see the ambiguity pre-check immediately below.
     """
+    if (
+        resolved_database_id is None
+        and interaction.guild_id is not None
+        and nominee_selection_service is not None
+    ):
+        pre_resolution = suggestion_service.resolve_database_for_channel(
+            interaction.guild_id, interaction.channel_id, suggestion_database_configuration_repository
+        )
+        if pre_resolution.ambiguous_candidates:
+
+            async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
+                await handle_start_vote_completion(
+                    select_interaction,
+                    vote_service,
+                    suggestion_service,
+                    nominee_selection_service,
+                    wash_crew_role_id,
+                    visibility_str,
+                    duration_hours,
+                    nominee_count,
+                    default_nominee_count,
+                    scheduler_service=scheduler_service,
+                    guild_configuration_repository=guild_configuration_repository,
+                    reminder_enabled=reminder_enabled,
+                    reminder_hours_before_close=reminder_hours_before_close,
+                    rotation_service=rotation_service,
+                    suggestion_database_configuration_repository=suggestion_database_configuration_repository,
+                    resolved_database_id=database_id,
+                )
+
+            options = [
+                (
+                    database.database_id,
+                    _resolve_collection_name(
+                        suggestion_service, database, interaction.guild, suggestion_database_configuration_repository
+                    ),
+                )
+                for database in pre_resolution.ambiguous_candidates
+            ]
+            view = ListDatabaseSelectView(options, on_select)
+            await interaction.response.send_message(
+                "Which collection would you like to use?", view=view, ephemeral=True
+            )
+            return
+
     message, ephemeral = perform_start_vote(
         vote_service=vote_service,
         suggestion_service=suggestion_service,
@@ -3168,6 +3553,7 @@ async def handle_start_vote_completion(
         rotation_service=rotation_service,
         suggestion_database_configuration_repository=suggestion_database_configuration_repository,
         guild_configuration_repository=guild_configuration_repository,
+        resolved_database_id=resolved_database_id,
     )
     if ephemeral:
         await interaction.response.send_message(message, ephemeral=True)
@@ -4650,89 +5036,84 @@ async def handle_add_suggestion(
         )
         return
 
-    resolution = bot.suggestion_service.resolve_database_for_channel(
-        guild_id, channel_id, bot.suggestion_database_configuration_repository
-    )
-    if resolution.database is None:
-        await interaction.response.send_message(
-            resolution.error_message or "No suggestion database is available here.", ephemeral=True
+    async def on_resolved(target_interaction: discord.Interaction, database: SuggestionDatabase) -> None:
+        final_title = resolved.title or title
+        final_release_year = release_year if release_year is not None else extract_year_from_title_suffix(final_title)
+        is_crew = is_wash_crew_member(target_interaction.user, bot.wash_crew_role_id)
+
+        existing_items = bot.suggestion_service.get_suggestions_for_database(
+            database.database_id, include_archived=True
         )
-        return
-    database = resolution.database
-
-    final_title = resolved.title or title
-    final_release_year = release_year if release_year is not None else extract_year_from_title_suffix(final_title)
-    is_crew = is_wash_crew_member(interaction.user, bot.wash_crew_role_id)
-
-    existing_items = bot.suggestion_service.get_suggestions_for_database(database.database_id, include_archived=True)
-    duplicate_result = find_duplicates(
-        title=final_title, release_year=final_release_year, imdb_url=resolved.imdb_url, existing_items=existing_items
-    )
-    decision = decide_add_suggestion_outcome(duplicate_result, is_crew=is_crew)
-
-    async def create_new_suggestion(target_interaction: discord.Interaction) -> None:
-        result = bot.suggestion_service.suggest(
-            final_title,
-            resolved.imdb_url,
-            database_id=database.database_id,
-            guild_id=guild_id,
-            channel_id=channel_id,
-            release_year=final_release_year,
-            runtime_minutes=resolved.runtime_minutes,
-            genres=resolved.genres,
-            description=resolved.plot,
-            content_rating=resolved.content_rating,
-            director=resolved.director,
-            imdb_rating=resolved.imdb_rating,
-            poster_url=resolved.poster_url,
-            original_suggester=str(target_interaction.user.id),
+        duplicate_result = find_duplicates(
+            title=final_title, release_year=final_release_year, imdb_url=resolved.imdb_url, existing_items=existing_items
         )
-        if not result.success or result.watch_item is None:
-            await target_interaction.response.send_message(result.message, ephemeral=True)
+        decision = decide_add_suggestion_outcome(duplicate_result, is_crew=is_crew)
+
+        async def create_new_suggestion(create_interaction: discord.Interaction) -> None:
+            result = bot.suggestion_service.suggest(
+                final_title,
+                resolved.imdb_url,
+                database_id=database.database_id,
+                guild_id=guild_id,
+                channel_id=channel_id,
+                release_year=final_release_year,
+                runtime_minutes=resolved.runtime_minutes,
+                genres=resolved.genres,
+                description=resolved.plot,
+                content_rating=resolved.content_rating,
+                director=resolved.director,
+                imdb_rating=resolved.imdb_rating,
+                poster_url=resolved.poster_url,
+                original_suggester=str(create_interaction.user.id),
+            )
+            if not result.success or result.watch_item is None:
+                await create_interaction.response.send_message(result.message, ephemeral=True)
+                return
+            await finish_add_or_reactivate(create_interaction, bot, result.watch_item, database, is_new=True)
+
+        async def reactivate_existing(reactivate_interaction: discord.Interaction, matched_item: WatchItem) -> None:
+            result = bot.suggestion_service.reactivate_suggestion(matched_item.id)
+            if not result.success or result.watch_item is None:
+                await reactivate_interaction.response.send_message(result.message, ephemeral=True)
+                return
+            await finish_add_or_reactivate(reactivate_interaction, bot, result.watch_item, database, is_new=False)
+
+        if decision.kind in (
+            AddSuggestionOutcomeKind.BLOCKED_ACTIVE,
+            AddSuggestionOutcomeKind.BLOCKED_NO_CREW_OVERRIDE,
+            AddSuggestionOutcomeKind.BLOCKED_POSSIBLE_NO_CREW,
+        ):
+            await target_interaction.response.send_message(decision.message, ephemeral=True)
             return
-        await finish_add_or_reactivate(target_interaction, bot, result.watch_item, database, is_new=True)
 
-    async def reactivate_existing(target_interaction: discord.Interaction, matched_item: WatchItem) -> None:
-        result = bot.suggestion_service.reactivate_suggestion(matched_item.id)
-        if not result.success or result.watch_item is None:
-            await target_interaction.response.send_message(result.message, ephemeral=True)
+        if decision.kind is AddSuggestionOutcomeKind.PROCEED:
+            await create_new_suggestion(target_interaction)
             return
-        await finish_add_or_reactivate(target_interaction, bot, result.watch_item, database, is_new=False)
 
-    if decision.kind in (
-        AddSuggestionOutcomeKind.BLOCKED_ACTIVE,
-        AddSuggestionOutcomeKind.BLOCKED_NO_CREW_OVERRIDE,
-        AddSuggestionOutcomeKind.BLOCKED_POSSIBLE_NO_CREW,
-    ):
-        await interaction.response.send_message(decision.message, ephemeral=True)
-        return
+        if decision.kind is AddSuggestionOutcomeKind.NEEDS_CREW_REACTIVATION_CONFIRM:
+            matched_item = decision.matched_item
 
-    if decision.kind is AddSuggestionOutcomeKind.PROCEED:
-        await create_new_suggestion(interaction)
-        return
+            async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+                await reactivate_existing(confirm_interaction, matched_item)
 
-    if decision.kind is AddSuggestionOutcomeKind.NEEDS_CREW_REACTIVATION_CONFIRM:
-        matched_item = decision.matched_item
+            async def on_abort(abort_interaction: discord.Interaction) -> None:
+                await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
 
+            view = EditVoteConfirmationView(confirm_label="Reactivate", on_confirm=on_confirm, on_abort=on_abort)
+            await target_interaction.response.send_message(decision.message, view=view, ephemeral=True)
+            return
+
+        # NEEDS_CREW_POSSIBLE_CONFIRM
         async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-            await reactivate_existing(confirm_interaction, matched_item)
+            await create_new_suggestion(confirm_interaction)
 
         async def on_abort(abort_interaction: discord.Interaction) -> None:
             await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
 
-        view = EditVoteConfirmationView(confirm_label="Reactivate", on_confirm=on_confirm, on_abort=on_abort)
-        await interaction.response.send_message(decision.message, view=view, ephemeral=True)
-        return
+        view = EditVoteConfirmationView(confirm_label="Add Anyway", on_confirm=on_confirm, on_abort=on_abort)
+        await target_interaction.response.send_message(decision.message, view=view, ephemeral=True)
 
-    # NEEDS_CREW_POSSIBLE_CONFIRM
-    async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-        await create_new_suggestion(confirm_interaction)
-
-    async def on_abort(abort_interaction: discord.Interaction) -> None:
-        await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
-
-    view = EditVoteConfirmationView(confirm_label="Add Anyway", on_confirm=on_confirm, on_abort=on_abort)
-    await interaction.response.send_message(decision.message, view=view, ephemeral=True)
+    await resolve_database_then(interaction, bot, guild_id, channel_id, on_resolved)
 
 
 def find_backup_by_filename(backup_service: BackupService, backup_filename: str) -> Optional[Path]:
@@ -5106,7 +5487,7 @@ async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPa
         file = discord.File(result.creation.archive_path, filename=result.display_filename)
         await select_interaction.response.send_message(result.message, file=file, ephemeral=True)
 
-    options = build_database_admin_options(bot.suggestion_service, databases)
+    options = build_database_admin_options(bot.suggestion_service, databases, interaction.guild, bot.suggestion_database_configuration_repository)
     view = DatabaseAdminSelectView(
         options, on_select, custom_id="wpm_database_backup_select", placeholder="Choose a suggestion database to back up..."
     )
@@ -5296,7 +5677,7 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
             build_database_reset_summary_text(summary), view=confirmation_view, ephemeral=True
         )
 
-    options = build_database_admin_options(bot.suggestion_service, databases)
+    options = build_database_admin_options(bot.suggestion_service, databases, interaction.guild, bot.suggestion_database_configuration_repository)
     view = DatabaseAdminSelectView(
         options, on_select, custom_id="wpm_database_reset_select", placeholder="Choose a suggestion database to reset..."
     )
@@ -5563,7 +5944,13 @@ def perform_add_suggestion(
     """
     resolution = suggestion_service.resolve_database_for_channel(guild_id, channel_id)
     if resolution.database is None:
-        return resolution.error_message, True, None
+        return (
+            resolution.error_message
+            or "Which collection would you like to use? Run this in the channel or thread "
+            "configured for the one you mean.",
+            True,
+            None,
+        )
 
     result = suggestion_service.suggest(
         title,
@@ -5712,35 +6099,10 @@ async def handle_list_suggestions(
         await interaction.response.send_message("Choose Available, Watched, or Retired.", ephemeral=True)
         return
 
-    resolution = bot.suggestion_service.resolve_database_for_channel(guild_id, channel_id)
-    if resolution.database is not None:
-        await send_suggestion_list(interaction, bot, resolution.database, status_filter, public)
-        return
+    async def on_resolved(target_interaction: discord.Interaction, database: SuggestionDatabase) -> None:
+        await send_suggestion_list(target_interaction, bot, database, status_filter, public)
 
-    active_databases = [
-        database for database in bot.suggestion_service.list_databases(guild_id) if database.active
-    ]
-    if len(active_databases) > 1:
-
-        async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
-            database = bot.suggestion_service.get_database(database_id)
-            if database is None:
-                await select_interaction.response.send_message(
-                    "That suggestion database no longer exists.", ephemeral=True
-                )
-                return
-            await send_suggestion_list(select_interaction, bot, database, status_filter, public)
-
-        options = [(database.database_id, database.name) for database in active_databases]
-        view = ListDatabaseSelectView(options, on_select)
-        await interaction.response.send_message(
-            "Multiple suggestion databases are configured. Choose one:", view=view, ephemeral=True
-        )
-        return
-
-    await interaction.response.send_message(
-        resolution.error_message or "No suggestion database is available here.", ephemeral=True
-    )
+    await resolve_database_then(interaction, bot, guild_id, channel_id, on_resolved)
 
 
 def resolve_rejection_threshold(
@@ -5978,14 +6340,71 @@ def build_database_add_confirmation(database: SuggestionDatabase) -> str:
     )
 
 
+def _resolve_collection_name(
+    suggestion_service: SuggestionService,
+    database: SuggestionDatabase,
+    guild: Optional[discord.Guild],
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository],
+) -> str:
+    """A collection's display name is its suggestion destination channel
+    or thread's current Discord name, not a separately-maintained
+    string -- renaming the channel in Discord immediately changes what
+    WASH shows everywhere it's next displayed. Falls back to the
+    database's stored name (set once at creation, never auto-updated)
+    when no guild is available to resolve against, or the channel can no
+    longer be resolved (e.g. it was deleted).
+    """
+    if guild is not None:
+        channel_id = suggestion_service.resolve_collection_channel_id(
+            database, suggestion_database_configuration_repository
+        )
+        channel = guild.get_channel_or_thread(channel_id)
+        if channel is not None and getattr(channel, "name", None):
+            return channel.name
+    return database.name
+
+
+def build_database_autocomplete_choices(
+    suggestion_service: SuggestionService,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository],
+    guild_id: int,
+    guild: Optional[discord.Guild],
+    current: str,
+) -> List[Tuple[str, int]]:
+    """(display name, database_id) pairs for /edit_suggestion's database_id
+    autocomplete, filtered case-insensitively by what's typed so far --
+    kept Discord-Choice-free so it stays independently testable, mirroring
+    every other perform_*/build_* helper in this module.
+    """
+    matches = []
+    for database in suggestion_service.list_databases(guild_id):
+        name = _resolve_collection_name(suggestion_service, database, guild, suggestion_database_configuration_repository)
+        if current.lower() in name.lower():
+            matches.append((name, database.database_id))
+    return matches[:25]
+
+
 def build_database_list_text(
-    suggestion_service: SuggestionService, databases: List[SuggestionDatabase]
+    suggestion_service: SuggestionService,
+    databases: List[SuggestionDatabase],
+    guild: Optional[discord.Guild] = None,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
 ) -> str:
     """Build the /database_list message for a set of databases.
 
     Args:
-        suggestion_service: Used to look up each database's watch-item count.
+        suggestion_service: Used to look up each database's watch-item
+            count and (with guild) resolve its live collection name.
         databases: The databases to display, in the order given.
+        guild: Optional; when supplied, each collection's Name line shows
+            its suggestion destination channel/thread's current Discord
+            name instead of the stored, never-auto-updated name. Omitted
+            by callers/tests with no live Discord connection, in which
+            case the stored name is shown (unchanged prior behavior).
+        suggestion_database_configuration_repository: Optional; used
+            together with guild to resolve a collection's configured
+            suggestion-destination override, if any, before its home
+            channel.
 
     Returns:
         A readable multi-line block per database with its ID, name, status,
@@ -5993,7 +6412,7 @@ def build_database_list_text(
         labeled explicitly ("Database ID: 1") rather than shown as a bare
         "[1]" prefix, which read as ambiguous (Release Polish Priority 2).
     """
-    sections = ["Suggestion Databases"]
+    sections = ["Collections"]
     ordered_databases = sorted(
         databases,
         key=lambda database: (not database.active, database.name.casefold(), database.database_id),
@@ -6002,9 +6421,12 @@ def build_database_list_text(
         status = "Active" if database.active else "Inactive"
         suggestion_count = suggestion_service.suggestion_count_for_database(database.database_id)
         item_word = "watch item" if suggestion_count == 1 else "watch items"
+        display_name = _resolve_collection_name(
+            suggestion_service, database, guild, suggestion_database_configuration_repository
+        )
         sections.append(
             f"Database ID: {database.database_id}\n"
-            f"Name: {database.name}\n"
+            f"Name: {display_name}\n"
             f"Status: {status}\n"
             f"Channel: <#{database.channel_id}>\n"
             f"Watch items: {suggestion_count} {item_word}"
@@ -6013,7 +6435,10 @@ def build_database_list_text(
 
 
 def build_database_admin_options(
-    suggestion_service: SuggestionService, databases: List[SuggestionDatabase]
+    suggestion_service: SuggestionService,
+    databases: List[SuggestionDatabase],
+    guild: Optional[discord.Guild] = None,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
 ) -> List[Tuple[int, str, str]]:
     """Build (id, label, description) options for DatabaseAdminSelectView.
 
@@ -6025,6 +6450,9 @@ def build_database_admin_options(
     Args:
         suggestion_service: Used to look up each database's watch-item count.
         databases: The databases to build options for.
+        guild: Optional; see build_database_list_text.
+        suggestion_database_configuration_repository: Optional; see
+            build_database_list_text.
 
     Returns:
         Options ordered the same way as build_database_list_text (Active
@@ -6039,7 +6467,10 @@ def build_database_admin_options(
         status = "Active" if database.active else "Inactive"
         suggestion_count = suggestion_service.suggestion_count_for_database(database.database_id)
         item_word = "watch item" if suggestion_count == 1 else "watch items"
-        options.append((database.database_id, database.name, f"{status} - {suggestion_count} {item_word}"))
+        display_name = _resolve_collection_name(
+            suggestion_service, database, guild, suggestion_database_configuration_repository
+        )
+        options.append((database.database_id, display_name, f"{status} - {suggestion_count} {item_word}"))
     return options
 
 
@@ -6313,12 +6744,14 @@ def perform_database_add(
     guild_id: Optional[int],
     channel_id: Optional[int],
     name: str,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
 ) -> tuple[str, bool]:
     """Core logic for /database_add, kept free of Discord objects except `user`.
 
-    All the actual creation rules (duplicate name, duplicate channel) are
-    enforced by SuggestionService.create_database(); this function only
-    handles the WASH Crew permission check and presentation.
+    All the actual creation rules (duplicate name, duplicate channel,
+    duplicate configured suggestion destination) are enforced by
+    SuggestionService.create_database(); this function only handles the
+    WASH Crew permission check and presentation.
 
     Args:
         suggestion_service: The suggestion service to create the database in.
@@ -6328,6 +6761,12 @@ def perform_database_add(
         guild_id: The Discord guild the command was run in.
         channel_id: The Discord channel or thread the command was run in.
         name: The desired database name.
+        suggestion_database_configuration_repository: Contextual Database
+            Resolution: passed through to create_database() so the new
+            database's channel can't collide with another database's
+            configured suggestion post destination, not just another
+            database's home channel. Optional so existing callers/tests
+            that don't pass it keep working unchanged.
 
     Returns:
         A (message, ephemeral) tuple. Every /database_add response is
@@ -6349,7 +6788,12 @@ def perform_database_add(
     if channel_id is None:
         return "This command must be used in a server channel or thread.", True
 
-    result = suggestion_service.create_database(name, guild_id=guild_id, channel_id=channel_id)
+    result = suggestion_service.create_database(
+        name,
+        guild_id=guild_id,
+        channel_id=channel_id,
+        suggestion_database_configuration_repository=suggestion_database_configuration_repository,
+    )
     if not result.success:
         return result.message, True
 
@@ -6481,7 +6925,7 @@ async def handle_database_remove(interaction: discord.Interaction, bot: "WatchPa
         )
         await select_interaction.response.send_message(message, ephemeral=ephemeral)
 
-    options = build_database_admin_options(bot.suggestion_service, databases)
+    options = build_database_admin_options(bot.suggestion_service, databases, interaction.guild, bot.suggestion_database_configuration_repository)
     view = DatabaseAdminSelectView(
         options, on_select, custom_id="wpm_database_remove_select", placeholder="Choose a suggestion database to remove..."
     )
@@ -7221,46 +7665,60 @@ def build_database_statistics_text(stats: DatabaseStatistics) -> str:
 OnStatsDatabaseResolved = Callable[[discord.Interaction, SuggestionDatabase], Awaitable[None]]
 
 
-async def resolve_stats_database_then(
+async def resolve_database_then(
     interaction: discord.Interaction,
     bot: "WatchPartyBot",
     guild_id: int,
     channel_id: Optional[int],
-    show: OnStatsDatabaseResolved,
+    on_resolved: OnStatsDatabaseResolved,
 ) -> None:
-    """Resolve which database a rotation/database statistics request targets, then show it.
+    """Resolve which suggestion database a command should use for this
+    channel/thread, then continue with on_resolved.
 
-    Mirrors /list's exact resolution order (FR-033A): the current
-    channel's configured database first, then the guild's sole active
-    database, then an interactive picker when several exist, then a
-    clear error when none are available.
+    The one shared contextual-resolution entry point every database-
+    scoped command goes through: automatic, silent resolution when the
+    channel unambiguously identifies a database (its home channel or its
+    configured suggestion post destination -- see
+    SuggestionService.resolve_database_for_channel), an interactive
+    picker when more than one database exists and none matches, and a
+    clear error when no database is configured in the guild at all.
+    Never guesses.
     """
-    resolution = bot.suggestion_service.resolve_database_for_channel(guild_id, channel_id)
+    resolution = bot.suggestion_service.resolve_database_for_channel(
+        guild_id, channel_id, bot.suggestion_database_configuration_repository
+    )
     if resolution.database is not None:
-        await show(interaction, resolution.database)
+        await on_resolved(interaction, resolution.database)
         return
 
-    active_databases = [database for database in bot.suggestion_service.list_databases(guild_id) if database.active]
-    if len(active_databases) > 1:
+    if resolution.ambiguous_candidates:
 
         async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
             database = bot.suggestion_service.get_database(database_id)
             if database is None:
                 await select_interaction.response.send_message(
-                    "That suggestion database no longer exists.", ephemeral=True
+                    "That collection no longer exists.", ephemeral=True
                 )
                 return
-            await show(select_interaction, database)
+            await on_resolved(select_interaction, database)
 
-        options = [(database.database_id, database.name) for database in active_databases]
+        options = [
+            (
+                database.database_id,
+                _resolve_collection_name(
+                    bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+                ),
+            )
+            for database in resolution.ambiguous_candidates
+        ]
         view = ListDatabaseSelectView(options, on_select)
         await interaction.response.send_message(
-            "Multiple suggestion databases are configured. Choose one:", view=view, ephemeral=True
+            "Which collection would you like to use?", view=view, ephemeral=True
         )
         return
 
     await interaction.response.send_message(
-        resolution.error_message or "No suggestion database is available here.", ephemeral=True
+        resolution.error_message or "No collection is available here.", ephemeral=True
     )
 
 
@@ -7353,7 +7811,7 @@ async def send_rotation_statistics(
             return
         await send_paginated_stats(target_interaction, build_rotation_statistics_text(stats, database.name), public)
 
-    await resolve_stats_database_then(interaction, bot, guild_id, channel_id, show)
+    await resolve_database_then(interaction, bot, guild_id, channel_id, show)
 
 
 async def send_database_statistics(
@@ -7368,7 +7826,7 @@ async def send_database_statistics(
             return
         await send_paginated_stats(target_interaction, build_database_statistics_text(stats), public)
 
-    await resolve_stats_database_then(interaction, bot, guild_id, channel_id, show)
+    await resolve_database_then(interaction, bot, guild_id, channel_id, show)
 
 
 async def handle_stats(

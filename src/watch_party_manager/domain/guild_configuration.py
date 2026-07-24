@@ -77,12 +77,21 @@ class GuildChannelsConfig:
     # requests -- deliberately separate from log_channel_id, which is a
     # general administrative log, not a WASH Crew action queue.
     admin_channel_id: Optional[int] = None
+    # Contextual Collections refinement: the guild-wide default watched-
+    # movie destination. A collection's own
+    # SuggestionDatabaseConfiguration.channels.watch_history_channel_id
+    # overrides this when set -- see
+    # services/config_service.py's resolve_effective_watch_destination().
+    # Unlike a suggestion destination, this may be None (no watch
+    # history posted) and may be shared across every collection.
+    watch_history_channel_id: Optional[int] = None
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         _validate_optional_snowflake(self.announcements_channel_id, "announcements_channel_id")
         _validate_optional_snowflake(self.log_channel_id, "log_channel_id")
         _validate_optional_snowflake(self.admin_channel_id, "admin_channel_id")
+        _validate_optional_snowflake(self.watch_history_channel_id, "watch_history_channel_id")
         _validate_extra_fields(self.extra_fields)
 
 

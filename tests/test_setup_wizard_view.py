@@ -16,7 +16,6 @@ from watch_party_manager.setup_wizard_view import (
     BackupDefaultsModal,
     BeginSetupButton,
     CandidateSelectionSelectComponent,
-    CreateDatabaseChannelSelectView,
     CreateDatabaseNameModal,
     CreateThreadNameModal,
     CreateThreadParentChannelSelectView,
@@ -218,13 +217,6 @@ class CreateDatabaseNameModalTests(unittest.IsolatedAsyncioTestCase):
         modal.name_input._value = "Movies"
         await modal.on_submit(interaction=object())
         self.assertEqual(calls, ["Movies"])
-
-
-class CreateDatabaseChannelSelectViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_a_channel_select_and_a_cancel_button(self) -> None:
-        view = CreateDatabaseChannelSelectView(_noop, _noop)
-        self.assertEqual(len(view.children), 2)
-        self.assertEqual(view.children[0].custom_id, "wpm_setup_database_channel_select")
 
 
 class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):

@@ -141,10 +141,11 @@ class FakeResponse:
 
 
 class FakeInteraction:
-    def __init__(self, user=None, guild_id=GUILD_ID, channel_id=CHANNEL_ID) -> None:
+    def __init__(self, user=None, guild_id=GUILD_ID, channel_id=CHANNEL_ID, guild=None) -> None:
         self.user = user if user is not None else FakeMember([WATCH_PARTY_MEMBER_ROLE_ID])
         self.guild_id = guild_id
         self.channel_id = channel_id
+        self.guild = guild
         self.response = FakeResponse()
 
 
@@ -155,6 +156,7 @@ class FakeBot:
             watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=wash_crew_role_id
         )
         self.wash_crew_role_id = wash_crew_role_id
+        self.suggestion_database_configuration_repository = None
 
 
 class HandleListSuggestionsTestCase(unittest.IsolatedAsyncioTestCase):

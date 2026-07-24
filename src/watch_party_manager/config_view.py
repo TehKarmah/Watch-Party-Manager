@@ -188,7 +188,13 @@ class ConfigAdminChannelSectionView(discord.ui.View):
         self.add_item(BackToMenuButton(on_back))
 
 
-# --- Active Suggestion Database -----------------------------------------------------------
+# --- Manage Databases ----------------------------------------------------------------------
+#
+# Replaces the old "Active Suggestion Database" section: WASH Crew picks
+# which database to manage (ConfigDatabaseSectionView, below -- reused
+# unchanged from that section, just re-purposed to open a per-database
+# settings menu instead of activating one), then edits that database's
+# own destination/candidate-selection settings directly.
 
 
 class ConfigDatabaseSelect(discord.ui.Select):
@@ -213,28 +219,81 @@ class ConfigDatabaseSectionView(discord.ui.View):
         self.add_item(BackToMenuButton(on_back))
 
 
+OnDatabaseSettingChosen = Callable[[discord.Interaction, str], Awaitable[None]]
+
+DATABASE_SETTING_SUGGESTION_DESTINATION = "suggestion_destination"
+DATABASE_SETTING_WATCH_DESTINATION = "watch_destination"
+DATABASE_SETTING_CANDIDATE_SELECTION = "candidate_selection"
+
+
+class DatabaseSettingSelect(discord.ui.Select):
+    def __init__(self, on_select: OnDatabaseSettingChosen) -> None:
+        options = [
+            discord.SelectOption(label="Suggestion Post Destination", value=DATABASE_SETTING_SUGGESTION_DESTINATION),
+            discord.SelectOption(label="Watched Movie Destination", value=DATABASE_SETTING_WATCH_DESTINATION),
+            discord.SelectOption(label="Candidate Selection", value=DATABASE_SETTING_CANDIDATE_SELECTION),
+        ]
+        super().__init__(
+            placeholder="Choose a setting to edit...", options=options, custom_id="wpm_config_database_setting_select"
+        )
+        self._on_select = on_select
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_select(interaction, self.values[0])
+
+
+class ConfigDatabaseSettingsMenuView(discord.ui.View):
+    """One database's settings menu -- pick which of its own settings to edit."""
+
+    def __init__(self, on_select: OnDatabaseSettingChosen, on_back: OnBackToMenu) -> None:
+        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
+        self.add_item(DatabaseSettingSelect(on_select))
+        self.add_item(BackToMenuButton(on_back))
+
+
+class ConfigDatabaseCandidateSelectionView(discord.ui.View):
+    """One database's Candidate Selection setting: choose from the
+    dropdown (reusing setup_wizard_view.py's CandidateSelectionSelectComponent
+    unchanged) and press Save.
+    """
+
+    def __init__(
+        self,
+        on_save: OnConfigVotingDefaultsConfigure,
+        on_back: OnBackToMenu,
+        *,
+        default_candidate_selection: CandidateSelectionMode,
+    ) -> None:
+        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
+        self.candidate_selection_select = CandidateSelectionSelectComponent(default=default_candidate_selection)
+        self.add_item(self.candidate_selection_select)
+        self.add_item(
+            ConfigureStepButton(
+                self._handle_save,
+                label="Save Candidate Selection",
+                custom_id="wpm_config_database_candidate_selection_save",
+            )
+        )
+        self.add_item(BackToMenuButton(on_back))
+        self._on_save = on_save
+
+    async def _handle_save(self, interaction: discord.Interaction) -> None:
+        await self._on_save(interaction, self.candidate_selection_select.selected)
+
+
 # --- Suggestion Post Destination ------------------------------------------------------------
 
 
-class ConfigClearSuggestionDestinationButton(discord.ui.Button):
-    def __init__(self, on_click: OnConfigSkip) -> None:
-        super().__init__(
-            label="Clear Destination",
-            style=discord.ButtonStyle.secondary,
-            custom_id="wpm_config_suggestion_destination_clear",
-        )
-        self._on_click = on_click
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await self._on_click(interaction)
-
-
 class ConfigSuggestionDestinationSectionView(discord.ui.View):
-    """Reuses setup_wizard_view.py's generic DestinationChannelSelect, exactly
-    like ConfigWatchDestinationSectionView.
+    """Reuses setup_wizard_view.py's generic DestinationChannelSelect.
+
+    Deliberately has no Clear/Skip button, unlike ConfigWatchDestinationSectionView:
+    every collection MUST have exactly one dedicated suggestion
+    destination, so this section can only change it to a different
+    channel or thread, never unset it.
     """
 
-    def __init__(self, on_select: OnConfigChannelSelected, on_clear: OnConfigSkip, on_back: OnBackToMenu) -> None:
+    def __init__(self, on_select: OnConfigChannelSelected, on_back: OnBackToMenu) -> None:
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
         self.add_item(
             DestinationChannelSelect(
@@ -243,7 +302,6 @@ class ConfigSuggestionDestinationSectionView(discord.ui.View):
                 placeholder="Choose an existing channel or thread",
             )
         )
-        self.add_item(ConfigClearSuggestionDestinationButton(on_clear))
         self.add_item(BackToMenuButton(on_back))
 
 
@@ -274,39 +332,6 @@ class ConfigWatchDestinationSectionView(discord.ui.View):
         self.add_item(ConfigSkipDestinationButton(on_skip))
         self.add_item(BackToMenuButton(on_back))
 
-
-# --- Voting Defaults candidate-selection intro screen ---------------------------------------
-
-
-class ConfigVotingDefaultsIntroView(discord.ui.View):
-    """Voting Defaults section: choose the candidate selection mode from
-    a dropdown, then press Set Voting Defaults to open the modal for the
-    remaining fields. Reuses setup_wizard_view.py's
-    CandidateSelectionSelectComponent and ConfigureStepButton directly,
-    with /config's own Back to Menu navigation in place of the wizard's
-    Back/Save & Finish Later/Cancel Setup controls.
-    """
-
-    def __init__(
-        self,
-        on_configure: OnConfigVotingDefaultsConfigure,
-        on_back: OnBackToMenu,
-        *,
-        default_candidate_selection: CandidateSelectionMode,
-    ) -> None:
-        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
-        self.candidate_selection_select = CandidateSelectionSelectComponent(default=default_candidate_selection)
-        self.add_item(self.candidate_selection_select)
-        self.add_item(
-            ConfigureStepButton(
-                self._handle_configure, label="Set Voting Defaults", custom_id="wpm_config_voting_defaults_configure"
-            )
-        )
-        self.add_item(BackToMenuButton(on_back))
-        self._on_configure = on_configure
-
-    async def _handle_configure(self, interaction: discord.Interaction) -> None:
-        await self._on_configure(interaction, self.candidate_selection_select.selected)
 
 
 # --- Modal-defaults retry screen (Voting / Reminder / Backup Defaults) ---------------------

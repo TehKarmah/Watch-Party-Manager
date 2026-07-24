@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from watch_party_manager.bot import handle_edit_suggestion
+from watch_party_manager.bot import build_database_autocomplete_choices, handle_edit_suggestion
 from watch_party_manager.domain.watch_item import MetadataProvider
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
@@ -253,6 +253,46 @@ class EditDuplicateDetectionTests(EditSuggestionTestCase):
 
         self.assertIsNone(interaction.response.sent_view)
         self.assertEqual(1979, self.suggestion_service.get_suggestion(self.item.id).release_year)
+
+
+class DatabaseIdAutocompleteTests(EditSuggestionTestCase):
+    """database_id is an internal reference administrators should almost
+    never type; autocomplete is the practical alternative to manual entry.
+    """
+
+    def test_lists_matching_collections_by_name(self) -> None:
+        self.suggestion_service.create_database("TV Shows", guild_id=GUILD_ID, channel_id=555)
+
+        matches = build_database_autocomplete_choices(
+            self.suggestion_service, None, GUILD_ID, None, ""
+        )
+
+        self.assertEqual({name for name, _ in matches}, {"Movie Night", "TV Shows"})
+
+    def test_filters_case_insensitively_by_current_input(self) -> None:
+        self.suggestion_service.create_database("TV Shows", guild_id=GUILD_ID, channel_id=555)
+
+        matches = build_database_autocomplete_choices(
+            self.suggestion_service, None, GUILD_ID, None, "tv"
+        )
+
+        self.assertEqual([name for name, _ in matches], ["TV Shows"])
+
+    def test_returns_the_database_id_as_the_value(self) -> None:
+        matches = build_database_autocomplete_choices(
+            self.suggestion_service, None, GUILD_ID, None, "Movie"
+        )
+
+        self.assertEqual(matches, [("Movie Night", self.database.database_id)])
+
+    def test_other_guilds_databases_are_excluded(self) -> None:
+        self.suggestion_service.create_database("Other Guild DB", guild_id=999, channel_id=555)
+
+        matches = build_database_autocomplete_choices(
+            self.suggestion_service, None, GUILD_ID, None, ""
+        )
+
+        self.assertNotIn("Other Guild DB", [name for name, _ in matches])
 
 
 if __name__ == "__main__":

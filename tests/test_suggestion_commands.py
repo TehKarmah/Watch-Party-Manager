@@ -103,7 +103,7 @@ class SuggestionCommandTests(unittest.TestCase):
 
         self.assertTrue(ephemeral)
         self.assertIsNone(watch_item)
-        self.assertIn("Multiple suggestion databases", message)
+        self.assertIn("Which collection would you like to use", message)
         self.assertEqual(self.suggestion_service.suggestion_count(), 0)
 
     def test_add_with_no_databases_configured_explains_wash_crew_must_configure_one(self) -> None:

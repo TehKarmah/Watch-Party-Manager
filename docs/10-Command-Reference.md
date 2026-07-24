@@ -43,7 +43,7 @@ Required Role reflects WASH's three-tier permission model:
 | `/reject` | Watch Party Member | Mark a suggestion "I WILL NOT WATCH". |
 | `/unreject` | Watch Party Member | Remove your own rejection from a suggestion. |
 
-`/add` takes a `title` and optional `imdb_url` and `release_year`. `/list` takes an optional `status` (Available, Watched, or Retired; defaults to Available) and a `public` option (WASH Crew only). `/reject` and `/unreject` both take a `suggestion_id` and mirror the suggestion post's own "I WILL NOT WATCH" button; results are always ephemeral, since a member's rejection is for their eyes only.
+`/add` takes a `title` and optional `imdb_url` and `release_year`. `/list` takes an optional `status` (Available, Watched, or Retired; defaults to Available) and a `public` option (WASH Crew only). `/reject` and `/unreject` both take a `suggestion_id` and mirror the suggestion post's own "I WILL NOT WATCH" button; results are always ephemeral, since a member's rejection is for their eyes only. `/edit_suggestion`'s optional `database_id` (to move a suggestion to a different collection) offers live autocomplete of this server's collections by name -- it's never necessary to type a raw ID.
 
 ## Voting
 
@@ -68,7 +68,7 @@ Casting a vote itself happens through the interactive buttons on the voting post
 | `/setup` | WASH Crew | Run the guided server setup wizard. |
 | `/config` | WASH Crew | View or change WASH's server configuration. |
 
-`/setup` is a one-time guided first-run flow; once setup is complete, `/config` edits individual settings section by section (roles, channels, the active suggestion database, suggestion post destination, watched-movie destination, voting/reminder/backup defaults) without repeating the whole wizard.
+`/setup` is a one-time guided first-run flow; once setup is complete, `/config` edits individual settings section by section (roles, channels, Manage Collections -- pick a collection to edit its suggestion destination, watched-movie destination override, and candidate selection -- a guild-wide default Watched Movie Destination, and voting/reminder/backup defaults) without repeating the whole wizard. Every collection must have exactly one dedicated suggestion destination, so Manage Collections can only change it to a different channel or thread, never clear it; a collection's watched-movie destination remains optional and may be cleared to fall back to the guild-wide default.
 
 ## WASH Crew: Suggestion Databases
 
