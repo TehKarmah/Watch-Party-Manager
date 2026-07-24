@@ -47,3 +47,9 @@ These documents distinguish currently available administration from planned Vers
 - [Decision Log](99-Decision-Log.md)
 - [Future Ideas](Future-Ideas.md)
 - [Changelog](../CHANGELOG.md)
+
+## Release
+
+8. [Release Validation Checklist](11-Release-Validation-Checklist.md)
+
+The official v1.0 release acceptance checklist -- manual, end-to-end verification of every major feature, to be run against a real Discord server before tagging a release.
