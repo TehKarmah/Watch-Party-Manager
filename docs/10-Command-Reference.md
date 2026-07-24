@@ -4,8 +4,8 @@
 | --- | --- |
 | Document | Commands Reference |
 | File | `10-Command-Reference.md` |
-| Version | 1.0 Draft |
-| Status | Active Draft |
+| Version | 1.0 |
+| Status | Active |
 | Last Updated | July 2026 |
 | Authors | TehKarmah & ChatGPT |
 
@@ -40,8 +40,10 @@ Required Role reflects WASH's three-tier permission model:
 | `/list` | Watch Party Member | List watch items by status. |
 | `/remove` | WASH Crew | Remove a watch item. |
 | `/edit_suggestion` | WASH Crew | Edit a suggestion's details or database. |
+| `/reject` | Watch Party Member | Mark a suggestion "I WILL NOT WATCH". |
+| `/unreject` | Watch Party Member | Remove your own rejection from a suggestion. |
 
-`/add` takes a `title` and optional `imdb_url` and `release_year`. `/list` takes an optional `status` (Available, Watched, or Retired; defaults to Available) and a `public` option (WASH Crew only).
+`/add` takes a `title` and optional `imdb_url` and `release_year`. `/list` takes an optional `status` (Available, Watched, or Retired; defaults to Available) and a `public` option (WASH Crew only). `/reject` and `/unreject` both take a `suggestion_id` and mirror the suggestion post's own "I WILL NOT WATCH" button; results are always ephemeral, since a member's rejection is for their eyes only.
 
 ## Voting
 

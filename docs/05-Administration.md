@@ -6,13 +6,13 @@
 | --- | --- |
 | Document | Administration |
 | File | `05-Administration.md` |
-| Version | 1.0 Draft |
-| Status | Active Draft |
+| Version | 1.0 |
+| Status | Active |
 | Last Updated | July 2026 |
 | Authors | TehKarmah & ChatGPT |
 
 > [!NOTE]
-> This document distinguishes administration available in the current 0.1.0 build from the broader Version 1 administration plan. For a complete first-time installation walkthrough, see the [Installation Guide](09-Installation-Guide.md).
+> This document distinguishes administration available in the current 1.0.0 build from the broader Version 1 administration plan. For a complete first-time installation walkthrough, see the [Installation Guide](09-Installation-Guide.md).
 
 ## 1. Current Administrative Model
 
@@ -166,7 +166,7 @@ Current voting capabilities include:
 - Persistent round storage
 - Persistent interactive controls after restart
 
-Automatic expiration, closing, and winner announcements are currently in development.
+Automatic expiration, closing, and winner announcements are fully implemented, driven by the persistent scheduler rather than requiring a WASH Crew member to close a round manually.
 
 ## 6. Diagnostics and Integrity
 

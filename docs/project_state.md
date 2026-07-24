@@ -147,4 +147,4 @@ PowerShell:
 - Primary branch: `main`
 - Source of truth: GitHub repository
 - Development environment: VS Code
-- Current package version: `0.1.0`
+- Current package version: `1.0.0`

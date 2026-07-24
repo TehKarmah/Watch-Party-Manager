@@ -6,8 +6,8 @@
 | ------------ | ------------------- |
 | Document     | Data Model          |
 | File         | `04-Data-Model.md`  |
-| Version      | 1.0 Draft           |
-| Status       | Draft               |
+| Version      | 1.0                 |
+| Status       | Active              |
 | Last Updated | July 2026           |
 | Authors      | TehKarmah & ChatGPT |
 

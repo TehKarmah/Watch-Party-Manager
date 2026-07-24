@@ -6,13 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Planned
+No unreleased changes.
 
-- Final v1.0 release polish and sign-off.
-- Release validation against the [Installation Guide](docs/09-Installation-Guide.md)'s verification checklist on a clean environment.
-- A final documentation review pass before tagging the release.
-
-## [1.0.0] - Release Candidate
+## [1.0.0] - 2026-07-24
 
 Watch Party Manager's first complete, self-hostable release: a Discord bot (**WASH**, the Watch Party Administration & Scheduling Helper) that runs a community's entire watch-party lifecycle -- suggesting titles, voting, scheduling, and reporting on the results -- through guided setup rather than manual configuration file editing.
 
@@ -90,12 +86,13 @@ Watch Party Manager's first complete, self-hostable release: a Discord bot (**WA
 
 - A structured, permission-aware `/help` registry showing each member only the commands they can use, linking out to expanded GitHub-hosted documentation.
 - `/about`, reporting version, build, Discord gateway latency, and uptime alongside a feature summary.
-- `/diagnostics` (WASH Crew only), startup data-integrity checks, and structured application logging throughout.
+- Startup data-integrity checks and structured application logging throughout.
 
 ### Changed
 
 - Renamed the original suggestion commands (`/suggest`, `/suggestions`, `/remove_suggestion`) to `/add`, `/list`, and `/remove`.
 - Replaced the original `/version` command with the richer `/about`.
+- Merged the separate `/diagnostics` command (WASH Crew only) into `/about`'s expanded Health/Configuration/Runtime view.
 - Replaced direct IMDb scraping with OMDb API-backed metadata resolution (optional, configured via `OMDB_API_KEY`); plain-title suggestions have never required it.
 - Moved the full command reference out of Discord messages and into linked GitHub documentation, keeping `/help` itself concise.
 - Broadened `/list` and `/stats` from WASH-Crew-only to every Watch Party member, with public posting remaining WASH Crew-gated (except a member's own statistics).
@@ -121,4 +118,4 @@ Watch Party Manager's first complete, self-hostable release: a Discord bot (**WA
 
 ### Testing
 
-- Automated test suite grown to **2,426 passing tests**, covering domain validation, service behavior, repository persistence and migration, permission fail-closed behavior, guild scoping, and restart-safe restoration of every persistent Discord view.
+- Automated test suite grown to **2,595 passing tests**, covering domain validation, service behavior, repository persistence and migration, permission fail-closed behavior, guild scoping, and restart-safe restoration of every persistent Discord view.

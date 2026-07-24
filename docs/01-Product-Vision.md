@@ -6,8 +6,8 @@
 | ------------ | ---------------------- |
 | Document     | Product Vision         |
 | File         | `01-Product-Vision.md` |
-| Version      | 1.0 Draft              |
-| Status       | Draft                  |
+| Version      | 1.0                    |
+| Status       | Active                 |
 | Last Updated | July 2026              |
 | Authors      | TehKarmah & ChatGPT    |
 

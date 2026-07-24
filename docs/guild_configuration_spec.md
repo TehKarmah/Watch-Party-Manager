@@ -29,9 +29,10 @@ watch_party_role:
   role_id: null
   join_mode: self_service
   allow_self_leave: true
+  denial_cooldown_days: 7
 ```
 
-Supported join modes are `manual`, `self_service`, `approval`, and `discord_managed`.
+Supported join modes are `manual`, `self_service`, `approval`, and `discord_managed`. `denial_cooldown_days` (1 through 365) is how long a member must wait after an Approval-Required join request is denied before requesting again; only Approval-Required mode consults it.
 
 ## Suggestion Databases
 
@@ -53,17 +54,18 @@ This lightweight guild entry does not replace the existing operational `Suggesti
 channels:
   announcements_channel_id: null
   log_channel_id: null
+  admin_channel_id: null
 ```
 
-Both channels are optional. When no announcements channel is configured, WASH may use the current interaction channel where appropriate. When no log channel is configured, noncritical Discord logging is suppressed; critical failures still go to application logs.
+All three channels are optional. When no announcements channel is configured, WASH may use the current interaction channel where appropriate. When no log channel is configured, noncritical Discord logging is suppressed; critical failures still go to application logs. `admin_channel_id` is a dedicated channel for Approval-Required membership requests, deliberately separate from `log_channel_id`'s general administrative logging.
 
 ## Voting Defaults
 
 ```yaml
 voting_defaults:
   candidate_count: 3
-  duration_days: 7
-  visibility: blind
+  duration_hours: 24
+  visibility: visible
   max_vote_changes: 1
   tie_behavior: all_winners
 ```
@@ -71,12 +73,14 @@ voting_defaults:
 Validation:
 
 - `candidate_count`: 2 through 10
-- `duration_days`: 1 through 30
+- `duration_hours`: 1 through 720 (Hour-Based Voting Durations; hours is the single internal unit, replacing the earlier day-based setting)
 - `visibility`: `blind` or `visible`
 - `max_vote_changes`: 0 through 10
 - `tie_behavior`: `all_winners` in v1
 
 Runoff and other tie strategies are deferred.
+
+Per-database voting overrides (candidate count, duration, visibility, max vote changes, tie behavior) and per-database candidate-selection strategy (Rotation Pool, Soft Rotation, Infinite Pool) are database-owned configuration, outside this document's scope (see "Purpose & Scope" above).
 
 ## Notifications
 

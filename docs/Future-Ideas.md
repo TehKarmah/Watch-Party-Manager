@@ -6,7 +6,7 @@
 | ------------ | ------------------- |
 | Document     | Future Ideas        |
 | File         | `Future-Ideas.md`   |
-| Version      | 1.0 Draft           |
+| Version      | 1.0                 |
 | Status       | Living Document     |
 | Last Updated | July 2026           |
 | Authors      | TehKarmah & ChatGPT |

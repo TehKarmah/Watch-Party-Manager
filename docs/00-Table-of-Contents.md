@@ -6,8 +6,8 @@
 | --- | --- |
 | Document | Table of Contents |
 | File | `00-Table-of-Contents.md` |
-| Version | 1.0 Draft |
-| Status | Active Draft |
+| Version | 1.0 |
+| Status | Active |
 | Last Updated | July 2026 |
 | Authors | TehKarmah & ChatGPT |
 

@@ -6,8 +6,8 @@
 | --- | --- |
 | Document | Release Validation Checklist |
 | File | `11-Release-Validation-Checklist.md` |
-| Version | 1.0 Draft |
-| Status | Active Draft |
+| Version | 1.0 |
+| Status | Active |
 | Last Updated | July 2026 |
 | Authors | TehKarmah & ChatGPT |
 

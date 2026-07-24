@@ -6,8 +6,8 @@
 | ------------ | -------------------- |
 | Document     | Architecture         |
 | File         | `02-Architecture.md` |
-| Version      | 1.0 Draft            |
-| Status       | Draft                |
+| Version      | 1.0                  |
+| Status       | Active               |
 | Last Updated | July 2026            |
 | Authors      | TehKarmah & ChatGPT  |
 

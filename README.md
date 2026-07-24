@@ -6,8 +6,8 @@ WASH manages suggestion databases and suggestions (with IMDb link normalization 
 
 ## Current Status
 
-- **Version:** 0.1.0 (final release preparation)
-- **Automated tests:** 2426 passing
+- **Version:** 1.0.0
+- **Automated tests:** 2595 passing
 - **Python:** 3.12 or later
 - **Discord library:** discord.py 2.4 or later
 - **Persistence:** JSON repositories
@@ -63,7 +63,7 @@ WASH's in-Discord `/help` command always reflects the exact command set availabl
 
 ### Watch Party members (WASH Crew inherit these too)
 
-- `/add`, `/list`, `/stats`
+- `/add`, `/list`, `/stats`, `/reject`, `/unreject`
 
 ### WASH Crew
 
@@ -105,6 +105,7 @@ Everything else -- suggestion databases, voting defaults, reminders, backup sche
 - [Expanded Help](docs/08-Expanded-Help.md)
 - [Glossary](docs/98-Glossary.md)
 - [Current Project State](docs/project_state.md)
+- [Release Validation Checklist](docs/11-Release-Validation-Checklist.md)
 - [Changelog](CHANGELOG.md)
 
 ## License
