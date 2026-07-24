@@ -124,7 +124,7 @@ class ConfigRoleSectionView(discord.ui.View):
 class ConfigJoinModeSelect(discord.ui.Select):
     def __init__(self, on_select: OnConfigJoinModeSelected) -> None:
         super().__init__(
-            placeholder="Select the join mode",
+            placeholder="Choose the join mode",
             options=_JOIN_MODE_OPTIONS,
             custom_id="wpm_config_join_mode_select",
         )
@@ -174,7 +174,7 @@ class ConfigAdminChannelSectionView(discord.ui.View):
             DestinationChannelSelect(
                 on_select,
                 custom_id="wpm_config_admin_channel_select",
-                placeholder="Select an existing channel or thread",
+                placeholder="Choose an existing channel or thread",
             )
         )
         self.add_item(ConfigClearAdminChannelButton(on_clear))
@@ -233,14 +233,14 @@ class ConfigSuggestionDestinationSectionView(discord.ui.View):
             DestinationChannelSelect(
                 on_select,
                 custom_id="wpm_config_suggestion_destination_channel_select",
-                placeholder="Select an existing channel or thread",
+                placeholder="Choose an existing channel or thread",
             )
         )
         self.add_item(ConfigClearSuggestionDestinationButton(on_clear))
         self.add_item(BackToMenuButton(on_back))
 
 
-# --- Watched-Movie Destination -------------------------------------------------------------
+# --- Watched Movie Destination -------------------------------------------------------------
 
 
 class ConfigSkipDestinationButton(discord.ui.Button):
@@ -261,7 +261,7 @@ class ConfigWatchDestinationSectionView(discord.ui.View):
             DestinationChannelSelect(
                 on_select,
                 custom_id="wpm_config_watch_destination_channel_select",
-                placeholder="Select an existing channel or thread",
+                placeholder="Choose an existing channel or thread",
             )
         )
         self.add_item(ConfigSkipDestinationButton(on_skip))

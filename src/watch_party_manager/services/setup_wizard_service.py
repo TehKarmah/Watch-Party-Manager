@@ -365,7 +365,7 @@ class SetupWizardService:
             candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[draft.voting_candidate_selection]
             lines.append(
                 "Voting Defaults: Configured "
-                f"({draft.voting_candidate_count} nominees, {draft.voting_duration_days} day(s), "
+                f"({draft.voting_candidate_count} candidates, {draft.voting_duration_days} day(s), "
                 f"{draft.voting_visibility.value}, {candidate_selection_label})"
             )
         else:

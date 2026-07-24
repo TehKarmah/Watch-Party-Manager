@@ -130,7 +130,7 @@ class MainSummaryTests(ConfigServiceTestCase):
         self._seed_completed_setup()
         self._create_database()
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn("Watched-Movie Destination: Skipped", lines)
+        self.assertIn("Watched Movie Destination: Skipped", lines)
 
     def test_invalid_role_no_longer_existing_is_reported_as_invalid(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=999999)

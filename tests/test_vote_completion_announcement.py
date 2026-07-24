@@ -376,7 +376,7 @@ class BuildWinnerDetailEmbedTests(unittest.TestCase):
         embed = build_winner_detail_embed(watch_item, 4, show_thumbnail=True)
 
         fields = {field.name: field.value for field in embed.fields}
-        self.assertEqual(fields.get("Rating"), "8.0/10")
+        self.assertEqual(fields.get("IMDb Rating"), "8.0/10")
 
     def test_shows_genres(self) -> None:
         watch_item = make_watch_item("Brazil (1985)", id=1, genres=("Comedy", "Sci-Fi"))

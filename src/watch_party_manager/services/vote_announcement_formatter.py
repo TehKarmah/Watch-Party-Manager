@@ -402,7 +402,7 @@ def build_winner_detail_embed(watch_item: WatchItem, vote_count: int, *, show_th
     if watch_item.runtime_minutes:
         embed.add_field(name="Runtime", value=f"{watch_item.runtime_minutes} min", inline=True)
     if watch_item.imdb_rating:
-        embed.add_field(name="Rating", value=f"{watch_item.imdb_rating}/10", inline=True)
+        embed.add_field(name="IMDb Rating", value=f"{watch_item.imdb_rating}/10", inline=True)
     if watch_item.genres:
         embed.add_field(name="Genres", value=" • ".join(watch_item.genres), inline=True)
     vote_word = "vote" if vote_count == 1 else "votes"

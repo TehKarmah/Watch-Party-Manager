@@ -92,7 +92,7 @@ CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
     ConfigSection.ADMIN_CHANNEL: "Admin Channel",
     ConfigSection.SUGGESTION_DATABASE: "Active Suggestion Database",
     ConfigSection.SUGGESTION_DESTINATION: "Suggestion Post Destination",
-    ConfigSection.WATCH_DESTINATION: "Watched-Movie Destination",
+    ConfigSection.WATCH_DESTINATION: "Watched Movie Destination",
     ConfigSection.VOTING_DEFAULTS: "Voting Defaults",
     ConfigSection.REMINDER_DEFAULTS: "Reminder Defaults",
     ConfigSection.BACKUP_DEFAULTS: "Backup Defaults",
@@ -143,7 +143,7 @@ class ConfigService:
     def resolve_configured_database(self, guild_id: int) -> Optional[SuggestionDatabase]:
         """Return "the" active suggestion database for this guild, if unambiguous.
 
-        Watched-Movie Destination and Voting Defaults' candidate-selection
+        Watched Movie Destination and Voting Defaults' candidate-selection
         both live on a specific database's SuggestionDatabaseConfiguration
         (see docs/guild_configuration_spec.md's deferred-reconciliation
         note, also honored by setup_wizard_service.py). Multiple databases
@@ -226,13 +226,13 @@ class ConfigService:
         destination_channel_id = self._resolve_watch_destination_channel_id(guild_id)
         if destination_channel_id is None:
             if len(active_databases) == 1:
-                lines.append("Watched-Movie Destination: Skipped")
+                lines.append("Watched Movie Destination: Skipped")
             else:
-                lines.append("Watched-Movie Destination: Not configured")
+                lines.append("Watched Movie Destination: Not configured")
         elif validate_channel_usable(destination_channel_id, guild):
-            lines.append(f"Watched-Movie Destination: Invalid (<#{destination_channel_id}> no longer usable)")
+            lines.append(f"Watched Movie Destination: Invalid (<#{destination_channel_id}> no longer usable)")
         else:
-            lines.append(f"Watched-Movie Destination: Configured (<#{destination_channel_id}>)")
+            lines.append(f"Watched Movie Destination: Configured (<#{destination_channel_id}>)")
 
         voting_defaults = configuration.voting_defaults
         candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[
@@ -240,7 +240,7 @@ class ConfigService:
         ]
         lines.append(
             "Voting Defaults: Configured "
-            f"({voting_defaults.candidate_count} nominees, {voting_defaults.duration_days} day(s), "
+            f"({voting_defaults.candidate_count} candidates, {voting_defaults.duration_days} day(s), "
             f"{voting_defaults.visibility.value}, candidate selection: {candidate_selection_label})"
         )
 
@@ -420,7 +420,7 @@ class ConfigService:
             True, "Suggestion post destination cleared.", self.get_configuration(guild_id)
         )
 
-    # --- Watched-Movie Destination ------------------------------------------------------------
+    # --- Watched Movie Destination ------------------------------------------------------------
 
     def set_watch_destination(self, guild_id: int, channel_id: int, guild: GuildLookup) -> ConfigUpdateResult:
         database = self.resolve_configured_database(guild_id)
@@ -433,7 +433,7 @@ class ConfigService:
 
         self._save_database_channel(guild_id, database, channel_id, field_name="watch_history_channel_id")
         return ConfigUpdateResult(
-            True, f"Watched-movie destination updated to <#{channel_id}>.", self.get_configuration(guild_id)
+            True, f"Watched movie destination updated to <#{channel_id}>.", self.get_configuration(guild_id)
         )
 
     def skip_watch_destination(self, guild_id: int) -> ConfigUpdateResult:
@@ -443,7 +443,7 @@ class ConfigService:
 
         self._save_database_channel(guild_id, database, None, field_name="watch_history_channel_id")
         return ConfigUpdateResult(
-            True, "Watched-movie destination cleared.", self.get_configuration(guild_id)
+            True, "Watched movie destination cleared.", self.get_configuration(guild_id)
         )
 
     def _save_database_channel(

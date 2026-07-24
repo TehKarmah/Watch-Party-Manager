@@ -1,24 +1,25 @@
 """Tests for FR-029's corrected command-access model.
 
-The approved model restricts /list, /vote_status, /watch_party_status,
-and /stats to WASH Crew (only /add remains Watch Party member-facing
-beyond /help and /about). Each of these commands' bot.py callback now
-gates on PermissionService.require_wash_crew before doing anything else
--- the same fail-closed, already-tested gate every other WASH-only
-command uses (see test_permission_service.py for its own full coverage:
-fails closed when unconfigured, rejects the Watch Party role alone,
-accepts the WASH Crew role).
+/vote_status and /watch_party_status are WASH Crew-only; each command's
+bot.py callback gates on PermissionService.require_wash_crew before
+doing anything else -- the same fail-closed, already-tested gate every
+other WASH-only command uses (see test_permission_service.py for its
+own full coverage: fails closed when unconfigured, rejects the Watch
+Party role alone, accepts the WASH Crew role). /list was extended to
+every Watch Party member by FR-033A and is no longer covered by this
+file -- see test_list_suggestion_command.py for its own permission
+coverage.
 
-/list, /vote_status, /watch_party_status, and /stats gate inline in
-their @self.tree.command closures (matching this project's established
+/vote_status and /watch_party_status gate inline in their
+@self.tree.command closures (matching this project's established
 "inline permission check, then call a permission-agnostic perform_*
-content function" pattern already used by /add) -- there's no separate
-perform_* wrapper to call in isolation, so this file instead confirms
-the shared gate they all now call (PermissionService.require_wash_crew)
-behaves correctly for the same WASH/member/unprivileged/unconfigured
-matrix, and that each command's content-only perform_* function takes no
-user/role at all (i.e. permission is enforced entirely by the gate that
-runs before it, never duplicated or bypassed inside it).
+content function" pattern) -- there's no separate perform_* wrapper to
+call in isolation, so this file instead confirms the shared gate they
+call (PermissionService.require_wash_crew) behaves correctly for the
+same WASH/member/unprivileged/unconfigured matrix, and that each
+command's content-only perform_* function takes no user/role at all
+(i.e. permission is enforced entirely by the gate that runs before it,
+never duplicated or bypassed inside it).
 
 The formerly separate, WASH Crew-only /diagnostics command was removed
 and consolidated into /about, which gates its expanded Health/
@@ -30,7 +31,6 @@ import inspect
 import unittest
 
 from watch_party_manager.bot import (
-    perform_list_suggestions_response,
     perform_stats,
     perform_vote_status,
     perform_watch_party_status,
@@ -64,8 +64,8 @@ def _unprivileged_user() -> FakeMember:
 
 
 class SharedWashCrewGateTests(unittest.TestCase):
-    """The exact gate /list, /vote_status, /watch_party_status, and
-    /stats now call before doing anything else.
+    """The exact gate /vote_status, /watch_party_status, and /stats now
+    call before doing anything else.
     """
 
     def _service(self) -> PermissionService:
@@ -97,21 +97,12 @@ class SharedWashCrewGateTests(unittest.TestCase):
 
 
 class ContentFunctionsDoNotDuplicateOrBypassPermissionTests(unittest.TestCase):
-    """/list, /vote_status, /watch_party_status, and /stats delegate their
+    """/vote_status, /watch_party_status, and /stats delegate their
     actual content to perform_* functions that take no user or role --
     confirming that shape guards against permission logic silently
     reappearing (or a bypass being reintroduced) inside the content
     function itself, separate from the gate in the command callback.
     """
-
-    def test_perform_list_suggestions_response_still_takes_a_user_for_view_selection_only(self) -> None:
-        # perform_list_suggestions_response legitimately takes `user` and
-        # `wash_crew_role_id` to choose between the standard/WASH Crew
-        # list *views* (an existing, unrelated feature) -- not to gate
-        # access, which now happens earlier, in the /list callback itself.
-        parameters = inspect.signature(perform_list_suggestions_response).parameters
-        self.assertIn("user", parameters)
-        self.assertIn("wash_crew_role_id", parameters)
 
     def test_perform_vote_status_takes_no_permission_parameters(self) -> None:
         parameters = inspect.signature(perform_vote_status).parameters

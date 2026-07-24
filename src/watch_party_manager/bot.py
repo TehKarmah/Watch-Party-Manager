@@ -144,10 +144,6 @@ from watch_party_manager.services.duplicate_detection_service import (
 )
 from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
-from watch_party_manager.services.suggestion_list_formatter import (
-    SuggestionListFormatter,
-    SuggestionListView,
-)
 from watch_party_manager.services.suggestion_service import (
     DEFAULT_REJECTION_THRESHOLD,
     SuggestionService,
@@ -1190,7 +1186,7 @@ def parse_vote_nominee_count(value: Optional[int], default: int = DEFAULT_VOTE_C
         return default
     if not (MIN_VOTE_CANDIDATE_COUNT <= value <= MAX_VOTE_CANDIDATE_COUNT):
         raise ValueError(
-            f"nominee_count must be between {MIN_VOTE_CANDIDATE_COUNT} and "
+            f"Candidate count must be between {MIN_VOTE_CANDIDATE_COUNT} and "
             f"{MAX_VOTE_CANDIDATE_COUNT}."
         )
     return value
@@ -1610,10 +1606,10 @@ def parse_setup_voting_candidate_count(value: str) -> int:
     try:
         count = int(value.strip())
     except ValueError:
-        raise ValueError("Default nominee count must be a whole number.")
+        raise ValueError("Default candidate count must be a whole number.")
     if not (MIN_VOTE_CANDIDATE_COUNT <= count <= MAX_VOTE_CANDIDATE_COUNT):
         raise ValueError(
-            f"Default nominee count must be between {MIN_VOTE_CANDIDATE_COUNT} and {MAX_VOTE_CANDIDATE_COUNT}."
+            f"Default candidate count must be between {MIN_VOTE_CANDIDATE_COUNT} and {MAX_VOTE_CANDIDATE_COUNT}."
         )
     return count
 
@@ -1748,7 +1744,7 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
     )
     lines.append(
         "Voting Defaults: "
-        f"{configuration.voting_defaults.candidate_count} nominees, "
+        f"{configuration.voting_defaults.candidate_count} candidates, "
         f"{configuration.voting_defaults.duration_days} day(s), "
         f"{configuration.voting_defaults.visibility.value}, "
         f"candidate selection: {candidate_selection_label}"
@@ -2224,7 +2220,7 @@ async def send_config_section(
             on_select,
             on_back,
             custom_id="wpm_config_wash_crew_role_select",
-            placeholder="Select the new WASH Crew role",
+            placeholder="Choose the new WASH Crew role",
             min_values=1,
         )
         body += "\n\nSelect the Discord role that should control administrative access to WASH."
@@ -2239,7 +2235,7 @@ async def send_config_section(
             on_select,
             on_back,
             custom_id="wpm_config_watch_party_role_select",
-            placeholder="Select the new Watch Party role (optional)",
+            placeholder="Choose the new Watch Party role (optional)",
             min_values=0,
         )
         body += "\n\nSelect the Watch Party role, or leave blank to clear it."
@@ -5431,68 +5427,6 @@ async def perform_repair_suggestions(
         return "You need the WASH Crew role to repair suggestions.", True
     report = await repair_service.repair_all()
     return report.format_message(), True
-
-
-def perform_list_suggestions_response(
-    suggestion_service: SuggestionService,
-    guild_id: Optional[int],
-    channel_id: Optional[int],
-    user: object | None = None,
-    wash_crew_role_id: Optional[int] = None,
-    view: str | None = None,
-    public: bool = False,
-) -> tuple[str, bool]:
-    """Build the role-aware ``/list`` response.
-
-    NOT the live ``/list`` command (see handle_list_suggestions /
-    send_suggestion_list / build_suggestion_entry_line below, registered
-    against the actual ``/list`` slash command). This is a pre-FR-033A
-    formatter kept only for its existing test coverage -- it uses
-    SuggestionListFormatter, a separate formatter from
-    build_suggestion_entry_line's active title/year rendering (Release
-    Polish Batch 2, Priority 2), so it must never be wired back up
-    without also updating it to match the corrected behavior there.
-
-    The standard view is available to everyone and is ephemeral by default.
-    The expanded Crew view and public posting are restricted to WASH Crew.
-    """
-    try:
-        parsed_view = SuggestionListView.parse(view)
-    except ValueError as exc:
-        return str(exc), True
-
-    is_crew = is_wash_crew_member(user, wash_crew_role_id) if user is not None else False
-    if parsed_view is SuggestionListView.CREW and not is_crew:
-        return "You need the WASH Crew role to use the Crew list view.", True
-    if public and not is_crew:
-        return "You need the WASH Crew role to post the suggestion list publicly.", True
-
-    resolution = suggestion_service.resolve_database_for_channel(guild_id, channel_id)
-    if resolution.database is None:
-        return resolution.error_message or "No suggestion database is available here.", True
-
-    # The Crew view is WASH's administrative view (already gated above),
-    # so it continues to show archived suggestions -- e.g. those rejected
-    # via /reject -- while the standard view excludes them.
-    items = suggestion_service.get_suggestions_for_database(
-        resolution.database.database_id, include_archived=parsed_view is SuggestionListView.CREW
-    )
-    message = SuggestionListFormatter().format(items, resolution.database, parsed_view)
-    return message, not public
-
-
-def perform_list_suggestions(
-    suggestion_service: SuggestionService,
-    guild_id: Optional[int],
-    channel_id: Optional[int],
-) -> str:
-    """Backward-compatible standard list formatter used by existing callers."""
-    message, _ = perform_list_suggestions_response(
-        suggestion_service=suggestion_service,
-        guild_id=guild_id,
-        channel_id=channel_id,
-    )
-    return message
 
 
 # --- FR-033A: /list with status filters, richer entries, and pagination -------------------

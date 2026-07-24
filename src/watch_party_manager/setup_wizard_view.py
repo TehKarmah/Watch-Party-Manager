@@ -174,7 +174,7 @@ class SetupWizardResumeView(SetupWizardStepView):
 class WashCrewRoleSelect(discord.ui.RoleSelect):
     def __init__(self, on_select: OnRoleSelected) -> None:
         super().__init__(
-            placeholder="Select the WASH Crew role",
+            placeholder="Choose the WASH Crew role",
             min_values=1,
             max_values=1,
             custom_id="wpm_setup_wash_crew_role_select",
@@ -226,7 +226,7 @@ class WatchPartyRoleSelectComponent(discord.ui.RoleSelect):
 
     def __init__(self) -> None:
         super().__init__(
-            placeholder="Select the Watch Party role (optional)",
+            placeholder="Choose the Watch Party role (optional)",
             min_values=0,
             max_values=1,
             custom_id="wpm_setup_watch_party_role_select",
@@ -241,7 +241,7 @@ class JoinModeSelectComponent(discord.ui.Select):
 
     def __init__(self) -> None:
         super().__init__(
-            placeholder="Select the join mode (defaults to Self-Service)",
+            placeholder="Choose the join mode (defaults to Self-Service)",
             custom_id="wpm_setup_watch_party_join_mode_select",
             options=_JOIN_MODE_OPTIONS,
         )
@@ -410,7 +410,7 @@ class CreateDatabaseChannelSelectView(SetupWizardStepView):
             DestinationChannelSelect(
                 on_select,
                 custom_id="wpm_setup_database_channel_select",
-                placeholder="Select the channel or thread for this database",
+                placeholder="Choose the channel or thread for this database",
             )
         )
         self.add_item(SetupCancelButton(on_cancel))
@@ -451,7 +451,7 @@ class AdminChannelStepView(SetupWizardStepView):
             DestinationChannelSelect(
                 on_select,
                 custom_id="wpm_setup_admin_channel_select",
-                placeholder="Select an existing channel or thread",
+                placeholder="Choose an existing channel or thread",
             )
         )
         self.add_item(SkipAdminChannelButton(on_skip))
@@ -490,7 +490,7 @@ class WatchDestinationStepView(SetupWizardStepView):
             DestinationChannelSelect(
                 on_select,
                 custom_id="wpm_setup_watch_destination_channel_select",
-                placeholder="Select an existing channel or thread",
+                placeholder="Choose an existing channel or thread",
             )
         )
         self.add_item(SkipWatchDestinationButton(on_skip))
@@ -549,7 +549,7 @@ class VotingDefaultsModal(discord.ui.Modal):
             defaults or ("3", "7", "visible", "rotation_pool")
         )
         self.candidate_count_input = discord.ui.TextInput(
-            label="Default nominee count (2-10)", default=candidate_count_default
+            label="Default candidate count (2-10)", default=candidate_count_default
         )
         self.duration_days_input = discord.ui.TextInput(
             label="Default vote duration in days (1-30)", default=duration_days_default

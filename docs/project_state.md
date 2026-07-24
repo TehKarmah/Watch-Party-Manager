@@ -132,7 +132,7 @@ With core functionality, configuration, and documentation in place, remaining Ve
 ## Testing Status
 
 - Full automated suite passing
-- Current baseline: **2583 tests**
+- Current baseline: **2559 tests**
 - Test framework: `unittest`
 - Python version: 3.12
 

@@ -33,4 +33,4 @@ FR-017 and later (membership workflows, IMDb link normalization/duplicate detect
 | Diagnostics info (via `/about`, WASH Crew only) | Complete foundation |
 | Startup data-integrity checks | Complete foundation |
 | Structured application logging | Complete foundation |
-| Automated test suite | 2583 passing tests |
+| Automated test suite | 2559 passing tests |

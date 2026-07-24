@@ -104,7 +104,7 @@ class CustomizeVoteModal(discord.ui.Modal):
         self._submit_callback = on_submit
 
         self.nominee_count_input = discord.ui.TextInput(
-            label="Nominee count (2-10)",
+            label="Candidate count (2-10)",
             required=False,
             placeholder="Leave blank to use the configured default",
         )

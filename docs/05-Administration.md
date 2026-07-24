@@ -117,8 +117,8 @@ Use `/start_vote` to begin an interactive setup flow.
 
 WASH offers:
 
-- **Use Defaults**, which applies the configured nominee count, seven-day duration, and the guild's configured default visibility.
-- **Customize This Vote**, which accepts a nominee count, duration from 1 through 30 days, and blind or visible voting (leaving it blank also uses the guild's configured default, not a hardcoded value).
+- **Use Defaults**, which applies the configured candidate count, seven-day duration, and the guild's configured default visibility.
+- **Customize This Vote**, which accepts a candidate count, duration from 1 through 30 days, and blind or visible voting (leaving it blank also uses the guild's configured default, not a hardcoded value).
 
 WASH selects nominees from the applicable suggestion database and creates an interactive voting post -- WASH's standard embed style with the yellow accent color, showing the round's visibility, end time, and candidate titles (no leading nominee number; vote buttons below the embed carry the same clean titles). Candidate availability is validated before the round is created.
 
