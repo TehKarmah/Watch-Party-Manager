@@ -23,6 +23,20 @@ class ImdbMetadataServiceTests(unittest.IsolatedAsyncioTestCase):
             "https://www.imdb.com/title/tt0133093/",
         )
 
+    def test_is_configured_true_when_an_api_key_is_given(self) -> None:
+        service = ImdbMetadataService(api_key="abc123")
+        self.assertTrue(service.is_configured)
+
+    def test_is_configured_false_without_an_api_key(self) -> None:
+        service = ImdbMetadataService(api_key="")
+        self.assertFalse(service.is_configured)
+
+    def test_is_configured_reads_the_environment_when_no_key_is_given(self) -> None:
+        with patch.dict(os.environ, {"OMDB_API_KEY": "env-key"}, clear=False):
+            self.assertTrue(ImdbMetadataService().is_configured)
+        with patch.dict(os.environ, {"OMDB_API_KEY": ""}, clear=False):
+            self.assertFalse(ImdbMetadataService().is_configured)
+
     async def test_resolves_title_and_year_from_omdb(self) -> None:
         service = ImdbMetadataService(
             api_key="test-key",

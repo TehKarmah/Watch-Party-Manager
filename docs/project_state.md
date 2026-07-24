@@ -33,10 +33,10 @@ Core suggestion, voting, rotation, statistics, membership, setup/configuration, 
 | Interactive voting | Complete | Discord controls and persistent restoration after restart are implemented. |
 | Vote completion | Complete | Automatic expiration, closing, winner announcements, and Watch Item Journey updates are implemented. |
 | Statistics | Complete foundation | Server, member, suggestion, rotation, and database statistics are implemented. Likes, leaderboards, graphs, and exports are explicitly out of scope for the current architecture. |
-| Diagnostics and integrity | Complete foundation | Crew diagnostics, startup checks, and logging are implemented. |
+| Diagnostics and integrity | Complete foundation | WASH Crew health/configuration/runtime diagnostics are shown via `/about`'s expanded sections (no separate `/diagnostics` command); startup checks and logging are implemented. |
 | Membership | Complete | Self-service, manual, approval-required, and Discord-managed join modes; membership administration commands. |
 | Scheduled watch parties | Complete foundation | Single-occurrence scheduling, rescheduling, cancellation, and reminders. The richer recurring Event Series/Discord Event model remains future work. |
-| Setup and configuration | Complete | Guided, rerunnable `/setup` wizard and an always-available `/config` menu cover WASH Crew/Watch Party roles, suggestion databases, voting/reminder/backup defaults. |
+| Setup and configuration | Complete | Guided, resumable `/setup` wizard (per-step Back navigation, Save & Finish Later, and resume-with-progress detection) and an always-available `/config` menu cover WASH Crew/Watch Party roles, suggestion databases, voting/reminder/backup defaults, and candidate-selection mode -- setup and `/config` read and write the exact same persisted values. |
 | Backup, restore, import, reset | Complete | Full and per-database backup/restore, factory reset, and cross-instance import, each with pre-action safety backups. Automatic scheduled backup *execution* is not yet wired to the existing schedule/retention settings. |
 
 ## Implemented Discord Commands
@@ -60,7 +60,6 @@ Run `/help` in Discord for the exact, permission-scoped list available to a give
 - `/watch_party` (membership administration)
 - `/setup`, `/config`
 - `/backup`, `/restore`, `/factory_reset`, `/import`
-- `/diagnostics`
 
 ## Implemented Services
 

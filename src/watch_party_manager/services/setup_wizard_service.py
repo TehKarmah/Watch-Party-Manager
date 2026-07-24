@@ -34,6 +34,7 @@ from watch_party_manager.domain.setup_wizard import (
     SetupWizardStep,
 )
 from watch_party_manager.domain.suggestion_database_configuration import (
+    CANDIDATE_SELECTION_DISPLAY_LABELS,
     CandidateSelectionMode,
     SuggestionDatabaseConfiguration,
 )
@@ -158,6 +159,49 @@ class SetupWizardService:
     def go_to_step(self, state: SetupWizardState, step: SetupWizardStep) -> SetupWizardState:
         """Jump directly to a step -- used by the Review screen's "edit a section"."""
         updated = replace(state, current_step=step, updated_at=datetime.now(timezone.utc))
+        self._wizard_repository.save(updated)
+        return updated
+
+    def previous_step(self, state: SetupWizardState) -> Optional[SetupWizardStep]:
+        """Return the step immediately before state.current_step in the
+        walkthrough order, or None if already at the first step.
+
+        Pure step-index math over the existing SETUP_WIZARD_STEP_ORDER --
+        no separate navigation history is needed, since the wizard's
+        steps are always visited in this same fixed order (see
+        _next_step's identical approach for the forward direction).
+        """
+        index = SETUP_WIZARD_STEP_ORDER.index(state.current_step)
+        if index == 0:
+            return None
+        return SETUP_WIZARD_STEP_ORDER[index - 1]
+
+    def go_back(self, state: SetupWizardState) -> SetupWizardState:
+        """Return to the immediately previous step, if any.
+
+        A no-op (returns state unchanged) at the first step -- callers
+        should hide/omit the Back control there rather than relying on
+        this to reject the call. Never touches draft or completed_steps,
+        so nothing already answered is ever lost by going back; visiting
+        that step's screen again and re-submitting it is what overwrites
+        its own field(s), exactly as re-answering any step already does.
+        """
+        previous = self.previous_step(state)
+        if previous is None:
+            return state
+        return self.go_to_step(state, previous)
+
+    def save_for_later(self, state: SetupWizardState) -> SetupWizardState:
+        """Explicitly persist current progress for "Save & Finish Later".
+
+        Every step-answering method already saves as it goes (see
+        _advance/go_to_step), so this never has unsaved work to flush --
+        it exists to give "Save & Finish Later" its own clear intent and
+        a fresh updated_at, independent of whatever the last-touched step
+        happened to be. Status stays IN_PROGRESS: only finalize() (Save,
+        on Review) or cancel() (Cancel Setup) ever change it.
+        """
+        updated = replace(state, updated_at=datetime.now(timezone.utc))
         self._wizard_repository.save(updated)
         return updated
 
@@ -318,10 +362,11 @@ class SetupWizardService:
             lines.append("Watched Movie Destination: Incomplete")
 
         if draft.voting_candidate_count is not None:
+            candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[draft.voting_candidate_selection]
             lines.append(
                 "Voting Defaults: Configured "
                 f"({draft.voting_candidate_count} nominees, {draft.voting_duration_days} day(s), "
-                f"{draft.voting_visibility.value}, {draft.voting_candidate_selection.value})"
+                f"{draft.voting_visibility.value}, {candidate_selection_label})"
             )
         else:
             lines.append("Voting Defaults: Incomplete")

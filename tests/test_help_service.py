@@ -98,7 +98,6 @@ class HelpServiceTests(unittest.TestCase):
         response = build_help_response(show_wash_crew=True)
 
         self.assertIn("`/database_add`", response.command_text)
-        self.assertIn("`/diagnostics`", response.command_text)
         self.assertIn("`/backup`", response.command_text)
         self.assertIn("`/restore`", response.command_text)
         self.assertIn("`/setup`", response.command_text)
@@ -110,6 +109,26 @@ class HelpServiceTests(unittest.TestCase):
 
         self.assertIn("`/add`", response.command_text)
         self.assertIn("`/list`", response.command_text)
+
+    def test_help_never_lists_diagnostics_which_no_longer_exists(self) -> None:
+        # /diagnostics was consolidated into /about (Release Polish) --
+        # /help must never reference the removed command.
+        everyone = build_help_response(show_wash_crew=False)
+        member = build_help_response(show_wash_crew=False, show_watch_party_member=True)
+        crew = build_help_response(show_wash_crew=True)
+
+        for response in (everyone, member, crew):
+            self.assertNotIn("diagnostics", response.command_text.lower())
+
+    def test_help_stays_focused_on_usage_not_runtime_or_version_details(self) -> None:
+        # /help answers "how do I use WASH?" -- /about (not /help) is the
+        # status/runtime dashboard.
+        response = build_help_response(show_wash_crew=True)
+
+        self.assertNotIn("Uptime", response.command_text)
+        self.assertNotIn("latency", response.command_text.lower())
+        self.assertNotIn("Python", response.command_text)
+        self.assertNotIn("discord.py", response.command_text)
 
     def test_wash_crew_help_never_mentions_vote_command(self) -> None:
         response = build_help_response(show_wash_crew=True)

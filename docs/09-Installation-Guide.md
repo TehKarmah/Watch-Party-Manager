@@ -235,14 +235,21 @@ The wizard walks through, in order:
 
 1. **WASH Crew role** -- which Discord role has administrative access.
 2. **Watch Party role and join mode** -- which role identifies participants, and how members get it: Self-Service (anyone can join with `/join_watch_party`), Manual (WASH Crew adds members), Approval-Required (requests go to WASH Crew for approval), or Discord-Managed (an existing role you manage outside WASH).
-3. **Suggestion database** -- select an existing one or create a new one, tied to a channel or thread.
-4. **Watch destination** -- where watched-movie history posts, or skip for now.
-5. **Voting defaults** -- nominee count, duration, visibility, and candidate-selection mode.
-6. **Reminder defaults** -- whether a vote-ending reminder is sent, and how far ahead.
-7. **Backup defaults** -- automatic backup interval and how many backups to retain.
-8. **Summary** -- review every section, then Save, go back and edit one, or cancel without saving.
+3. **Admin channel** -- where Approval-Required membership requests are posted for WASH Crew, or skip for now.
+4. **Suggestion database** -- select an existing one or create a new one, tied to a channel or thread.
+5. **Watch destination** -- where watched-movie history posts, or skip for now.
+6. **Voting defaults** -- nominee count (default 3), duration, visibility, and candidate-selection mode: **Balanced Random** (recommended and the default -- avoids repeating a suggestion until a fresh rotation begins), **Soft Rotation** (keeps repeats eligible but weighted down), or **Pure Random** (no weighting or exclusion at all).
+7. **Reminder defaults** -- whether a vote-ending reminder is sent, and how far ahead.
+8. **Backup defaults** -- automatic backup interval and how many backups to retain.
+9. **Summary** -- review every section (including the chosen candidate-selection mode), then Save, jump back to edit any section, or cancel without saving.
 
 Nothing is applied until you reach the summary and choose to save.
+
+**Back, and Save & Finish Later.** Every step after the first shows a **Back** button that returns to the immediately previous step without losing anything you've already entered -- the first step has no Back button, since there's nothing earlier to return to. Every step also shows a **Save & Finish Later** button: it saves your progress so far, exits the wizard cleanly, and does *not* mark setup as complete. Run `/setup` again at any time to resume exactly where you left off. **Cancel Setup**, by contrast, discards everything entered so far -- use Save & Finish Later if you just want a break.
+
+**Resuming.** If you run `/setup` again while a draft is already saved, WASH shows how many of the 9 steps are done and where you left off, then offers **Continue Setup** (pick up where you stopped), **Review Progress** (jump straight to the summary screen), or **Restart Setup** (discard the saved draft and start over -- never the default choice). Once setup has actually been completed and saved, `/setup` no longer offers to resume or restart at all; it redirects you to `/config` instead.
+
+Every setting the wizard can set (including candidate-selection mode) can also be changed later through `/config`, one section at a time, without re-running the whole wizard -- see Section 12.
 
 ## 12. Guild Configuration Overview
 
@@ -260,14 +267,14 @@ Work through this list after your first startup and `/setup` run. Everything sho
 
 - [ ] WASH shows as **online** in your server's member list.
 - [ ] `/help` responds (available to everyone).
-- [ ] `/about` responds and shows a version number and uptime.
+- [ ] `/about` responds and shows a version number.
 - [ ] `/setup` completes without errors and reaches the summary screen.
 - [ ] `/config` opens and shows the settings you just configured.
 - [ ] A Watch Party member (or WASH Crew, which always qualifies) can run `/add` with a plain title and see it confirmed.
 - [ ] `/list` shows the suggestion you just added.
 - [ ] WASH Crew can run `/start_vote` and see an interactive voting post with buttons.
 - [ ] `/stats` responds ephemerally (visible only to you).
-- [ ] `/diagnostics` (WASH Crew only) shows runtime information with no reported errors.
+- [ ] As WASH Crew, `/about` also shows Health, Configuration, and Runtime sections with no reported errors.
 
 If a step fails, check Section 14 before assuming something is broken.
 

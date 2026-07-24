@@ -17,7 +17,7 @@ This checklist tracks implemented foundations against the Version 1 specificatio
 | FR-011 | Implement scheduling and Discord Events | Partial | Single-occurrence scheduled watch parties (schedule/reschedule/cancel/reminders) are implemented. The richer recurring Event Series model and native Discord Scheduled Event publishing are not. |
 | FR-012 | Implement reminders and recurring event behavior | Partial | Vote-ending and watch-party reminders are implemented. Recurring event behavior depends on the Event Series foundation (FR-011). |
 | FR-013 | Expand statistics and reporting | Complete foundation | Server, member, suggestion, rotation, and database statistics are implemented via `/stats`, derived from historical data with no running counters. |
-| FR-014 | Implement setup and administration workflows | Complete | Guided, rerunnable `/setup` wizard and an always-available `/config` menu cover WASH Crew/Watch Party roles, suggestion databases, and voting/reminder/backup defaults. |
+| FR-014 | Implement setup and administration workflows | Complete | Guided, resumable `/setup` wizard (Back navigation, Save & Finish Later, resume-with-progress detection) and an always-available `/config` menu cover WASH Crew/Watch Party roles, suggestion databases, voting/reminder/backup defaults, and candidate-selection mode -- setup and `/config` read and write the same persisted values. |
 | FR-015 | Implement backup, restore, import, and export | Complete foundation | Manual backup, validated restore (select or upload, with a pre-restore summary and confirmation), safety backups, single-suggestion-database backup/restore (merge or replace), suggestion-database reset, factory reset, and cross-instance import (merge or replace, typed-confirmation-gated) are implemented. Configurable scheduled backup *execution* is not. |
 | FR-016 | Implement migration support | Not started | Required before persistent format changes become necessary. |
 
@@ -30,7 +30,7 @@ FR-017 and later (membership workflows, IMDb link normalization/duplicate detect
 | WASH Crew fail-closed authorization | Complete |
 | Guild scoping for implemented database operations | Complete |
 | Discord timestamp formatting | Complete foundation |
-| Diagnostics command | Complete foundation |
+| Diagnostics info (via `/about`, WASH Crew only) | Complete foundation |
 | Startup data-integrity checks | Complete foundation |
 | Structured application logging | Complete foundation |
 | Automated test suite | 2426 passing tests |

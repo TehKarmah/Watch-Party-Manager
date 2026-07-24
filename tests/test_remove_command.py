@@ -2,7 +2,7 @@
 
 /remove was briefly (and incorrectly) opened to any Watch Party member.
 The approved model restricts it to WASH Crew, matching /list,
-/vote_status, /watch_party_status, /diagnostics, and /stats. This covers
+/vote_status, /watch_party_status, and /stats. This covers
 perform_remove_suggestion, the extracted, Discord-free logic the /remove
 command callback now delegates to (mirroring perform_database_add's
 existing shape: fail-closed permission check first, then the service

@@ -35,6 +35,7 @@ from watch_party_manager.domain.guild_configuration import (
 )
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.suggestion_database_configuration import (
+    CANDIDATE_SELECTION_DISPLAY_LABELS,
     CandidateSelectionMode,
     SuggestionDatabaseConfiguration,
 )
@@ -234,10 +235,13 @@ class ConfigService:
             lines.append(f"Watched-Movie Destination: Configured (<#{destination_channel_id}>)")
 
         voting_defaults = configuration.voting_defaults
+        candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[
+            self._resolve_candidate_selection(guild_id)
+        ]
         lines.append(
             "Voting Defaults: Configured "
             f"({voting_defaults.candidate_count} nominees, {voting_defaults.duration_days} day(s), "
-            f"{voting_defaults.visibility.value})"
+            f"{voting_defaults.visibility.value}, candidate selection: {candidate_selection_label})"
         )
 
         vote_notifications = configuration.notifications.vote
@@ -278,6 +282,23 @@ class ConfigService:
         if database_configuration is None:
             return None
         return database_configuration.channels.suggestion_channel_id
+
+    def _resolve_candidate_selection(self, guild_id: int) -> CandidateSelectionMode:
+        """The active database's candidate-selection mode, or the documented
+        default (ROTATION_POOL) when no single active database or saved
+        configuration exists yet -- mirrors SuggestionRulesConfig's own
+        default so the summary never shows a value nothing has actually
+        set.
+        """
+        database = self.resolve_configured_database(guild_id)
+        if database is None:
+            return CandidateSelectionMode.ROTATION_POOL
+        database_configuration = self._suggestion_database_configuration_repository.get(
+            guild_id, database.database_id
+        )
+        if database_configuration is None:
+            return CandidateSelectionMode.ROTATION_POOL
+        return database_configuration.suggestion_rules.candidate_selection
 
     # --- WASH Crew Role ------------------------------------------------------------
 

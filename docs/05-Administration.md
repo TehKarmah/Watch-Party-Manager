@@ -124,11 +124,13 @@ Only one open round is supported by the current voting service behavior.
 
 ### Candidate selection and rotation management
 
-Each database's `suggestion_rules.candidate_selection` setting (configurable through the setup wizard or `/config`'s Voting Defaults screen) chooses how `/start_vote` picks nominees from that database's eligible suggestions:
+Each database's `suggestion_rules.candidate_selection` setting (configurable through the Setup Wizard's Voting Defaults step or `/config`'s Voting Defaults screen -- both show and save the exact same value) chooses how `/start_vote` picks nominees from that database's eligible suggestions. The Setup Wizard and `/config` present these three modes under friendlier names; the underlying value in parentheses is what's actually persisted:
 
-- **Rotation Pool** (the default) -- every eligible suggestion belongs to a rotation. Once presented in a vote, a suggestion is excluded from selection until the rotation is exhausted and a fresh one begins automatically.
-- **Soft Rotation** -- unpresented suggestions are strongly preferred, but a previously presented suggestion remains technically eligible at a much lower selection weight rather than being excluded outright.
-- **Infinite Pool** -- every eligible suggestion is always available; no rotation state is created or tracked for a database using this mode.
+- **Balanced Random** (`rotation_pool`, the recommended and default choice) -- every eligible suggestion belongs to a rotation. Once presented in a vote, a suggestion is excluded from selection until the rotation is exhausted and a fresh one begins automatically.
+- **Soft Rotation** (`soft_rotation`) -- unpresented suggestions are strongly preferred, but a previously presented suggestion remains technically eligible at a much lower selection weight rather than being excluded outright.
+- **Pure Random** (`infinite_pool`) -- every eligible suggestion is always available; no rotation state is created or tracked for a database using this mode.
+
+A guild that never explicitly sets this (including one configured before this setting existed) keeps behaving exactly as Balanced Random/`rotation_pool` -- SuggestionRulesConfig's own documented default.
 
 Within whichever pool a mode produces, WASH still applies its existing genre/media-type diversity pass and its existing deprioritization of recently nominated or recently won suggestions -- candidate-selection mode and diversity are independent, layered concerns.
 
@@ -162,12 +164,11 @@ Automatic expiration, closing, and winner announcements are currently in develop
 
 ## 6. Diagnostics and Integrity
 
-Use `/diagnostics` to review operational information such as:
+`/diagnostics` no longer exists as a separate command -- its information was consolidated into `/about`, WASH's single status and information dashboard. Everyone gets WASH's identity and documentation links; WASH Crew additionally see:
 
-- Application, Python, and discord.py versions
-- Latency and uptime
-- Guild-scoped data summaries
-- Interactive voting restoration state
+- **Health** -- Discord connection quality, scheduler status, interactive voting restoration state, and whether OMDb (`OMDB_API_KEY`) is configured.
+- **Configuration** -- the active suggestion database, suggestion database count, watch item count, scheduled watch party count, and whether a voting round is currently open.
+- **Runtime** -- Python and discord.py versions, uptime, and the current server's name.
 
 WASH also runs integrity checks against persisted data and writes operational information through the logging system. Review console and log output when startup reports an issue.
 
@@ -191,7 +192,7 @@ Before manual maintenance, stop the bot and make a copy of the data files.
 4. update the checked-out repository.
 5. Activate the virtual environment and install updated dependencies if needed.
 6. Start WASH and review startup logs.
-7. Run `/diagnostics` from an authorized account.
+7. Run `/about` as a WASH Crew member to confirm Health, Configuration, and Runtime all look correct.
 8. Smoke-test any commands changed in the release.
 
 Configurable scheduled backup execution is planned but not implemented (see Section 9) -- backups still require an explicit `/backup` today. Import from another WASH instance is implemented via `/import`; that other instance's own `/backup` output is the "export" side of the exchange, so there is no separate export command.

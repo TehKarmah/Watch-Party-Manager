@@ -55,6 +55,11 @@ class ImdbMetadataService:
         self._fetch_json = fetch_json or self._fetch_json_from_web
         self._timeout_seconds = timeout_seconds
 
+    @property
+    def is_configured(self) -> bool:
+        """Whether an OMDb API key is available for title lookups."""
+        return bool(self._api_key)
+
     @staticmethod
     def is_imdb_title_url(value: str) -> bool:
         """Return whether ``value`` identifies an IMDb title page."""

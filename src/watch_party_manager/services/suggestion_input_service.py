@@ -31,6 +31,11 @@ class SuggestionInputService:
     def __init__(self, imdb_metadata_service: Optional[ImdbMetadataService] = None) -> None:
         self._imdb_metadata_service = imdb_metadata_service or ImdbMetadataService()
 
+    @property
+    def is_omdb_configured(self) -> bool:
+        """Whether OMDb title lookups are configured (see ImdbMetadataService.is_configured)."""
+        return self._imdb_metadata_service.is_configured
+
     async def resolve(
         self,
         title: str,

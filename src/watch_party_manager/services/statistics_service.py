@@ -1,7 +1,8 @@
 """Read-only statistics derived from existing WASH data.
 
 FR-034: extends the pre-existing server-wide StatisticsSnapshot/snapshot()
-(kept unchanged -- /diagnostics depends on its exact shape) with four
+(kept unchanged -- /about's expanded Configuration section and /stats
+both depend on its exact shape) with four
 additional, independently callable statistic types: server (a richer
 voting/watch-party view alongside the original snapshot), suggestion,
 member, rotation, and database. Every method here recomputes its result
@@ -77,8 +78,9 @@ class StatisticsSnapshot:
 class ServerStatistics:
     """FR-034 Section 5: a richer, guild-scoped activity summary.
 
-    Deliberately separate from StatisticsSnapshot (which /diagnostics
-    depends on unchanged) rather than extending it -- this is the /stats
+    Deliberately separate from StatisticsSnapshot (which /about's
+    expanded Configuration section and /stats both depend on unchanged)
+    rather than extending it -- this is the /stats
     "server" type's dedicated shape. total_watch_party_members/
     participation_percentage are None whenever the caller doesn't supply
     a live member count (StatisticsService has no Discord connection of

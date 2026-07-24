@@ -7,7 +7,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import (
     build_help_text,
-    build_ping_text,
     format_datetime_for_display,
     is_wash_crew_member,
     parse_default_nominee_count,
@@ -63,7 +62,6 @@ class BotHelperTests(unittest.TestCase):
             "/database_add",
             "/database_list",
             "/database_remove",
-            "/diagnostics",
         )
         for command in expected_commands:
             self.assertIn(command, help_text)
@@ -101,7 +99,6 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("/database_add", help_text)
         self.assertNotIn("/database_list", help_text)
         self.assertNotIn("/database_remove", help_text)
-        self.assertNotIn("/diagnostics", help_text)
         self.assertNotIn("/setup", help_text)
         self.assertNotIn("/config", help_text)
         self.assertNotIn("/stats", help_text)
@@ -110,8 +107,8 @@ class BotHelperTests(unittest.TestCase):
         # FR-033A extends the Watch Party Member tier: /add and /list
         # (view-only, never public) are visible over "everyone". FR-034
         # additionally gives them /stats (privacy-scoped -- see
-        # StatsType/handle_stats). /remove, /vote_status,
-        # /watch_party_status, and /diagnostics remain WASH Crew only.
+        # StatsType/handle_stats). /remove, /vote_status, and
+        # /watch_party_status remain WASH Crew only.
         help_text = build_help_text(show_admin=False, show_member=True)
 
         self.assertIn("**General**", help_text)
@@ -127,33 +124,8 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("/database_add", help_text)
         self.assertNotIn("/database_list", help_text)
         self.assertNotIn("/database_remove", help_text)
-        self.assertNotIn("/diagnostics", help_text)
         self.assertNotIn("/setup", help_text)
         self.assertNotIn("/config", help_text)
-
-    def test_ping_text_includes_latency_and_uptime(self) -> None:
-        started_at = datetime(2026, 7, 16, 10, 0, tzinfo=timezone.utc)
-        now = started_at + timedelta(days=1, hours=2, minutes=3, seconds=4)
-
-        self.assertEqual(
-            build_ping_text(42.6, started_at, now),
-            "Pong.\nGateway latency: 43 ms\nUptime: 1d 2h 3m 4s",
-        )
-
-    def test_ping_text_handles_subminute_uptime(self) -> None:
-        started_at = datetime(2026, 7, 16, 10, 0, tzinfo=timezone.utc)
-        now = started_at + timedelta(seconds=9)
-
-        self.assertTrue(build_ping_text(0.4, started_at, now).endswith("Uptime: 9s"))
-
-    def test_ping_text_rejects_naive_datetimes(self) -> None:
-        aware = datetime(2026, 7, 16, 10, 0, tzinfo=timezone.utc)
-        naive = datetime(2026, 7, 16, 10, 0)
-
-        with self.assertRaises(ValueError):
-            build_ping_text(10, naive, aware)
-        with self.assertRaises(ValueError):
-            build_ping_text(10, aware, naive)
 
     def test_parse_guild_id_returns_none_when_not_provided(self) -> None:
         self.assertIsNone(parse_guild_id(None))

@@ -58,6 +58,22 @@ class CandidateSelectionMode(str, Enum):
     INFINITE_POOL = "infinite_pool"
 
 
+# The single source of truth for how each mode is labeled in Discord UI
+# (Setup Wizard, /config, and any summary text) -- ROTATION_POOL is
+# presented as "Balanced Random" since it's the recommended, default
+# choice that avoids immediate repeats without excluding anything
+# permanently; INFINITE_POOL as "Pure Random" since it applies no
+# weighting or exclusion at all. Kept here, next to the enum itself,
+# so every caller (setup_wizard_view.py, bot.py's /config and setup
+# summaries) shows the exact same wording rather than each inventing
+# its own.
+CANDIDATE_SELECTION_DISPLAY_LABELS: dict[CandidateSelectionMode, str] = {
+    CandidateSelectionMode.ROTATION_POOL: "Balanced Random",
+    CandidateSelectionMode.SOFT_ROTATION: "Soft Rotation",
+    CandidateSelectionMode.INFINITE_POOL: "Pure Random",
+}
+
+
 class SuggestionAdmissionMode(str, Enum):
     """When a newly created (or reactivated) suggestion joins a rotation.
 

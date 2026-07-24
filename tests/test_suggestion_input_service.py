@@ -79,6 +79,13 @@ class SuggestionInputServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.success)
         self.assertIn("two different links", result.error_message)
 
+    def test_is_omdb_configured_reflects_the_underlying_imdb_service(self) -> None:
+        configured = SuggestionInputService(ImdbMetadataService(api_key="abc123"))
+        unconfigured = SuggestionInputService(ImdbMetadataService(api_key=""))
+
+        self.assertTrue(configured.is_omdb_configured)
+        self.assertFalse(unconfigured.is_omdb_configured)
+
 
 if __name__ == "__main__":
     unittest.main()

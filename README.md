@@ -74,7 +74,6 @@ WASH's in-Discord `/help` command always reflects the exact command set availabl
 - Membership: `/watch_party`
 - Configuration: `/setup`, `/config`
 - Maintenance: `/backup`, `/restore`, `/factory_reset`, `/import`
-- Diagnostics: `/diagnostics`
 
 WASH Crew commands require the role configured through `WASH_CREW_ROLE_ID` (or the Setup Wizard's WASH Crew step). Watch Party member commands require `WATCH_PARTY_MEMBER_ROLE_ID` or the wizard's Watch Party role step. Both fail closed when unconfigured -- nobody can use them until a role is set.
 

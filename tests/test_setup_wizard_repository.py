@@ -44,6 +44,8 @@ class SetupWizardRepositoryTests(unittest.TestCase):
             suggestion_database_id=5,
             suggestion_database_name="Movies",
             suggestion_database_is_new=True,
+            admin_channel_id=300,
+            admin_channel_skipped=False,
             watch_destination_channel_id=400,
             watch_destination_skipped=False,
             voting_candidate_count=4,
@@ -73,12 +75,25 @@ class SetupWizardRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.draft.watch_party_join_mode, JoinMode.APPROVAL)
         self.assertEqual(loaded.draft.suggestion_database_name, "Movies")
         self.assertTrue(loaded.draft.suggestion_database_is_new)
+        self.assertEqual(loaded.draft.admin_channel_id, 300)
+        self.assertFalse(loaded.draft.admin_channel_skipped)
         self.assertEqual(loaded.draft.voting_visibility, GuildVoteVisibility.VISIBLE)
         self.assertEqual(loaded.draft.voting_candidate_selection, CandidateSelectionMode.ROTATION_POOL)
         self.assertTrue(loaded.draft.reminder_enabled)
         self.assertEqual(loaded.draft.reminder_hours_before_close, 48)
         self.assertEqual(loaded.draft.backup_interval_days, 2)
         self.assertEqual(loaded.draft.backup_retention_count, 15)
+
+    def test_admin_channel_skipped_round_trips_independently_of_admin_channel_id(self):
+        # Regression test: admin_channel_id/admin_channel_skipped were
+        # missing from the repository's serialize/deserialize entirely --
+        # a guild that skipped this step (or set it) lost that answer on
+        # every reload, defeating Save & Finish Later for this step.
+        draft = SetupWizardDraft(admin_channel_skipped=True)
+        self.repo.save(SetupWizardState(guild_id=1, draft=draft))
+        loaded = self.repo.get(1)
+        self.assertTrue(loaded.draft.admin_channel_skipped)
+        self.assertIsNone(loaded.draft.admin_channel_id)
 
     def test_round_trips_a_skipped_and_incomplete_draft(self):
         draft = SetupWizardDraft(watch_destination_skipped=True)

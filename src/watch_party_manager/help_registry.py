@@ -44,7 +44,7 @@ class CommandHelp:
 
 COMMAND_HELP: tuple[CommandHelp, ...] = (
     CommandHelp("/help", "Show the WASH command guide.", "General"),
-    CommandHelp("/about", "View WASH info, version, latency, and uptime.", "General"),
+    CommandHelp("/about", "View WASH's status, health, and configuration info.", "General"),
     CommandHelp(
         "/join_watch_party",
         "Join or leave the Watch Party.",
@@ -171,12 +171,6 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         "/import",
         "Import a backup from another WASH instance.",
         "WASH Crew: Maintenance",
-        HelpAudience.WASH_CREW,
-    ),
-    CommandHelp(
-        "/diagnostics",
-        "Show WASH runtime diagnostics.",
-        "WASH Crew: Diagnostics",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(

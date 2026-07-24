@@ -24,11 +24,13 @@ Required Role reflects WASH's three-tier permission model:
 | Command | Required Role | Description |
 | --- | --- | --- |
 | `/help` | Everyone | Show the WASH command guide. |
-| `/about` | Everyone | View WASH info, version, latency, and uptime. |
+| `/about` | Everyone | View WASH's status, health, and configuration info. |
 | `/join_watch_party` | Everyone | Join or leave the Watch Party. |
 | `/stats` | Watch Party Member | Show server, member, suggestion, rotation, or database statistics. |
 
 `/stats` takes an optional `type` (Server, Member, Suggestion, Rotation, or Database; defaults to Server) and `public` option. Members may always post their own Member statistics publicly; posting any other type publicly requires WASH Crew.
+
+`/about` answers "tell me about this running instance of WASH": everyone sees WASH's identity and Documentation links; WASH Crew additionally see Health (Discord connection, scheduler, interactive-voting restoration, OMDb configuration), Configuration (active suggestion database, database/watch-item/scheduled-watch-party counts, whether a voting round is open), and Runtime (Python/discord.py versions, uptime, server name) -- the information the former, separate `/diagnostics` command used to show. There is no longer a standalone `/diagnostics` command.
 
 ## Watch Items
 
@@ -99,9 +101,3 @@ Casting a vote itself happens through the interactive buttons on the voting post
 | `/restore` | WASH Crew | Restore WASH's data from a backup. |
 | `/factory_reset` | WASH Crew | Erase all WASH data for this server. |
 | `/import` | WASH Crew | Import a backup from another WASH instance. |
-
-## WASH Crew: Diagnostics
-
-| Command | Required Role | Description |
-| --- | --- | --- |
-| `/diagnostics` | WASH Crew | Show WASH runtime diagnostics. |

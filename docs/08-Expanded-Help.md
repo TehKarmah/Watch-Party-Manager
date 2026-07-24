@@ -49,7 +49,6 @@ Casting a vote itself happens through the interactive buttons on the voting post
 - `/restore`
 - `/factory_reset`
 - `/import`
-- `/diagnostics`
 
 ## Help Topics
 

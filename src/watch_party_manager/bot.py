@@ -44,6 +44,7 @@ from watch_party_manager.domain.setup_wizard import (
 from watch_party_manager.domain.membership_request import MembershipRequest
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.suggestion_database_configuration import (
+    CANDIDATE_SELECTION_DISPLAY_LABELS,
     CandidateSelectionMode,
     SuggestionAdmissionMode,
 )
@@ -79,7 +80,12 @@ from watch_party_manager.scheduler import (
     schedule_vote_jobs,
     schedule_watch_party_reminder,
 )
-from watch_party_manager.services.about_service import build_about_content
+from watch_party_manager.services.about_service import (
+    AboutConfiguration,
+    AboutHealth,
+    AboutRuntime,
+    build_about_content,
+)
 from watch_party_manager.services.backup_service import (
     BackupError,
     BackupKind,
@@ -340,19 +346,7 @@ class WatchPartyBot(commands.Bot):
     async def setup_hook(self) -> None:
         @self.tree.command(name="about")
         async def about(interaction: discord.Interaction) -> None:
-            content = build_about_content(
-                __version__,
-                __build__,
-                latency_ms=self.latency * 1000,
-                started_at=self.started_at,
-                now=datetime.now(timezone.utc),
-            )
-            message = (
-                f"**{content.title}**\n\n"
-                f"{content.description}\n\n"
-                f"*{content.footer}*"
-            )
-            await interaction.response.send_message(message, ephemeral=True)
+            await handle_about(interaction, self)
 
         @self.tree.command(name="join_watch_party")
         async def join_watch_party(interaction: discord.Interaction) -> None:
@@ -395,29 +389,6 @@ class WatchPartyBot(commands.Bot):
                 type,
                 interaction.guild_id,
             )
-
-        @self.tree.command(name="diagnostics")
-        async def diagnostics(interaction: discord.Interaction) -> None:
-            message, ephemeral = perform_diagnostics(
-                statistics_service=self.statistics_service,
-                user=interaction.user,
-                wash_crew_role_id=self.wash_crew_role_id,
-                guild_id=interaction.guild_id,
-                version=__version__,
-                python_version=platform.python_version(),
-                discord_version=getattr(discord, "__version__", "Unknown"),
-                latency_ms=self.latency * 1000,
-                started_at=self.started_at,
-                now=datetime.now(timezone.utc),
-                interactive_voting_restored=self.interactive_voting_restored,
-            )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
-            if message.startswith("**WASH Diagnostics**"):
-                logger.info(
-                    "User %s requested diagnostics in guild %s",
-                    interaction.user.id,
-                    interaction.guild_id,
-                )
 
         @self.tree.command(name="add")
         @discord.app_commands.describe(
@@ -822,29 +793,34 @@ class WatchPartyBot(commands.Bot):
                 await interaction.response.send_message(redirect_message, ephemeral=True)
                 return
 
+            requester_id = interaction.user.id
             state, resumed = self.setup_wizard_service.start_or_resume(guild_id)
 
             if resumed:
                 async def on_continue(resume_interaction: discord.Interaction) -> None:
-                    await send_setup_wizard_step(resume_interaction, self, state, edit=True)
+                    await send_setup_wizard_step(resume_interaction, self, state, edit=True, requester_id=requester_id)
 
                 async def on_review(resume_interaction: discord.Interaction) -> None:
                     reviewed = self.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
-                    await send_setup_wizard_step(resume_interaction, self, reviewed, edit=True)
+                    await send_setup_wizard_step(resume_interaction, self, reviewed, edit=True, requester_id=requester_id)
 
                 async def on_restart(resume_interaction: discord.Interaction) -> None:
                     restarted = self.setup_wizard_service.restart(guild_id)
-                    await send_setup_wizard_step(resume_interaction, self, restarted, edit=True)
+                    await send_setup_wizard_step(resume_interaction, self, restarted, edit=True, requester_id=requester_id)
 
-                view = SetupWizardResumeView(on_continue, on_review, on_restart)
+                view = SetupWizardResumeView(on_continue, on_review, on_restart, requester_id=requester_id)
+                total_steps = len(SETUP_WIZARD_STEP_ORDER)
+                completed_count = len(state.completed_steps)
                 await interaction.response.send_message(
-                    "A setup attempt is already in progress. What would you like to do?",
+                    "**Setup already in progress for this server.**\n\n"
+                    f"{completed_count} of {total_steps} steps completed so far "
+                    f"(currently on: {SETUP_WIZARD_STEP_TITLES[state.current_step]}). What would you like to do?",
                     view=view,
                     ephemeral=True,
                 )
                 return
 
-            await send_setup_wizard_step(interaction, self, state, edit=False)
+            await send_setup_wizard_step(interaction, self, state, edit=False, requester_id=requester_id)
 
         @self.tree.command(name="config")
         async def config(interaction: discord.Interaction) -> None:
@@ -1625,15 +1601,31 @@ def parse_setup_voting_visibility(value: str) -> GuildVoteVisibility:
         raise ValueError("Default visibility must be 'blind' or 'visible'.")
 
 
+_CANDIDATE_SELECTION_LABEL_LOOKUP: dict[str, CandidateSelectionMode] = {
+    label.lower(): mode for mode, label in CANDIDATE_SELECTION_DISPLAY_LABELS.items()
+}
+
+
 def parse_setup_candidate_selection(value: str) -> CandidateSelectionMode:
-    """Validate a Voting Defaults modal's candidate-selection field."""
+    """Validate a Voting Defaults modal's candidate-selection field.
+
+    Accepts either the raw persisted value ("rotation_pool") or its
+    Discord-facing display label ("Balanced Random"), case-insensitively
+    -- the modal shows both (the raw value as the pre-filled default, the
+    labels in the surrounding step text and placeholder), so either is a
+    reasonable thing to type back.
+    """
     normalized = value.strip().lower()
     try:
         return CandidateSelectionMode(normalized)
     except ValueError:
-        raise ValueError(
-            "Candidate selection must be 'rotation_pool', 'soft_rotation', or 'infinite_pool'."
-        )
+        pass
+    if normalized in _CANDIDATE_SELECTION_LABEL_LOOKUP:
+        return _CANDIDATE_SELECTION_LABEL_LOOKUP[normalized]
+    raise ValueError(
+        "Candidate selection must be 'Balanced Random' (rotation_pool, recommended), "
+        "'Soft Rotation' (soft_rotation), or 'Pure Random' (infinite_pool)."
+    )
 
 
 def parse_setup_reminder_enabled(value: str) -> bool:
@@ -1710,11 +1702,17 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
         lines.append("Watched Movie Destination: Skipped (configure later)")
     elif draft.watch_destination_channel_id is not None:
         lines.append(f"Watched Movie Destination: <#{draft.watch_destination_channel_id}>")
+    candidate_selection_label = (
+        CANDIDATE_SELECTION_DISPLAY_LABELS[draft.voting_candidate_selection]
+        if draft.voting_candidate_selection is not None
+        else CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.ROTATION_POOL]
+    )
     lines.append(
         "Voting Defaults: "
         f"{configuration.voting_defaults.candidate_count} nominees, "
         f"{configuration.voting_defaults.duration_days} day(s), "
-        f"{configuration.voting_defaults.visibility.value}"
+        f"{configuration.voting_defaults.visibility.value}, "
+        f"candidate selection: {candidate_selection_label}"
     )
     if configuration.notifications.vote.vote_ending_reminder:
         lines.append(
@@ -1737,6 +1735,7 @@ async def send_setup_wizard_step(
     *,
     edit: bool,
     error_message: Optional[str] = None,
+    requester_id: Optional[int] = None,
 ) -> None:
     """Render whichever step `state.current_step` points to.
 
@@ -1745,6 +1744,12 @@ async def send_setup_wizard_step(
     (via edit_message) -- see each `on_*` closure below. This is the one
     place that knows how to turn a SetupWizardState into a Discord
     message; the service layer never touches discord.ui objects.
+
+    requester_id is threaded through unchanged on every recursive call
+    (never re-derived from whichever interaction just fired) so it keeps
+    reflecting whoever is actually driving this particular wizard render
+    -- see SetupWizardStepView's own docstring for why that's the right
+    scope, not "the one person who ever ran /setup for this guild."
     """
     setup_wizard_service = bot.setup_wizard_service
     suggestion_service = bot.suggestion_service
@@ -1756,6 +1761,21 @@ async def send_setup_wizard_step(
             content="Setup has been cancelled. No configuration was changed.", view=None
         )
 
+    async def on_back(back_interaction: discord.Interaction) -> None:
+        updated = setup_wizard_service.go_back(state)
+        await send_setup_wizard_step(back_interaction, bot, updated, edit=True, requester_id=requester_id)
+
+    async def on_save_for_later(save_later_interaction: discord.Interaction) -> None:
+        setup_wizard_service.save_for_later(state)
+        await save_later_interaction.response.edit_message(
+            content=(
+                "**Setup progress saved.**\n\n"
+                "Nothing further was changed. Run `/setup` again at any time to resume "
+                "exactly where you left off."
+            ),
+            view=None,
+        )
+
     header = build_setup_step_header(state)
     body = header if not error_message else f"{header}\n\n⚠ {error_message}"
     step = state.current_step
@@ -1765,9 +1785,9 @@ async def send_setup_wizard_step(
 
         async def on_select(select_interaction: discord.Interaction, role_id: int) -> None:
             updated = setup_wizard_service.set_wash_crew_role(state, role_id)
-            await send_setup_wizard_step(select_interaction, bot, updated, edit=True)
+            await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
 
-        view = WashCrewRoleStepView(on_select, on_cancel)
+        view = WashCrewRoleStepView(on_select, on_save_for_later, on_cancel, requester_id=requester_id)
         body += "\n\nSelect the Discord role that should control administrative access to WASH."
 
     elif step == SetupWizardStep.WATCH_PARTY_ROLE:
@@ -1776,9 +1796,9 @@ async def send_setup_wizard_step(
             confirm_interaction: discord.Interaction, role_id: Optional[int], join_mode: JoinMode
         ) -> None:
             updated = setup_wizard_service.set_watch_party_role(state, role_id, join_mode)
-            await send_setup_wizard_step(confirm_interaction, bot, updated, edit=True)
+            await send_setup_wizard_step(confirm_interaction, bot, updated, edit=True, requester_id=requester_id)
 
-        view = WatchPartyRoleStepView(on_confirm, on_cancel)
+        view = WatchPartyRoleStepView(on_confirm, on_back, on_save_for_later, on_cancel, requester_id=requester_id)
         body += (
             "\n\nSelect the Watch Party role (optional) and its join mode, then press Continue."
         )
@@ -1787,13 +1807,13 @@ async def send_setup_wizard_step(
 
         async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
             updated = setup_wizard_service.set_admin_channel(state, channel_id)
-            await send_setup_wizard_step(select_interaction, bot, updated, edit=True)
+            await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
 
         async def on_skip(skip_interaction: discord.Interaction) -> None:
             updated = setup_wizard_service.skip_admin_channel(state)
-            await send_setup_wizard_step(skip_interaction, bot, updated, edit=True)
+            await send_setup_wizard_step(skip_interaction, bot, updated, edit=True, requester_id=requester_id)
 
-        view = AdminChannelStepView(on_select, on_skip, on_cancel)
+        view = AdminChannelStepView(on_select, on_skip, on_back, on_save_for_later, on_cancel, requester_id=requester_id)
         body += (
             "\n\nSelect the channel where Approval-Required membership requests should be "
             "posted for WASH Crew, or skip for now."
@@ -1806,7 +1826,10 @@ async def send_setup_wizard_step(
             if not databases:
                 await choice_interaction.response.edit_message(
                     content=body + "\n\nNo suggestion databases exist yet in this server. Choose Create New instead.",
-                    view=SuggestionDatabaseChoiceView(on_select_existing, on_create_new, on_cancel),
+                    view=SuggestionDatabaseChoiceView(
+                        on_select_existing, on_create_new, on_back, on_save_for_later, on_cancel,
+                        requester_id=requester_id,
+                    ),
                 )
                 return
 
@@ -1814,11 +1837,13 @@ async def send_setup_wizard_step(
                 updated, message = setup_wizard_service.select_existing_database(
                     state, database_id, guild_id=guild_id
                 )
-                await send_setup_wizard_step(select_interaction, bot, updated, edit=True)
+                await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
 
             await choice_interaction.response.edit_message(
                 content=body + "\n\nChoose a suggestion database.",
-                view=ExistingDatabaseSelectView(databases, on_database_selected, on_cancel),
+                view=ExistingDatabaseSelectView(
+                    databases, on_database_selected, on_cancel, requester_id=requester_id
+                ),
             )
 
         async def on_create_new(choice_interaction: discord.Interaction) -> None:
@@ -1827,32 +1852,49 @@ async def send_setup_wizard_step(
                     updated, message = setup_wizard_service.create_new_database(
                         state, name, channel_id, guild_id=guild_id
                     )
-                    await send_setup_wizard_step(channel_interaction, bot, updated, edit=True)
+                    await send_setup_wizard_step(
+                        channel_interaction, bot, updated, edit=True, requester_id=requester_id
+                    )
 
                 await modal_interaction.response.edit_message(
                     content=body + f'\n\nWhich channel or thread should "{name}" use?',
-                    view=CreateDatabaseChannelSelectView(on_channel_selected, on_cancel),
+                    view=CreateDatabaseChannelSelectView(on_channel_selected, on_cancel, requester_id=requester_id),
                 )
 
             await choice_interaction.response.send_modal(CreateDatabaseNameModal(on_name_submit))
 
-        view = SuggestionDatabaseChoiceView(on_select_existing, on_create_new, on_cancel)
+        view = SuggestionDatabaseChoiceView(
+            on_select_existing, on_create_new, on_back, on_save_for_later, on_cancel, requester_id=requester_id
+        )
         body += "\n\nSelect an existing suggestion database or create a new one."
 
     elif step == SetupWizardStep.WATCH_DESTINATION:
 
         async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
             updated = setup_wizard_service.set_watch_destination(state, channel_id)
-            await send_setup_wizard_step(select_interaction, bot, updated, edit=True)
+            await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
 
         async def on_skip(skip_interaction: discord.Interaction) -> None:
             updated = setup_wizard_service.skip_watch_destination(state)
-            await send_setup_wizard_step(skip_interaction, bot, updated, edit=True)
+            await send_setup_wizard_step(skip_interaction, bot, updated, edit=True, requester_id=requester_id)
 
-        view = WatchDestinationStepView(on_select, on_skip, on_cancel)
+        view = WatchDestinationStepView(
+            on_select, on_skip, on_back, on_save_for_later, on_cancel, requester_id=requester_id
+        )
         body += "\n\nChoose where watched-movie history should be posted, or skip for now."
 
     elif step == SetupWizardStep.VOTING_DEFAULTS:
+
+        voting_defaults_prefill = (
+            str(state.draft.voting_candidate_count) if state.draft.voting_candidate_count is not None else "3",
+            str(state.draft.voting_duration_days) if state.draft.voting_duration_days is not None else "7",
+            state.draft.voting_visibility.value if state.draft.voting_visibility is not None else "blind",
+            (
+                state.draft.voting_candidate_selection.value
+                if state.draft.voting_candidate_selection is not None
+                else CandidateSelectionMode.ROTATION_POOL.value
+            ),
+        )
 
         async def on_configure(configure_interaction: discord.Interaction) -> None:
             async def on_submit(
@@ -1872,9 +1914,12 @@ async def send_setup_wizard_step(
                         content=body + f"\n\n⚠ {exc}",
                         view=ModalStepIntroView(
                             on_configure,
+                            on_back,
+                            on_save_for_later,
                             on_cancel,
                             button_label="Set Voting Defaults",
                             custom_id="wpm_setup_voting_defaults_configure",
+                            requester_id=requester_id,
                         ),
                     )
                     return
@@ -1882,16 +1927,37 @@ async def send_setup_wizard_step(
                 updated = setup_wizard_service.set_voting_defaults(
                     state, candidate_count, duration_days, visibility, candidate_selection
                 )
-                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True)
+                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
 
-            await configure_interaction.response.send_modal(VotingDefaultsModal(on_submit))
+            await configure_interaction.response.send_modal(
+                VotingDefaultsModal(on_submit, defaults=voting_defaults_prefill)
+            )
 
         view = ModalStepIntroView(
-            on_configure, on_cancel, button_label="Set Voting Defaults", custom_id="wpm_setup_voting_defaults_configure"
+            on_configure,
+            on_back,
+            on_save_for_later,
+            on_cancel,
+            button_label="Set Voting Defaults",
+            custom_id="wpm_setup_voting_defaults_configure",
+            requester_id=requester_id,
         )
-        body += "\n\nConfigure the guild's default nominee count, vote duration, visibility, and candidate selection mode."
+        body += (
+            "\n\nConfigure the guild's default nominee count, vote duration, visibility, and "
+            "candidate selection mode: **Balanced Random** (`rotation_pool`, recommended and the "
+            "default), **Soft Rotation** (`soft_rotation`), or **Pure Random** (`infinite_pool`)."
+        )
 
     elif step == SetupWizardStep.REMINDER_DEFAULTS:
+
+        reminder_defaults_prefill = (
+            "yes" if state.draft.reminder_enabled is None or state.draft.reminder_enabled else "no",
+            (
+                str(state.draft.reminder_hours_before_close)
+                if state.draft.reminder_hours_before_close is not None
+                else "24"
+            ),
+        )
 
         async def on_configure(configure_interaction: discord.Interaction) -> None:
             async def on_submit(
@@ -1905,27 +1971,40 @@ async def send_setup_wizard_step(
                         content=body + f"\n\n⚠ {exc}",
                         view=ModalStepIntroView(
                             on_configure,
+                            on_back,
+                            on_save_for_later,
                             on_cancel,
                             button_label="Set Reminder Defaults",
                             custom_id="wpm_setup_reminder_defaults_configure",
+                            requester_id=requester_id,
                         ),
                     )
                     return
 
                 updated = setup_wizard_service.set_reminder_defaults(state, enabled, hours_before_close)
-                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True)
+                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
 
-            await configure_interaction.response.send_modal(ReminderDefaultsModal(on_submit))
+            await configure_interaction.response.send_modal(
+                ReminderDefaultsModal(on_submit, defaults=reminder_defaults_prefill)
+            )
 
         view = ModalStepIntroView(
             on_configure,
+            on_back,
+            on_save_for_later,
             on_cancel,
             button_label="Set Reminder Defaults",
             custom_id="wpm_setup_reminder_defaults_configure",
+            requester_id=requester_id,
         )
         body += "\n\nConfigure whether a vote-ending reminder is sent, and how many hours before close."
 
     elif step == SetupWizardStep.BACKUP_DEFAULTS:
+
+        backup_defaults_prefill = (
+            str(state.draft.backup_interval_days) if state.draft.backup_interval_days is not None else "1",
+            str(state.draft.backup_retention_count) if state.draft.backup_retention_count is not None else "30",
+        )
 
         async def on_configure(configure_interaction: discord.Interaction) -> None:
             async def on_submit(
@@ -1939,20 +2018,31 @@ async def send_setup_wizard_step(
                         content=body + f"\n\n⚠ {exc}",
                         view=ModalStepIntroView(
                             on_configure,
+                            on_back,
+                            on_save_for_later,
                             on_cancel,
                             button_label="Set Backup Defaults",
                             custom_id="wpm_setup_backup_defaults_configure",
+                            requester_id=requester_id,
                         ),
                     )
                     return
 
                 updated = setup_wizard_service.set_backup_defaults(state, interval_days, retention_count)
-                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True)
+                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
 
-            await configure_interaction.response.send_modal(BackupDefaultsModal(on_submit))
+            await configure_interaction.response.send_modal(
+                BackupDefaultsModal(on_submit, defaults=backup_defaults_prefill)
+            )
 
         view = ModalStepIntroView(
-            on_configure, on_cancel, button_label="Set Backup Defaults", custom_id="wpm_setup_backup_defaults_configure"
+            on_configure,
+            on_back,
+            on_save_for_later,
+            on_cancel,
+            button_label="Set Backup Defaults",
+            custom_id="wpm_setup_backup_defaults_configure",
+            requester_id=requester_id,
         )
         body += "\n\nConfigure the automatic backup interval and how many backups to retain."
 
@@ -1972,6 +2062,7 @@ async def send_setup_wizard_step(
                     redirected,
                     edit=True,
                     error_message=f"Setup could not be saved:\n{issue_lines}",
+                    requester_id=requester_id,
                 )
                 return
 
@@ -1984,7 +2075,7 @@ async def send_setup_wizard_step(
         async def on_edit_section(select_interaction: discord.Interaction, step_value: str) -> None:
             target_step = SetupWizardStep(step_value)
             updated = setup_wizard_service.go_to_step(state, target_step)
-            await send_setup_wizard_step(select_interaction, bot, updated, edit=True)
+            await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
 
         review_lines = setup_wizard_service.build_review_lines(state)
         body += "\n\n" + "\n".join(review_lines)
@@ -1994,7 +2085,10 @@ async def send_setup_wizard_step(
             ],
             on_save=on_save,
             on_edit_section=on_edit_section,
+            on_back=on_back,
+            on_save_for_later=on_save_for_later,
             on_cancel=on_cancel,
+            requester_id=requester_id,
         )
 
     if edit:
@@ -7129,83 +7223,88 @@ async def handle_stats(
         await send_database_statistics(interaction, bot, guild_id, channel_id, public)
 
 
-def build_diagnostics_text(
-    *,
-    version: str,
-    python_version: str,
-    discord_version: str,
-    latency_ms: float,
-    started_at: datetime,
-    now: datetime,
-    snapshot: StatisticsSnapshot,
-    interactive_voting_restored: bool,
-) -> str:
-    """Format WASH Crew runtime diagnostics."""
-    ping_lines = build_ping_text(latency_ms, started_at, now).splitlines()
-    latency_line = ping_lines[1].removeprefix("Gateway latency: ")
-    uptime_line = ping_lines[2].removeprefix("Uptime: ")
-    return "\n".join(
-        [
-            "**WASH Diagnostics**",
-            "",
-            "**Runtime**",
-            f"WASH version: {version}",
-            f"Python: {python_version}",
-            f"discord.py: {discord_version}",
-            f"Gateway latency: {latency_line}",
-            f"Uptime: {uptime_line}",
-            "",
-            "**Loaded Data**",
-            f"Suggestion databases: {format_count(snapshot.total_databases, 'database')}",
-            f"Watch items: {format_count(snapshot.total_watch_items, 'watch item')}",
-            f"Active suggestions: {format_count(snapshot.active_suggestions, 'suggestion')}",
-            "",
-            "**Voting**",
-            f"Open voting round: {'Yes' if snapshot.open_vote_rounds else 'No'}",
-            f"Interactive controls restored: {'Yes' if interactive_voting_restored else 'No'}",
-        ]
-    )
+def resolve_active_database_display_name(suggestion_service: SuggestionService, guild_id: int) -> str:
+    """Build a display-ready "Active suggestion database" string for /about.
+
+    Mirrors the same active-database filtering build_database_list_text
+    and ConfigService.build_summary_lines already use -- zero active
+    databases and multiple active databases (SuggestionDatabase.active is
+    not an exclusive selector, see SuggestionService.resolve_database_for_
+    channel's own docstring) are both explained rather than guessed at.
+    """
+    active = [database for database in suggestion_service.list_databases(guild_id) if database.active]
+    if len(active) == 1:
+        return active[0].name
+    if not active:
+        return "None configured"
+    return f"{len(active)} active (see /database_list)"
 
 
-def perform_diagnostics(
-    *,
-    statistics_service: StatisticsService,
-    user: object,
-    wash_crew_role_id: Optional[int],
-    guild_id: Optional[int],
-    version: str,
-    python_version: str,
-    discord_version: str,
-    latency_ms: float,
-    started_at: datetime,
-    now: datetime,
-    interactive_voting_restored: bool,
-) -> tuple[str, bool]:
-    """Return the WASH Crew-only /diagnostics response."""
-    if wash_crew_role_id is None:
-        return (
-            "WASH Crew permissions have not been configured. "
-            "Set WASH_CREW_ROLE_ID before using this command.",
-            True,
+async def handle_about(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """Send /about: WASH identity and Documentation links for everyone,
+    plus Health/Configuration/Runtime (formerly the separate, WASH Crew-
+    only /diagnostics command) for WASH Crew.
+
+    Never fails or rejects -- non-crew members and DM/no-guild
+    invocations simply see the reduced, everyone-visible view.
+    """
+    is_crew = bot.permission_service.is_wash_crew(interaction.user)
+    guild_id = interaction.guild_id
+    show_expanded = is_crew and guild_id is not None
+
+    health: Optional[AboutHealth] = None
+    configuration: Optional[AboutConfiguration] = None
+    runtime_info: Optional[AboutRuntime] = None
+    latency_ms: Optional[float] = None
+    started_at: Optional[datetime] = None
+    now: Optional[datetime] = None
+
+    if show_expanded:
+        latency_ms = bot.latency * 1000
+        started_at = bot.started_at
+        now = datetime.now(timezone.utc)
+
+        health = AboutHealth(
+            discord_connected=bot.is_ready(),
+            scheduler_running=bot.scheduler_host.is_running,
+            interactive_voting_restored=bot.interactive_voting_restored,
+            omdb_configured=bot.suggestion_input_service.is_omdb_configured,
         )
-    if not is_wash_crew_member(user, wash_crew_role_id):
-        return "You need the WASH Crew role to view diagnostics.", True
-    if guild_id is None:
-        return "This command can only be used in a Discord server.", True
 
-    return (
-        build_diagnostics_text(
-            version=version,
-            python_version=python_version,
-            discord_version=discord_version,
-            latency_ms=latency_ms,
-            started_at=started_at,
-            now=now,
-            snapshot=statistics_service.snapshot(guild_id),
-            interactive_voting_restored=interactive_voting_restored,
-        ),
-        True,
+        snapshot = bot.statistics_service.snapshot(guild_id)
+        server_stats = bot.statistics_service.server_statistics(guild_id)
+        configuration = AboutConfiguration(
+            active_database_name=resolve_active_database_display_name(bot.suggestion_service, guild_id),
+            database_count=snapshot.total_databases,
+            watch_item_count=snapshot.total_watch_items,
+            scheduled_watch_party_count=server_stats.scheduled_watch_parties,
+            open_vote_round=snapshot.open_vote_rounds > 0,
+        )
+
+        runtime_info = AboutRuntime(
+            python_version=platform.python_version(),
+            discord_py_version=getattr(discord, "__version__", "Unknown"),
+            guild_name=getattr(interaction.guild, "name", None),
+        )
+
+    content = build_about_content(
+        __version__,
+        __build__,
+        show_expanded_sections=show_expanded,
+        latency_ms=latency_ms,
+        started_at=started_at,
+        now=now,
+        health=health,
+        configuration=configuration,
+        runtime_info=runtime_info,
     )
+    embed = EmbedFactory.info(
+        content.title,
+        content.description,
+        footer=content.footer,
+        fields=[{"name": field.name, "value": field.value, "inline": field.inline} for field in content.fields],
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 def build_help_text(show_admin: bool = True, show_member: bool = False) -> str:
@@ -7236,31 +7335,6 @@ async def send_help_response(interaction: discord.Interaction, response: HelpRes
     """
     embed = EmbedFactory.info(response.reference_title, response.reference_description, url=response.reference_url)
     await interaction.response.send_message(response.command_text, embed=embed, ephemeral=response.ephemeral)
-
-
-def build_ping_text(latency_ms: float, started_at: datetime, now: datetime) -> str:
-    """Build a compact gateway-latency-and-uptime summary, used by /diagnostics."""
-    if started_at.tzinfo is None or started_at.utcoffset() is None:
-        raise ValueError("started_at must be timezone-aware")
-    if now.tzinfo is None or now.utcoffset() is None:
-        raise ValueError("now must be timezone-aware")
-
-    uptime_seconds = max(0, int((now - started_at).total_seconds()))
-    days, remainder = divmod(uptime_seconds, 86400)
-    hours, remainder = divmod(remainder, 3600)
-    minutes, seconds = divmod(remainder, 60)
-
-    uptime_parts = []
-    if days:
-        uptime_parts.append(f"{days}d")
-    if hours or days:
-        uptime_parts.append(f"{hours}h")
-    if minutes or hours or days:
-        uptime_parts.append(f"{minutes}m")
-    uptime_parts.append(f"{seconds}s")
-
-    return f"Pong.\nGateway latency: {round(latency_ms)} ms\nUptime: {' '.join(uptime_parts)}"
-
 
 
 def main() -> None:

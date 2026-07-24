@@ -38,12 +38,45 @@ OnSave = Callable[[discord.Interaction], Awaitable[None]]
 OnEditSection = Callable[[discord.Interaction, str], Awaitable[None]]
 OnResumeChoice = Callable[[discord.Interaction], Awaitable[None]]
 OnConfigureClicked = Callable[[discord.Interaction], Awaitable[None]]
+OnBack = Callable[[discord.Interaction], Awaitable[None]]
+OnSaveForLater = Callable[[discord.Interaction], Awaitable[None]]
 
 _DESTINATION_CHANNEL_TYPES = [
     discord.ChannelType.text,
     discord.ChannelType.public_thread,
     discord.ChannelType.private_thread,
 ]
+
+
+class SetupWizardStepView(discord.ui.View):
+    """Base class for every /setup step's view.
+
+    Adds one thing over discord.ui.View: an optional requester_id
+    interaction_check, matching the project's existing convention (see
+    pagination_view.PaginatedListView) for defense-in-depth scoping a
+    control surface to whoever is actually driving it -- every /setup
+    message is already ephemeral (only the invoking member can even see
+    it in Discord's own client), so this is a second layer, not the only
+    one. requester_id is captured once per render from whichever
+    interaction produced that render (see bot.py's send_setup_wizard_step)
+    and threaded through unchanged on every subsequent step, so it always
+    reflects the person actually walking through the wizard right now --
+    not persisted, and not the same across every guild's entire
+    days-long resumable journey (any WASH Crew member may legitimately
+    resume a different member's in-progress draft).
+    """
+
+    def __init__(self, *, requester_id: Optional[int] = None) -> None:
+        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+        self._requester_id = requester_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self._requester_id is not None and interaction.user.id != self._requester_id:
+            await interaction.response.send_message(
+                "Only the person who ran this command can use these controls.", ephemeral=True
+            )
+            return False
+        return True
 
 
 class SetupCancelButton(discord.ui.Button):
@@ -55,6 +88,32 @@ class SetupCancelButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await self._on_cancel(interaction)
+
+
+class SetupBackButton(discord.ui.Button):
+    """Returns to the immediately previous step. Omitted on the first step."""
+
+    def __init__(self, on_back: OnBack) -> None:
+        super().__init__(label="Back", style=discord.ButtonStyle.secondary, custom_id="wpm_setup_back")
+        self._on_back = on_back
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_back(interaction)
+
+
+class SetupSaveForLaterButton(discord.ui.Button):
+    """Exits the wizard without discarding its draft -- unlike Cancel Setup,
+    which deletes it. Present on every step.
+    """
+
+    def __init__(self, on_save_for_later: OnSaveForLater) -> None:
+        super().__init__(
+            label="Save & Finish Later", style=discord.ButtonStyle.secondary, custom_id="wpm_setup_save_for_later"
+        )
+        self._on_save_for_later = on_save_for_later
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_save_for_later(interaction)
 
 
 # --- Resume prompt --------------------------------------------------------------------
@@ -87,11 +146,23 @@ class RestartSetupButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class SetupWizardResumeView(discord.ui.View):
-    """Shown when /setup is run again while a previous attempt is still in progress."""
+class SetupWizardResumeView(SetupWizardStepView):
+    """Shown when /setup is run again while a previous attempt is still in progress.
 
-    def __init__(self, on_continue: OnResumeChoice, on_review: OnResumeChoice, on_restart: OnResumeChoice) -> None:
-        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+    Continue Setup and Review Progress are listed first (and are the
+    non-destructive, recommended way back in); Restart Setup remains
+    available but is never the default action.
+    """
+
+    def __init__(
+        self,
+        on_continue: OnResumeChoice,
+        on_review: OnResumeChoice,
+        on_restart: OnResumeChoice,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
         self.add_item(ContinueSetupButton(on_continue))
         self.add_item(ReviewProgressButton(on_review))
         self.add_item(RestartSetupButton(on_restart))
@@ -114,12 +185,24 @@ class WashCrewRoleSelect(discord.ui.RoleSelect):
         await self._on_select(interaction, self.values[0].id)
 
 
-class WashCrewRoleStepView(discord.ui.View):
-    """Step 1: choose the role that controls administrative access to WASH."""
+class WashCrewRoleStepView(SetupWizardStepView):
+    """Step 1: choose the role that controls administrative access to WASH.
 
-    def __init__(self, on_select: OnRoleSelected, on_cancel: OnWizardCancel) -> None:
-        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+    The first step -- never shows a Back button, since there is no
+    earlier step to return to.
+    """
+
+    def __init__(
+        self,
+        on_select: OnRoleSelected,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
         self.add_item(WashCrewRoleSelect(on_select))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
 
 
@@ -176,7 +259,7 @@ class WatchPartyRoleConfirmButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class WatchPartyRoleStepView(discord.ui.View):
+class WatchPartyRoleStepView(SetupWizardStepView):
     """Step 2: choose the Watch Party role and its join mode together.
 
     The role is optional (a guild may not want a distinct Watch Party
@@ -185,14 +268,24 @@ class WatchPartyRoleStepView(discord.ui.View):
     touched.
     """
 
-    def __init__(self, on_confirm: OnWatchPartyRoleConfirmed, on_cancel: OnWizardCancel) -> None:
-        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+    def __init__(
+        self,
+        on_confirm: OnWatchPartyRoleConfirmed,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
         self._on_confirm = on_confirm
         self.role_select = WatchPartyRoleSelectComponent()
         self.join_mode_select = JoinModeSelectComponent()
         self.add_item(self.role_select)
         self.add_item(self.join_mode_select)
         self.add_item(WatchPartyRoleConfirmButton(self._handle_confirm))
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
 
     async def _handle_confirm(self, interaction: discord.Interaction) -> None:
@@ -222,15 +315,24 @@ class CreateNewDatabaseButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class SuggestionDatabaseChoiceView(discord.ui.View):
+class SuggestionDatabaseChoiceView(SetupWizardStepView):
     """Step 3, part 1: select an existing suggestion database, or create one."""
 
     def __init__(
-        self, on_select_existing: OnDatabaseChoiceButton, on_create_new: OnDatabaseChoiceButton, on_cancel: OnWizardCancel
+        self,
+        on_select_existing: OnDatabaseChoiceButton,
+        on_create_new: OnDatabaseChoiceButton,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
     ) -> None:
-        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+        super().__init__(requester_id=requester_id)
         self.add_item(SelectExistingDatabaseButton(on_select_existing))
         self.add_item(CreateNewDatabaseButton(on_create_new))
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
 
 
@@ -247,13 +349,24 @@ class ExistingDatabaseSelect(discord.ui.Select):
         await self._on_select(interaction, int(self.values[0]))
 
 
-class ExistingDatabaseSelectView(discord.ui.View):
-    """Step 3, part 2a: pick which existing suggestion database to use."""
+class ExistingDatabaseSelectView(SetupWizardStepView):
+    """Step 3, part 2a: pick which existing suggestion database to use.
+
+    A transient sub-screen of the Suggestion Database step, not a
+    top-level wizard step in its own right -- Cancel Setup returns here
+    (matching the choice screen it was reached from); use the Suggestion
+    Database step's own Back button to return to Admin Channel.
+    """
 
     def __init__(
-        self, databases: List[Tuple[int, str]], on_select: OnExistingDatabaseSelected, on_cancel: OnWizardCancel
+        self,
+        databases: List[Tuple[int, str]],
+        on_select: OnExistingDatabaseSelected,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
     ) -> None:
-        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+        super().__init__(requester_id=requester_id)
         self.add_item(ExistingDatabaseSelect(databases, on_select))
         self.add_item(SetupCancelButton(on_cancel))
 
@@ -286,11 +399,13 @@ class DestinationChannelSelect(discord.ui.ChannelSelect):
         await self._on_select(interaction, self.values[0].id)
 
 
-class CreateDatabaseChannelSelectView(discord.ui.View):
+class CreateDatabaseChannelSelectView(SetupWizardStepView):
     """Step 3, part 2b (2 of 2): pick the new database's channel or thread."""
 
-    def __init__(self, on_select: OnChannelSelected, on_cancel: OnWizardCancel) -> None:
-        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+    def __init__(
+        self, on_select: OnChannelSelected, on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None
+    ) -> None:
+        super().__init__(requester_id=requester_id)
         self.add_item(
             DestinationChannelSelect(
                 on_select,
@@ -313,7 +428,7 @@ class SkipAdminChannelButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class AdminChannelStepView(discord.ui.View):
+class AdminChannelStepView(SetupWizardStepView):
     """Admin Channel step: choose where Approval-Required membership
     requests are posted for WASH Crew, or skip for now.
 
@@ -321,8 +436,17 @@ class AdminChannelStepView(discord.ui.View):
     Destination step) rather than a duplicate channel-select component.
     """
 
-    def __init__(self, on_select: OnChannelSelected, on_skip: OnSkip, on_cancel: OnWizardCancel) -> None:
-        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+    def __init__(
+        self,
+        on_select: OnChannelSelected,
+        on_skip: OnSkip,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
         self.add_item(
             DestinationChannelSelect(
                 on_select,
@@ -331,6 +455,8 @@ class AdminChannelStepView(discord.ui.View):
             )
         )
         self.add_item(SkipAdminChannelButton(on_skip))
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
 
 
@@ -346,11 +472,20 @@ class SkipWatchDestinationButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class WatchDestinationStepView(discord.ui.View):
+class WatchDestinationStepView(SetupWizardStepView):
     """Step 4: choose where watched-movie history posts, or skip for now."""
 
-    def __init__(self, on_select: OnChannelSelected, on_skip: OnSkip, on_cancel: OnWizardCancel) -> None:
-        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+    def __init__(
+        self,
+        on_select: OnChannelSelected,
+        on_skip: OnSkip,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
         self.add_item(
             DestinationChannelSelect(
                 on_select,
@@ -359,6 +494,8 @@ class WatchDestinationStepView(discord.ui.View):
             )
         )
         self.add_item(SkipWatchDestinationButton(on_skip))
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
 
 
@@ -374,18 +511,31 @@ class ConfigureStepButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class ModalStepIntroView(discord.ui.View):
+class ModalStepIntroView(SetupWizardStepView):
     """A short intro screen whose single button opens the step's modal.
 
     Reused for Voting Defaults, Reminder Defaults, and Backup Defaults --
     a modal cannot be sent directly in response to /setup's own
     interaction chain without an intervening component click, so each of
-    these three steps shows this one-button prompt first.
+    these three steps shows this one-button prompt first. Also reused,
+    unchanged, as the retry screen shown after a failed modal submission.
     """
 
-    def __init__(self, on_configure: OnConfigureClicked, on_cancel: OnWizardCancel, *, button_label: str, custom_id: str) -> None:
-        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+    def __init__(
+        self,
+        on_configure: OnConfigureClicked,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        button_label: str,
+        custom_id: str,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
         self.add_item(ConfigureStepButton(on_configure, label=button_label, custom_id=custom_id))
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
 
 
@@ -410,7 +560,10 @@ class VotingDefaultsModal(discord.ui.Modal):
         self.candidate_selection_input = discord.ui.TextInput(
             label="Candidate selection",
             default=candidate_selection_default,
-            placeholder="rotation_pool, soft_rotation, or infinite_pool",
+            placeholder=(
+                "Balanced Random/rotation_pool (default), Soft Rotation/soft_rotation, "
+                "or Pure Random/infinite_pool"
+            ),
         )
         self.add_item(self.candidate_count_input)
         self.add_item(self.duration_days_input)
@@ -481,17 +634,25 @@ class EditSectionSelect(discord.ui.Select):
         await self._on_select(interaction, self.values[0])
 
 
-class ReviewStepView(discord.ui.View):
-    """Step 8: summarize every section, then Save, edit one, or cancel."""
+class ReviewStepView(SetupWizardStepView):
+    """Step 9 (final): summarize every section, then Save, edit one via the
+    dropdown, step Back to Backup Defaults, Save & Finish Later, or Cancel.
+    """
 
     def __init__(
         self,
         section_options: List[Tuple[str, str]],
         on_save: OnSave,
         on_edit_section: OnEditSection,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
         on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
     ) -> None:
-        super().__init__(timeout=SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+        super().__init__(requester_id=requester_id)
         self.add_item(SaveSetupButton(on_save))
         self.add_item(EditSectionSelect(section_options, on_edit_section))
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))

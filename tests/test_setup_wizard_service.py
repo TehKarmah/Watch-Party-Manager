@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, JoinMode
-from watch_party_manager.domain.setup_wizard import SetupWizardStep
+from watch_party_manager.domain.setup_wizard import SETUP_WIZARD_STEP_ORDER, SetupWizardStatus, SetupWizardStep
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.setup_wizard_repository import SetupWizardRepository
@@ -166,6 +166,101 @@ class WizardFlowTests(SetupWizardServiceTestCase):
         self.assertTrue(result.success)
         self.assertTrue(result.configuration.setup_completed)
         self.assertIsNone(self.wizard_repository.get(GUILD_ID))
+
+
+class BackNavigationServiceTests(SetupWizardServiceTestCase):
+    """Setup Wizard Polish Batch 1, Section 1: previous_step/go_back."""
+
+    def test_previous_step_is_none_at_the_first_step(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        self.assertIsNone(self.service.previous_step(state))
+
+    def test_previous_step_returns_the_step_before_in_walkthrough_order(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.go_to_step(state, SetupWizardStep.WATCH_DESTINATION)
+        self.assertEqual(self.service.previous_step(state), SetupWizardStep.SUGGESTION_DATABASE)
+
+    def test_previous_step_for_review_is_backup_defaults(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.go_to_step(state, SetupWizardStep.REVIEW)
+        self.assertEqual(self.service.previous_step(state), SetupWizardStep.BACKUP_DEFAULTS)
+
+    def test_go_back_is_a_no_op_at_the_first_step(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        result = self.service.go_back(state)
+        self.assertEqual(result.current_step, SetupWizardStep.WASH_CREW_ROLE)
+        self.assertEqual(result, state)
+
+    def test_go_back_moves_to_the_previous_step(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        self.assertEqual(state.current_step, SetupWizardStep.WATCH_PARTY_ROLE)
+
+        back = self.service.go_back(state)
+
+        self.assertEqual(back.current_step, SetupWizardStep.WASH_CREW_ROLE)
+
+    def test_go_back_never_touches_the_draft_or_completed_steps(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+
+        back = self.service.go_back(state)
+
+        self.assertEqual(back.draft, state.draft)
+        self.assertEqual(back.completed_steps, state.completed_steps)
+
+    def test_go_back_persists_the_new_current_step(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+
+        self.service.go_back(state)
+
+        self.assertEqual(self.wizard_repository.get(GUILD_ID).current_step, SetupWizardStep.WASH_CREW_ROLE)
+
+    def test_go_back_repeatedly_walks_all_the_way_to_the_first_step(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.go_to_step(state, SetupWizardStep.REVIEW)
+
+        for _ in range(len(SETUP_WIZARD_STEP_ORDER)):
+            state = self.service.go_back(state)
+
+        self.assertEqual(state.current_step, SetupWizardStep.WASH_CREW_ROLE)
+
+
+class SaveForLaterServiceTests(SetupWizardServiceTestCase):
+    """Setup Wizard Polish Batch 1, Section 2: save_for_later."""
+
+    def test_save_for_later_keeps_status_in_progress(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+
+        saved = self.service.save_for_later(state)
+
+        self.assertEqual(saved.status, SetupWizardStatus.IN_PROGRESS)
+
+    def test_save_for_later_does_not_change_the_current_step_or_draft(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+
+        saved = self.service.save_for_later(state)
+
+        self.assertEqual(saved.current_step, state.current_step)
+        self.assertEqual(saved.draft, state.draft)
+
+    def test_save_for_later_persists_to_the_repository(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+
+        self.service.save_for_later(state)
+
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.draft.wash_crew_role_id, WASH_CREW_ROLE_ID)
+
+    def test_save_for_later_refreshes_updated_at(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        saved = self.service.save_for_later(state)
+        self.assertGreaterEqual(saved.updated_at, state.updated_at)
 
 
 class WashCrewRoleStepTests(SetupWizardServiceTestCase):
