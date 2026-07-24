@@ -24,7 +24,13 @@ from typing import Awaitable, Callable, List, Optional, Tuple
 import discord
 
 from watch_party_manager.domain.guild_configuration import JoinMode
-from watch_party_manager.setup_wizard_view import _JOIN_MODE_OPTIONS, DestinationChannelSelect
+from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+from watch_party_manager.setup_wizard_view import (
+    _JOIN_MODE_OPTIONS,
+    CandidateSelectionSelectComponent,
+    ConfigureStepButton,
+    DestinationChannelSelect,
+)
 
 CONFIG_VIEW_TIMEOUT_SECONDS = 900
 
@@ -36,7 +42,8 @@ OnConfigSkip = Callable[[discord.Interaction], Awaitable[None]]
 OnConfigSectionChosen = Callable[[discord.Interaction, str], Awaitable[None]]
 OnBackToMenu = Callable[[discord.Interaction], Awaitable[None]]
 OnConfigRetry = Callable[[discord.Interaction], Awaitable[None]]
-OnConfigVotingDefaultsSubmit = Callable[[discord.Interaction, str, str, str, str], Awaitable[None]]
+OnConfigVotingDefaultsSubmit = Callable[[discord.Interaction, str, str, str], Awaitable[None]]
+OnConfigVotingDefaultsConfigure = Callable[[discord.Interaction, CandidateSelectionMode], Awaitable[None]]
 OnConfigReminderDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 OnConfigBackupDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 
@@ -266,6 +273,40 @@ class ConfigWatchDestinationSectionView(discord.ui.View):
         )
         self.add_item(ConfigSkipDestinationButton(on_skip))
         self.add_item(BackToMenuButton(on_back))
+
+
+# --- Voting Defaults candidate-selection intro screen ---------------------------------------
+
+
+class ConfigVotingDefaultsIntroView(discord.ui.View):
+    """Voting Defaults section: choose the candidate selection mode from
+    a dropdown, then press Set Voting Defaults to open the modal for the
+    remaining fields. Reuses setup_wizard_view.py's
+    CandidateSelectionSelectComponent and ConfigureStepButton directly,
+    with /config's own Back to Menu navigation in place of the wizard's
+    Back/Save & Finish Later/Cancel Setup controls.
+    """
+
+    def __init__(
+        self,
+        on_configure: OnConfigVotingDefaultsConfigure,
+        on_back: OnBackToMenu,
+        *,
+        default_candidate_selection: CandidateSelectionMode,
+    ) -> None:
+        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
+        self.candidate_selection_select = CandidateSelectionSelectComponent(default=default_candidate_selection)
+        self.add_item(self.candidate_selection_select)
+        self.add_item(
+            ConfigureStepButton(
+                self._handle_configure, label="Set Voting Defaults", custom_id="wpm_config_voting_defaults_configure"
+            )
+        )
+        self.add_item(BackToMenuButton(on_back))
+        self._on_configure = on_configure
+
+    async def _handle_configure(self, interaction: discord.Interaction) -> None:
+        await self._on_configure(interaction, self.candidate_selection_select.selected)
 
 
 # --- Modal-defaults retry screen (Voting / Reminder / Backup Defaults) ---------------------

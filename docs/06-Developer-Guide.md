@@ -190,9 +190,9 @@ Before a milestone handoff:
 - Confirm the implementation checklist reflects completed foundations.
 - Keep planned functionality clearly separated from implemented functionality.
 
-## 10. Current Development Priorities
+## 10. Planned Post-v1.0 Development Priorities
 
-Voting lifecycle completion, watch-item journey/rotation tracking, setup/configuration workflows, statistics, and backup/restore/import are implemented. Remaining Version 1 priorities:
+Voting lifecycle completion, watch-item journey/rotation tracking, setup/configuration workflows, statistics, and backup/restore/import are implemented. Planned post-v1.0 priorities:
 
 1. Wire automatic execution of the existing scheduled-backup interval/retention settings.
 2. Build the richer Event Series/Discord Event scheduling foundation.

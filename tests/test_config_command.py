@@ -26,6 +26,7 @@ from watch_party_manager.bot import (
     send_config_voting_defaults_modal,
 )
 from watch_party_manager.domain.guild_configuration import GuildConfiguration
+from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
@@ -43,6 +44,7 @@ from watch_party_manager.config_view import (
     ConfigMainMenuView,
     ConfigRoleSectionView,
     ConfigSuggestionDestinationSectionView,
+    ConfigVotingDefaultsIntroView,
     ConfigWatchDestinationSectionView,
 )
 
@@ -405,7 +407,7 @@ class WashCrewRoleConfirmationTests(ConfigCommandTestCase):
 
 
 class ModalDefaultsSectionTests(ConfigCommandTestCase):
-    async def test_voting_defaults_modal_is_prefilled_with_current_values(self) -> None:
+    async def test_voting_defaults_intro_shows_the_candidate_selection_dropdown(self) -> None:
         self._seed_completed_setup()
         interaction = FakeInteraction()
 
@@ -414,7 +416,23 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
 
         await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
 
-        modal = interaction.response.sent_modal
+        intro_view = interaction.response.edited_view
+        self.assertIsInstance(intro_view, ConfigVotingDefaultsIntroView)
+        self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.ROTATION_POOL)
+
+    async def test_voting_defaults_modal_is_prefilled_with_current_values(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+        intro_view = interaction.response.edited_view
+        configure_interaction = FakeInteraction()
+        await intro_view.children[1].callback(interaction=configure_interaction)
+
+        modal = configure_interaction.response.sent_modal
         self.assertEqual(modal.candidate_count_input.default, "3")
         self.assertEqual(modal.duration_input.default, "1 day")
         self.assertEqual(modal.visibility_input.default, "visible")
@@ -427,11 +445,14 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
             pass
 
         await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        modal = interaction.response.sent_modal
+        intro_view = interaction.response.edited_view
+        intro_view.candidate_selection_select._values = [CandidateSelectionMode.SOFT_ROTATION.value]
+        configure_interaction = FakeInteraction()
+        await intro_view.children[1].callback(interaction=configure_interaction)
+        modal = configure_interaction.response.sent_modal
         modal.candidate_count_input._value = "5"
         modal.duration_input._value = "14"
         modal.visibility_input._value = "visible"
-        modal.candidate_selection_input._value = "rotation_pool"
 
         submit_interaction = FakeInteraction()
         await modal.on_submit(interaction=submit_interaction)
@@ -448,11 +469,13 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
             pass
 
         await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        modal = interaction.response.sent_modal
+        intro_view = interaction.response.edited_view
+        configure_interaction = FakeInteraction()
+        await intro_view.children[1].callback(interaction=configure_interaction)
+        modal = configure_interaction.response.sent_modal
         modal.candidate_count_input._value = "not-a-number"
         modal.duration_input._value = "14"
         modal.visibility_input._value = "visible"
-        modal.candidate_selection_input._value = "rotation_pool"
 
         submit_interaction = FakeInteraction()
         await modal.on_submit(interaction=submit_interaction)

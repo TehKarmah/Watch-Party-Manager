@@ -188,6 +188,7 @@ from watch_party_manager.config_view import (
     ConfigModalRetryView,
     ConfigRoleSectionView,
     ConfigSuggestionDestinationSectionView,
+    ConfigVotingDefaultsIntroView,
     ConfigWatchDestinationSectionView,
     OnBackToMenu,
 )
@@ -207,12 +208,16 @@ from watch_party_manager.setup_wizard_view import (
     BackupDefaultsModal,
     CreateDatabaseChannelSelectView,
     CreateDatabaseNameModal,
+    CreateThreadNameModal,
+    CreateThreadParentChannelSelectView,
     ExistingDatabaseSelectView,
     ModalStepIntroView,
     ReminderDefaultsModal,
     ReviewStepView,
+    SetupPreparationView,
     SetupWizardResumeView,
     SuggestionDatabaseChoiceView,
+    VotingDefaultsIntroView,
     VotingDefaultsModal,
     WashCrewRoleStepView,
     WatchDestinationStepView,
@@ -818,7 +823,7 @@ class WatchPartyBot(commands.Bot):
                 )
                 return
 
-            await send_setup_wizard_step(interaction, self, state, edit=False, requester_id=requester_id)
+            await send_setup_preparation_screen(interaction, self, state, requester_id=requester_id)
 
         @self.tree.command(name="config")
         async def config(interaction: discord.Interaction) -> None:
@@ -1717,33 +1722,6 @@ def parse_setup_voting_visibility(value: str) -> GuildVoteVisibility:
         raise ValueError("Default visibility must be 'blind' or 'visible'.")
 
 
-_CANDIDATE_SELECTION_LABEL_LOOKUP: dict[str, CandidateSelectionMode] = {
-    label.lower(): mode for mode, label in CANDIDATE_SELECTION_DISPLAY_LABELS.items()
-}
-
-
-def parse_setup_candidate_selection(value: str) -> CandidateSelectionMode:
-    """Validate a Voting Defaults modal's candidate-selection field.
-
-    Accepts either the raw persisted value ("rotation_pool") or its
-    Discord-facing display label ("Balanced Random"), case-insensitively
-    -- the modal shows both (the raw value as the pre-filled default, the
-    labels in the surrounding step text and placeholder), so either is a
-    reasonable thing to type back.
-    """
-    normalized = value.strip().lower()
-    try:
-        return CandidateSelectionMode(normalized)
-    except ValueError:
-        pass
-    if normalized in _CANDIDATE_SELECTION_LABEL_LOOKUP:
-        return _CANDIDATE_SELECTION_LABEL_LOOKUP[normalized]
-    raise ValueError(
-        "Candidate selection must be 'Balanced Random' (rotation_pool, recommended), "
-        "'Soft Rotation' (soft_rotation), or 'Pure Random' (infinite_pool)."
-    )
-
-
 def parse_setup_reminder_enabled(value: str) -> bool:
     """Validate a Reminder Defaults modal's enabled field.
 
@@ -1844,6 +1822,52 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
     return "\n".join(lines)
 
 
+def build_setup_preparation_text() -> str:
+    """Build the one-time preparation screen shown before Step 1 of a
+    brand-new /setup run (never shown again once a draft is resumed).
+    """
+    return (
+        "**WASH Setup**\n\n"
+        "Before you begin, we recommend creating the following Discord roles:\n\n"
+        "**Watch Party**\n"
+        "Members who participate in watch parties and use WASH's member commands "
+        "(`/add`, `/list`, `/stats`, and more).\n\n"
+        "**WASH Crew**\n"
+        "Administrators who configure and manage WASH.\n\n"
+        "You can create these roles now or later, but having them ready will make setup faster.\n\n"
+        "Setup can be resumed later using **Save & Finish Later**, and any existing channels or "
+        "threads you already have can be reused wherever WASH asks you to choose a destination."
+    )
+
+
+async def send_setup_preparation_screen(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    state: SetupWizardState,
+    *,
+    requester_id: Optional[int] = None,
+) -> None:
+    """Show the preparation screen for a brand-new (never-resumed) /setup
+    run. Begin Setup proceeds into Step 1; Cancel discards the draft
+    start_or_resume() already created, exactly like Cancel Setup on any
+    other step.
+    """
+    setup_wizard_service = bot.setup_wizard_service
+    guild_id = state.guild_id
+
+    async def on_begin(begin_interaction: discord.Interaction) -> None:
+        await send_setup_wizard_step(begin_interaction, bot, state, edit=True, requester_id=requester_id)
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        setup_wizard_service.cancel(guild_id)
+        await cancel_interaction.response.edit_message(
+            content="Setup has been cancelled. No configuration was changed.", view=None
+        )
+
+    view = SetupPreparationView(on_begin, on_cancel, requester_id=requester_id)
+    await interaction.response.send_message(build_setup_preparation_text(), view=view, ephemeral=True)
+
+
 async def send_setup_wizard_step(
     interaction: discord.Interaction,
     bot: "WatchPartyBot",
@@ -1916,7 +1940,10 @@ async def send_setup_wizard_step(
 
         view = WatchPartyRoleStepView(on_confirm, on_back, on_save_for_later, on_cancel, requester_id=requester_id)
         body += (
-            "\n\nSelect the Watch Party role (optional) and its join mode, then press Continue."
+            "\n\nSelect the Watch Party role -- every member who should participate in watch "
+            "parties and use WASH's member commands (`/add`, `/list`, `/stats`, and more) needs "
+            "this role; until it's configured, only WASH Crew can use them. Then choose the "
+            "join mode and press Continue."
         )
 
     elif step == SetupWizardStep.ADMIN_CHANNEL:
@@ -1994,10 +2021,54 @@ async def send_setup_wizard_step(
             updated = setup_wizard_service.skip_watch_destination(state)
             await send_setup_wizard_step(skip_interaction, bot, updated, edit=True, requester_id=requester_id)
 
+        async def on_create_thread(create_interaction: discord.Interaction) -> None:
+            async def on_parent_selected(parent_interaction: discord.Interaction, parent_channel_id: int) -> None:
+                async def on_name_submit(modal_interaction: discord.Interaction, thread_name: str) -> None:
+                    parent_channel = (
+                        modal_interaction.guild.get_channel(parent_channel_id)
+                        if modal_interaction.guild is not None
+                        else None
+                    )
+                    if parent_channel is None:
+                        await modal_interaction.response.edit_message(
+                            content=body + "\n\n⚠ That channel no longer exists. Choose another destination.",
+                            view=WatchDestinationStepView(
+                                on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
+                                requester_id=requester_id,
+                            ),
+                        )
+                        return
+                    try:
+                        thread = await parent_channel.create_thread(
+                            name=thread_name, type=discord.ChannelType.public_thread
+                        )
+                    except (discord.Forbidden, discord.HTTPException) as exc:
+                        await modal_interaction.response.edit_message(
+                            content=body + f"\n\n⚠ Could not create the thread: {exc}",
+                            view=WatchDestinationStepView(
+                                on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
+                                requester_id=requester_id,
+                            ),
+                        )
+                        return
+                    updated = setup_wizard_service.set_watch_destination(state, thread.id)
+                    await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
+
+                await parent_interaction.response.send_modal(CreateThreadNameModal(on_name_submit))
+
+            await create_interaction.response.edit_message(
+                content=body + "\n\nChoose the parent channel the new thread should be created under.",
+                view=CreateThreadParentChannelSelectView(on_parent_selected, on_cancel, requester_id=requester_id),
+            )
+
         view = WatchDestinationStepView(
-            on_select, on_skip, on_back, on_save_for_later, on_cancel, requester_id=requester_id
+            on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel, requester_id=requester_id
         )
-        body += "\n\nChoose where watched-movie history should be posted, or skip for now."
+        body += (
+            "\n\nChoose where WASH should post watched-movie history and discussion -- a running "
+            "record of what your community has watched, with a link back to each vote. Pick an "
+            "existing text channel or thread, create a new thread, or skip for now."
+        )
 
     elif step == SetupWizardStep.VOTING_DEFAULTS:
 
@@ -2009,36 +2080,35 @@ async def send_setup_wizard_step(
                 else format_duration_hours(DEFAULT_VOTE_DURATION_HOURS)
             ),
             state.draft.voting_visibility.value if state.draft.voting_visibility is not None else "visible",
-            (
-                state.draft.voting_candidate_selection.value
-                if state.draft.voting_candidate_selection is not None
-                else CandidateSelectionMode.ROTATION_POOL.value
-            ),
+        )
+        default_candidate_selection = (
+            state.draft.voting_candidate_selection
+            if state.draft.voting_candidate_selection is not None
+            else CandidateSelectionMode.ROTATION_POOL
         )
 
-        async def on_configure(configure_interaction: discord.Interaction) -> None:
+        async def on_configure(
+            configure_interaction: discord.Interaction, candidate_selection: CandidateSelectionMode
+        ) -> None:
             async def on_submit(
                 modal_interaction: discord.Interaction,
                 candidate_count_text: str,
                 duration_text: str,
                 visibility_text: str,
-                candidate_selection_text: str,
             ) -> None:
                 try:
                     candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
                     duration_hours = parse_setup_voting_duration_hours(duration_text)
                     visibility = parse_setup_voting_visibility(visibility_text)
-                    candidate_selection = parse_setup_candidate_selection(candidate_selection_text)
                 except ValueError as exc:
                     await modal_interaction.response.edit_message(
                         content=body + f"\n\n⚠ {exc}",
-                        view=ModalStepIntroView(
+                        view=VotingDefaultsIntroView(
                             on_configure,
                             on_back,
                             on_save_for_later,
                             on_cancel,
-                            button_label="Set Voting Defaults",
-                            custom_id="wpm_setup_voting_defaults_configure",
+                            default_candidate_selection=candidate_selection,
                             requester_id=requester_id,
                         ),
                     )
@@ -2053,19 +2123,18 @@ async def send_setup_wizard_step(
                 VotingDefaultsModal(on_submit, defaults=voting_defaults_prefill)
             )
 
-        view = ModalStepIntroView(
+        view = VotingDefaultsIntroView(
             on_configure,
             on_back,
             on_save_for_later,
             on_cancel,
-            button_label="Set Voting Defaults",
-            custom_id="wpm_setup_voting_defaults_configure",
+            default_candidate_selection=default_candidate_selection,
             requester_id=requester_id,
         )
         body += (
-            "\n\nConfigure the guild's default nominee count, vote duration, visibility, and "
-            "candidate selection mode: **Balanced Random** (`rotation_pool`, recommended and the "
-            "default), **Soft Rotation** (`soft_rotation`), or **Pure Random** (`infinite_pool`)."
+            "\n\nChoose the guild's default candidate selection mode below, then press "
+            "**Set Voting Defaults** to configure the default nominee count, vote duration, and "
+            "visibility."
         )
 
     elif step == SetupWizardStep.REMINDER_DEFAULTS:
@@ -2449,23 +2518,31 @@ async def handle_config_wash_crew_role_selected(
     )
 
 
-def _resolve_config_voting_defaults_modal_defaults(
-    bot: "WatchPartyBot", guild_id: int
-) -> Tuple[str, str, str, str]:
+def _resolve_config_voting_defaults_modal_defaults(bot: "WatchPartyBot", guild_id: int) -> Tuple[str, str, str]:
     """Pre-fill the Voting Defaults modal with the guild's current values."""
     configuration = bot.config_service.get_configuration(guild_id)
-    candidate_selection = CandidateSelectionMode.ROTATION_POOL
-    database = bot.config_service.resolve_configured_database(guild_id)
-    if database is not None:
-        database_configuration = bot.suggestion_database_configuration_repository.get(guild_id, database.database_id)
-        if database_configuration is not None:
-            candidate_selection = database_configuration.suggestion_rules.candidate_selection
     return (
         str(configuration.voting_defaults.candidate_count),
         format_duration_hours(configuration.voting_defaults.duration_hours),
         configuration.voting_defaults.visibility.value,
-        candidate_selection.value,
     )
+
+
+def _resolve_config_candidate_selection_default(bot: "WatchPartyBot", guild_id: int) -> CandidateSelectionMode:
+    """Pre-select the guild's currently configured candidate selection mode."""
+    database = bot.config_service.resolve_configured_database(guild_id)
+    if database is not None:
+        database_configuration = bot.suggestion_database_configuration_repository.get(guild_id, database.database_id)
+        if database_configuration is not None:
+            return database_configuration.suggestion_rules.candidate_selection
+    return CandidateSelectionMode.ROTATION_POOL
+
+
+_CONFIG_VOTING_DEFAULTS_BODY = (
+    "**WASH Configuration -- Voting Defaults**\n\n"
+    "Choose the candidate selection mode below, then press Set Voting Defaults to configure "
+    "the nominee count, vote duration, and visibility."
+)
 
 
 async def send_config_voting_defaults_modal(
@@ -2473,37 +2550,44 @@ async def send_config_voting_defaults_modal(
 ) -> None:
     config_service = bot.config_service
 
-    async def on_retry(retry_interaction: discord.Interaction) -> None:
-        await send_config_voting_defaults_modal(retry_interaction, bot, guild_id, on_back)
-
-    async def on_submit(
-        modal_interaction: discord.Interaction,
-        candidate_count_text: str,
-        duration_text: str,
-        visibility_text: str,
-        candidate_selection_text: str,
+    async def on_configure(
+        configure_interaction: discord.Interaction, candidate_selection: CandidateSelectionMode
     ) -> None:
-        try:
-            candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
-            duration_hours = parse_setup_voting_duration_hours(duration_text)
-            visibility = parse_setup_voting_visibility(visibility_text)
-            candidate_selection = parse_setup_candidate_selection(candidate_selection_text)
-        except ValueError as exc:
-            view = ConfigModalRetryView(
-                on_retry, on_back, button_label="Try Again", custom_id="wpm_config_voting_defaults_retry"
-            )
-            await modal_interaction.response.edit_message(
-                content=f"**WASH Configuration -- Voting Defaults**\n\n⚠ {exc}", view=view
-            )
-            return
+        async def on_retry(retry_interaction: discord.Interaction) -> None:
+            await send_config_voting_defaults_modal(retry_interaction, bot, guild_id, on_back)
 
-        result = config_service.set_voting_defaults(
-            guild_id, candidate_count, duration_hours, visibility, candidate_selection
-        )
-        await send_config_result(modal_interaction, bot, guild_id, result)
+        async def on_submit(
+            modal_interaction: discord.Interaction,
+            candidate_count_text: str,
+            duration_text: str,
+            visibility_text: str,
+        ) -> None:
+            try:
+                candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
+                duration_hours = parse_setup_voting_duration_hours(duration_text)
+                visibility = parse_setup_voting_visibility(visibility_text)
+            except ValueError as exc:
+                view = ConfigModalRetryView(
+                    on_retry, on_back, button_label="Try Again", custom_id="wpm_config_voting_defaults_retry"
+                )
+                await modal_interaction.response.edit_message(
+                    content=f"**WASH Configuration -- Voting Defaults**\n\n⚠ {exc}", view=view
+                )
+                return
 
-    defaults = _resolve_config_voting_defaults_modal_defaults(bot, guild_id)
-    await interaction.response.send_modal(VotingDefaultsModal(on_submit, defaults=defaults))
+            result = config_service.set_voting_defaults(
+                guild_id, candidate_count, duration_hours, visibility, candidate_selection
+            )
+            await send_config_result(modal_interaction, bot, guild_id, result)
+
+        defaults = _resolve_config_voting_defaults_modal_defaults(bot, guild_id)
+        await configure_interaction.response.send_modal(VotingDefaultsModal(on_submit, defaults=defaults))
+
+    default_candidate_selection = _resolve_config_candidate_selection_default(bot, guild_id)
+    view = ConfigVotingDefaultsIntroView(
+        on_configure, on_back, default_candidate_selection=default_candidate_selection
+    )
+    await interaction.response.edit_message(content=_CONFIG_VOTING_DEFAULTS_BODY, view=view)
 
 
 async def send_config_reminder_defaults_modal(

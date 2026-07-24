@@ -37,7 +37,7 @@ These documents describe intended behavior, information managed by the applicati
 6. [Administration](05-Administration.md)
 7. [Developer Guide](06-Developer-Guide.md)
 
-These documents distinguish currently available administration from planned Version 1 capabilities and explain how the application is developed and tested.
+These documents distinguish currently available administration from planned post-v1.0 capabilities and explain how the application is developed and tested.
 
 ## Help & Reference
 

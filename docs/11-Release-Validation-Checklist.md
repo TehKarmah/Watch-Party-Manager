@@ -446,7 +446,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Click **I WILL NOT WATCH** on the confirmation post as one member; confirm the count updates and the button state changes.
   2. Click it again as the same member; confirm the rejection is removed (toggle, not additive).
-  3. As WASH Crew, run `/reject suggestion_id:<id>` and `/unreject suggestion_id:<id>` directly.
+  3. As a Watch Party member (WASH Crew inherit this too, but it is not WASH Crew-only), run `/reject suggestion_id:<id>` and `/unreject suggestion_id:<id>` directly.
   4. Reach the configured rejection threshold and confirm the suggestion is retired (archived) and excluded from further selection.
 - **Expected Result:** Rejections never double-count per member; retirement happens automatically at the configured threshold; retired items remain visible via `/list status:Retired` and can be reactivated through `/add`.
 - **Result:** [ ] Pass [ ] Fail
@@ -608,32 +608,35 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 6.2 Reschedule
 
-- **Objective:** Confirm the active watch party's time can be changed.
+- **Objective:** Confirm a scheduled watch party's time can be changed via the watch-party picker.
 - **Preconditions:** Test 6.1 passed.
 - **Steps:**
   1. Run `/reschedule_watch_party when:"YYYY-MM-DD HH:MM"` with a different time.
+  2. Choose the watch party from the picker WASH shows (title and scheduled date/time).
 - **Expected Result:** The scheduled time updates; the reminder job (Test 6.5) is rescheduled to match, not duplicated.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
 ### 6.3 Cancel
 
-- **Objective:** Confirm the active watch party can be cancelled cleanly.
+- **Objective:** Confirm a scheduled watch party can be cancelled cleanly via the watch-party picker.
 - **Preconditions:** Test 6.1 (or 6.2) passed.
 - **Steps:**
   1. Run `/cancel_watch_party`.
-- **Expected Result:** The watch party is cancelled; its reminder job no longer fires; `/watch_party_status` no longer shows it as active.
+  2. Choose the watch party from the picker WASH shows.
+- **Expected Result:** The watch party is cancelled; its reminder job no longer fires; `/watch_party_status` no longer reports it as the soonest scheduled item.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 6.4 Active watch party selection
+### 6.4 Watch-party picker and empty state
 
-- **Objective:** Confirm `/reschedule_watch_party` and `/cancel_watch_party` unambiguously target the single active watch party (neither command takes an ID).
-- **Preconditions:** No active watch party.
+- **Objective:** Confirm `/reschedule_watch_party` and `/cancel_watch_party` show a picker of currently scheduled watch parties rather than taking a watch party ID directly, and fail clearly when none are scheduled.
+- **Preconditions:** No watch party scheduled initially.
 - **Steps:**
-  1. Run `/reschedule_watch_party` with no watch party scheduled; confirm a clear "nothing scheduled" message.
-  2. Schedule one (Test 6.1), then run `/watch_party_status`.
-- **Expected Result:** With nothing scheduled, both commands fail clearly rather than erroring unhelpfully. `/watch_party_status` clearly reports the single active watch party's title and time.
+  1. Run `/reschedule_watch_party` with no watch party scheduled; confirm a clear "no watch parties are currently scheduled" message and no picker appears.
+  2. Schedule two or more watch parties (Test 6.1), then run `/reschedule_watch_party` again; confirm a picker lists each by title and scheduled date/time, and selecting one affects only that watch party.
+  3. Run `/watch_party_status`.
+- **Expected Result:** With nothing scheduled, both commands fail clearly rather than erroring unhelpfully. With one or more scheduled, a picker is always shown to choose the target -- even with only one. `/watch_party_status` reports the soonest-scheduled watch party's title and time, which may not be the one just rescheduled or cancelled if others remain.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

@@ -20,6 +20,10 @@ from typing import Awaitable, Callable, List, Optional, Tuple
 import discord
 
 from watch_party_manager.domain.guild_configuration import JoinMode
+from watch_party_manager.domain.suggestion_database_configuration import (
+    CANDIDATE_SELECTION_DISPLAY_LABELS,
+    CandidateSelectionMode,
+)
 
 SETUP_WIZARD_STEP_TIMEOUT_SECONDS = 900
 
@@ -29,9 +33,12 @@ OnWizardCancel = Callable[[discord.Interaction], Awaitable[None]]
 OnDatabaseChoiceButton = Callable[[discord.Interaction], Awaitable[None]]
 OnExistingDatabaseSelected = Callable[[discord.Interaction, int], Awaitable[None]]
 OnDatabaseNameSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
+OnThreadNameSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnChannelSelected = Callable[[discord.Interaction, int], Awaitable[None]]
 OnSkip = Callable[[discord.Interaction], Awaitable[None]]
-OnVotingDefaultsSubmit = Callable[[discord.Interaction, str, str, str, str], Awaitable[None]]
+OnCreateThreadClicked = Callable[[discord.Interaction], Awaitable[None]]
+OnVotingDefaultsSubmit = Callable[[discord.Interaction, str, str, str], Awaitable[None]]
+OnVotingDefaultsConfigure = Callable[[discord.Interaction, CandidateSelectionMode], Awaitable[None]]
 OnReminderDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 OnBackupDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 OnSave = Callable[[discord.Interaction], Awaitable[None]]
@@ -40,12 +47,26 @@ OnResumeChoice = Callable[[discord.Interaction], Awaitable[None]]
 OnConfigureClicked = Callable[[discord.Interaction], Awaitable[None]]
 OnBack = Callable[[discord.Interaction], Awaitable[None]]
 OnSaveForLater = Callable[[discord.Interaction], Awaitable[None]]
+OnBeginSetup = Callable[[discord.Interaction], Awaitable[None]]
 
 _DESTINATION_CHANNEL_TYPES = [
     discord.ChannelType.text,
     discord.ChannelType.public_thread,
     discord.ChannelType.private_thread,
 ]
+
+_THREAD_PARENT_CHANNEL_TYPES = [discord.ChannelType.text]
+
+# Reuses CANDIDATE_SELECTION_DISPLAY_LABELS (the same mapping /about,
+# /config, and every other candidate-selection display already draws
+# from) so the dropdown's wording can never drift from that single
+# source of truth. "(Recommended)" is presentation-only, appended here
+# rather than baked into the shared label.
+_CANDIDATE_SELECTION_SELECT_LABELS: dict[CandidateSelectionMode, str] = {
+    CandidateSelectionMode.ROTATION_POOL: f"{CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.ROTATION_POOL]} (Recommended)",
+    CandidateSelectionMode.SOFT_ROTATION: CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.SOFT_ROTATION],
+    CandidateSelectionMode.INFINITE_POOL: CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.INFINITE_POOL],
+}
 
 
 class SetupWizardStepView(discord.ui.View):
@@ -114,6 +135,37 @@ class SetupSaveForLaterButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await self._on_save_for_later(interaction)
+
+
+# --- Preparation screen -----------------------------------------------------------------
+
+
+class BeginSetupButton(discord.ui.Button):
+    def __init__(self, on_click: OnBeginSetup) -> None:
+        super().__init__(label="Begin Setup", style=discord.ButtonStyle.primary, custom_id="wpm_setup_preparation_begin")
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class SetupPreparationView(SetupWizardStepView):
+    """Shown once, before Step 1, for a brand-new (never-resumed) /setup
+    run -- helps administrators prepare their Discord server before
+    configuration begins. Not itself a SetupWizardStep: it collects
+    nothing and is never resumed into, so it adds no wizard state.
+    """
+
+    def __init__(
+        self,
+        on_begin: OnBeginSetup,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(BeginSetupButton(on_begin))
+        self.add_item(SetupCancelButton(on_cancel))
 
 
 # --- Resume prompt --------------------------------------------------------------------
@@ -226,7 +278,7 @@ class WatchPartyRoleSelectComponent(discord.ui.RoleSelect):
 
     def __init__(self) -> None:
         super().__init__(
-            placeholder="Choose the Watch Party role (optional)",
+            placeholder="Choose the Watch Party role",
             min_values=0,
             max_values=1,
             custom_id="wpm_setup_watch_party_role_select",
@@ -262,10 +314,14 @@ class WatchPartyRoleConfirmButton(discord.ui.Button):
 class WatchPartyRoleStepView(SetupWizardStepView):
     """Step 2: choose the Watch Party role and its join mode together.
 
-    The role is optional (a guild may not want a distinct Watch Party
-    role at all); join mode always has a value, defaulting to
-    Self-Service (WatchPartyRoleConfig's own documented default) if never
-    touched.
+    The Watch Party role gates WASH's participant commands (/add, /list,
+    /stats, and more) -- every member who should use them needs it. The
+    role select still technically allows zero selections (min_values=0,
+    so Continue can be pressed without picking one), but leaving it
+    unset is not a neutral choice: until a Watch Party role is
+    configured here or later via /config, only WASH Crew can use those
+    commands. Join mode always has a value, defaulting to Self-Service
+    (WatchPartyRoleConfig's own documented default) if never touched.
     """
 
     def __init__(
@@ -316,7 +372,7 @@ class CreateNewDatabaseButton(discord.ui.Button):
 
 
 class SuggestionDatabaseChoiceView(SetupWizardStepView):
-    """Step 3, part 1: select an existing suggestion database, or create one."""
+    """Step 4, part 1: select an existing suggestion database, or create one."""
 
     def __init__(
         self,
@@ -350,7 +406,7 @@ class ExistingDatabaseSelect(discord.ui.Select):
 
 
 class ExistingDatabaseSelectView(SetupWizardStepView):
-    """Step 3, part 2a: pick which existing suggestion database to use.
+    """Step 4, part 2a: pick which existing suggestion database to use.
 
     A transient sub-screen of the Suggestion Database step, not a
     top-level wizard step in its own right -- Cancel Setup returns here
@@ -372,7 +428,7 @@ class ExistingDatabaseSelectView(SetupWizardStepView):
 
 
 class CreateDatabaseNameModal(discord.ui.Modal):
-    """Step 3, part 2b (1 of 2): collect the new database's name."""
+    """Step 4, part 2b (1 of 2): collect the new database's name."""
 
     def __init__(self, on_submit: OnDatabaseNameSubmit) -> None:
         super().__init__(title="New Suggestion Database")
@@ -385,10 +441,17 @@ class CreateDatabaseNameModal(discord.ui.Modal):
 
 
 class DestinationChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self, on_select: OnChannelSelected, *, custom_id: str, placeholder: str) -> None:
+    def __init__(
+        self,
+        on_select: OnChannelSelected,
+        *,
+        custom_id: str,
+        placeholder: str,
+        channel_types: Optional[List[discord.ChannelType]] = None,
+    ) -> None:
         super().__init__(
             placeholder=placeholder,
-            channel_types=_DESTINATION_CHANNEL_TYPES,
+            channel_types=channel_types or _DESTINATION_CHANNEL_TYPES,
             min_values=1,
             max_values=1,
             custom_id=custom_id,
@@ -400,7 +463,7 @@ class DestinationChannelSelect(discord.ui.ChannelSelect):
 
 
 class CreateDatabaseChannelSelectView(SetupWizardStepView):
-    """Step 3, part 2b (2 of 2): pick the new database's channel or thread."""
+    """Step 4, part 2b (2 of 2): pick the new database's channel or thread."""
 
     def __init__(
         self, on_select: OnChannelSelected, on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None
@@ -472,12 +535,61 @@ class SkipWatchDestinationButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
+class CreateNewThreadButton(discord.ui.Button):
+    def __init__(self, on_click: OnCreateThreadClicked) -> None:
+        super().__init__(
+            label="Create New Thread", style=discord.ButtonStyle.secondary, custom_id="wpm_setup_destination_create_thread"
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class CreateThreadParentChannelSelectView(SetupWizardStepView):
+    """Watched Movie Destination step: pick the parent text channel a new
+    thread should be created under, before naming it.
+    """
+
+    def __init__(
+        self, on_select: OnChannelSelected, on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None
+    ) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(
+            DestinationChannelSelect(
+                on_select,
+                custom_id="wpm_setup_destination_thread_parent_select",
+                placeholder="Choose the parent channel for the new thread",
+                channel_types=_THREAD_PARENT_CHANNEL_TYPES,
+            )
+        )
+        self.add_item(SetupCancelButton(on_cancel))
+
+
+class CreateThreadNameModal(discord.ui.Modal):
+    """Watched Movie Destination step: name the new thread, once its
+    parent channel has been chosen.
+    """
+
+    def __init__(self, on_submit: OnThreadNameSubmit) -> None:
+        super().__init__(title="New Thread")
+        self._submit_callback = on_submit
+        self.name_input = discord.ui.TextInput(label="Thread name", required=True, max_length=100)
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self._submit_callback(interaction, self.name_input.value)
+
+
 class WatchDestinationStepView(SetupWizardStepView):
-    """Step 4: choose where watched-movie history posts, or skip for now."""
+    """Watched Movie Destination step: choose an existing channel or
+    thread, create a new thread, or skip for now.
+    """
 
     def __init__(
         self,
         on_select: OnChannelSelected,
+        on_create_thread: OnCreateThreadClicked,
         on_skip: OnSkip,
         on_back: OnBack,
         on_save_for_later: OnSaveForLater,
@@ -493,6 +605,7 @@ class WatchDestinationStepView(SetupWizardStepView):
                 placeholder="Choose an existing channel or thread",
             )
         )
+        self.add_item(CreateNewThreadButton(on_create_thread))
         self.add_item(SkipWatchDestinationButton(on_skip))
         self.add_item(SetupBackButton(on_back))
         self.add_item(SetupSaveForLaterButton(on_save_for_later))
@@ -540,14 +653,18 @@ class ModalStepIntroView(SetupWizardStepView):
 
 
 class VotingDefaultsModal(discord.ui.Modal):
-    """Step 5: default nominee count, duration, visibility, and candidate selection."""
+    """Default nominee count, duration, and visibility.
 
-    def __init__(self, on_submit: OnVotingDefaultsSubmit, *, defaults: Optional[Tuple[str, str, str, str]] = None) -> None:
+    Candidate selection is chosen separately, via CandidateSelectionSelectComponent
+    on VotingDefaultsIntroView/ConfigVotingDefaultsIntroView -- Discord
+    modals cannot contain Select menus, so it can no longer live here as
+    a free-text field once it became a dropdown.
+    """
+
+    def __init__(self, on_submit: OnVotingDefaultsSubmit, *, defaults: Optional[Tuple[str, str, str]] = None) -> None:
         super().__init__(title="Voting Defaults")
         self._submit_callback = on_submit
-        candidate_count_default, duration_default, visibility_default, candidate_selection_default = (
-            defaults or ("3", "1 day", "visible", "rotation_pool")
-        )
+        candidate_count_default, duration_default, visibility_default = defaults or ("3", "1 day", "visible")
         self.candidate_count_input = discord.ui.TextInput(
             label="Default candidate count (2-10)", default=candidate_count_default
         )
@@ -559,18 +676,9 @@ class VotingDefaultsModal(discord.ui.Modal):
         self.visibility_input = discord.ui.TextInput(
             label="Default visibility: blind or visible", default=visibility_default
         )
-        self.candidate_selection_input = discord.ui.TextInput(
-            label="Candidate selection",
-            default=candidate_selection_default,
-            placeholder=(
-                "Balanced Random/rotation_pool (default), Soft Rotation/soft_rotation, "
-                "or Pure Random/infinite_pool"
-            ),
-        )
         self.add_item(self.candidate_count_input)
         self.add_item(self.duration_input)
         self.add_item(self.visibility_input)
-        self.add_item(self.candidate_selection_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self._submit_callback(
@@ -578,12 +686,82 @@ class VotingDefaultsModal(discord.ui.Modal):
             self.candidate_count_input.value,
             self.duration_input.value,
             self.visibility_input.value,
-            self.candidate_selection_input.value,
         )
 
 
+class CandidateSelectionSelectComponent(discord.ui.Select):
+    """Discord Select replacing free-text candidate-selection entry.
+
+    Persists exactly the same CandidateSelectionMode values as before
+    (option value == CandidateSelectionMode.value); only the input
+    mechanism changed. Reused, unchanged, by both /setup's
+    VotingDefaultsIntroView and /config's ConfigVotingDefaultsIntroView.
+    """
+
+    def __init__(self, *, default: CandidateSelectionMode) -> None:
+        options = [
+            discord.SelectOption(
+                label=_CANDIDATE_SELECTION_SELECT_LABELS[mode],
+                value=mode.value,
+                default=mode is default,
+            )
+            for mode in (
+                CandidateSelectionMode.ROTATION_POOL,
+                CandidateSelectionMode.SOFT_ROTATION,
+                CandidateSelectionMode.INFINITE_POOL,
+            )
+        ]
+        super().__init__(
+            placeholder="Choose the candidate selection mode",
+            options=options,
+            custom_id="wpm_setup_voting_candidate_selection_select",
+        )
+        self._default = default
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+
+    @property
+    def selected(self) -> CandidateSelectionMode:
+        """The chosen mode, or the pre-filled default if never touched."""
+        return CandidateSelectionMode(self.values[0]) if self.values else self._default
+
+
+class VotingDefaultsIntroView(SetupWizardStepView):
+    """Voting Defaults step: choose the candidate selection mode from a
+    dropdown, then press Set Voting Defaults to open the modal for the
+    remaining fields (candidate count, duration, visibility).
+    """
+
+    def __init__(
+        self,
+        on_configure: OnVotingDefaultsConfigure,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        default_candidate_selection: CandidateSelectionMode,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
+        self.candidate_selection_select = CandidateSelectionSelectComponent(default=default_candidate_selection)
+        self.add_item(self.candidate_selection_select)
+        self.add_item(
+            ConfigureStepButton(
+                self._handle_configure, label="Set Voting Defaults", custom_id="wpm_setup_voting_defaults_configure"
+            )
+        )
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
+        self.add_item(SetupCancelButton(on_cancel))
+        self._on_configure = on_configure
+
+    async def _handle_configure(self, interaction: discord.Interaction) -> None:
+        await self._on_configure(interaction, self.candidate_selection_select.selected)
+
+
 class ReminderDefaultsModal(discord.ui.Modal):
-    """Step 6: whether a vote-ending reminder is sent, and how many hours before close."""
+    """Step 7: whether a vote-ending reminder is sent, and how many hours before close."""
 
     def __init__(self, on_submit: OnReminderDefaultsSubmit, *, defaults: Optional[Tuple[str, str]] = None) -> None:
         super().__init__(title="Reminder Defaults")
@@ -599,7 +777,7 @@ class ReminderDefaultsModal(discord.ui.Modal):
 
 
 class BackupDefaultsModal(discord.ui.Modal):
-    """Step 7: automatic backup interval and retention count."""
+    """Step 8: automatic backup interval and retention count."""
 
     def __init__(self, on_submit: OnBackupDefaultsSubmit, *, defaults: Optional[Tuple[str, str]] = None) -> None:
         super().__init__(title="Backup Defaults")

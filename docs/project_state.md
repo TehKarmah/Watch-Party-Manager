@@ -18,7 +18,7 @@ Server, member, suggestion, rotation, and database statistics are available thro
 
 ## Overall Completion Estimate
 
-Core suggestion, voting, rotation, statistics, membership, setup/configuration, and backup/restore foundations are implemented and under automated test. Remaining Version 1 scope is concentrated in the richer Event Series/Scheduled Event model, Discord Event publishing, retroactive watch-history correction, and configurable scheduled-backup execution -- see [Administration](05-Administration.md)'s "Planned Version 1 Administration" section for specifics.
+Core suggestion, voting, rotation, statistics, membership, setup/configuration, and backup/restore foundations are implemented and under automated test. Planned post-v1.0 scope is concentrated in the richer Event Series/Scheduled Event model, Discord Event publishing, retroactive watch-history correction, and configurable scheduled-backup execution -- see [Administration](05-Administration.md)'s "Planned Post-v1.0 Administration" section for specifics.
 
 ## Functional Requirement Status
 
@@ -123,11 +123,11 @@ Restricted commands fail closed when the relevant role is not configured by eith
 - `SuggestionService`'s storage is keyed by `(database_id, normalized title)`, so two suggestions can never share an exactly-matching title within one database -- see [Administration](05-Administration.md)'s "Known limitation: identical titles within one database."
 - Member/suggestion statistics that depend on a recorded submitter or creation date only cover suggestions added since FR-034 shipped; earlier suggestions are excluded rather than guessed at.
 - Suggestions saved before public confirmation posts existed (or whose post failed at the time) have no original-post link for `/list` to show, and `/repair_suggestions` cannot recover it -- Discord provides no reliable way to relocate a message after the fact without inventing a URL or risking a duplicate public post.
-- `CHANGELOG.md`'s `[Unreleased]` section predates most milestones completed this cycle and has not been refreshed as part of this documentation pass.
+- `CHANGELOG.md`'s `[1.0.0]` entry is the release record; `[Unreleased]` is empty pending post-v1.0 work.
 
 ## Next Recommended Milestone
 
-With core functionality, configuration, and documentation in place, remaining Version 1 work is concentrated in: automatic scheduled-backup execution, the Event Series/Discord Event scheduling model, and retroactive watch-history correction. See [Administration](05-Administration.md)'s "Planned Version 1 Administration" section.
+With core functionality, configuration, and documentation in place, planned post-v1.0 work is concentrated in: automatic scheduled-backup execution, the Event Series/Discord Event scheduling model, and retroactive watch-history correction. See [Administration](05-Administration.md)'s "Planned Post-v1.0 Administration" section.
 
 ## Testing Status
 

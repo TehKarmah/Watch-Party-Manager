@@ -144,7 +144,7 @@ Responsible for:
 - Statistics
 - Audit logs
 
-Version 1 uses SQLite as the primary database engine.
+Version 1 uses JSON file-based repositories as its persistence engine (see the [Developer Guide](06-Developer-Guide.md) for the implemented source of truth).
 
 ---
 
@@ -159,7 +159,7 @@ Responsible for:
 - Birthday detection
 - Daylight Saving Time monitoring
 
-The Scheduler performs time-based operations independently of user interaction.
+The Scheduler performs time-based operations independently of user interaction. See [Scheduler Architecture](architecture/scheduler.md) for the implemented design (polling interval, job dispatch, and restart-safety/persistence details).
 
 ---
 

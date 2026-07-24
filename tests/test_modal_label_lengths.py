@@ -19,6 +19,7 @@ from watch_party_manager.edit_vote_view import EditVoteEndTimeModal
 from watch_party_manager.setup_wizard_view import (
     BackupDefaultsModal,
     CreateDatabaseNameModal,
+    CreateThreadNameModal,
     ReminderDefaultsModal,
     VotingDefaultsModal,
 )
@@ -53,22 +54,13 @@ class ModalTextInputLabelLengthTests(unittest.TestCase):
     def test_voting_defaults_modal_labels_are_within_limit(self) -> None:
         self._assert_all_labels_within_limit(VotingDefaultsModal(_noop))
 
-    def test_voting_defaults_modal_has_exactly_four_labeled_fields(self) -> None:
+    def test_voting_defaults_modal_has_exactly_three_labeled_fields(self) -> None:
+        # Candidate selection moved to a Discord Select (see
+        # CandidateSelectionSelectComponent), which cannot live inside a
+        # modal -- only candidate count, duration, and visibility remain
+        # here as text fields.
         modal = VotingDefaultsModal(_noop)
-        self.assertEqual(len(_text_input_labels(modal)), 4)
-
-    def test_voting_defaults_modal_fourth_field_label_was_shortened(self) -> None:
-        # The exact field that triggered the 400 Bad Request in production.
-        modal = VotingDefaultsModal(_noop)
-        self.assertEqual(modal.candidate_selection_input.label, "Candidate selection")
-        self.assertLessEqual(len(modal.candidate_selection_input.label), DISCORD_TEXT_INPUT_LABEL_MAX_LENGTH)
-
-    def test_voting_defaults_modal_preserves_guidance_in_the_placeholder(self) -> None:
-        # The wording removed from the label must still reach the user.
-        modal = VotingDefaultsModal(_noop)
-        self.assertIn("rotation_pool", modal.candidate_selection_input.placeholder or "")
-        self.assertIn("soft_rotation", modal.candidate_selection_input.placeholder or "")
-        self.assertIn("infinite_pool", modal.candidate_selection_input.placeholder or "")
+        self.assertEqual(len(_text_input_labels(modal)), 3)
 
     def test_reminder_defaults_modal_labels_are_within_limit(self) -> None:
         self._assert_all_labels_within_limit(ReminderDefaultsModal(_noop))
@@ -84,6 +76,9 @@ class ModalTextInputLabelLengthTests(unittest.TestCase):
 
     def test_edit_vote_end_time_modal_label_is_within_limit(self) -> None:
         self._assert_all_labels_within_limit(EditVoteEndTimeModal(_noop))
+
+    def test_create_thread_name_modal_label_is_within_limit(self) -> None:
+        self._assert_all_labels_within_limit(CreateThreadNameModal(_noop))
 
 
 if __name__ == "__main__":

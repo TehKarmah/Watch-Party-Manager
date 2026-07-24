@@ -9,21 +9,28 @@ lives in services/setup_wizard_service.py and bot.py's wiring around it.
 import unittest
 
 from watch_party_manager.domain.guild_configuration import JoinMode
+from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.setup_wizard_view import (
     SETUP_WIZARD_STEP_TIMEOUT_SECONDS,
     AdminChannelStepView,
     BackupDefaultsModal,
+    BeginSetupButton,
+    CandidateSelectionSelectComponent,
     CreateDatabaseChannelSelectView,
     CreateDatabaseNameModal,
+    CreateThreadNameModal,
+    CreateThreadParentChannelSelectView,
     ExistingDatabaseSelectView,
     ModalStepIntroView,
     ReminderDefaultsModal,
     ReviewStepView,
     SetupBackButton,
     SetupCancelButton,
+    SetupPreparationView,
     SetupSaveForLaterButton,
     SetupWizardResumeView,
     SuggestionDatabaseChoiceView,
+    VotingDefaultsIntroView,
     VotingDefaultsModal,
     WashCrewRoleStepView,
     WatchDestinationStepView,
@@ -257,12 +264,13 @@ class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class WatchDestinationStepViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_channel_select_skip_back_save_and_cancel(self) -> None:
-        view = WatchDestinationStepView(_noop, _noop, _noop, _noop, _noop)
+    async def test_has_channel_select_create_thread_skip_back_save_and_cancel(self) -> None:
+        view = WatchDestinationStepView(_noop, _noop, _noop, _noop, _noop, _noop)
         self.assertEqual(
             [getattr(child, "label", None) or getattr(child, "custom_id", None) for child in view.children],
             [
                 "wpm_setup_watch_destination_channel_select",
+                "Create New Thread",
                 "Skip for Now",
                 "Back",
                 "Save & Finish Later",
@@ -270,15 +278,90 @@ class WatchDestinationStepViewTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_create_thread_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_create_thread(interaction) -> None:
+            calls.append("create_thread")
+
+        view = WatchDestinationStepView(_noop, on_create_thread, _noop, _noop, _noop, _noop)
+        await view.children[1].callback(interaction=object())
+        self.assertEqual(calls, ["create_thread"])
+
     async def test_skip_button_triggers_its_callback(self) -> None:
         calls = []
 
         async def on_skip(interaction) -> None:
             calls.append("skip")
 
-        view = WatchDestinationStepView(_noop, on_skip, _noop, _noop, _noop)
-        await view.children[1].callback(interaction=object())
+        view = WatchDestinationStepView(_noop, _noop, on_skip, _noop, _noop, _noop)
+        await view.children[2].callback(interaction=object())
         self.assertEqual(calls, ["skip"])
+
+
+class CreateThreadParentChannelSelectViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_a_text_only_channel_select_and_a_cancel_button(self) -> None:
+        view = CreateThreadParentChannelSelectView(_noop, _noop)
+        self.assertEqual(len(view.children), 2)
+        self.assertEqual(view.children[0].custom_id, "wpm_setup_destination_thread_parent_select")
+        self.assertIsInstance(view.children[-1], SetupCancelButton)
+
+    async def test_selection_forwards_the_chosen_channel_id(self) -> None:
+        calls = []
+
+        async def on_select(interaction, channel_id) -> None:
+            calls.append(channel_id)
+
+        view = CreateThreadParentChannelSelectView(on_select, _noop)
+        select = view.children[0]
+        select._values = [type("FakeChannel", (), {"id": 777})()]
+        await select.callback(interaction=object())
+        self.assertEqual(calls, [777])
+
+
+class CreateThreadNameModalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_submission_forwards_the_entered_name(self) -> None:
+        calls = []
+
+        async def on_submit(interaction, name) -> None:
+            calls.append(name)
+
+        modal = CreateThreadNameModal(on_submit)
+        modal.name_input._value = "Watched Movies"
+        await modal.on_submit(interaction=object())
+        self.assertEqual(calls, ["Watched Movies"])
+
+
+class SetupPreparationViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_begin_setup_and_cancel_buttons(self) -> None:
+        view = SetupPreparationView(_noop, _noop)
+        self.assertEqual(
+            [(button.label, button.custom_id) for button in view.children],
+            [
+                ("Begin Setup", "wpm_setup_preparation_begin"),
+                ("Cancel Setup", "wpm_setup_cancel"),
+            ],
+        )
+
+    async def test_begin_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_begin(interaction) -> None:
+            calls.append("begin")
+
+        view = SetupPreparationView(on_begin, _noop)
+        await view.children[0].callback(interaction=object())
+        self.assertEqual(calls, ["begin"])
+
+    async def test_cancel_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_cancel(interaction) -> None:
+            calls.append("cancel")
+
+        view = SetupPreparationView(_noop, on_cancel)
+        await view.children[1].callback(interaction=object())
+        self.assertEqual(calls, ["cancel"])
 
 
 class ModalStepIntroViewTests(unittest.IsolatedAsyncioTestCase):
@@ -315,27 +398,96 @@ class ModalStepIntroViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_four_fields_with_expected_defaults(self) -> None:
+    async def test_has_three_fields_with_expected_defaults(self) -> None:
         modal = VotingDefaultsModal(_noop)
-        self.assertEqual(len(modal.children), 4)
+        self.assertEqual(len(modal.children), 3)
         self.assertEqual(modal.candidate_count_input.default, "3")
         self.assertEqual(modal.duration_input.default, "1 day")
         self.assertEqual(modal.visibility_input.default, "visible")
-        self.assertEqual(modal.candidate_selection_input.default, "rotation_pool")
 
-    async def test_submission_forwards_all_four_values(self) -> None:
+    async def test_submission_forwards_all_three_values(self) -> None:
         calls = []
 
-        async def on_submit(interaction, candidate_count, duration_text, visibility, candidate_selection) -> None:
-            calls.append((candidate_count, duration_text, visibility, candidate_selection))
+        async def on_submit(interaction, candidate_count, duration_text, visibility) -> None:
+            calls.append((candidate_count, duration_text, visibility))
 
         modal = VotingDefaultsModal(on_submit)
         modal.candidate_count_input._value = "4"
         modal.duration_input._value = "10"
         modal.visibility_input._value = "visible"
-        modal.candidate_selection_input._value = "rotation_pool"
         await modal.on_submit(interaction=object())
-        self.assertEqual(calls, [("4", "10", "visible", "rotation_pool")])
+        self.assertEqual(calls, [("4", "10", "visible")])
+
+
+class CandidateSelectionSelectComponentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_displays_all_three_modes_with_balanced_random_recommended(self) -> None:
+        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.ROTATION_POOL)
+        self.assertEqual(
+            [option.value for option in select.options],
+            [
+                CandidateSelectionMode.ROTATION_POOL.value,
+                CandidateSelectionMode.SOFT_ROTATION.value,
+                CandidateSelectionMode.INFINITE_POOL.value,
+            ],
+        )
+        self.assertEqual(
+            [option.label for option in select.options],
+            ["Balanced Random (Recommended)", "Soft Rotation", "Pure Random"],
+        )
+
+    async def test_default_option_matches_the_requested_default(self) -> None:
+        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.SOFT_ROTATION)
+        defaults = {option.value: option.default for option in select.options}
+        self.assertTrue(defaults[CandidateSelectionMode.SOFT_ROTATION.value])
+        self.assertFalse(defaults[CandidateSelectionMode.ROTATION_POOL.value])
+        self.assertFalse(defaults[CandidateSelectionMode.INFINITE_POOL.value])
+
+    async def test_selected_falls_back_to_default_when_never_touched(self) -> None:
+        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.INFINITE_POOL)
+        self.assertEqual(select.selected, CandidateSelectionMode.INFINITE_POOL)
+
+    async def test_selected_reflects_a_made_choice(self) -> None:
+        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.ROTATION_POOL)
+        select._values = [CandidateSelectionMode.SOFT_ROTATION.value]
+        self.assertEqual(select.selected, CandidateSelectionMode.SOFT_ROTATION)
+
+
+class VotingDefaultsIntroViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_candidate_selection_select_configure_back_save_and_cancel(self) -> None:
+        view = VotingDefaultsIntroView(
+            _noop, _noop, _noop, _noop, default_candidate_selection=CandidateSelectionMode.ROTATION_POOL
+        )
+        self.assertEqual(len(view.children), 5)
+        self.assertEqual(view.children[0].custom_id, "wpm_setup_voting_candidate_selection_select")
+        self.assertEqual(view.children[1].label, "Set Voting Defaults")
+        self.assertIsInstance(view.children[-1], SetupCancelButton)
+        self.assertTrue(any(isinstance(child, SetupBackButton) for child in view.children))
+        self.assertTrue(any(isinstance(child, SetupSaveForLaterButton) for child in view.children))
+
+    async def test_configure_forwards_the_selected_candidate_selection(self) -> None:
+        calls = []
+
+        async def on_configure(interaction, candidate_selection) -> None:
+            calls.append(candidate_selection)
+
+        view = VotingDefaultsIntroView(
+            on_configure, _noop, _noop, _noop, default_candidate_selection=CandidateSelectionMode.ROTATION_POOL
+        )
+        view.candidate_selection_select._values = [CandidateSelectionMode.INFINITE_POOL.value]
+        await view.children[1].callback(interaction=object())
+        self.assertEqual(calls, [CandidateSelectionMode.INFINITE_POOL])
+
+    async def test_configure_uses_default_when_selection_never_touched(self) -> None:
+        calls = []
+
+        async def on_configure(interaction, candidate_selection) -> None:
+            calls.append(candidate_selection)
+
+        view = VotingDefaultsIntroView(
+            on_configure, _noop, _noop, _noop, default_candidate_selection=CandidateSelectionMode.SOFT_ROTATION
+        )
+        await view.children[1].callback(interaction=object())
+        self.assertEqual(calls, [CandidateSelectionMode.SOFT_ROTATION])
 
 
 class ReminderDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
@@ -513,11 +665,20 @@ class RequesterScopedInteractionCheckTests(unittest.IsolatedAsyncioTestCase):
         # requester_id kwarg (and its enforcement) was threaded through
         # each one, not just WashCrewRoleStepView.
         views = [
+            SetupPreparationView(_noop, _noop, requester_id=42),
             WatchPartyRoleStepView(_noop, _noop, _noop, _noop, requester_id=42),
             AdminChannelStepView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
             SuggestionDatabaseChoiceView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
-            WatchDestinationStepView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
+            WatchDestinationStepView(_noop, _noop, _noop, _noop, _noop, _noop, requester_id=42),
             ModalStepIntroView(_noop, _noop, _noop, _noop, button_label="Go", custom_id="wpm_x", requester_id=42),
+            VotingDefaultsIntroView(
+                _noop,
+                _noop,
+                _noop,
+                _noop,
+                default_candidate_selection=CandidateSelectionMode.ROTATION_POOL,
+                requester_id=42,
+            ),
             ReviewStepView([("wash_crew_role", "WASH Crew Role")], _noop, _noop, _noop, _noop, _noop, requester_id=42),
         ]
         for view in views:

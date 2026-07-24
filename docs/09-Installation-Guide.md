@@ -231,14 +231,16 @@ If `DISCORD_GUILD_ID` is set, slash commands appear in that server almost immedi
 
 Once WASH is online and you can see its slash commands, run `/setup` as a server administrator (or whichever role you've already designated as WASH Crew). This is a guided, interactive, multi-step flow -- entirely re-runnable at any time to change earlier answers.
 
-The wizard walks through, in order:
+**Preparation screen.** The first screen you see (only on a brand-new run, not when resuming a saved draft) is a preparation screen, not one of the numbered steps below. It suggests creating two Discord roles before you continue -- **Watch Party** (members who participate and use WASH's member commands) and **WASH Crew** (administrators who configure and manage WASH) -- and reminds you that setup can be paused with Save & Finish Later and that existing channels or threads can be reused wherever the wizard asks for a destination. You can create the roles now or later; press **Begin Setup** to continue, or **Cancel** to stop without starting a draft.
+
+The wizard then walks through, in order:
 
 1. **WASH Crew role** -- which Discord role has administrative access.
-2. **Watch Party role and join mode** -- which role identifies participants, and how members get it: Self-Service (anyone can join with `/join_watch_party`), Manual (WASH Crew adds members), Approval-Required (requests go to WASH Crew for approval), or Discord-Managed (an existing role you manage outside WASH).
+2. **Watch Party role and join mode** -- every member who should participate in watch parties and use WASH's participant commands (`/add`, `/list`, `/stats`, and more) needs this role; until it's configured, only WASH Crew can use them. Also choose how members get it: Self-Service (anyone can join with `/join_watch_party`), Manual (WASH Crew adds members), Approval-Required (requests go to WASH Crew for approval), or Discord-Managed (an existing role you manage outside WASH).
 3. **Admin channel** -- where Approval-Required membership requests are posted for WASH Crew, or skip for now.
 4. **Suggestion database** -- select an existing one or create a new one, tied to a channel or thread.
-5. **Watch destination** -- where watched-movie history posts, or skip for now.
-6. **Voting defaults** -- candidate count (default 3), duration (1 hour through 30 days; default **24 hours**, shown in natural language like "4 hours" or "3 days"), visibility (**Visible** by default; **Blind** remains fully selectable), and candidate-selection mode: **Balanced Random** (recommended and the default -- avoids repeating a suggestion until a fresh rotation begins), **Soft Rotation** (keeps repeats eligible but weighted down), or **Pure Random** (no weighting or exclusion at all).
+5. **Watch destination** -- where watched-movie history and discussion should be posted: an existing text channel or thread, a brand-new thread (choose a parent channel, then name it -- WASH creates it for you), or skip for now.
+6. **Voting defaults** -- candidate count and duration/visibility are entered in a modal (default 3 candidates; duration 1 hour through 30 days, default **24 hours**, shown in natural language like "4 hours" or "3 days"; visibility **Visible** by default, **Blind** remains fully selectable). Candidate-selection mode is chosen from a dropdown, not typed: **Balanced Random** (recommended and the default -- avoids repeating a suggestion until a fresh rotation begins), **Soft Rotation** (keeps repeats eligible but weighted down), or **Pure Random** (no weighting or exclusion at all).
 7. **Reminder defaults** -- whether a vote-ending reminder is sent, and how far ahead.
 8. **Backup defaults** -- automatic backup interval and how many backups to retain.
 9. **Summary** -- review every section (including the chosen candidate-selection mode), then Save, jump back to edit any section, or cancel without saving.

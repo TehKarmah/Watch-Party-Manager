@@ -17,10 +17,10 @@ from pathlib import Path
 from watch_party_manager.bot import (
     WatchPartyBot,
     build_setup_completion_summary,
+    build_setup_preparation_text,
     build_setup_step_header,
     parse_setup_backup_interval_days,
     parse_setup_backup_retention_count,
-    parse_setup_candidate_selection,
     parse_setup_reminder_enabled,
     parse_setup_reminder_hours_before_close,
     parse_setup_voting_candidate_count,
@@ -29,6 +29,7 @@ from watch_party_manager.bot import (
     perform_setup_permission_check,
     perform_setup_redirect_check,
     resolve_startup_role_ids,
+    send_setup_preparation_screen,
     send_setup_wizard_step,
 )
 from watch_party_manager.domain.guild_configuration import (
@@ -58,7 +59,9 @@ from watch_party_manager.setup_wizard_view import (
     ModalStepIntroView,
     ReviewStepView,
     SetupBackButton,
+    SetupPreparationView,
     SetupSaveForLaterButton,
+    VotingDefaultsIntroView,
     VotingDefaultsModal,
     WashCrewRoleStepView,
     WatchDestinationStepView,
@@ -208,11 +211,6 @@ class ParseSetupFieldsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_setup_voting_visibility("secret")
 
-    def test_candidate_selection_valid_and_invalid(self):
-        self.assertEqual(parse_setup_candidate_selection("rotation_pool"), CandidateSelectionMode.ROTATION_POOL)
-        with self.assertRaises(ValueError):
-            parse_setup_candidate_selection("weighted")
-
     def test_reminder_enabled_required_and_invalid(self):
         self.assertTrue(parse_setup_reminder_enabled("yes"))
         self.assertFalse(parse_setup_reminder_enabled("no"))
@@ -359,16 +357,19 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         self.assertIn("Step 4 of 9", skip_interaction.response.edited_content)
 
     async def test_voting_defaults_step_sends_a_modal_with_valid_component_labels(self) -> None:
-        # Regression test: Step 6 (Voting Defaults) previously crashed with
+        # Regression test: Voting Defaults previously crashed with
         # discord.errors.HTTPException 400 ("Must be between 1 and 45 in
         # length") because VotingDefaultsModal's fourth TextInput label
-        # was 46 characters. This exercises the exact path that failed --
-        # go_to_step -> send_setup_wizard_step -> ModalStepIntroView's
-        # button -> on_configure -> interaction.response.send_modal(...)
-        # -- and confirms every field on the modal actually sent has a
-        # label within Discord's 1-45 character limit.
+        # was 46 characters (candidate selection has since moved to a
+        # Discord Select on VotingDefaultsIntroView, dropping that field
+        # from the modal entirely). This exercises the current path --
+        # go_to_step -> send_setup_wizard_step -> VotingDefaultsIntroView's
+        # Set Voting Defaults button -> on_configure ->
+        # interaction.response.send_modal(...) -- and confirms every
+        # field on the modal actually sent has a label within Discord's
+        # 1-45 character limit.
         from watch_party_manager.domain.setup_wizard import SetupWizardStep
-        from watch_party_manager.setup_wizard_view import ModalStepIntroView, VotingDefaultsModal
+        from watch_party_manager.setup_wizard_view import VotingDefaultsIntroView, VotingDefaultsModal
 
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
@@ -376,8 +377,8 @@ class SetupCommandFlowTests(SetupCommandTestCase):
 
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
-        self.assertIsInstance(interaction.response.sent_view, ModalStepIntroView)
-        configure_button = interaction.response.sent_view.children[0]
+        self.assertIsInstance(interaction.response.sent_view, VotingDefaultsIntroView)
+        configure_button = interaction.response.sent_view.children[1]
 
         configure_interaction = FakeInteraction()
         await configure_button.callback(interaction=configure_interaction)
@@ -553,8 +554,9 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
-        intro_view: ModalStepIntroView = interaction.response.sent_view
-        configure_button = intro_view.children[0]
+        intro_view: VotingDefaultsIntroView = interaction.response.sent_view
+        self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.SOFT_ROTATION)
+        configure_button = intro_view.children[1]
 
         configure_interaction = FakeInteraction()
         await configure_button.callback(interaction=configure_interaction)
@@ -563,7 +565,6 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         self.assertEqual(modal.candidate_count_input.default, "5")
         self.assertEqual(modal.duration_input.default, "14 hours")
         self.assertEqual(modal.visibility_input.default, "visible")
-        self.assertEqual(modal.candidate_selection_input.default, "soft_rotation")
 
     async def test_back_from_review_returns_to_backup_defaults(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
@@ -861,53 +862,48 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
     Voting Defaults, exercised end-to-end through the wizard.
     """
 
-    async def test_voting_defaults_modal_defaults_to_balanced_random(self) -> None:
+    async def test_voting_defaults_dropdown_defaults_to_balanced_random(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
-        configure_button = interaction.response.sent_view.children[0]
 
-        configure_interaction = FakeInteraction()
-        await configure_button.callback(interaction=configure_interaction)
-
-        modal: VotingDefaultsModal = configure_interaction.response.sent_modal
-        self.assertEqual(modal.candidate_selection_input.default, CandidateSelectionMode.ROTATION_POOL.value)
+        intro_view: VotingDefaultsIntroView = interaction.response.sent_view
+        self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.ROTATION_POOL)
         self.assertEqual(CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.ROTATION_POOL], "Balanced Random")
 
-    async def test_pure_random_can_be_selected_by_raw_value(self) -> None:
+    async def test_dropdown_displays_all_three_candidate_selection_modes(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
-        configure_button = interaction.response.sent_view.children[0]
+
+        intro_view: VotingDefaultsIntroView = interaction.response.sent_view
+        option_values = {option.value for option in intro_view.candidate_selection_select.options}
+        self.assertEqual(
+            option_values,
+            {
+                CandidateSelectionMode.ROTATION_POOL.value,
+                CandidateSelectionMode.SOFT_ROTATION.value,
+                CandidateSelectionMode.INFINITE_POOL.value,
+            },
+        )
+
+    async def test_pure_random_can_be_selected_via_the_dropdown_and_persists(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        intro_view: VotingDefaultsIntroView = interaction.response.sent_view
+        intro_view.candidate_selection_select._values = [CandidateSelectionMode.INFINITE_POOL.value]
+        configure_button = intro_view.children[1]
+
         configure_interaction = FakeInteraction()
         await configure_button.callback(interaction=configure_interaction)
         modal: VotingDefaultsModal = configure_interaction.response.sent_modal
         modal.candidate_count_input._value = "3"
         modal.duration_input._value = "7"
         modal.visibility_input._value = "blind"
-        modal.candidate_selection_input._value = "infinite_pool"
-
-        submit_interaction = FakeInteraction()
-        await modal.on_submit(interaction=submit_interaction)
-
-        persisted = self.wizard_repository.get(GUILD_ID)
-        self.assertEqual(persisted.draft.voting_candidate_selection, CandidateSelectionMode.INFINITE_POOL)
-
-    async def test_pure_random_can_be_selected_by_friendly_label(self) -> None:
-        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
-        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
-        interaction = FakeInteraction()
-        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
-        configure_button = interaction.response.sent_view.children[0]
-        configure_interaction = FakeInteraction()
-        await configure_button.callback(interaction=configure_interaction)
-        modal: VotingDefaultsModal = configure_interaction.response.sent_modal
-        modal.candidate_count_input._value = "3"
-        modal.duration_input._value = "7"
-        modal.visibility_input._value = "blind"
-        modal.candidate_selection_input._value = "Pure Random"
 
         submit_interaction = FakeInteraction()
         await modal.on_submit(interaction=submit_interaction)
@@ -920,7 +916,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
-        configure_button = interaction.response.sent_view.children[0]
+        configure_button = interaction.response.sent_view.children[1]
 
         configure_interaction = FakeInteraction()
         await configure_button.callback(interaction=configure_interaction)
@@ -933,12 +929,6 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
             parse_setup_voting_candidate_count("1")
         with self.assertRaises(ValueError):
             parse_setup_voting_candidate_count("11")
-
-    async def test_invalid_candidate_selection_is_rejected_with_a_clear_message(self) -> None:
-        with self.assertRaises(ValueError) as ctx:
-            parse_setup_candidate_selection("weighted")
-        self.assertIn("Balanced Random", str(ctx.exception))
-        self.assertIn("Pure Random", str(ctx.exception))
 
     async def test_completion_summary_includes_the_candidate_selection_mode(self) -> None:
         database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
@@ -1079,6 +1069,211 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
         lines = config_service.build_summary_lines(GUILD_ID, FakeGuild())
         self.assertTrue(any("Balanced Random" in line for line in lines))
+
+
+class SetupPreparationScreenIntegrationTests(SetupCommandTestCase):
+    """Setup Wizard UX Polish: the preparation screen shown before Step 1."""
+
+    async def test_preparation_screen_explains_the_recommended_roles(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        interaction = FakeInteraction()
+
+        await send_setup_preparation_screen(interaction, self.bot, state)
+
+        self.assertIn("Watch Party", interaction.response.sent_message)
+        self.assertIn("WASH Crew", interaction.response.sent_message)
+        self.assertIn("Save & Finish Later", interaction.response.sent_message)
+        self.assertIsInstance(interaction.response.sent_view, SetupPreparationView)
+        self.assertTrue(interaction.response.sent_ephemeral)
+
+    async def test_begin_setup_proceeds_to_step_one(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        interaction = FakeInteraction()
+        await send_setup_preparation_screen(interaction, self.bot, state)
+        begin_button = interaction.response.sent_view.children[0]
+
+        begin_interaction = FakeInteraction()
+        await begin_button.callback(interaction=begin_interaction)
+
+        self.assertIn("Step 1 of 9", begin_interaction.response.edited_content)
+        self.assertIsInstance(begin_interaction.response.edited_view, WashCrewRoleStepView)
+
+    async def test_cancel_from_preparation_screen_discards_the_draft(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        interaction = FakeInteraction()
+        await send_setup_preparation_screen(interaction, self.bot, state)
+        cancel_button = interaction.response.sent_view.children[1]
+
+        cancel_interaction = FakeInteraction()
+        await cancel_button.callback(interaction=cancel_interaction)
+
+        self.assertIn("cancelled", cancel_interaction.response.edited_content)
+        self.assertIsNone(cancel_interaction.response.edited_view)
+        self.assertIsNone(self.wizard_repository.get(GUILD_ID))
+
+    async def test_build_setup_preparation_text_mentions_reusing_existing_channels(self) -> None:
+        text = build_setup_preparation_text()
+        self.assertIn("existing channels", text)
+
+
+class WatchPartyRoleWordingTests(SetupCommandTestCase):
+    """Setup Wizard UX Polish: the Watch Party role must not be described
+    as optional -- it gates every participant command.
+    """
+
+    async def test_step_body_does_not_describe_the_role_as_optional(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        interaction = FakeInteraction()
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        self.assertNotIn("(optional)", interaction.response.sent_message)
+        self.assertIn("only WASH Crew can use them", interaction.response.sent_message)
+
+    async def test_role_select_placeholder_does_not_say_optional(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        interaction = FakeInteraction()
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        role_select = interaction.response.sent_view.children[0]
+        self.assertNotIn("optional", role_select.placeholder)
+
+    async def test_the_role_can_still_technically_be_left_unset(self) -> None:
+        # Leaving it unset must remain possible (min_values=0) even though
+        # it's no longer described as optional -- WASH Crew can always
+        # configure it later via /config.
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_watch_party_role(state, None, JoinMode.SELF_SERVICE)
+        self.assertIsNone(state.draft.watch_party_role_id)
+
+
+class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
+    """Setup Wizard UX Polish: Watch Destination wording, navigation
+    controls, and the new create-new-thread option.
+    """
+
+    class FakeThread:
+        def __init__(self, thread_id: int) -> None:
+            self.id = thread_id
+
+    class FakeHTTPResponse:
+        status = 403
+        reason = "Forbidden"
+
+    class FakeParentChannel:
+        def __init__(self, *, thread_id: int = 999, fail: bool = False) -> None:
+            self._thread_id = thread_id
+            self._fail = fail
+            self.created_with = None
+
+        async def create_thread(self, *, name, type):
+            self.created_with = (name, type)
+            if self._fail:
+                import discord
+
+                raise discord.HTTPException(
+                    response=WatchDestinationStepIntegrationTests.FakeHTTPResponse(), message="boom"
+                )
+            return WatchDestinationStepIntegrationTests.FakeThread(self._thread_id)
+
+    class FakeGuildWithChannel:
+        def __init__(self, channel) -> None:
+            self._channel = channel
+
+        def get_channel(self, channel_id):
+            return self._channel
+
+    async def _render_step(self):
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.WATCH_DESTINATION)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        return interaction
+
+    async def test_body_explains_history_and_discussion_and_mentions_thread_creation(self) -> None:
+        interaction = await self._render_step()
+        self.assertIn("history and discussion", interaction.response.sent_message)
+        self.assertIn("create a new thread", interaction.response.sent_message)
+
+    async def test_shows_back_and_save_for_later(self) -> None:
+        interaction = await self._render_step()
+        view = interaction.response.sent_view
+        self.assertTrue(any(isinstance(child, SetupBackButton) for child in view.children))
+        self.assertTrue(any(isinstance(child, SetupSaveForLaterButton) for child in view.children))
+
+    async def test_selecting_an_existing_channel_or_thread_advances_and_persists(self) -> None:
+        interaction = await self._render_step()
+        view = interaction.response.sent_view
+        channel_select = view.children[0]
+        channel_select._values = [type("FakeChannelValue", (), {"id": DESTINATION_CHANNEL_ID})()]
+
+        select_interaction = FakeInteraction()
+        await channel_select.callback(interaction=select_interaction)
+
+        self.assertIn("Step 6 of 9", select_interaction.response.edited_content)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.watch_destination_channel_id, DESTINATION_CHANNEL_ID)
+        self.assertFalse(persisted.draft.watch_destination_skipped)
+
+    async def test_create_new_thread_end_to_end_persists_the_new_threads_id(self) -> None:
+        interaction = await self._render_step()
+        create_thread_button = interaction.response.sent_view.children[1]
+
+        create_interaction = FakeInteraction()
+        await create_thread_button.callback(interaction=create_interaction)
+        parent_select_view = create_interaction.response.edited_view
+        parent_select = parent_select_view.children[0]
+        parent_select._values = [type("FakeChannelValue", (), {"id": 500})()]
+
+        parent_interaction = FakeInteraction()
+        await parent_select.callback(interaction=parent_interaction)
+        name_modal = parent_interaction.response.sent_modal
+        name_modal.name_input._value = "Watched Movies"
+
+        fake_channel = self.FakeParentChannel(thread_id=777)
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_channel))
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        self.assertEqual(fake_channel.created_with, ("Watched Movies", __import__("discord").ChannelType.public_thread))
+        self.assertIn("Step 6 of 9", submit_interaction.response.edited_content)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.watch_destination_channel_id, 777)
+
+    async def test_create_new_thread_failure_shows_an_error_and_stays_on_the_step(self) -> None:
+        interaction = await self._render_step()
+        create_thread_button = interaction.response.sent_view.children[1]
+
+        create_interaction = FakeInteraction()
+        await create_thread_button.callback(interaction=create_interaction)
+        parent_select = create_interaction.response.edited_view.children[0]
+        parent_select._values = [type("FakeChannelValue", (), {"id": 500})()]
+
+        parent_interaction = FakeInteraction()
+        await parent_select.callback(interaction=parent_interaction)
+        name_modal = parent_interaction.response.sent_modal
+        name_modal.name_input._value = "Watched Movies"
+
+        failing_channel = self.FakeParentChannel(fail=True)
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(failing_channel))
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        self.assertIn("Could not create the thread", submit_interaction.response.edited_content)
+        self.assertIsInstance(submit_interaction.response.edited_view, WatchDestinationStepView)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertIsNone(persisted.draft.watch_destination_channel_id)
+
+    async def test_skip_still_works(self) -> None:
+        interaction = await self._render_step()
+        skip_button = interaction.response.sent_view.children[2]
+
+        skip_interaction = FakeInteraction()
+        await skip_button.callback(interaction=skip_interaction)
+
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertTrue(persisted.draft.watch_destination_skipped)
 
 
 if __name__ == "__main__":

@@ -130,7 +130,7 @@ Only one open round is supported by the current voting service behavior.
 
 ### Candidate selection and rotation management
 
-Each database's `suggestion_rules.candidate_selection` setting (configurable through the Setup Wizard's Voting Defaults step or `/config`'s Voting Defaults screen -- both show and save the exact same value) chooses how `/start_vote` picks nominees from that database's eligible suggestions. The Setup Wizard and `/config` present these three modes under friendlier names; the underlying value in parentheses is what's actually persisted:
+Each database's `suggestion_rules.candidate_selection` setting (configurable through the Setup Wizard's Voting Defaults step or `/config`'s Voting Defaults screen -- both show and save the exact same value, chosen from a Discord dropdown rather than typed) chooses how `/start_vote` picks nominees from that database's eligible suggestions. The Setup Wizard and `/config` present these three modes under friendlier names; the underlying value in parentheses is what's actually persisted:
 
 - **Balanced Random** (`rotation_pool`, the recommended and default choice) -- every eligible suggestion belongs to a rotation. Once presented in a vote, a suggestion is excluded from selection until the rotation is exhausted and a fresh one begins automatically.
 - **Soft Rotation** (`soft_rotation`) -- unpresented suggestions are strongly preferred, but a previously presented suggestion remains technically eligible at a much lower selection weight rather than being excluded outright.
@@ -324,9 +324,9 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 
 Member and suggestion statistics that depend on "who submitted this" or "when was this created" (suggestions submitted/watched/retired/winning per member; a suggestion's created date and days-until-first-nomination) rely on two fields -- `journey.original_suggester` and `journey.suggestion_date` -- that are recorded for the first time by this milestone, exclusively at the moment `/add` creates a brand-new suggestion. They are never modified afterward (not by reactivation, editing, or a database move) and are never backfilled onto suggestions that already existed. A suggestion added before this feature shipped simply has no recorded submitter or creation date, and its Suggestion statistics report those fields as unavailable rather than guessing; it's also excluded from every member's submission-based counts. Votes-cast-based statistics are unaffected, since `VoteRecord.discord_user_id` has always been recorded.
 
-## 11. Planned Version 1 Administration
+## 11. Planned Post-v1.0 Administration
 
-Guided setup (`/setup`, rerunnable), rotation administration, and statistics/reporting are implemented -- see the sections above. The remaining Version 1 plan includes:
+Guided setup (`/setup`, rerunnable), rotation administration, and statistics/reporting are implemented -- see the sections above. Planned post-v1.0 enhancements include:
 
 - Existing, newly created, or deferred watch-history destinations
 - Event-series administration (the richer recurring-schedule/Discord Event model `docs/04-Data-Model.md` describes; scheduled watch parties today are a simpler, single-occurrence foundation -- see `domain/watch_party.py`)
