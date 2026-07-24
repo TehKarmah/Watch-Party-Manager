@@ -24,7 +24,7 @@ from watch_party_manager.bot import (
     parse_setup_reminder_enabled,
     parse_setup_reminder_hours_before_close,
     parse_setup_voting_candidate_count,
-    parse_setup_voting_duration_days,
+    parse_setup_voting_duration_hours,
     parse_setup_voting_visibility,
     perform_setup_permission_check,
     perform_setup_redirect_check,
@@ -192,12 +192,16 @@ class ParseSetupFieldsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_setup_voting_candidate_count("abc")
 
-    def test_voting_duration_days_valid_and_invalid(self):
-        self.assertEqual(parse_setup_voting_duration_days("10"), 10)
+    def test_voting_duration_hours_valid_and_invalid(self):
+        # A bare number is interpreted as days, backward compatible with
+        # this field's original meaning.
+        self.assertEqual(parse_setup_voting_duration_hours("10"), 240)
+        self.assertEqual(parse_setup_voting_duration_hours("4h"), 4)
+        self.assertEqual(parse_setup_voting_duration_hours("3 days"), 72)
         with self.assertRaises(ValueError):
-            parse_setup_voting_duration_days("0")
+            parse_setup_voting_duration_hours("0")
         with self.assertRaises(ValueError):
-            parse_setup_voting_duration_days("31")
+            parse_setup_voting_duration_hours("31")  # 31 days = 744 hours, above the 720-hour maximum
 
     def test_voting_visibility_valid_and_invalid(self):
         self.assertEqual(parse_setup_voting_visibility("Blind"), GuildVoteVisibility.BLIND)
@@ -557,7 +561,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
 
         modal: VotingDefaultsModal = configure_interaction.response.sent_modal
         self.assertEqual(modal.candidate_count_input.default, "5")
-        self.assertEqual(modal.duration_days_input.default, "14")
+        self.assertEqual(modal.duration_input.default, "14 hours")
         self.assertEqual(modal.visibility_input.default, "visible")
         self.assertEqual(modal.candidate_selection_input.default, "soft_rotation")
 
@@ -881,7 +885,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         await configure_button.callback(interaction=configure_interaction)
         modal: VotingDefaultsModal = configure_interaction.response.sent_modal
         modal.candidate_count_input._value = "3"
-        modal.duration_days_input._value = "7"
+        modal.duration_input._value = "7"
         modal.visibility_input._value = "blind"
         modal.candidate_selection_input._value = "infinite_pool"
 
@@ -901,7 +905,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         await configure_button.callback(interaction=configure_interaction)
         modal: VotingDefaultsModal = configure_interaction.response.sent_modal
         modal.candidate_count_input._value = "3"
-        modal.duration_days_input._value = "7"
+        modal.duration_input._value = "7"
         modal.visibility_input._value = "blind"
         modal.candidate_selection_input._value = "Pure Random"
 

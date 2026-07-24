@@ -114,7 +114,7 @@ Run the complete suite before handing off or committing work:
 Current baseline:
 
 ```text
-Ran 2559 tests
+Ran 2595 tests
 
 OK
 ```

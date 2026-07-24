@@ -165,6 +165,25 @@ class GuildConfigurationRepository:
         return {key: copy.deepcopy(value) for key, value in entry.items() if key not in known}
 
     @staticmethod
+    def _resolve_duration_hours(voting: dict[str, Any]) -> int:
+        """Hour-Based Voting Durations: backward-compatible loading.
+
+        A file already written under the new schema has "duration_hours"
+        and is used directly. An older file has only "duration_days" (a
+        whole number of days) -- converted to the exact equivalent hour
+        count (days * 24), never requiring a manual migration. A file
+        with neither key (should not normally happen, but defensive)
+        falls back to the current 24-hour default. The next save rewrites
+        the record under "duration_hours" only, so the legacy key is
+        dropped naturally rather than through a destructive migration.
+        """
+        if "duration_hours" in voting:
+            return voting["duration_hours"]
+        if "duration_days" in voting:
+            return voting["duration_days"] * 24
+        return 24
+
+    @staticmethod
     def _merge(extra: dict[str, Any], known: dict[str, Any]) -> dict[str, Any]:
         merged = copy.deepcopy(extra)
         merged.update(known)
@@ -200,7 +219,7 @@ class GuildConfigurationRepository:
             }),
             "voting_defaults": cls._merge(c.voting_defaults.extra_fields, {
                 "candidate_count": c.voting_defaults.candidate_count,
-                "duration_days": c.voting_defaults.duration_days,
+                "duration_hours": c.voting_defaults.duration_hours,
                 "visibility": c.voting_defaults.visibility.value,
                 "max_vote_changes": c.voting_defaults.max_vote_changes,
                 "tie_behavior": c.voting_defaults.tie_behavior.value,
@@ -298,10 +317,11 @@ class GuildConfigurationRepository:
                 extra_fields=cls._split_known(channels, {"announcements_channel_id", "log_channel_id", "admin_channel_id"}),
             ),
             voting_defaults=VotingDefaultsConfig(
-                candidate_count=voting.get("candidate_count", 3), duration_days=voting.get("duration_days", 7),
+                candidate_count=voting.get("candidate_count", 3),
+                duration_hours=cls._resolve_duration_hours(voting),
                 visibility=GuildVoteVisibility(voting.get("visibility", "visible")), max_vote_changes=voting.get("max_vote_changes", 1),
                 tie_behavior=TieBehavior(voting.get("tie_behavior", "all_winners")),
-                extra_fields=cls._split_known(voting, {"candidate_count", "duration_days", "visibility", "max_vote_changes", "tie_behavior"}),
+                extra_fields=cls._split_known(voting, {"candidate_count", "duration_hours", "duration_days", "visibility", "max_vote_changes", "tie_behavior"}),
             ),
             notifications=NotificationsConfig(
                 vote=VoteNotificationsConfig(

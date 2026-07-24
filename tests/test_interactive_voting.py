@@ -353,7 +353,7 @@ class StartVoteCreatesAVotingPostTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_days=None,
+            duration_hours=None,
         )
         self.assertFalse(ephemeral)
 
@@ -380,7 +380,7 @@ class StartVoteCreatesAVotingPostTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_days=None,
+            duration_hours=None,
         )
         vote_round = self.vote_service.get_open_round()
 
@@ -440,7 +440,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_days=None,
+            duration_hours=None,
             guild_id=100,
             channel_id=200,
         )
@@ -464,7 +464,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_days=None,
+            duration_hours=None,
             nominee_count=5,
             guild_id=100,
             channel_id=200,
@@ -484,7 +484,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_days=None,
+            duration_hours=None,
             guild_id=100,
             channel_id=200,
         )
@@ -505,7 +505,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_days=None,
+            duration_hours=None,
             nominee_count=2,
             guild_id=100,
             channel_id=200,
@@ -529,7 +529,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_days=None,
+            duration_hours=None,
             nominee_count=2,
             guild_id=100,
             channel_id=200,

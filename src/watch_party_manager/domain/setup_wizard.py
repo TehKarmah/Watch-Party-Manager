@@ -98,7 +98,7 @@ class SetupWizardDraft:
     watch_destination_skipped: bool = False
 
     voting_candidate_count: Optional[int] = None
-    voting_duration_days: Optional[int] = None
+    voting_duration_hours: Optional[int] = None
     voting_visibility: Optional[GuildVoteVisibility] = None
     voting_candidate_selection: Optional[CandidateSelectionMode] = None
 

@@ -18,13 +18,13 @@ from dotenv import load_dotenv
 
 from watch_party_manager.domain.vote import (
     DEFAULT_VOTE_CANDIDATE_COUNT,
-    DEFAULT_VOTE_DURATION_DAYS,
+    DEFAULT_VOTE_DURATION_HOURS,
     MAX_VOTE_CHANGES,
     MAX_VOTE_CANDIDATE_COUNT,
-    MAX_VOTE_DURATION_DAYS,
+    MAX_VOTE_DURATION_HOURS,
     MIN_CANDIDATES_FOR_A_ROUND,
     MIN_VOTE_CANDIDATE_COUNT,
-    MIN_VOTE_DURATION_DAYS,
+    MIN_VOTE_DURATION_HOURS,
     VoteRecord,
     VoteRound,
     VoteRoundStatus,
@@ -115,6 +115,7 @@ from watch_party_manager.services.config_service import (
 from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
 )
+from watch_party_manager.services.duration_formatter import format_duration_hours
 from watch_party_manager.services.embed_factory import EmbedFactory
 from watch_party_manager.services.help_service import HelpResponse, build_help_response
 from watch_party_manager.services.membership_service import (
@@ -538,7 +539,7 @@ class WatchPartyBot(commands.Bot):
                 async def on_modal_submit(
                     modal_interaction: discord.Interaction,
                     nominee_count_text: Optional[str],
-                    duration_days_text: Optional[str],
+                    duration_text: Optional[str],
                     visibility_text: Optional[str],
                     reminder_enabled_text: Optional[str],
                     reminder_hours_text: Optional[str],
@@ -551,7 +552,7 @@ class WatchPartyBot(commands.Bot):
                         wash_crew_role_id=self.wash_crew_role_id,
                         default_nominee_count=self.default_nominee_count,
                         nominee_count_text=nominee_count_text,
-                        duration_days_text=duration_days_text,
+                        duration_text=duration_text,
                         visibility_text=visibility_text,
                         reminder_enabled_text=reminder_enabled_text,
                         reminder_hours_text=reminder_hours_text,
@@ -1104,30 +1105,75 @@ def parse_vote_visibility(
         raise ValueError("Visibility must be 'blind' or 'visible'.")
 
 
-def parse_vote_duration_days(duration_days: Optional[int]) -> int:
-    """Validate and resolve a /start_vote duration_days option.
+def parse_vote_duration_hours(duration_hours: Optional[int], default: int = DEFAULT_VOTE_DURATION_HOURS) -> int:
+    """Validate and resolve a /start_vote duration option, in hours.
 
     Args:
-        duration_days: The raw duration option, or None to use the default.
+        duration_hours: The already-parsed duration in hours, or None to
+            use the default.
+        default: The guild's configured default duration in hours,
+            resolved by the caller from VotingDefaultsConfig.duration_hours
+            when available (see perform_start_vote). Defaults to
+            DEFAULT_VOTE_DURATION_HOURS for callers with no guild
+            configuration to resolve.
 
     Returns:
-        DEFAULT_VOTE_DURATION_DAYS if duration_days is None, otherwise
-        duration_days itself once validated.
+        default if duration_hours is None, otherwise duration_hours
+        itself once validated.
 
     Raises:
-        ValueError: If duration_days is outside
-            [MIN_VOTE_DURATION_DAYS, MAX_VOTE_DURATION_DAYS].
+        ValueError: If duration_hours is outside
+            [MIN_VOTE_DURATION_HOURS, MAX_VOTE_DURATION_HOURS].
     """
-    if duration_days is None:
-        return DEFAULT_VOTE_DURATION_DAYS
+    if duration_hours is None:
+        return default
 
-    if not (MIN_VOTE_DURATION_DAYS <= duration_days <= MAX_VOTE_DURATION_DAYS):
+    if not (MIN_VOTE_DURATION_HOURS <= duration_hours <= MAX_VOTE_DURATION_HOURS):
         raise ValueError(
-            f"duration_days must be between {MIN_VOTE_DURATION_DAYS} and "
-            f"{MAX_VOTE_DURATION_DAYS}."
+            f"Duration must be between {MIN_VOTE_DURATION_HOURS} hour and "
+            f"{MAX_VOTE_DURATION_HOURS} hours (30 days)."
         )
 
-    return duration_days
+    return duration_hours
+
+
+_DURATION_TEXT_PATTERN = re.compile(
+    r"^(\d+)\s*(h|hr|hrs|hour|hours|d|day|days)?$", re.IGNORECASE
+)
+
+
+def parse_duration_text_to_hours(text: str) -> int:
+    """Parse free-text voting-duration input into whole hours.
+
+    Accepts a bare positive whole number (interpreted as **days**, matching
+    this field's original meaning before Hour-Based Voting Durations, so
+    existing muscle memory like typing "3" for three days keeps working
+    unchanged) or a number immediately followed by an hour unit ("4h",
+    "4 hours") or day unit ("3d", "3 days"). Does not perform range
+    validation -- see parse_vote_duration_hours/parse_setup_voting_duration_hours
+    for that, applied by each caller with its own error wording.
+
+    Args:
+        text: The raw duration text (already known to be non-blank).
+
+    Returns:
+        The equivalent whole number of hours.
+
+    Raises:
+        ValueError: If text isn't a positive whole number optionally
+            followed by a recognized hour/day unit.
+    """
+    match = _DURATION_TEXT_PATTERN.match(text.strip())
+    if not match:
+        raise ValueError(
+            "Duration must be a whole number, optionally followed by 'h'/'hours' or "
+            "'d'/'days' (e.g. '4h', '3 days', or '7' for 7 days)."
+        )
+    amount = int(match.group(1))
+    unit = (match.group(2) or "").lower()
+    if unit in ("h", "hr", "hrs", "hour", "hours"):
+        return amount
+    return amount * 24
 
 
 # Bounds for a per-round reminder-hours override, matching
@@ -1257,22 +1303,28 @@ def build_low_suggestion_pool_warning(candidate_count: int) -> str:
 
 
 def build_start_vote_confirmation(
-    vote_round: VoteRound, candidate_count: int, pool_count: Optional[int] = None
+    vote_round: VoteRound, candidate_count: int, duration_hours: int, pool_count: Optional[int] = None
 ) -> str:
     """Build the /start_vote confirmation message.
 
     Args:
         vote_round: The newly created round.
         candidate_count: How many suggestions were available to vote on.
+        duration_hours: The round's resolved duration, in hours -- shown
+            in natural language (see format_duration_hours) alongside the
+            absolute end time, which remains Discord-timestamp-formatted
+            and unchanged.
 
     Returns:
-        A message with the round ID, visibility, candidate count, end
-        time, and vote-change allowance. Never includes individual votes.
+        A message with the round ID, visibility, candidate count,
+        duration, end time, and vote-change allowance. Never includes
+        individual votes.
     """
     return (
         f"Voting round {vote_round.id} is now open.\n"
         f"Visibility: {vote_round.visibility.value.capitalize()}\n"
         f"Candidates: {candidate_count}\n"
+        f"Duration: {format_duration_hours(duration_hours)}\n"
         f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}\n"
         f"Vote changes allowed: {format_vote_changes_setting()}"
         f"{build_low_suggestion_pool_warning(pool_count if pool_count is not None else candidate_count)}"
@@ -1332,7 +1384,7 @@ def perform_start_vote(
     user: object,
     wash_crew_role_id: Optional[int],
     visibility_str: Optional[str],
-    duration_days: Optional[int],
+    duration_hours: Optional[int],
     nominee_count: Optional[int] = None,
     default_nominee_count: int = DEFAULT_VOTE_CANDIDATE_COUNT,
     guild_id: Optional[int] = None,
@@ -1361,7 +1413,10 @@ def perform_start_vote(
             settings", or a blank visibility field while customizing) --
             see parse_vote_visibility, which resolves None against the
             guild's configured default via guild_configuration_repository.
-        duration_days: The raw duration option, or None for the default.
+        duration_hours: The raw duration option in hours, or None for the
+            default -- see parse_vote_duration_hours, which resolves
+            None against the guild's configured default via
+            guild_configuration_repository.
         nominee_count: The raw nominee_count option ("customize this
             vote"), or None to use default_nominee_count ("use default
             settings").
@@ -1407,10 +1462,12 @@ def perform_start_vote(
         return "You need the WASH Crew role to start a voting round.", True
 
     default_visibility = GuildVoteVisibility.VISIBLE
+    default_duration_hours = DEFAULT_VOTE_DURATION_HOURS
     if guild_configuration_repository is not None and guild_id is not None:
         configuration = guild_configuration_repository.get(guild_id)
         if configuration is not None:
             default_visibility = configuration.voting_defaults.visibility
+            default_duration_hours = configuration.voting_defaults.duration_hours
 
     try:
         visibility = parse_vote_visibility(visibility_str, default=default_visibility)
@@ -1418,7 +1475,7 @@ def perform_start_vote(
         return str(exc), True
 
     try:
-        days = parse_vote_duration_days(duration_days)
+        hours = parse_vote_duration_hours(duration_hours, default=default_duration_hours)
     except ValueError as exc:
         return str(exc), True
 
@@ -1469,7 +1526,7 @@ def perform_start_vote(
             True,
         )
 
-    closes_at = datetime.now(timezone.utc) + timedelta(days=days)
+    closes_at = datetime.now(timezone.utc) + timedelta(hours=hours)
     result = vote_service.create_round(
         visibility=visibility,
         closes_at=closes_at,
@@ -1486,7 +1543,7 @@ def perform_start_vote(
     else:
         pool_count = suggestion_service.suggestion_count()
     return build_start_vote_confirmation(
-        result.vote_round, len(candidates), pool_count=pool_count
+        result.vote_round, len(candidates), hours, pool_count=pool_count
     ), False
 
 
@@ -1502,6 +1559,21 @@ def parse_optional_int_field(value: Optional[str]) -> Optional[int]:
         return int(value.strip())
     except ValueError as exc:
         raise ValueError(f"'{value.strip()}' is not a whole number.") from exc
+
+
+def parse_optional_duration_field(value: Optional[str]) -> Optional[int]:
+    """Parse an optional voting-duration field from a Discord modal into hours.
+
+    Blank values mean "use the configured default", matching
+    parse_optional_int_field's own contract. A non-blank value is parsed
+    by parse_duration_text_to_hours (a bare number as days, or an
+    explicit "4h"/"3 days"-style value) -- range validation against the
+    1-hour to 30-day bounds remains in parse_vote_duration_hours, called
+    by :func:`perform_start_vote`.
+    """
+    if value is None or not value.strip():
+        return None
+    return parse_duration_text_to_hours(value)
 
 
 _TRUTHY_FIELD_VALUES = {"yes", "y", "true", "on", "enable", "enabled"}
@@ -1614,17 +1686,26 @@ def parse_setup_voting_candidate_count(value: str) -> int:
     return count
 
 
-def parse_setup_voting_duration_days(value: str) -> int:
-    """Validate a Voting Defaults modal's duration field, reusing /start_vote's bounds."""
+def parse_setup_voting_duration_hours(value: str) -> int:
+    """Validate a Voting Defaults modal's duration field, reusing /start_vote's bounds.
+
+    Accepts the same flexible text as /start_vote's Customize This Vote
+    duration field (see parse_duration_text_to_hours): a bare number as
+    days, or an explicit "4h"/"3 days"-style value.
+    """
     try:
-        days = int(value.strip())
+        hours = parse_duration_text_to_hours(value)
     except ValueError:
-        raise ValueError("Default vote duration must be a whole number of days.")
-    if not (MIN_VOTE_DURATION_DAYS <= days <= MAX_VOTE_DURATION_DAYS):
         raise ValueError(
-            f"Default vote duration must be between {MIN_VOTE_DURATION_DAYS} and {MAX_VOTE_DURATION_DAYS} days."
+            "Default vote duration must be a whole number, optionally followed by "
+            "'h'/'hours' or 'd'/'days' (e.g. '4h', '3 days', or '7' for 7 days)."
         )
-    return days
+    if not (MIN_VOTE_DURATION_HOURS <= hours <= MAX_VOTE_DURATION_HOURS):
+        raise ValueError(
+            f"Default vote duration must be between {MIN_VOTE_DURATION_HOURS} hour and "
+            f"{MAX_VOTE_DURATION_HOURS} hours (30 days)."
+        )
+    return hours
 
 
 def parse_setup_voting_visibility(value: str) -> GuildVoteVisibility:
@@ -1745,7 +1826,7 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
     lines.append(
         "Voting Defaults: "
         f"{configuration.voting_defaults.candidate_count} candidates, "
-        f"{configuration.voting_defaults.duration_days} day(s), "
+        f"{format_duration_hours(configuration.voting_defaults.duration_hours)}, "
         f"{configuration.voting_defaults.visibility.value}, "
         f"candidate selection: {candidate_selection_label}"
     )
@@ -1922,7 +2003,11 @@ async def send_setup_wizard_step(
 
         voting_defaults_prefill = (
             str(state.draft.voting_candidate_count) if state.draft.voting_candidate_count is not None else "3",
-            str(state.draft.voting_duration_days) if state.draft.voting_duration_days is not None else "7",
+            (
+                format_duration_hours(state.draft.voting_duration_hours)
+                if state.draft.voting_duration_hours is not None
+                else format_duration_hours(DEFAULT_VOTE_DURATION_HOURS)
+            ),
             state.draft.voting_visibility.value if state.draft.voting_visibility is not None else "visible",
             (
                 state.draft.voting_candidate_selection.value
@@ -1935,13 +2020,13 @@ async def send_setup_wizard_step(
             async def on_submit(
                 modal_interaction: discord.Interaction,
                 candidate_count_text: str,
-                duration_days_text: str,
+                duration_text: str,
                 visibility_text: str,
                 candidate_selection_text: str,
             ) -> None:
                 try:
                     candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
-                    duration_days = parse_setup_voting_duration_days(duration_days_text)
+                    duration_hours = parse_setup_voting_duration_hours(duration_text)
                     visibility = parse_setup_voting_visibility(visibility_text)
                     candidate_selection = parse_setup_candidate_selection(candidate_selection_text)
                 except ValueError as exc:
@@ -1960,7 +2045,7 @@ async def send_setup_wizard_step(
                     return
 
                 updated = setup_wizard_service.set_voting_defaults(
-                    state, candidate_count, duration_days, visibility, candidate_selection
+                    state, candidate_count, duration_hours, visibility, candidate_selection
                 )
                 await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
 
@@ -2377,7 +2462,7 @@ def _resolve_config_voting_defaults_modal_defaults(
             candidate_selection = database_configuration.suggestion_rules.candidate_selection
     return (
         str(configuration.voting_defaults.candidate_count),
-        str(configuration.voting_defaults.duration_days),
+        format_duration_hours(configuration.voting_defaults.duration_hours),
         configuration.voting_defaults.visibility.value,
         candidate_selection.value,
     )
@@ -2394,13 +2479,13 @@ async def send_config_voting_defaults_modal(
     async def on_submit(
         modal_interaction: discord.Interaction,
         candidate_count_text: str,
-        duration_days_text: str,
+        duration_text: str,
         visibility_text: str,
         candidate_selection_text: str,
     ) -> None:
         try:
             candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
-            duration_days = parse_setup_voting_duration_days(duration_days_text)
+            duration_hours = parse_setup_voting_duration_hours(duration_text)
             visibility = parse_setup_voting_visibility(visibility_text)
             candidate_selection = parse_setup_candidate_selection(candidate_selection_text)
         except ValueError as exc:
@@ -2413,7 +2498,7 @@ async def send_config_voting_defaults_modal(
             return
 
         result = config_service.set_voting_defaults(
-            guild_id, candidate_count, duration_days, visibility, candidate_selection
+            guild_id, candidate_count, duration_hours, visibility, candidate_selection
         )
         await send_config_result(modal_interaction, bot, guild_id, result)
 
@@ -2927,7 +3012,7 @@ async def handle_watch_party_denied(interaction: discord.Interaction, bot: "Watc
 
 def parse_start_vote_overrides(
     nominee_count_text: Optional[str],
-    duration_days_text: Optional[str],
+    duration_text: Optional[str],
     visibility_text: Optional[str],
     reminder_enabled_text: Optional[str] = None,
     reminder_hours_text: Optional[str] = None,
@@ -2940,15 +3025,19 @@ def parse_start_vote_overrides(
     the guild's configured default visibility rather than a hardcoded
     value (Release Polish Batch 2, Priority 6). Blank reminder fields
     remain ``None`` so the guild's configured reminder default is used
-    (see scheduler.vote_scheduling.resolve_vote_reminder_settings). Range
-    and enum validation remain centralized in :func:`perform_start_vote`.
+    (see scheduler.vote_scheduling.resolve_vote_reminder_settings).
+    duration_text accepts the same flexible hour/day text as the Setup
+    Wizard/`/config` Voting Defaults field (see
+    parse_optional_duration_field/parse_duration_text_to_hours) and is
+    already resolved to whole hours here. Range and enum validation
+    remain centralized in :func:`perform_start_vote`.
     """
     nominee_count = parse_optional_int_field(nominee_count_text)
-    duration_days = parse_optional_int_field(duration_days_text)
+    duration_hours = parse_optional_duration_field(duration_text)
     visibility = (visibility_text or "").strip() or None
     reminder_enabled = parse_optional_bool_field(reminder_enabled_text)
     reminder_hours_before_close = parse_optional_int_field(reminder_hours_text)
-    return nominee_count, duration_days, visibility, reminder_enabled, reminder_hours_before_close
+    return nominee_count, duration_hours, visibility, reminder_enabled, reminder_hours_before_close
 
 
 async def handle_start_vote_completion(
@@ -2958,7 +3047,7 @@ async def handle_start_vote_completion(
     nominee_selection_service: Optional[NomineeSelectionService],
     wash_crew_role_id: Optional[int],
     visibility_str: Optional[str],
-    duration_days: Optional[int],
+    duration_hours: Optional[int],
     nominee_count: Optional[int],
     default_nominee_count: int,
     scheduler_service: Optional[SchedulerService] = None,
@@ -2985,7 +3074,7 @@ async def handle_start_vote_completion(
         user=interaction.user,
         wash_crew_role_id=wash_crew_role_id,
         visibility_str=visibility_str,
-        duration_days=duration_days,
+        duration_hours=duration_hours,
         nominee_count=nominee_count,
         default_nominee_count=default_nominee_count,
         guild_id=interaction.guild_id,
@@ -3071,7 +3160,7 @@ async def handle_start_vote_use_defaults(
         nominee_selection_service,
         wash_crew_role_id,
         visibility_str=None,
-        duration_days=None,
+        duration_hours=None,
         nominee_count=None,
         default_nominee_count=default_nominee_count,
         scheduler_service=scheduler_service,
@@ -3089,7 +3178,7 @@ async def handle_customize_vote_submit(
     wash_crew_role_id: Optional[int],
     default_nominee_count: int,
     nominee_count_text: Optional[str],
-    duration_days_text: Optional[str],
+    duration_text: Optional[str],
     visibility_text: Optional[str],
     reminder_enabled_text: Optional[str] = None,
     reminder_hours_text: Optional[str] = None,
@@ -3100,9 +3189,9 @@ async def handle_customize_vote_submit(
 ) -> None:
     """Start a round using optional one-time modal overrides."""
     try:
-        nominee_count, duration_days, visibility_str, reminder_enabled, reminder_hours_before_close = (
+        nominee_count, duration_hours, visibility_str, reminder_enabled, reminder_hours_before_close = (
             parse_start_vote_overrides(
-                nominee_count_text, duration_days_text, visibility_text, reminder_enabled_text, reminder_hours_text
+                nominee_count_text, duration_text, visibility_text, reminder_enabled_text, reminder_hours_text
             )
         )
     except ValueError as exc:
@@ -3116,7 +3205,7 @@ async def handle_customize_vote_submit(
         nominee_selection_service,
         wash_crew_role_id,
         visibility_str=visibility_str,
-        duration_days=duration_days,
+        duration_hours=duration_hours,
         nominee_count=nominee_count,
         default_nominee_count=default_nominee_count,
         scheduler_service=scheduler_service,

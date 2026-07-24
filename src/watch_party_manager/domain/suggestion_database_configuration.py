@@ -127,9 +127,10 @@ class VotingOverridesConfig:
     voting_defaults" -- resolving that inheritance is a future consumer's
     responsibility; this configuration-only model just stores the
     override (or absence of one). Bounds mirror
-    guild_configuration.VotingDefaultsConfig's validation exactly, except
-    duration, which is hour-based here per current project decision
-    (Guild Configuration's own duration_days is unrelated and unchanged).
+    guild_configuration.VotingDefaultsConfig's validation exactly --
+    duration is hour-based in both models (Hour-Based Voting Durations
+    made Guild Configuration's own duration_hours match this field's
+    pre-existing unit and bounds exactly).
     """
 
     candidate_count: Optional[int] = None

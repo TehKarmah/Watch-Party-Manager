@@ -28,6 +28,20 @@ logger = logging.getLogger(__name__)
 DEFAULT_SETUP_WIZARD_STATE_PATH = Path("data/setup_wizard_state.json")
 
 
+def _resolve_draft_duration_hours(draft_entry: dict[str, Any]) -> Optional[int]:
+    """Hour-Based Voting Durations: backward-compatible loading for a
+    resumable draft. A draft saved under the new schema has
+    "voting_duration_hours" (possibly still None -- the Voting Defaults
+    step hasn't been reached yet) and is used directly. An older draft
+    has only "voting_duration_days" -- converted to the exact equivalent
+    hour count. Absent from both means the step was never reached.
+    """
+    if "voting_duration_hours" in draft_entry:
+        return draft_entry["voting_duration_hours"]
+    legacy_days = draft_entry.get("voting_duration_days")
+    return legacy_days * 24 if legacy_days is not None else None
+
+
 class SetupWizardRepository:
     """Loads and saves in-progress /setup wizard state, one guild at a time."""
 
@@ -105,7 +119,7 @@ class SetupWizardRepository:
                 "watch_destination_channel_id": draft.watch_destination_channel_id,
                 "watch_destination_skipped": draft.watch_destination_skipped,
                 "voting_candidate_count": draft.voting_candidate_count,
-                "voting_duration_days": draft.voting_duration_days,
+                "voting_duration_hours": draft.voting_duration_hours,
                 "voting_visibility": draft.voting_visibility.value if draft.voting_visibility else None,
                 "voting_candidate_selection": (
                     draft.voting_candidate_selection.value if draft.voting_candidate_selection else None
@@ -136,7 +150,7 @@ class SetupWizardRepository:
             watch_destination_channel_id=draft_entry.get("watch_destination_channel_id"),
             watch_destination_skipped=draft_entry.get("watch_destination_skipped", False),
             voting_candidate_count=draft_entry.get("voting_candidate_count"),
-            voting_duration_days=draft_entry.get("voting_duration_days"),
+            voting_duration_hours=_resolve_draft_duration_hours(draft_entry),
             voting_visibility=GuildVoteVisibility(visibility_raw) if visibility_raw else None,
             voting_candidate_selection=(
                 CandidateSelectionMode(candidate_selection_raw) if candidate_selection_raw else None

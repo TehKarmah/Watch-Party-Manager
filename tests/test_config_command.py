@@ -416,7 +416,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
 
         modal = interaction.response.sent_modal
         self.assertEqual(modal.candidate_count_input.default, "3")
-        self.assertEqual(modal.duration_days_input.default, "7")
+        self.assertEqual(modal.duration_input.default, "1 day")
         self.assertEqual(modal.visibility_input.default, "visible")
 
     async def test_voting_defaults_submission_saves_and_shows_result(self) -> None:
@@ -429,7 +429,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
         modal = interaction.response.sent_modal
         modal.candidate_count_input._value = "5"
-        modal.duration_days_input._value = "14"
+        modal.duration_input._value = "14"
         modal.visibility_input._value = "visible"
         modal.candidate_selection_input._value = "rotation_pool"
 
@@ -450,7 +450,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
         modal = interaction.response.sent_modal
         modal.candidate_count_input._value = "not-a-number"
-        modal.duration_days_input._value = "14"
+        modal.duration_input._value = "14"
         modal.visibility_input._value = "visible"
         modal.candidate_selection_input._value = "rotation_pool"
 

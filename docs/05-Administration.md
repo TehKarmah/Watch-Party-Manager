@@ -117,12 +117,14 @@ Use `/start_vote` to begin an interactive setup flow.
 
 WASH offers:
 
-- **Use Defaults**, which applies the configured candidate count, seven-day duration, and the guild's configured default visibility.
-- **Customize This Vote**, which accepts a candidate count, duration from 1 through 30 days, and blind or visible voting (leaving it blank also uses the guild's configured default, not a hardcoded value).
+- **Use Defaults**, which applies the configured candidate count, configured duration, and the guild's configured default visibility.
+- **Customize This Vote**, which accepts a candidate count and blind or visible voting (leaving either blank also uses the guild's configured default, not a hardcoded value), plus a duration field accepting either a bare number of days (e.g. `3`, matching this field's original meaning) or an explicit unit -- `4h`/`4 hours`, `3d`/`3 days` -- anywhere from 1 hour through 30 days (720 hours). Practical shortcuts: **1 hour**, **4 hours**, **12 hours**, **24 hours**, **3 days**, **7 days**, or any custom value in that range.
 
-WASH selects nominees from the applicable suggestion database and creates an interactive voting post -- WASH's standard embed style with the yellow accent color, showing the round's visibility, end time, and candidate titles (no leading nominee number; vote buttons below the embed carry the same clean titles). Candidate availability is validated before the round is created.
+WASH selects nominees from the applicable suggestion database and creates an interactive voting post -- WASH's standard embed style with the yellow accent color, showing the round's visibility, duration, end time, and candidate titles (no leading nominee number; vote buttons below the embed carry the same clean titles). Candidate availability is validated before the round is created.
 
 **Default voting visibility.** New guilds default to **Visible**; **Blind** remains fully supported and selectable at any time via the Setup Wizard's Voting Defaults step or `/config`. An existing guild's explicitly saved visibility (including one set to Blind) is never changed by this default; only a guild configuration saved before this setting existed resolves to Visible.
+
+**Default voting duration.** New guilds default to **24 hours**, configurable (1 hour through 30 days) via the Setup Wizard's Voting Defaults step or `/config`, both of which display it in natural language (e.g. "4 hours" or "3 days" -- whole days shown as days, everything else in hours). An older guild configuration that only ever saved a whole number of days loads as the exact equivalent number of hours, with no action required.
 
 Only one open round is supported by the current voting service behavior.
 

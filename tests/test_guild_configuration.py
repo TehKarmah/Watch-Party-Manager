@@ -21,7 +21,8 @@ class GuildConfigurationTests(unittest.TestCase):
         self.assertTrue(config.administrator_override)
         self.assertEqual(config.watch_party_role.join_mode, JoinMode.SELF_SERVICE)
         self.assertEqual(config.voting_defaults.candidate_count, 3)
-        self.assertEqual(config.voting_defaults.duration_days, 7)
+        # Hour-Based Voting Durations: default is 24 hours (one day).
+        self.assertEqual(config.voting_defaults.duration_hours, 24)
         # Release Polish Batch 2, Priority 6: default voting visibility
         # changed from Blind to Visible; Blind remains fully selectable.
         self.assertEqual(config.voting_defaults.visibility, GuildVoteVisibility.VISIBLE)
@@ -109,13 +110,13 @@ class GuildConfigurationTests(unittest.TestCase):
             WatchPartyRoleConfig(denial_cooldown_days=366)
 
     def test_voting_validation_boundaries(self):
-        VotingDefaultsConfig(candidate_count=2, duration_days=1, max_vote_changes=0)
-        VotingDefaultsConfig(candidate_count=10, duration_days=30, max_vote_changes=10)
+        VotingDefaultsConfig(candidate_count=2, duration_hours=1, max_vote_changes=0)
+        VotingDefaultsConfig(candidate_count=10, duration_hours=720, max_vote_changes=10)
 
     def test_rejects_invalid_voting_values(self):
         invalid = (
             {"candidate_count": 1}, {"candidate_count": 11},
-            {"duration_days": 0}, {"duration_days": 31},
+            {"duration_hours": 0}, {"duration_hours": 721},
             {"max_vote_changes": -1}, {"max_vote_changes": 11},
             {"visibility": "secret"}, {"tie_behavior": "runoff"},
         )

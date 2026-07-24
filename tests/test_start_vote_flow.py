@@ -135,7 +135,7 @@ class UseDefaultsTests(StartVoteFlowTestCase):
         )
 
         vote_round = self.vote_service.get_open_round()
-        expected = before + timedelta(days=7)  # DEFAULT_VOTE_DURATION_DAYS
+        expected = before + timedelta(hours=24)  # DEFAULT_VOTE_DURATION_HOURS
         self.assertAlmostEqual(vote_round.closes_at.timestamp(), expected.timestamp(), delta=5)
 
     async def test_use_defaults_sends_the_interactive_voting_post(self) -> None:
@@ -215,7 +215,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text="5",
-            duration_days_text=None,
+            duration_text=None,
             visibility_text=None,
         )
 
@@ -235,7 +235,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text=None,
-            duration_days_text="3",
+            duration_text="3",
             visibility_text=None,
         )
 
@@ -254,7 +254,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text=None,
-            duration_days_text=None,
+            duration_text=None,
             visibility_text="blind",
         )
 
@@ -272,7 +272,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text="",
-            duration_days_text="   ",
+            duration_text="   ",
             visibility_text=None,
         )
 
@@ -291,7 +291,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text="99",
-            duration_days_text=None,
+            duration_text=None,
             visibility_text=None,
         )
 
@@ -310,7 +310,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text="a lot",
-            duration_days_text=None,
+            duration_text=None,
             visibility_text=None,
         )
 
@@ -329,7 +329,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text=None,
-            duration_days_text="0",
+            duration_text="0",
             visibility_text=None,
         )
 
@@ -347,7 +347,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text=None,
-            duration_days_text="45",
+            duration_text="45",
             visibility_text=None,
         )
 
@@ -365,7 +365,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text=None,
-            duration_days_text=None,
+            duration_text=None,
             visibility_text="sideways",
         )
 
@@ -385,7 +385,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text="5",
-            duration_days_text=None,
+            duration_text=None,
             visibility_text=None,
         )
 
@@ -404,7 +404,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text="5",
-            duration_days_text="2",
+            duration_text="2",
             visibility_text="blind",
         )
         first_round = self.vote_service.get_open_round()
@@ -442,7 +442,7 @@ class CustomizeVoteReminderTests(StartVoteFlowTestCase):
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
             nominee_count_text=None,
-            duration_days_text=None,
+            duration_text=None,
             visibility_text=None,
             reminder_enabled_text=reminder_enabled_text,
             reminder_hours_text=reminder_hours_text,
@@ -550,7 +550,7 @@ class StartVoteChoiceViewTests(unittest.IsolatedAsyncioTestCase):
 
 class CustomizeVoteModalTests(unittest.TestCase):
     async def _noop(
-        self, interaction, nominee_count_text, duration_days_text, visibility_text,
+        self, interaction, nominee_count_text, duration_text, visibility_text,
         reminder_enabled_text, reminder_hours_text,
     ) -> None:
         pass
@@ -573,15 +573,15 @@ class CustomizeVoteModalSubmitTests(unittest.IsolatedAsyncioTestCase):
     async def test_submit_forwards_all_five_raw_values(self) -> None:
         received = []
 
-        async def on_submit(interaction, nominee_count_text, duration_days_text, visibility_text,
+        async def on_submit(interaction, nominee_count_text, duration_text, visibility_text,
                              reminder_enabled_text, reminder_hours_text) -> None:
             received.append(
-                (nominee_count_text, duration_days_text, visibility_text, reminder_enabled_text, reminder_hours_text)
+                (nominee_count_text, duration_text, visibility_text, reminder_enabled_text, reminder_hours_text)
             )
 
         modal = CustomizeVoteModal(on_submit)
         modal.nominee_count_input._value = "5"
-        modal.duration_days_input._value = "3"
+        modal.duration_input._value = "3"
         modal.visibility_input._value = "blind"
         modal.reminder_enabled_input._value = "no"
         modal.reminder_hours_input._value = "12"
@@ -622,19 +622,37 @@ class ParseStartVoteOverridesTests(unittest.TestCase):
         )
 
     def test_values_are_trimmed_and_parsed(self) -> None:
+        # " 3 " is a bare number, interpreted as 3 days (backward
+        # compatible with this field's original meaning) -- 72 hours.
         self.assertEqual(
             parse_start_vote_overrides(" 5 ", " 3 ", " blind "),
-            (5, 3, "blind", None, None),
+            (5, 72, "blind", None, None),
+        )
+
+    def test_explicit_hour_unit_is_parsed(self) -> None:
+        self.assertEqual(
+            parse_start_vote_overrides(None, "4h", None),
+            (None, 4, None, None, None),
+        )
+
+    def test_explicit_day_unit_is_parsed(self) -> None:
+        self.assertEqual(
+            parse_start_vote_overrides(None, "3 days", None),
+            (None, 72, None, None, None),
         )
 
     def test_numeric_parse_errors_are_preserved(self) -> None:
         with self.assertRaisesRegex(ValueError, "not a whole number"):
             parse_start_vote_overrides("many", None, None)
 
+    def test_invalid_duration_unit_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "whole number"):
+            parse_start_vote_overrides(None, "3 weeks", None)
+
     # --- FR-027: reminder overrides -------------------------------------------
 
     def test_blank_reminder_fields_resolve_to_none(self) -> None:
-        nominee_count, duration_days, visibility, reminder_enabled, reminder_hours = parse_start_vote_overrides(
+        nominee_count, duration_hours, visibility, reminder_enabled, reminder_hours = parse_start_vote_overrides(
             None, None, None, "", "  "
         )
         self.assertIsNone(reminder_enabled)

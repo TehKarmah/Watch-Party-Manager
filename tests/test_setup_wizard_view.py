@@ -319,19 +319,19 @@ class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
         modal = VotingDefaultsModal(_noop)
         self.assertEqual(len(modal.children), 4)
         self.assertEqual(modal.candidate_count_input.default, "3")
-        self.assertEqual(modal.duration_days_input.default, "7")
+        self.assertEqual(modal.duration_input.default, "1 day")
         self.assertEqual(modal.visibility_input.default, "visible")
         self.assertEqual(modal.candidate_selection_input.default, "rotation_pool")
 
     async def test_submission_forwards_all_four_values(self) -> None:
         calls = []
 
-        async def on_submit(interaction, candidate_count, duration_days, visibility, candidate_selection) -> None:
-            calls.append((candidate_count, duration_days, visibility, candidate_selection))
+        async def on_submit(interaction, candidate_count, duration_text, visibility, candidate_selection) -> None:
+            calls.append((candidate_count, duration_text, visibility, candidate_selection))
 
         modal = VotingDefaultsModal(on_submit)
         modal.candidate_count_input._value = "4"
-        modal.duration_days_input._value = "10"
+        modal.duration_input._value = "10"
         modal.visibility_input._value = "visible"
         modal.candidate_selection_input._value = "rotation_pool"
         await modal.on_submit(interaction=object())

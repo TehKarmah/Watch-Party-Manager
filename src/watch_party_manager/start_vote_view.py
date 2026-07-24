@@ -81,7 +81,7 @@ class CustomizeVoteModal(discord.ui.Modal):
 
     All fields are optional text inputs -- a blank field means "use the
     configured default for this setting", matching how nominee_count and
-    duration_days already behave as optional /start_vote parameters.
+    duration_hours already behave as optional /start_vote parameters.
     Values are handed to the on_submit callback as raw strings; parsing
     and validation happen in bot.py, reusing the exact same functions
     /start_vote's direct parameters already used, so nothing here
@@ -97,7 +97,7 @@ class CustomizeVoteModal(discord.ui.Modal):
 
         Args:
             on_submit: Called with (interaction, nominee_count_text,
-                duration_days_text, visibility_text, reminder_enabled_text,
+                duration_text, visibility_text, reminder_enabled_text,
                 reminder_hours_text) once submitted.
         """
         super().__init__(title="Customize This Vote")
@@ -108,10 +108,10 @@ class CustomizeVoteModal(discord.ui.Modal):
             required=False,
             placeholder="Leave blank to use the configured default",
         )
-        self.duration_days_input = discord.ui.TextInput(
-            label="Voting duration in days",
+        self.duration_input = discord.ui.TextInput(
+            label="Duration (1 hour - 30 days)",
             required=False,
-            placeholder="Leave blank to use the configured default",
+            placeholder="e.g. 1h, 4h, 12h, 24h, 3d, or 7d -- blank uses the default",
         )
         self.visibility_input = discord.ui.TextInput(
             label="Visibility: blind or visible",
@@ -129,7 +129,7 @@ class CustomizeVoteModal(discord.ui.Modal):
             placeholder="e.g. 1, 4, 12, 24, or 48 -- blank uses the default",
         )
         self.add_item(self.nominee_count_input)
-        self.add_item(self.duration_days_input)
+        self.add_item(self.duration_input)
         self.add_item(self.visibility_input)
         self.add_item(self.reminder_enabled_input)
         self.add_item(self.reminder_hours_input)
@@ -139,7 +139,7 @@ class CustomizeVoteModal(discord.ui.Modal):
         await self._submit_callback(
             interaction,
             self.nominee_count_input.value or None,
-            self.duration_days_input.value or None,
+            self.duration_input.value or None,
             self.visibility_input.value or None,
             self.reminder_enabled_input.value or None,
             self.reminder_hours_input.value or None,

@@ -447,7 +447,7 @@ class VotingDefaultsSectionTests(ConfigServiceTestCase):
         self.assertTrue(result.success)
         voting_defaults = self.guild_configuration_repository.get(GUILD_ID).voting_defaults
         self.assertEqual(voting_defaults.candidate_count, 5)
-        self.assertEqual(voting_defaults.duration_days, 14)
+        self.assertEqual(voting_defaults.duration_hours, 14)
         self.assertEqual(voting_defaults.visibility, GuildVoteVisibility.VISIBLE)
 
     def test_candidate_selection_is_saved_to_the_active_database(self) -> None:

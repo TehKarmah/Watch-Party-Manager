@@ -545,14 +545,16 @@ class VotingDefaultsModal(discord.ui.Modal):
     def __init__(self, on_submit: OnVotingDefaultsSubmit, *, defaults: Optional[Tuple[str, str, str, str]] = None) -> None:
         super().__init__(title="Voting Defaults")
         self._submit_callback = on_submit
-        candidate_count_default, duration_days_default, visibility_default, candidate_selection_default = (
-            defaults or ("3", "7", "visible", "rotation_pool")
+        candidate_count_default, duration_default, visibility_default, candidate_selection_default = (
+            defaults or ("3", "1 day", "visible", "rotation_pool")
         )
         self.candidate_count_input = discord.ui.TextInput(
             label="Default candidate count (2-10)", default=candidate_count_default
         )
-        self.duration_days_input = discord.ui.TextInput(
-            label="Default vote duration in days (1-30)", default=duration_days_default
+        self.duration_input = discord.ui.TextInput(
+            label="Default vote duration (1 hour - 30 days)",
+            default=duration_default,
+            placeholder="e.g. 4h, 12h, 1 day, or 7 days",
         )
         self.visibility_input = discord.ui.TextInput(
             label="Default visibility: blind or visible", default=visibility_default
@@ -566,7 +568,7 @@ class VotingDefaultsModal(discord.ui.Modal):
             ),
         )
         self.add_item(self.candidate_count_input)
-        self.add_item(self.duration_days_input)
+        self.add_item(self.duration_input)
         self.add_item(self.visibility_input)
         self.add_item(self.candidate_selection_input)
 
@@ -574,7 +576,7 @@ class VotingDefaultsModal(discord.ui.Modal):
         await self._submit_callback(
             interaction,
             self.candidate_count_input.value,
-            self.duration_days_input.value,
+            self.duration_input.value,
             self.visibility_input.value,
             self.candidate_selection_input.value,
         )
