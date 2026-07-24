@@ -87,7 +87,7 @@ class EmbedFactory:
         color: int,
         url: Optional[str] = None,
         fields: Iterable[Mapping[str, Any]] = (),
-        footer: str = WASH_EMBED_FOOTER,
+        footer: Optional[str] = WASH_EMBED_FOOTER,
         timestamp: Optional[datetime] = None,
         include_timestamp: bool = True,
     ) -> Any:
@@ -99,8 +99,13 @@ class EmbedFactory:
         if not clean_description:
             clean_description = None
         clean_url = url.strip() if url else None
-        clean_footer = footer.strip()
-        if not clean_footer:
+        # None explicitly means "no footer" (e.g. the active-vote embed,
+        # which per Release Polish Batch 2's Branding Consistency section
+        # must not carry the project/attribution footer other WASH embeds
+        # use) -- distinct from a blank string, which remains an error so
+        # a caller can't silently produce a footer-less embed by accident.
+        clean_footer = footer.strip() if footer is not None else None
+        if footer is not None and not clean_footer:
             raise ValueError("footer is required")
 
         if timestamp is not None:
@@ -133,5 +138,6 @@ class EmbedFactory:
                 inline=bool(field.get("inline", False)),
             )
 
-        embed.set_footer(text=clean_footer)
+        if clean_footer is not None:
+            embed.set_footer(text=clean_footer)
         return embed

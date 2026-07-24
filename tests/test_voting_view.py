@@ -23,40 +23,35 @@ def make_candidates(count: int) -> list[WatchItem]:
 
 class ButtonLabelTests(unittest.TestCase):
     def test_short_titles_are_kept_intact(self) -> None:
-        self.assertEqual(build_nominee_button_label(1, "The Matrix"), "1 The Matrix")
+        self.assertEqual(build_nominee_button_label("The Matrix"), "The Matrix")
 
-    def test_label_leads_with_the_position_number(self) -> None:
-        # FR-025: "[1 Brazil]" -- number, space, title, no punctuation.
-        self.assertEqual(build_nominee_button_label(1, "Brazil (1985)"), "1 Brazil (1985)")
-        self.assertEqual(build_nominee_button_label(2, "Big (1988)"), "2 Big (1988)")
-        self.assertEqual(build_nominee_button_label(3, "Rango (2011)"), "3 Rango (2011)")
+    def test_no_leading_nominee_number(self) -> None:
+        # Release Polish Batch 2, Priority 4: no leading position number.
+        self.assertEqual(build_nominee_button_label("Brazil (1985)"), "Brazil (1985)")
+        self.assertEqual(build_nominee_button_label("Big (1988)"), "Big (1988)")
+        self.assertEqual(build_nominee_button_label("Rango (2011)"), "Rango (2011)")
+
+    def test_year_is_appended_exactly_once_when_missing_from_the_title(self) -> None:
+        self.assertEqual(build_nominee_button_label("Brazil", 1985), "Brazil (1985)")
+
+    def test_year_is_not_duplicated_when_already_embedded_in_the_title(self) -> None:
+        self.assertEqual(build_nominee_button_label("Brazil (1985)", 1985), "Brazil (1985)")
 
     def test_titles_at_exactly_the_limit_are_kept_intact(self) -> None:
-        prefix = "1 "
-        title = "A" * (BUTTON_LABEL_MAX_LENGTH - len(prefix))
+        title = "A" * BUTTON_LABEL_MAX_LENGTH
 
-        label = build_nominee_button_label(1, title)
+        label = build_nominee_button_label(title)
 
-        self.assertEqual(label, prefix + title)
+        self.assertEqual(label, title)
         self.assertEqual(len(label), BUTTON_LABEL_MAX_LENGTH)
 
     def test_titles_over_the_limit_are_truncated(self) -> None:
         title = "A" * (BUTTON_LABEL_MAX_LENGTH + 20)
 
-        label = build_nominee_button_label(1, title)
+        label = build_nominee_button_label(title)
 
         self.assertLessEqual(len(label), BUTTON_LABEL_MAX_LENGTH)
-        self.assertTrue(label.startswith("1 "))
         self.assertTrue(label.endswith("…"))
-
-    def test_a_larger_position_number_still_fits_within_the_limit(self) -> None:
-        prefix = "10 "
-        title = "A" * (BUTTON_LABEL_MAX_LENGTH - len(prefix) + 20)
-
-        label = build_nominee_button_label(10, title)
-
-        self.assertLessEqual(len(label), BUTTON_LABEL_MAX_LENGTH)
-        self.assertTrue(label.startswith("10 "))
 
 
 class VotingViewTests(unittest.IsolatedAsyncioTestCase):
@@ -70,13 +65,13 @@ class VotingViewTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(view.children), 3)
 
-    async def test_button_labels_include_the_position_and_the_candidate_title(self) -> None:
+    async def test_button_labels_are_clean_candidate_titles(self) -> None:
         candidates = make_candidates(2)
 
         view = VotingView(candidates, on_vote=self._noop)
 
         labels = [button.label for button in view.children]
-        self.assertEqual(labels, ["1 Movie 1", "2 Movie 2"])
+        self.assertEqual(labels, ["Movie 1", "Movie 2"])
 
     async def test_buttons_are_keyed_to_the_correct_suggestion_id(self) -> None:
         candidates = make_candidates(2)
@@ -86,10 +81,10 @@ class VotingViewTests(unittest.IsolatedAsyncioTestCase):
         suggestion_ids = [button.suggestion_id for button in view.children]
         self.assertEqual(suggestion_ids, [1, 2])
 
-    async def test_button_numbering_follows_candidate_order_not_suggestion_id(self) -> None:
-        # Candidate order (and therefore button numbering) is independent
-        # of the underlying suggestion IDs -- e.g. nominees selected out
-        # of ID order must still be numbered 1, 2, 3 in display order.
+    async def test_button_order_follows_candidate_order_not_suggestion_id(self) -> None:
+        # Candidate (button) order is independent of the underlying
+        # suggestion IDs -- e.g. nominees selected out of ID order must
+        # still render in the given candidate order.
         candidates = [
             WatchItem(title="Third Suggested", media_type=MediaType.MOVIE, id=30),
             WatchItem(title="First Suggested", media_type=MediaType.MOVIE, id=5),
@@ -98,7 +93,7 @@ class VotingViewTests(unittest.IsolatedAsyncioTestCase):
         view = VotingView(candidates, on_vote=self._noop)
 
         labels = [button.label for button in view.children]
-        self.assertEqual(labels, ["1 Third Suggested", "2 First Suggested"])
+        self.assertEqual(labels, ["Third Suggested", "First Suggested"])
 
     async def test_rejects_more_than_the_discord_component_limit(self) -> None:
         candidates = make_candidates(MAX_NOMINEE_BUTTONS + 1)
@@ -161,13 +156,17 @@ class NomineeButtonTests(unittest.TestCase):
         pass
 
     def test_custom_id_encodes_the_suggestion_id(self) -> None:
-        button = NomineeButton(position=1, suggestion_id=42, title="The Matrix", on_vote=self._noop)
+        button = NomineeButton(suggestion_id=42, title="The Matrix", on_vote=self._noop)
         self.assertIn("42", button.custom_id)
 
-    def test_label_encodes_the_position_not_the_suggestion_id(self) -> None:
-        button = NomineeButton(position=1, suggestion_id=42, title="The Matrix", on_vote=self._noop)
-        self.assertEqual(button.label, "1 The Matrix")
+    def test_label_is_the_clean_title_not_the_suggestion_id(self) -> None:
+        button = NomineeButton(suggestion_id=42, title="The Matrix", on_vote=self._noop)
+        self.assertEqual(button.label, "The Matrix")
         self.assertNotIn("42", button.label)
+
+    def test_label_includes_the_release_year_exactly_once(self) -> None:
+        button = NomineeButton(suggestion_id=1, title="Brazil", on_vote=self._noop, release_year=1985)
+        self.assertEqual(button.label, "Brazil (1985)")
 
 
 if __name__ == "__main__":

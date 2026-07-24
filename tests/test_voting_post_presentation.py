@@ -20,7 +20,7 @@ from watch_party_manager.bot import (
     build_candidate_standings_lines,
     build_suggestion_link,
     build_vote_progress_bar,
-    build_voting_post_text,
+    build_voting_post_embed,
 )
 from watch_party_manager.domain.vote import VoteRound, VoteVisibility
 from watch_party_manager.domain.watch_item import MediaType, WatchItem
@@ -138,10 +138,11 @@ class BuildCandidateStandingsLinesTests(unittest.TestCase):
             make_watch_item(id=3, title="Rango (2011)"),
         ]
 
-    def test_numbers_candidates_in_button_order_not_vote_sorted_order(self) -> None:
+    def test_orders_candidates_in_button_order_not_vote_sorted_order(self) -> None:
         candidates = self._candidates()
         vote_round = make_vote_round(visibility=VoteVisibility.VISIBLE)
-        # Suggestion #3 has the most votes but must still be numbered 3rd.
+        # Suggestion #3 has the most votes but must still appear 3rd
+        # (button/candidate order, never re-sorted by vote count).
         standings = [
             StandingsEntry(suggestion_id=3, vote_count=5),
             StandingsEntry(suggestion_id=1, vote_count=2),
@@ -150,11 +151,15 @@ class BuildCandidateStandingsLinesTests(unittest.TestCase):
         lines = build_candidate_standings_lines(candidates, vote_round, standings, None)
         text = "\n".join(lines)
 
-        self.assertIn("1. Brazil (1985)", text)
-        self.assertIn("2. Big (1988)", text)
-        self.assertIn("3. Rango (2011)", text)
-        self.assertLess(text.index("1. Brazil"), text.index("2. Big"))
-        self.assertLess(text.index("2. Big"), text.index("3. Rango"))
+        # Release Polish Batch 2, Priority 4: no leading nominee number.
+        self.assertIn("Brazil (1985)", text)
+        self.assertIn("Big (1988)", text)
+        self.assertIn("Rango (2011)", text)
+        self.assertNotIn("1. Brazil", text)
+        self.assertNotIn("2. Big", text)
+        self.assertNotIn("3. Rango", text)
+        self.assertLess(text.index("Brazil"), text.index("Big"))
+        self.assertLess(text.index("Big"), text.index("Rango"))
 
     def test_visible_round_shows_a_progress_bar_for_every_candidate(self) -> None:
         candidates = self._candidates()
@@ -246,7 +251,7 @@ class BuildCandidateStandingsLinesTests(unittest.TestCase):
         self.assertNotIn("█", text)
 
 
-class BuildVotingPostTextPresentationTests(unittest.TestCase):
+class BuildVotingPostEmbedPresentationTests(unittest.TestCase):
     """FR-025 integration coverage on top of test_interactive_voting.py's existing tests."""
 
     def _candidates(self):
@@ -258,48 +263,48 @@ class BuildVotingPostTextPresentationTests(unittest.TestCase):
     def test_candidate_titles_and_years_display_correctly(self) -> None:
         vote_round = make_vote_round(visibility=VoteVisibility.VISIBLE)
 
-        text = build_voting_post_text(vote_round, self._candidates(), standings=[], standings_error=None)
+        embed = build_voting_post_embed(vote_round, self._candidates(), standings=[], standings_error=None)
 
-        self.assertIn("Brazil (1985)", text)
-        self.assertIn("Big (1988)", text)
+        self.assertIn("Brazil (1985)", embed.description)
+        self.assertIn("Big (1988)", embed.description)
 
     def test_progress_bars_and_counts_rendered_for_visible_round(self) -> None:
         vote_round = make_vote_round(visibility=VoteVisibility.VISIBLE)
-        # Only the count matters for build_voting_post_text's percentage
+        # Only the count matters for build_voting_post_embed's percentage
         # math (len(vote_round.votes)), so these are dummy entries giving
         # a 4-vote total.
         vote_round.votes = dict.fromkeys(range(1, 5))
         standings = [StandingsEntry(suggestion_id=1, vote_count=3)]
 
-        text = build_voting_post_text(vote_round, self._candidates(), standings=standings, standings_error=None)
+        embed = build_voting_post_embed(vote_round, self._candidates(), standings=standings, standings_error=None)
 
-        self.assertIn("█", text)
-        self.assertIn("3 votes", text)
-        self.assertIn("75%", text)  # 3 of the 4-vote total set above
+        self.assertIn("█", embed.description)
+        self.assertIn("3 votes", embed.description)
+        self.assertIn("75%", embed.description)  # 3 of the 4-vote total set above
 
     def test_blind_voting_hides_all_standings_information(self) -> None:
         vote_round = make_vote_round(visibility=VoteVisibility.BLIND)
 
-        text = build_voting_post_text(vote_round, self._candidates(), standings=None, standings_error=None)
+        embed = build_voting_post_embed(vote_round, self._candidates(), standings=None, standings_error=None)
 
-        self.assertIn("Votes hidden until voting closes.", text)
-        self.assertNotIn("%", text)
-        self.assertNotIn("█", text)
+        self.assertIn("Votes hidden until voting closes.", embed.description)
+        self.assertNotIn("%", embed.description)
+        self.assertNotIn("█", embed.description)
 
     def test_hyperlink_present_for_a_candidate_with_message_metadata(self) -> None:
         vote_round = make_vote_round(visibility=VoteVisibility.VISIBLE)
 
-        text = build_voting_post_text(vote_round, self._candidates(), standings=[], standings_error=None)
+        embed = build_voting_post_embed(vote_round, self._candidates(), standings=[], standings_error=None)
 
-        self.assertIn("[Brazil (1985)](https://discord.com/channels/100/200/301)", text)
+        self.assertIn("[Brazil (1985)](https://discord.com/channels/100/200/301)", embed.description)
 
     def test_hyperlink_omitted_for_a_legacy_candidate(self) -> None:
         vote_round = make_vote_round(visibility=VoteVisibility.VISIBLE)
 
-        text = build_voting_post_text(vote_round, self._candidates(), standings=[], standings_error=None)
+        embed = build_voting_post_embed(vote_round, self._candidates(), standings=[], standings_error=None)
 
-        self.assertIn("Big (1988)", text)
-        self.assertNotIn("[Big (1988)]", text)
+        self.assertIn("Big (1988)", embed.description)
+        self.assertNotIn("[Big (1988)]", embed.description)
 
 
 if __name__ == "__main__":

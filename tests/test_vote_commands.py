@@ -8,7 +8,13 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import perform_start_vote, perform_vote, perform_vote_status
+from watch_party_manager.domain.guild_configuration import (
+    GuildConfiguration,
+    GuildVoteVisibility,
+    VotingDefaultsConfig,
+)
 from watch_party_manager.domain.vote import VoteVisibility
+from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
@@ -263,7 +269,7 @@ class VoteCommandTests(unittest.TestCase):
         message = perform_vote_status(self.vote_service, self.suggestion_service)
 
         self.assertIn("Standings:", message)
-        self.assertIn("Suggestion #1", message)
+        self.assertIn("The Matrix", message)
 
     def test_vote_status_shows_closed_round_status(self) -> None:
         created = self.vote_service.create_round(visibility=VoteVisibility.BLIND)
@@ -417,11 +423,23 @@ class VoteCommandTests(unittest.TestCase):
     def test_confirmation_formatting_for_a_first_vote(self) -> None:
         self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
 
+        message, _ = perform_vote(self.vote_service, user_id=111, suggestion_id=1, suggestion_service=self.suggestion_service)
+
+        self.assertEqual(
+            message,
+            "Your vote for The Matrix has been recorded.\n\nStandings:\nThe Matrix — 1 vote",
+        )
+
+    def test_confirmation_formatting_falls_back_to_suggestion_number_without_a_suggestion_service(self) -> None:
+        """No suggestion_service means no candidate to resolve a title from
+        -- Priority 3/4's graceful fallback, not a failure."""
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
         message, _ = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
 
         self.assertEqual(
             message,
-            "Your vote for suggestion #1 has been recorded.\n\nStandings:\n1. Suggestion #1 — 1 vote",
+            "Your vote for suggestion #1 has been recorded.\n\nStandings:\nSuggestion #1 — 1 vote",
         )
 
     def test_confirmation_formatting_for_a_changed_vote(self) -> None:
@@ -509,6 +527,132 @@ class VoteCommandTests(unittest.TestCase):
         message, _ = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
 
         self.assertNotIn("discord.com", message)
+
+
+class DefaultVoteVisibilityTests(unittest.TestCase):
+    """Release Polish Batch 2, Priority 6: starting a vote without an
+    explicit visibility override uses the guild's configured default --
+    previously hardcoded to "visible" regardless of what /setup or
+    /config had saved."""
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(Path(self._temp_dir.name) / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(
+                Path(self._temp_dir.name) / "suggestion_databases.json"
+            ),
+        )
+        self.vote_service = VoteService(self.suggestion_service, repository=JsonVoteRepository(Path(self._temp_dir.name) / "voting.json"))
+        self.guild_configuration_repository = GuildConfigurationRepository(
+            Path(self._temp_dir.name) / "guild_configuration.json"
+        )
+        self.suggestion_service.suggest("The Matrix")
+        self.suggestion_service.suggest("Inception")
+        self.suggestion_service.suggest("Arrival")
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _authorized_user(self) -> FakeMember:
+        return FakeMember(roles=[FakeRole(WASH_CREW_ROLE_ID)])
+
+    def _save_guild_default(self, visibility: GuildVoteVisibility) -> None:
+        self.guild_configuration_repository.save(
+            GuildConfiguration(
+                guild_id=100,
+                guild_name="Test Guild",
+                voting_defaults=VotingDefaultsConfig(visibility=visibility),
+            )
+        )
+
+    def test_no_guild_configuration_falls_back_to_visible(self) -> None:
+        message, ephemeral = perform_start_vote(
+            self.vote_service,
+            self.suggestion_service,
+            None,
+            self._authorized_user(),
+            WASH_CREW_ROLE_ID,
+            visibility_str=None,
+            duration_days=None,
+            guild_id=100,
+            guild_configuration_repository=self.guild_configuration_repository,
+        )
+
+        self.assertFalse(ephemeral)
+        self.assertEqual(self.vote_service.get_open_round().visibility, VoteVisibility.VISIBLE)
+
+    def test_configured_blind_default_is_honored_without_an_explicit_override(self) -> None:
+        self._save_guild_default(GuildVoteVisibility.BLIND)
+
+        message, ephemeral = perform_start_vote(
+            self.vote_service,
+            self.suggestion_service,
+            None,
+            self._authorized_user(),
+            WASH_CREW_ROLE_ID,
+            visibility_str=None,
+            duration_days=None,
+            guild_id=100,
+            guild_configuration_repository=self.guild_configuration_repository,
+        )
+
+        self.assertFalse(ephemeral)
+        self.assertEqual(self.vote_service.get_open_round().visibility, VoteVisibility.BLIND)
+
+    def test_configured_visible_default_is_honored_without_an_explicit_override(self) -> None:
+        self._save_guild_default(GuildVoteVisibility.VISIBLE)
+
+        message, ephemeral = perform_start_vote(
+            self.vote_service,
+            self.suggestion_service,
+            None,
+            self._authorized_user(),
+            WASH_CREW_ROLE_ID,
+            visibility_str=None,
+            duration_days=None,
+            guild_id=100,
+            guild_configuration_repository=self.guild_configuration_repository,
+        )
+
+        self.assertFalse(ephemeral)
+        self.assertEqual(self.vote_service.get_open_round().visibility, VoteVisibility.VISIBLE)
+
+    def test_explicit_override_wins_over_a_configured_blind_default(self) -> None:
+        self._save_guild_default(GuildVoteVisibility.BLIND)
+
+        message, ephemeral = perform_start_vote(
+            self.vote_service,
+            self.suggestion_service,
+            None,
+            self._authorized_user(),
+            WASH_CREW_ROLE_ID,
+            visibility_str="visible",
+            duration_days=None,
+            guild_id=100,
+            guild_configuration_repository=self.guild_configuration_repository,
+        )
+
+        self.assertFalse(ephemeral)
+        self.assertEqual(self.vote_service.get_open_round().visibility, VoteVisibility.VISIBLE)
+
+    def test_blank_string_is_treated_the_same_as_none(self) -> None:
+        self._save_guild_default(GuildVoteVisibility.BLIND)
+
+        message, ephemeral = perform_start_vote(
+            self.vote_service,
+            self.suggestion_service,
+            None,
+            self._authorized_user(),
+            WASH_CREW_ROLE_ID,
+            visibility_str="   ",
+            duration_days=None,
+            guild_id=100,
+            guild_configuration_repository=self.guild_configuration_repository,
+        )
+
+        self.assertFalse(ephemeral)
+        self.assertEqual(self.vote_service.get_open_round().visibility, VoteVisibility.BLIND)
 
 
 if __name__ == "__main__":

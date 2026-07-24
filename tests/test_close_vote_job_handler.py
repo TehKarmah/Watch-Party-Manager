@@ -47,7 +47,7 @@ class FakeMessage:
     def __init__(self) -> None:
         self.edits: list[tuple[str, object]] = []
 
-    async def edit(self, *, content=None, view="not-set") -> None:
+    async def edit(self, *, content=None, embed="not-set", view="not-set") -> None:
         self.edits.append((content, view))
 
 

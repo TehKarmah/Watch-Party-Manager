@@ -107,7 +107,7 @@ class GuildSuggestionDatabaseEntry:
 class VotingDefaultsConfig:
     candidate_count: int = 3
     duration_days: int = 7
-    visibility: GuildVoteVisibility = GuildVoteVisibility.BLIND
+    visibility: GuildVoteVisibility = GuildVoteVisibility.VISIBLE
     max_vote_changes: int = 1
     tie_behavior: TieBehavior = TieBehavior.ALL_WINNERS
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)

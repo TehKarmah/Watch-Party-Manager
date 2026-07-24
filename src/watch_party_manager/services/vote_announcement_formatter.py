@@ -20,6 +20,7 @@ from watch_party_manager.domain.vote import VoteRound, VoteVisibility
 from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.services.discord_message_link import build_discord_message_link
 from watch_party_manager.services.discord_timestamp_formatter import format_datetime_for_display
+from watch_party_manager.services.title_formatter import format_title_with_year
 from watch_party_manager.services.vote_service import StandingsEntry
 
 # Matches build_suggestion_confirmation_embed's own accent color in bot.py,
@@ -31,6 +32,7 @@ WINNER_EMBED_COLOR = 0xF5C518
 def format_standings_lines(
     standings: Optional[List[StandingsEntry]],
     standings_error: Optional[str],
+    candidates: Optional[List[WatchItem]] = None,
 ) -> List[str]:
     """Build the display lines for a round's standings, if any are shown.
 
@@ -45,6 +47,13 @@ def format_standings_lines(
         standings: Standings entries to display, or None to show nothing.
         standings_error: A message to show instead of standings if
             calculating them failed, or None.
+        candidates: The round's nominees, used to resolve each entry's
+            suggestion_id to its title (Release Polish Batch 2, Priority
+            3 -- standings must show titles, not internal suggestion
+            numbers). Optional so existing callers with no candidates in
+            scope keep working; a candidate missing from this list (or
+            candidates itself being None) falls back to the bare
+            "Suggestion #N" label rather than failing the command.
 
     Returns:
         Lines to append to a message, starting with a blank separator
@@ -56,10 +65,17 @@ def format_standings_lines(
     if standings is not None:
         if not standings:
             return ["", "Standings: no votes yet."]
+        candidates_by_id = {candidate.id: candidate for candidate in candidates or []}
         lines = ["", "Standings:"]
-        for position, entry in enumerate(standings, start=1):
+        for entry in standings:
             vote_word = "vote" if entry.vote_count == 1 else "votes"
-            lines.append(f"{position}. Suggestion #{entry.suggestion_id} — {entry.vote_count} {vote_word}")
+            candidate = candidates_by_id.get(entry.suggestion_id)
+            label = (
+                _format_candidate_title(candidate)
+                if candidate is not None
+                else f"Suggestion #{entry.suggestion_id}"
+            )
+            lines.append(f"{label} — {entry.vote_count} {vote_word}")
         return lines
 
     return []
@@ -141,13 +157,15 @@ def build_vote_cancellation_notice(vote_round: VoteRound) -> str:
 def _format_candidate_title(watch_item: WatchItem) -> str:
     """Format one candidate's title for display, linked to its original
     suggestion message when available. Never links to IMDb (FR-026's
-    Message Links requirement) -- title already includes the release
-    year when known (see SuggestionInputService/ImdbMetadataService).
+    Message Links requirement). Shows the release year exactly once --
+    see format_title_with_year -- whether or not it was already embedded
+    in the title by IMDb resolution.
     """
+    display_title = format_title_with_year(watch_item.title, watch_item.release_year)
     link = build_suggestion_link(watch_item)
     if link:
-        return f"[{watch_item.title}]({link})"
-    return watch_item.title
+        return f"[{display_title}]({link})"
+    return display_title
 
 
 def build_final_standings_lines(
@@ -169,28 +187,26 @@ def build_final_standings_lines(
         standings: The final vote tally, or None/empty if nobody voted.
 
     Returns:
-        One line per candidate, e.g. "1. Brazil (1985) — 4 votes", in
+        One line per candidate, e.g. "Brazil (1985) — 4 votes" (no
+        leading nominee number -- Release Polish Batch 2, Priority 4), in
         placement order. Empty if there are no candidates to show.
     """
     candidates_by_id = {candidate.id: candidate for candidate in candidates}
     lines: List[str] = []
     shown_ids: set[int] = set()
-    position = 1
 
     for entry in standings or []:
         watch_item = candidates_by_id.get(entry.suggestion_id)
         if watch_item is None:
             continue
         vote_word = "vote" if entry.vote_count == 1 else "votes"
-        lines.append(f"{position}. {_format_candidate_title(watch_item)} — {entry.vote_count} {vote_word}")
+        lines.append(f"{_format_candidate_title(watch_item)} — {entry.vote_count} {vote_word}")
         shown_ids.add(entry.suggestion_id)
-        position += 1
 
     for candidate in candidates:
         if candidate.id in shown_ids:
             continue
-        lines.append(f"{position}. {_format_candidate_title(candidate)} — 0 votes")
-        position += 1
+        lines.append(f"{_format_candidate_title(candidate)} — 0 votes")
 
     return lines
 

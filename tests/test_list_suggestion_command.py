@@ -85,7 +85,7 @@ class BuildSuggestionEntryLineTests(unittest.TestCase):
             message_id=3,
         )
         line = build_suggestion_entry_line(item)
-        self.assertEqual("The Matrix (1999) | [Original suggestion](https://discord.com/channels/1/2/3)", line)
+        self.assertEqual("The Matrix (1999) | [Original Suggestion](https://discord.com/channels/1/2/3)", line)
 
     def test_never_includes_a_reference_number(self) -> None:
         item = WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=42, release_year=1999)

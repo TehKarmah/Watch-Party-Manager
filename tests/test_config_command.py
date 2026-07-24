@@ -417,7 +417,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         modal = interaction.response.sent_modal
         self.assertEqual(modal.candidate_count_input.default, "3")
         self.assertEqual(modal.duration_days_input.default, "7")
-        self.assertEqual(modal.visibility_input.default, "blind")
+        self.assertEqual(modal.visibility_input.default, "visible")
 
     async def test_voting_defaults_submission_saves_and_shows_result(self) -> None:
         self._seed_completed_setup()

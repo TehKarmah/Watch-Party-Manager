@@ -83,10 +83,12 @@ class FakeMessage:
     def __init__(self, message_id: int) -> None:
         self.id = message_id
         self.edited_content = None
+        self.edited_embed = "not-edited"
         self.edited_view = "not-edited"
 
-    async def edit(self, content=None, view="not-edited") -> None:
+    async def edit(self, content=None, *, embed="not-edited", view="not-edited") -> None:
         self.edited_content = content
+        self.edited_embed = embed
         self.edited_view = view
 
 
@@ -521,8 +523,8 @@ class HandleChangeVoteEndTimeCompletionTests(EditVoteTestCase):
             bot,
         )
 
-        self.assertIsNotNone(message.edited_content)
-        self.assertIn(f"Voting round {vote_round.id}", message.edited_content)
+        self.assertIsNotNone(message.edited_embed)
+        self.assertIn(f"Voting Round {vote_round.id}", message.edited_embed.title)
         # The view is left intact (voting is still possible), unlike the
         # end-now/cancel paths which clear it.
         self.assertEqual(message.edited_view, "not-edited")

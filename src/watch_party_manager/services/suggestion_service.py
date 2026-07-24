@@ -15,6 +15,9 @@ _TRAILING_YEAR_PATTERN = re.compile(r"\s*\(\d{4}\)\s*$")
 # configuration value -- matches SuggestionRulesConfig.rejection_threshold's
 # own documented default (see domain/suggestion_database_configuration.py).
 DEFAULT_REJECTION_THRESHOLD = 2
+from watch_party_manager.persistence.suggestion_database_configuration_repository import (
+    SuggestionDatabaseConfigurationRepository,
+)
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
@@ -950,7 +953,12 @@ class SuggestionService:
         return sum(1 for watch_item in self._suggestions.values() if watch_item.database_id == database_id)
 
     def resolve_database_for_channel(
-        self, guild_id: int, channel_id: int
+        self,
+        guild_id: int,
+        channel_id: int,
+        suggestion_database_configuration_repository: Optional[
+            SuggestionDatabaseConfigurationRepository
+        ] = None,
     ) -> DatabaseResolution:
         """Determine which suggestion database applies in a guild/channel.
 
@@ -958,15 +966,32 @@ class SuggestionService:
         supplied guild -- an inactive (deactivated) database is never
         selected automatically, whether by a direct channel match or as
         the guild's sole database:
-          1. A database configured for this exact channel (or thread) ID.
-          2. If none matches but exactly one database exists in the guild, use it.
-          3. If multiple databases exist in the guild and none match, resolution
+          1. A database configured for this exact channel (or thread) ID
+             (its original creation-time "home" channel).
+          2. A database whose *configured suggestion post destination*
+             (SuggestionDatabaseConfiguration.channels.suggestion_channel_id,
+             settable independently via /config or the Setup Wizard) is
+             this exact channel (or thread) ID -- only checked when
+             suggestion_database_configuration_repository is supplied.
+             Without this step, a database whose post destination was
+             later changed away from its home channel (e.g. to a public
+             thread) would be invisible to every command run there, even
+             though /config correctly reports that destination as
+             configured -- the single resolver used everywhere is the
+             fix, not a second parallel one.
+          3. If none matches but exactly one database exists in the guild, use it.
+          4. If multiple databases exist in the guild and none match, resolution
              is ambiguous until interactive selection is implemented.
-          4. If the guild has no (active) databases, WASH Crew needs to configure one.
+          5. If the guild has no (active) databases, WASH Crew needs to configure one.
 
         Args:
             guild_id: The Discord guild (server) where the command was run.
             channel_id: The Discord channel or thread ID where it was run.
+            suggestion_database_configuration_repository: Optional; when
+                supplied, step 2 above is also checked. Omitted by callers
+                that don't have this repository in scope, in which case
+                resolution falls back to home-channel/sole-database rules
+                only.
 
         Returns:
             DatabaseResolution with either a usable database or a clear
@@ -976,6 +1001,14 @@ class SuggestionService:
         for database in databases:
             if database.channel_id == channel_id:
                 return DatabaseResolution(database=database)
+
+        if suggestion_database_configuration_repository is not None:
+            for database in databases:
+                configuration = suggestion_database_configuration_repository.get(
+                    guild_id, database.database_id
+                )
+                if configuration is not None and configuration.channels.suggestion_channel_id == channel_id:
+                    return DatabaseResolution(database=database)
 
         if len(databases) == 1:
             return DatabaseResolution(database=databases[0])

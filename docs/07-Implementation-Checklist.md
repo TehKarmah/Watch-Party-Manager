@@ -9,9 +9,9 @@ This checklist tracks implemented foundations against the Version 1 specificatio
 | FR-003 | Implement suggestion databases | Complete | Guild-scoped JSON persistence, per-database configuration, and administration (including per-database backup/restore/reset) are implemented. |
 | FR-004 | Implement Watch Item suggestions | Complete | Add, list (filters, pagination, archive browsing), edit, remove (archive-preferring), IMDb normalization, duplicate detection, database association, post references, and persistence are implemented. |
 | FR-005 | Implement nominee selection | Complete | Guild-scoped selection with configurable Rotation Pool / Soft Rotation / Infinite Pool strategies, candidate-count validation, and rotation lifecycle tracking. |
-| FR-006 | Implement voting rounds and ballots | Complete foundation | Blind/visible modes, duration, vote changes, persistence, and ballot validation are implemented. |
+| FR-006 | Implement voting rounds and ballots | Complete foundation | Blind/visible modes, duration, vote changes, persistence, and ballot validation are implemented. Visible is the default (Blind remains fully selectable); a vote started without an explicit override uses the guild's configured default. |
 | FR-007 | Implement standings and winner calculation | Complete | Deterministic ordering, totals, winners, and ties are implemented. |
-| FR-008 | Implement Discord voting interaction | Complete | Interactive controls and persistent restoration are implemented. |
+| FR-008 | Implement Discord voting interaction | Complete | Interactive controls and persistent restoration are implemented. The active-vote post is WASH's standard yellow-accent embed; candidate titles (never a leading nominee number or internal suggestion ID) label both the embed and the vote buttons. |
 | FR-009 | Complete expired voting rounds | Complete | Automatic closing, winner announcements, restart safety, and journey updates are implemented. |
 | FR-010 | Implement watch history | Partial | Winner recording into Watch Item Journey (times won, rotation history) is implemented. Marking an item "watched" and retroactive correction are not yet implemented. |
 | FR-011 | Implement scheduling and Discord Events | Partial | Single-occurrence scheduled watch parties (schedule/reschedule/cancel/reminders) are implemented. The richer recurring Event Series model and native Discord Scheduled Event publishing are not. |
@@ -33,4 +33,4 @@ FR-017 and later (membership workflows, IMDb link normalization/duplicate detect
 | Diagnostics info (via `/about`, WASH Crew only) | Complete foundation |
 | Startup data-integrity checks | Complete foundation |
 | Structured application logging | Complete foundation |
-| Automated test suite | 2426 passing tests |
+| Automated test suite | 2583 passing tests |

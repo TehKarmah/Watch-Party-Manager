@@ -320,7 +320,7 @@ class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(modal.children), 4)
         self.assertEqual(modal.candidate_count_input.default, "3")
         self.assertEqual(modal.duration_days_input.default, "7")
-        self.assertEqual(modal.visibility_input.default, "blind")
+        self.assertEqual(modal.visibility_input.default, "visible")
         self.assertEqual(modal.candidate_selection_input.default, "rotation_pool")
 
     async def test_submission_forwards_all_four_values(self) -> None:

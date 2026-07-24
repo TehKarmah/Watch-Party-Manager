@@ -46,11 +46,13 @@ class FakeMember:
 class FakeResponse:
     def __init__(self) -> None:
         self.sent_message = None
+        self.sent_embed = None
         self.sent_ephemeral = None
         self.sent_modal = None
 
-    async def send_message(self, content, ephemeral=False, view=None) -> None:
+    async def send_message(self, content=None, ephemeral=False, view=None, embed=None) -> None:
         self.sent_message = content
+        self.sent_embed = embed
         self.sent_ephemeral = ephemeral
 
     async def send_modal(self, modal) -> None:
@@ -149,7 +151,9 @@ class UseDefaultsTests(StartVoteFlowTestCase):
         )
 
         self.assertFalse(interaction.response.sent_ephemeral)
-        self.assertIn("1. ", interaction.response.sent_message)
+        self.assertIsNotNone(interaction.response.sent_embed)
+        self.assertIn("is Open", interaction.response.sent_embed.title)
+        self.assertIn("Voting ends:", interaction.response.sent_embed.description)
 
     async def test_use_defaults_still_enforces_wash_crew_permission(self) -> None:
         interaction = FakeInteraction(user_id=1)
@@ -608,9 +612,13 @@ class ParseOptionalIntFieldTests(unittest.TestCase):
 
 class ParseStartVoteOverridesTests(unittest.TestCase):
     def test_blank_values_resolve_to_defaults(self) -> None:
+        # Blank visibility resolves to None -- perform_start_vote (via
+        # parse_vote_visibility) then applies the guild's configured
+        # default rather than a hardcoded value (Release Polish Batch 2,
+        # Priority 6).
         self.assertEqual(
             parse_start_vote_overrides(None, "   ", ""),
-            (None, None, "visible", None, None),
+            (None, None, None, None, None),
         )
 
     def test_values_are_trimmed_and_parsed(self) -> None:

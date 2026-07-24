@@ -116,7 +116,7 @@ class CustomizeVoteModal(discord.ui.Modal):
         self.visibility_input = discord.ui.TextInput(
             label="Visibility: blind or visible",
             required=False,
-            placeholder="Leave blank to use visible",
+            placeholder="Leave blank to use the configured default",
         )
         self.reminder_enabled_input = discord.ui.TextInput(
             label="Reminder before close? (yes/no)",

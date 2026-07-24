@@ -85,7 +85,7 @@ class BuildFinalStandingsLinesTests(unittest.TestCase):
 
         lines = build_final_standings_lines(candidates, standings)
 
-        self.assertEqual(lines, ["1. Brazil (1985) — 4 votes"])
+        self.assertEqual(lines, ["Brazil (1985) — 4 votes"])
 
     def test_uses_singular_vote_wording_for_one_vote(self) -> None:
         candidates = [make_watch_item("Rango (2011)", id=3)]
@@ -93,7 +93,7 @@ class BuildFinalStandingsLinesTests(unittest.TestCase):
 
         lines = build_final_standings_lines(candidates, standings)
 
-        self.assertEqual(lines, ["1. Rango (2011) — 1 vote"])
+        self.assertEqual(lines, ["Rango (2011) — 1 vote"])
 
     def test_shows_every_nominee_even_those_with_zero_votes(self) -> None:
         candidates = [
@@ -124,9 +124,9 @@ class BuildFinalStandingsLinesTests(unittest.TestCase):
 
         lines = build_final_standings_lines(candidates, standings)
 
-        self.assertTrue(lines[0].startswith("1. Rango (2011)"))
-        self.assertTrue(lines[1].startswith("2. Brazil (1985)"))
-        self.assertTrue(lines[2].startswith("3. Big (1988)"))
+        self.assertTrue(lines[0].startswith("Rango (2011)"))
+        self.assertTrue(lines[1].startswith("Brazil (1985)"))
+        self.assertTrue(lines[2].startswith("Big (1988)"))
 
     def test_tied_winners_are_both_listed_first_in_deterministic_order(self) -> None:
         candidates = [
@@ -143,9 +143,9 @@ class BuildFinalStandingsLinesTests(unittest.TestCase):
 
         lines = build_final_standings_lines(candidates, standings)
 
-        self.assertTrue(lines[0].startswith("1. Brazil (1985)"))
-        self.assertTrue(lines[1].startswith("2. Big (1988)"))
-        self.assertTrue(lines[2].startswith("3. Rango (2011)"))
+        self.assertTrue(lines[0].startswith("Brazil (1985)"))
+        self.assertTrue(lines[1].startswith("Big (1988)"))
+        self.assertTrue(lines[2].startswith("Rango (2011)"))
 
     def test_titles_link_to_their_original_suggestion_when_available(self) -> None:
         candidates = [make_watch_item("Brazil (1985)", id=1, guild_id=100, channel_id=200, message_id=300)]

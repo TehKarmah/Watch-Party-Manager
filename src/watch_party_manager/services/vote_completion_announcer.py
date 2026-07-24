@@ -100,6 +100,11 @@ async def _update_original_voting_post(messenger: DiscordChannelMessenger, vote_
     imported, since bot.py cannot be imported from a module reachable by
     the scheduler package. Always clears the message's view: once a
     round has completed, its voting buttons must never remain usable.
+    Also always explicitly clears any embed: while open, the post is
+    WASH's active-vote embed (Release Polish Batch 2, Priority 5), and
+    Discord's edit() leaves an omitted embed untouched rather than
+    removing it, so an explicit embed=None is required here to replace
+    it with this plain-text closed record rather than showing both.
     """
     if vote_round.channel_id is None or vote_round.message_id is None:
         return
@@ -107,7 +112,7 @@ async def _update_original_voting_post(messenger: DiscordChannelMessenger, vote_
     try:
         channel = await _resolve_channel(messenger, vote_round.channel_id)
         message = await channel.fetch_message(vote_round.message_id)
-        await message.edit(content=content, view=None)
+        await message.edit(content=content, embed=None, view=None)
     except Exception:
         logger.exception(
             "Could not update the original voting message for round %s", vote_round.id

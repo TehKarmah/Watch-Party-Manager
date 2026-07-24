@@ -299,7 +299,7 @@ class GuildConfigurationRepository:
             ),
             voting_defaults=VotingDefaultsConfig(
                 candidate_count=voting.get("candidate_count", 3), duration_days=voting.get("duration_days", 7),
-                visibility=GuildVoteVisibility(voting.get("visibility", "blind")), max_vote_changes=voting.get("max_vote_changes", 1),
+                visibility=GuildVoteVisibility(voting.get("visibility", "visible")), max_vote_changes=voting.get("max_vote_changes", 1),
                 tie_behavior=TieBehavior(voting.get("tie_behavior", "all_winners")),
                 extra_fields=cls._split_known(voting, {"candidate_count", "duration_days", "visibility", "max_vote_changes", "tie_behavior"}),
             ),

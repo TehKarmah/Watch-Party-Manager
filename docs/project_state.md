@@ -29,8 +29,8 @@ Core suggestion, voting, rotation, statistics, membership, setup/configuration, 
 | Suggestion databases | Complete | Guild-scoped creation, listing, deactivation/reactivation, per-database configuration, and per-database backup/restore/reset. |
 | Suggestions | Complete | Add, list (with filters, pagination, and archive browsing), edit, remove (archive-preferring), duplicate detection, IMDb link normalization, re-suggestion rules, and public confirmation posts. |
 | Candidate selection & rotation | Complete | Rotation Pool (default), Soft Rotation, and Infinite Pool selection strategies; persistent rotation lifecycle tracking; configurable new-suggestion admission modes; Low Pool Reminder. |
-| Voting engine | Complete | Blind/visible rounds, ballots, changes, standings, winners, and ties are implemented. |
-| Interactive voting | Complete | Discord controls and persistent restoration after restart are implemented. |
+| Voting engine | Complete | Blind/visible rounds, ballots, changes, standings, winners, and ties are implemented. Visible is the default visibility (Blind remains fully selectable and unchanged for existing guilds/rounds); a vote started without an explicit override uses the guild's configured default. |
+| Interactive voting | Complete | Discord controls and persistent restoration after restart are implemented. The active-vote post is WASH's standard yellow-accent embed showing visibility, end time, and candidate titles (no leading nominee number); `/vote_status` and standings resolve candidates to titles rather than internal suggestion numbers. |
 | Vote completion | Complete | Automatic expiration, closing, winner announcements, and Watch Item Journey updates are implemented. |
 | Statistics | Complete foundation | Server, member, suggestion, rotation, and database statistics are implemented. Likes, leaderboards, graphs, and exports are explicitly out of scope for the current architecture. |
 | Diagnostics and integrity | Complete foundation | WASH Crew health/configuration/runtime diagnostics are shown via `/about`'s expanded sections (no separate `/diagnostics` command); startup checks and logging are implemented. |
@@ -122,6 +122,7 @@ Restricted commands fail closed when the relevant role is not configured by eith
 - The richer Event Series/recurring-schedule/Discord Event model remains future work; scheduled watch parties today are single-occurrence.
 - `SuggestionService`'s storage is keyed by `(database_id, normalized title)`, so two suggestions can never share an exactly-matching title within one database -- see [Administration](05-Administration.md)'s "Known limitation: identical titles within one database."
 - Member/suggestion statistics that depend on a recorded submitter or creation date only cover suggestions added since FR-034 shipped; earlier suggestions are excluded rather than guessed at.
+- Suggestions saved before public confirmation posts existed (or whose post failed at the time) have no original-post link for `/list` to show, and `/repair_suggestions` cannot recover it -- Discord provides no reliable way to relocate a message after the fact without inventing a URL or risking a duplicate public post.
 - `CHANGELOG.md`'s `[Unreleased]` section predates most milestones completed this cycle and has not been refreshed as part of this documentation pass.
 
 ## Next Recommended Milestone
@@ -131,7 +132,7 @@ With core functionality, configuration, and documentation in place, remaining Ve
 ## Testing Status
 
 - Full automated suite passing
-- Current baseline: **2426 tests**
+- Current baseline: **2583 tests**
 - Test framework: `unittest`
 - Python version: 3.12
 

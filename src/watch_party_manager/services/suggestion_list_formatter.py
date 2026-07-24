@@ -32,7 +32,18 @@ class SuggestionListView(str, Enum):
 
 
 class SuggestionListFormatter:
-    """Build consistent standard and WASH Crew suggestion-list output."""
+    """Build consistent standard and WASH Crew suggestion-list output.
+
+    Not used by the live ``/list`` command -- bot.py's
+    handle_list_suggestions/send_suggestion_list/build_suggestion_entry_line
+    is the active pathway (registered against the real ``/list`` slash
+    command). This formatter is only reachable through bot.py's own
+    perform_list_suggestions_response/perform_list_suggestions, which are
+    themselves pre-FR-033A helpers kept solely for their existing test
+    coverage. Its title rendering does not include the Release Polish
+    Batch 2, Priority 2 year-deduplication fix -- do not wire this back
+    into a live command without applying that fix here too.
+    """
 
     def format(
         self,

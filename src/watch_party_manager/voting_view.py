@@ -10,11 +10,12 @@ presentation layer with zero business logic of its own.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Optional
 
 import discord
 
 from watch_party_manager.domain.watch_item import WatchItem
+from watch_party_manager.services.title_formatter import format_title_with_year
 
 # Discord's hard limit on a button's visible label text.
 BUTTON_LABEL_MAX_LENGTH = 80
@@ -27,26 +28,28 @@ MAX_NOMINEE_BUTTONS = 25
 OnVoteCallback = Callable[[discord.Interaction, int], Awaitable[None]]
 
 
-def build_nominee_button_label(position: int, title: str) -> str:
+def build_nominee_button_label(title: str, release_year: Optional[int] = None) -> str:
     """Build a concise, Discord-safe button label for a nominee.
 
-    FR-025: the label leads with the nominee's position (e.g. "1 Brazil")
-    so each button visibly matches the same numbered candidate shown in
-    the voting post's standings list above it.
+    Release Polish Batch 2, Priority 4: shows the candidate's title alone
+    -- no leading nominee number. The internal candidate identity is
+    carried entirely by NomineeButton.custom_id (suggestion_id), never by
+    this label text, so truncating a long title here never risks casting
+    a vote for the wrong candidate.
 
     Args:
-        position: The nominee's 1-based position among this round's candidates.
         title: The nominee's full title.
+        release_year: The nominee's release year, shown exactly once (see
+            format_title_with_year) if not already embedded in the title.
 
     Returns:
-        The numbered title as-is if it fits Discord's label length limit,
+        The title as-is if it fits Discord's label length limit,
         otherwise a truncated version ending in an ellipsis.
     """
-    prefix = f"{position} "
-    max_title_length = BUTTON_LABEL_MAX_LENGTH - len(prefix)
-    if len(title) <= max_title_length:
-        return f"{prefix}{title}"
-    return f"{prefix}{title[: max_title_length - 1].rstrip()}…"
+    display_title = format_title_with_year(title, release_year)
+    if len(display_title) <= BUTTON_LABEL_MAX_LENGTH:
+        return display_title
+    return f"{display_title[: BUTTON_LABEL_MAX_LENGTH - 1].rstrip()}…"
 
 
 class NomineeButton(discord.ui.Button):
@@ -58,19 +61,26 @@ class NomineeButton(discord.ui.Button):
     references of its own.
     """
 
-    def __init__(self, position: int, suggestion_id: int, title: str, on_vote: OnVoteCallback) -> None:
+    def __init__(
+        self,
+        suggestion_id: int,
+        title: str,
+        on_vote: OnVoteCallback,
+        release_year: Optional[int] = None,
+    ) -> None:
         """Initialize the button.
 
         Args:
-            position: The nominee's 1-based position among this round's
-                candidates, used to build the button label so it matches
-                the numbered candidate list shown in the voting post.
-            suggestion_id: The suggestion this button represents.
+            suggestion_id: The suggestion this button represents -- the
+                sole internal identity carried by this button (via
+                custom_id below); the label is display text only.
             title: The nominee's title, used to build the button label.
             on_vote: Called with (interaction, suggestion_id) when clicked.
+            release_year: The nominee's release year, shown in the label
+                exactly once if not already embedded in the title.
         """
         super().__init__(
-            label=build_nominee_button_label(position, title),
+            label=build_nominee_button_label(title, release_year),
             style=discord.ButtonStyle.primary,
             custom_id=f"wpm_vote_suggestion_{suggestion_id}",
         )
@@ -112,5 +122,5 @@ class VotingView(discord.ui.View):
             raise ValueError("Voting nominees must have unique suggestion IDs.")
 
         super().__init__(timeout=None)
-        for position, candidate in enumerate(candidate_list, start=1):
-            self.add_item(NomineeButton(position, candidate.id, candidate.title, on_vote))
+        for candidate in candidate_list:
+            self.add_item(NomineeButton(candidate.id, candidate.title, on_vote, candidate.release_year))

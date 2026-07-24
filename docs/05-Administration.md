@@ -86,7 +86,9 @@ Reactivating always reuses the existing record's stable ID and full history (rej
 
 `/list [status] [public]` is available to every Watch Party member. `status` selects **Active** (default), **Archived**, **Watched**, or **All**. Only WASH Crew may set `public:true` to post the list in the channel; everyone else always sees it privately, including Archived and Watched.
 
-Database selection follows the same automatic-then-selector pattern used elsewhere: the current channel's configured database is used automatically; if none matches and the guild has exactly one active database, that one is used; if several exist, WASH shows a picker. Each entry shows its reference number, title, release year (when known), IMDb link (when known), a link back to the original suggestion post (when known), and current status. Long lists page with Previous/Next buttons rather than being cut off or capped.
+Database selection follows the same automatic-then-selector pattern used elsewhere: the current channel's configured database is used automatically; if none matches and the guild has exactly one active database, that one is used; if several exist, WASH shows a picker. Each entry is a terse, at-a-glance line -- title and release year exactly once (`50 First Dates (2004)`, never `50 First Dates (2004) (2004)`), followed by `| [Original Suggestion](link)` when the original public post is known, or nothing after the title when it isn't. The reference number, status label, and IMDb link intentionally do not appear on this default view. Long lists page with Previous/Next buttons rather than being cut off or capped; both the initial response and every page suppress Discord's automatic link-preview embeds.
+
+Older suggestions saved before public confirmation posts existed (or whose post failed at the time) have no original-post link to show and never will -- WASH has no reliable way to locate a Discord message after the fact without inventing a URL or risking a duplicate public post, so `/repair_suggestions` (WASH Crew-only; repairs legacy IMDb-link titles and a few known malformed records) does not attempt to recover it.
 
 ### Removing suggestions
 
@@ -115,10 +117,12 @@ Use `/start_vote` to begin an interactive setup flow.
 
 WASH offers:
 
-- **Use Defaults**, which applies the configured nominee count, seven-day duration, and default visibility.
-- **Customize This Vote**, which accepts a nominee count, duration from 1 through 30 days, and blind or visible voting.
+- **Use Defaults**, which applies the configured nominee count, seven-day duration, and the guild's configured default visibility.
+- **Customize This Vote**, which accepts a nominee count, duration from 1 through 30 days, and blind or visible voting (leaving it blank also uses the guild's configured default, not a hardcoded value).
 
-WASH selects nominees from the applicable suggestion database and creates an interactive voting post. Candidate availability is validated before the round is created.
+WASH selects nominees from the applicable suggestion database and creates an interactive voting post -- WASH's standard embed style with the yellow accent color, showing the round's visibility, end time, and candidate titles (no leading nominee number; vote buttons below the embed carry the same clean titles). Candidate availability is validated before the round is created.
+
+**Default voting visibility.** New guilds default to **Visible**; **Blind** remains fully supported and selectable at any time via the Setup Wizard's Voting Defaults step or `/config`. An existing guild's explicitly saved visibility (including one set to Blind) is never changed by this default; only a guild configuration saved before this setting existed resolves to Visible.
 
 Only one open round is supported by the current voting service behavior.
 
@@ -148,7 +152,7 @@ Within whichever pool a mode produces, WASH still applies its existing genre/med
 
 ## 5. Voting Operations
 
-Community members can vote through the interactive post. The `/vote` command remains available for ID-based voting, and `/vote_status` reports the current round.
+Community members vote by clicking a candidate's button on the interactive voting post -- there is no separate `/vote` slash command; casting a vote and changing it both go through the same buttons. `/vote_status` (WASH Crew) reports the current round, with standings shown as candidate titles (e.g. `Happy Gilmore (1996) — 1 vote`), never the internal suggestion number; if a candidate's record is somehow missing, that entry falls back to its suggestion number rather than failing the command.
 
 Current voting capabilities include:
 

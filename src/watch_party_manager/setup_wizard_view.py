@@ -546,7 +546,7 @@ class VotingDefaultsModal(discord.ui.Modal):
         super().__init__(title="Voting Defaults")
         self._submit_callback = on_submit
         candidate_count_default, duration_days_default, visibility_default, candidate_selection_default = (
-            defaults or ("3", "7", "blind", "rotation_pool")
+            defaults or ("3", "7", "visible", "rotation_pool")
         )
         self.candidate_count_input = discord.ui.TextInput(
             label="Default nominee count (2-10)", default=candidate_count_default

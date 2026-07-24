@@ -238,7 +238,7 @@ The wizard walks through, in order:
 3. **Admin channel** -- where Approval-Required membership requests are posted for WASH Crew, or skip for now.
 4. **Suggestion database** -- select an existing one or create a new one, tied to a channel or thread.
 5. **Watch destination** -- where watched-movie history posts, or skip for now.
-6. **Voting defaults** -- nominee count (default 3), duration, visibility, and candidate-selection mode: **Balanced Random** (recommended and the default -- avoids repeating a suggestion until a fresh rotation begins), **Soft Rotation** (keeps repeats eligible but weighted down), or **Pure Random** (no weighting or exclusion at all).
+6. **Voting defaults** -- nominee count (default 3), duration, visibility (**Visible** by default; **Blind** remains fully selectable), and candidate-selection mode: **Balanced Random** (recommended and the default -- avoids repeating a suggestion until a fresh rotation begins), **Soft Rotation** (keeps repeats eligible but weighted down), or **Pure Random** (no weighting or exclusion at all).
 7. **Reminder defaults** -- whether a vote-ending reminder is sent, and how far ahead.
 8. **Backup defaults** -- automatic backup interval and how many backups to retain.
 9. **Summary** -- review every section (including the chosen candidate-selection mode), then Save, jump back to edit any section, or cancel without saving.

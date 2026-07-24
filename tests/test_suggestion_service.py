@@ -6,7 +6,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from watch_party_manager.domain.suggestion_database_configuration import (
+    SuggestionDatabaseChannelsConfig,
+    SuggestionDatabaseConfiguration,
+)
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItemStatus
+from watch_party_manager.persistence.suggestion_database_configuration_repository import (
+    SuggestionDatabaseConfigurationRepository,
+)
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
@@ -824,6 +831,119 @@ class SuggestionServiceDatabaseAssociationTests(unittest.TestCase):
     def test_attach_message_reference_returns_false_for_an_unknown_suggestion(self) -> None:
         updated = self.service.attach_message_reference(999, message_id=123)
         self.assertFalse(updated)
+
+
+class ResolveDatabaseForChannelWithConfiguredDestinationTests(unittest.TestCase):
+    """Release Polish Batch 2, Priority 1: a database's channel resolves
+
+    consistently whether a command checks its original creation-time
+    "home" channel or its later-configured suggestion post destination
+    (settable independently via /config or the Setup Wizard, including to
+    a public thread) -- the exact contradiction the task reports: WASH
+    (/config's summary) reports a thread as the configured destination
+    while /add, run in that same thread, reported no destination at all.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.repository = JsonSuggestionRepository(Path(self._temp_dir.name) / "suggestions.json")
+        self.database_repository = JsonSuggestionDatabaseRepository(
+            Path(self._temp_dir.name) / "suggestion_databases.json"
+        )
+        self.service = SuggestionService(
+            repository=self.repository, database_repository=self.database_repository
+        )
+        self.configuration_repository = SuggestionDatabaseConfigurationRepository(
+            Path(self._temp_dir.name) / "suggestion_database_configurations.json"
+        )
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _configure_destination(self, database_id: int, channel_id: int, *, guild_id: int = 100) -> None:
+        self.configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=guild_id,
+                database_id=database_id,
+                display_name="Sunday Watch Party",
+                channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=channel_id),
+            )
+        )
+
+    def test_a_text_channel_destination_still_resolves_without_the_configuration_repository(self) -> None:
+        # Existing text-channel destination behavior (the database's own
+        # home channel) must remain unchanged -- this is the pre-existing
+        # resolution path, exercised with no configuration repository
+        # supplied at all.
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        resolution = self.service.resolve_database_for_channel(100, 200)
+
+        self.assertIsNotNone(resolution.database)
+        self.assertEqual(resolution.database.database_id, created.database.database_id)
+
+    def test_a_configured_thread_destination_resolves_when_different_from_the_home_channel(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        thread_id = 555
+        self._configure_destination(created.database.database_id, thread_id)
+
+        resolution = self.service.resolve_database_for_channel(
+            100, thread_id, self.configuration_repository
+        )
+
+        self.assertIsNotNone(resolution.database)
+        self.assertEqual(resolution.database.database_id, created.database.database_id)
+
+    def test_a_configured_thread_destination_is_invisible_without_the_configuration_repository(self) -> None:
+        # Reproduces the exact reported bug: omitting the configuration
+        # repository (the old behavior at every call site) leaves the
+        # thread unresolved -- with only one database, the sole-database
+        # fallback would incidentally still succeed, so this specifically
+        # uses two databases to prove the thread is genuinely unresolved
+        # without the fix (an ambiguous "multiple databases" error).
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+        thread_id = 555
+        self._configure_destination(created.database.database_id, thread_id)
+
+        resolution = self.service.resolve_database_for_channel(100, thread_id)
+
+        self.assertIsNone(resolution.database)
+        self.assertIn("Multiple suggestion databases", resolution.error_message)
+
+    def test_home_channel_match_takes_priority_over_a_configured_destination_match(self) -> None:
+        # If two different databases end up matching by different rules
+        # (home channel vs. configured destination), the home-channel
+        # match is checked first and wins -- deterministic, not
+        # incidental ordering.
+        home_match = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        destination_match = self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+        self._configure_destination(destination_match.database.database_id, 200)
+
+        resolution = self.service.resolve_database_for_channel(100, 200, self.configuration_repository)
+
+        self.assertEqual(resolution.database.database_id, home_match.database.database_id)
+
+    def test_an_inactive_database_configured_destination_is_never_matched(self) -> None:
+        created = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.deactivate_database(created.database.database_id, guild_id=100)
+        thread_id = 555
+        self._configure_destination(created.database.database_id, thread_id)
+
+        resolution = self.service.resolve_database_for_channel(100, thread_id, self.configuration_repository)
+
+        self.assertIsNone(resolution.database)
+
+    def test_no_configuration_saved_for_the_database_falls_through_gracefully(self) -> None:
+        # A database with no SuggestionDatabaseConfiguration record at all
+        # (repository.get() returns None) must not raise -- it simply
+        # doesn't match by destination, same as if none were configured.
+        self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+
+        resolution = self.service.resolve_database_for_channel(100, 555, self.configuration_repository)
+
+        self.assertIsNotNone(resolution.database)  # falls back to the sole active database
+        self.assertEqual(resolution.database.name, "Sunday Watch Party")
 
 
 if __name__ == "__main__":

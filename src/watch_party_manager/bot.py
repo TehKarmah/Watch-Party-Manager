@@ -169,6 +169,7 @@ from watch_party_manager.services.vote_announcement_formatter import (
     build_vote_link,
     format_standings_lines,
 )
+from watch_party_manager.services.title_formatter import format_title_with_year
 from watch_party_manager.services.vote_completion_announcer import finalize_vote_completion
 from watch_party_manager.services.vote_completion_service import (
     VoteCompletionResult,
@@ -1069,7 +1070,9 @@ def is_wash_crew_member(user: object, wash_crew_role_id: Optional[int]) -> bool:
     return any(getattr(role, "id", None) == wash_crew_role_id for role in roles)
 
 
-def parse_vote_visibility(value: str) -> VoteVisibility:
+def parse_vote_visibility(
+    value: Optional[str], default: GuildVoteVisibility = GuildVoteVisibility.VISIBLE
+) -> VoteVisibility:
     """Parse a /start_vote visibility option into a VoteVisibility.
 
     This is the sole place visibility text gets validated. Both the
@@ -1078,13 +1081,26 @@ def parse_vote_visibility(value: str) -> VoteVisibility:
     Args:
         value: The raw text entered for the visibility option, expected to
             be "blind" or "visible" (case-insensitive, whitespace ignored).
+            None or blank means no explicit override was supplied --
+            "use default settings", or a blank visibility field while
+            customizing -- so the caller's resolved guild default is used
+            instead (Release Polish Batch 2, Priority 6: starting a vote
+            without an explicit override must use the configured guild
+            default, not a hardcoded value).
+        default: The guild's configured default visibility (see
+            VotingDefaultsConfig.visibility), used only when value is
+            None or blank. Defaults to VISIBLE, matching that same
+            field's own documented default for callers with no guild
+            configuration to resolve.
 
     Returns:
         The matching VoteVisibility.
 
     Raises:
-        ValueError: If the value isn't "blind" or "visible".
+        ValueError: If value is non-blank but isn't "blind" or "visible".
     """
+    if value is None or not value.strip():
+        return VoteVisibility(default.value)
     normalized = value.strip().lower()
     try:
         return VoteVisibility(normalized)
@@ -1272,6 +1288,7 @@ def build_vote_status_text(
     candidate_count: int,
     standings: Optional[List[StandingsEntry]],
     standings_error: Optional[str],
+    candidates: Optional[List[WatchItem]] = None,
 ) -> str:
     """Build the /vote_status message for a round.
 
@@ -1283,6 +1300,10 @@ def build_vote_status_text(
             blind round).
         standings_error: A message to show instead of standings if
             calculating them failed, or None.
+        candidates: The round's nominees, used to resolve standings to
+            titles rather than internal suggestion numbers (Release
+            Polish Batch 2, Priority 3). Optional so existing callers
+            with no candidates in scope keep working.
 
     Returns:
         The formatted status text. Total votes cast is always shown,
@@ -1303,7 +1324,7 @@ def build_vote_status_text(
     link = build_vote_link(vote_round)
     if link:
         lines.append(f"Original post: {link}")
-    lines.extend(format_standings_lines(standings, standings_error))
+    lines.extend(format_standings_lines(standings, standings_error, candidates))
 
     return "\n".join(lines)
 
@@ -1314,7 +1335,7 @@ def perform_start_vote(
     nominee_selection_service: Optional[NomineeSelectionService],
     user: object,
     wash_crew_role_id: Optional[int],
-    visibility_str: str,
+    visibility_str: Optional[str],
     duration_days: Optional[int],
     nominee_count: Optional[int] = None,
     default_nominee_count: int = DEFAULT_VOTE_CANDIDATE_COUNT,
@@ -1324,6 +1345,7 @@ def perform_start_vote(
     reminder_hours_before_close: Optional[int] = None,
     rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
+    guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
 ) -> tuple[str, bool]:
     """Core logic for /start_vote, kept free of Discord objects except `user`.
 
@@ -1338,7 +1360,11 @@ def perform_start_vote(
             Crew role).
         wash_crew_role_id: The configured WASH Crew role ID, or None if
             unconfigured.
-        visibility_str: The raw visibility option text ("blind"/"visible").
+        visibility_str: The raw visibility option text ("blind"/"visible"),
+            or None when no explicit override was supplied ("use default
+            settings", or a blank visibility field while customizing) --
+            see parse_vote_visibility, which resolves None against the
+            guild's configured default via guild_configuration_repository.
         duration_days: The raw duration option, or None for the default.
         nominee_count: The raw nominee_count option ("customize this
             vote"), or None to use default_nominee_count ("use default
@@ -1363,6 +1389,11 @@ def perform_start_vote(
             selection proceeds exactly as it did before FR-033B.
         suggestion_database_configuration_repository: FR-033B: see
             rotation_service.
+        guild_configuration_repository: Release Polish Batch 2, Priority 6:
+            used to resolve the guild's configured default visibility
+            when visibility_str is None. Optional -- when unset (e.g. a
+            test caller with no guild configuration to resolve),
+            visibility_str's own default of VISIBLE applies.
 
     Returns:
         A (message, ephemeral) tuple. Errors and permission failures are
@@ -1379,8 +1410,14 @@ def perform_start_vote(
     if not is_wash_crew_member(user, wash_crew_role_id):
         return "You need the WASH Crew role to start a voting round.", True
 
+    default_visibility = GuildVoteVisibility.VISIBLE
+    if guild_configuration_repository is not None and guild_id is not None:
+        configuration = guild_configuration_repository.get(guild_id)
+        if configuration is not None:
+            default_visibility = configuration.voting_defaults.visibility
+
     try:
-        visibility = parse_vote_visibility(visibility_str)
+        visibility = parse_vote_visibility(visibility_str, default=default_visibility)
     except ValueError as exc:
         return str(exc), True
 
@@ -1401,7 +1438,9 @@ def perform_start_vote(
 
     resolution = None
     if guild_id is not None and channel_id is not None and nominee_selection_service is not None:
-        resolution = suggestion_service.resolve_database_for_channel(guild_id, channel_id)
+        resolution = suggestion_service.resolve_database_for_channel(
+            guild_id, channel_id, suggestion_database_configuration_repository
+        )
         if resolution.database is None:
             return resolution.error_message or "No suggestion database is available here.", True
         strategy = None
@@ -1888,7 +1927,7 @@ async def send_setup_wizard_step(
         voting_defaults_prefill = (
             str(state.draft.voting_candidate_count) if state.draft.voting_candidate_count is not None else "3",
             str(state.draft.voting_duration_days) if state.draft.voting_duration_days is not None else "7",
-            state.draft.voting_visibility.value if state.draft.voting_visibility is not None else "blind",
+            state.draft.voting_visibility.value if state.draft.voting_visibility is not None else "visible",
             (
                 state.draft.voting_candidate_selection.value
                 if state.draft.voting_candidate_selection is not None
@@ -2896,19 +2935,21 @@ def parse_start_vote_overrides(
     visibility_text: Optional[str],
     reminder_enabled_text: Optional[str] = None,
     reminder_hours_text: Optional[str] = None,
-) -> tuple[Optional[int], Optional[int], str, Optional[bool], Optional[int]]:
+) -> tuple[Optional[int], Optional[int], Optional[str], Optional[bool], Optional[int]]:
     """Parse raw customization-modal values into start-vote arguments.
 
     Blank numeric fields remain ``None`` so :func:`perform_start_vote` can
-    apply configured defaults. Blank visibility uses the established visible
-    default. Blank reminder fields remain ``None`` so the guild's
-    configured reminder default is used (see
-    scheduler.vote_scheduling.resolve_vote_reminder_settings). Range and
-    enum validation remain centralized in :func:`perform_start_vote`.
+    apply configured defaults. Blank visibility also remains ``None`` so
+    :func:`perform_start_vote` (via :func:`parse_vote_visibility`) applies
+    the guild's configured default visibility rather than a hardcoded
+    value (Release Polish Batch 2, Priority 6). Blank reminder fields
+    remain ``None`` so the guild's configured reminder default is used
+    (see scheduler.vote_scheduling.resolve_vote_reminder_settings). Range
+    and enum validation remain centralized in :func:`perform_start_vote`.
     """
     nominee_count = parse_optional_int_field(nominee_count_text)
     duration_days = parse_optional_int_field(duration_days_text)
-    visibility = (visibility_text or "").strip() or "visible"
+    visibility = (visibility_text or "").strip() or None
     reminder_enabled = parse_optional_bool_field(reminder_enabled_text)
     reminder_hours_before_close = parse_optional_int_field(reminder_hours_text)
     return nominee_count, duration_days, visibility, reminder_enabled, reminder_hours_before_close
@@ -2920,7 +2961,7 @@ async def handle_start_vote_completion(
     suggestion_service: SuggestionService,
     nominee_selection_service: Optional[NomineeSelectionService],
     wash_crew_role_id: Optional[int],
-    visibility_str: str,
+    visibility_str: Optional[str],
     duration_days: Optional[int],
     nominee_count: Optional[int],
     default_nominee_count: int,
@@ -2957,6 +2998,7 @@ async def handle_start_vote_completion(
         reminder_hours_before_close=reminder_hours_before_close,
         rotation_service=rotation_service,
         suggestion_database_configuration_repository=suggestion_database_configuration_repository,
+        guild_configuration_repository=guild_configuration_repository,
     )
     if ephemeral:
         await interaction.response.send_message(message, ephemeral=True)
@@ -2991,10 +3033,10 @@ async def handle_start_vote_completion(
             wash_crew_role_id=wash_crew_role_id,
         ),
     )
-    post_text = build_voting_post_text(
+    post_embed = build_voting_post_embed(
         vote_round, candidates, standings=None, standings_error=None
     )
-    await interaction.response.send_message(post_text, view=view)
+    await interaction.response.send_message(embed=post_embed, view=view)
     sent_message = await interaction.original_response()
     vote_service.attach_message_reference(
         vote_round.id, interaction.guild_id, interaction.channel_id, sent_message.id
@@ -3023,14 +3065,16 @@ async def handle_start_vote_use_defaults(
     rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
 ) -> None:
-    """Start a visible round using the configured defaults."""
+    """Start a round using the configured defaults, including the guild's
+    configured default voting visibility (visibility_str=None; see
+    parse_vote_visibility)."""
     await handle_start_vote_completion(
         interaction,
         vote_service,
         suggestion_service,
         nominee_selection_service,
         wash_crew_role_id,
-        visibility_str="visible",
+        visibility_str=None,
         duration_days=None,
         nominee_count=None,
         default_nominee_count=default_nominee_count,
@@ -3123,11 +3167,16 @@ def perform_vote_status(vote_service: VoteService, suggestion_service: Suggestio
         if vote_round.candidate_suggestion_ids
         else suggestion_service.suggestion_count()
     )
-    return build_vote_status_text(vote_round, candidate_count, standings, standings_error)
+    candidates = get_round_candidates(suggestion_service, vote_round)
+    return build_vote_status_text(vote_round, candidate_count, standings, standings_error, candidates)
 
 
 def build_vote_confirmation(
-    vote_record: VoteRecord, is_first_vote: bool, remaining_changes: int, vote_round: Optional[VoteRound] = None
+    vote_record: VoteRecord,
+    is_first_vote: bool,
+    remaining_changes: int,
+    vote_round: Optional[VoteRound] = None,
+    watch_item: Optional[WatchItem] = None,
 ) -> str:
     """Build the vote confirmation message shown after casting a vote.
 
@@ -3139,14 +3188,25 @@ def build_vote_confirmation(
             original voting post when available. Optional so existing
             callers that don't have it keep working unchanged; None
             simply omits the link.
+        watch_item: The voted-for suggestion, used to name it by title
+            (Release Polish Batch 2, Priority 4 -- the internal
+            suggestion number is no longer the user-facing label).
+            Optional so a caller with no resolvable candidate (e.g. it
+            was removed between button click and confirmation) still
+            gets a graceful message rather than a failure.
 
     Returns:
         A confirmation message. Never mentions any other member's vote.
     """
+    candidate_label = (
+        format_title_with_year(watch_item.title, watch_item.release_year)
+        if watch_item is not None
+        else f"suggestion #{vote_record.suggestion_id}"
+    )
     if is_first_vote:
-        lines = [f"Your vote for suggestion #{vote_record.suggestion_id} has been recorded."]
+        lines = [f"Your vote for {candidate_label} has been recorded."]
     else:
-        lines = [f"Your vote has been updated to suggestion #{vote_record.suggestion_id}."]
+        lines = [f"Your vote has been updated to {candidate_label}."]
         if remaining_changes > 0:
             change_word = "change" if remaining_changes == 1 else "changes"
             lines.append(f"You have {remaining_changes} vote {change_word} remaining.")
@@ -3161,7 +3221,12 @@ def build_vote_confirmation(
     return "\n".join(lines)
 
 
-def perform_vote(vote_service: VoteService, user_id: int, suggestion_id: int) -> tuple[str, bool]:
+def perform_vote(
+    vote_service: VoteService,
+    user_id: int,
+    suggestion_id: int,
+    suggestion_service: Optional[SuggestionService] = None,
+) -> tuple[str, bool]:
     """Core vote-casting logic, kept entirely free of Discord objects.
 
     Used exclusively by interactive voting's nominee buttons (see
@@ -3179,6 +3244,13 @@ def perform_vote(vote_service: VoteService, user_id: int, suggestion_id: int) ->
         vote_service: The vote service to cast the vote through.
         user_id: The voting member's Discord user ID.
         suggestion_id: The suggestion ID they're voting for.
+        suggestion_service: Used to resolve the voted candidate's (and
+            every other candidate's) title for display, rather than the
+            internal suggestion number (Release Polish Batch 2,
+            Priorities 3-4). Optional so existing callers with no
+            suggestion service in scope keep working -- confirmations
+            and standings gracefully fall back to the bare suggestion
+            number when unset or a candidate can't be resolved.
 
     Returns:
         A (message, ephemeral) tuple. Every response is ephemeral — a
@@ -3199,14 +3271,16 @@ def perform_vote(vote_service: VoteService, user_id: int, suggestion_id: int) ->
     is_first_vote = not had_existing_vote
     remaining_changes = MAX_VOTE_CHANGES - vote_record.changes_used
 
-    lines = [build_vote_confirmation(vote_record, is_first_vote, remaining_changes, vote_round)]
+    watch_item = suggestion_service.get_suggestion(suggestion_id) if suggestion_service is not None else None
+    lines = [build_vote_confirmation(vote_record, is_first_vote, remaining_changes, vote_round, watch_item)]
 
     if vote_round.visibility == VoteVisibility.VISIBLE:
+        candidates = get_round_candidates(suggestion_service, vote_round) if suggestion_service is not None else None
         standings_result = vote_service.calculate_standings(vote_round.id)
         if standings_result.success:
-            lines.extend(format_standings_lines(standings_result.standings, None))
+            lines.extend(format_standings_lines(standings_result.standings, None, candidates))
         else:
-            lines.extend(format_standings_lines(None, standings_result.message))
+            lines.extend(format_standings_lines(None, standings_result.message, candidates))
 
     return "\n".join(lines), True
 
@@ -3533,11 +3607,12 @@ def build_candidate_standings_lines(
 
     FR-025: replaces the old duplicate "Nominees:" list plus a
     separately vote-sorted "Standings:" section with one combined list,
-    kept in the same order as each candidate's vote button (not sorted
-    by vote count) so the displayed numbering always matches the
-    buttons below. Each candidate is its own paragraph: a numbered,
-    linked title, followed for a visible round by its progress bar,
-    vote count, and share. A blind round never reveals any of that.
+    kept in the same order as each candidate's vote button. Each
+    candidate is its own paragraph: a linked title (Release Polish
+    Batch 2, Priority 4 removed the leading nominee number -- the
+    candidate's own vote button below it is the only "which one is
+    this" cue needed), followed for a visible round by its progress
+    bar, vote count, and share. A blind round never reveals any of that.
 
     Args:
         candidates: The round's nominees, in button order.
@@ -3560,10 +3635,11 @@ def build_candidate_standings_lines(
     )
 
     blocks: List[List[str]] = []
-    for position, candidate in enumerate(candidates, start=1):
+    for candidate in candidates:
+        display_title = format_title_with_year(candidate.title, candidate.release_year)
         link = build_suggestion_link(candidate)
-        title_display = f"[{candidate.title}]({link})" if link else candidate.title
-        block = [f"{position}. {title_display}"]
+        title_display = f"[{display_title}]({link})" if link else display_title
+        block = [title_display]
         if show_counts:
             vote_count = vote_counts_by_suggestion_id.get(candidate.id, 0)
             block.append(build_candidate_standings_line(vote_count, total_votes))
@@ -3585,17 +3661,23 @@ def build_candidate_standings_lines(
     return lines
 
 
-def build_voting_post_text(
+def build_voting_post_embed(
     vote_round: VoteRound,
     candidates: List[WatchItem],
     standings: Optional[List[StandingsEntry]],
     standings_error: Optional[str],
-) -> str:
-    """Build the public voting post message for a round.
+) -> discord.Embed:
+    """Build the public voting post's embed for a round (Release Polish
+    Batch 2, Priority 5).
 
     Used both for the initial post created by /start_vote and to refresh
-    it after each vote. Reuses format_datetime_for_display and
-    build_candidate_standings_lines rather than reformatting either here.
+    it after each vote or a deadline change. Reuses
+    format_datetime_for_display and build_candidate_standings_lines
+    rather than reformatting either here. Uses WASH's standard
+    EmbedFactory styling (the yellow accent color) with no footer -- this
+    is an operational voting message, not a branded WASH info card, so it
+    carries none of EmbedFactory's default project/attribution footer
+    text (Branding Consistency).
 
     Args:
         vote_round: The round this post is for.
@@ -3609,28 +3691,29 @@ def build_voting_post_text(
             calculating them failed, or None.
 
     Returns:
-        The formatted post text. Total votes cast is always shown -- for a
-        blind round that's the only vote information revealed; per-candidate
-        counts, percentages, and progress bars are additionally shown for
-        a visible round.
+        The embed. Total votes cast is always shown -- for a blind round
+        that's the only vote information revealed; per-candidate counts,
+        percentages, and progress bars are additionally shown for a
+        visible round (never for blind, preserving that round's privacy).
     """
-    lines = [
-        f"Voting round {vote_round.id} is open!",
-        f"Visibility: {vote_round.visibility.value.capitalize()}",
-        f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
-        "",
-    ]
-    lines.extend(build_candidate_standings_lines(candidates, vote_round, standings, standings_error))
-    lines.append("")
-    lines.append(f"Votes cast: {len(vote_round.votes)}")
+    description_lines = [f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}", ""]
+    description_lines.extend(build_candidate_standings_lines(candidates, vote_round, standings, standings_error))
 
-    return "\n".join(lines)
+    return EmbedFactory.info(
+        f"Voting Round {vote_round.id} is Open",
+        "\n".join(description_lines),
+        footer=None,
+        fields=[
+            {"name": "Visibility", "value": vote_round.visibility.value.capitalize(), "inline": True},
+            {"name": "Votes Cast", "value": str(len(vote_round.votes)), "inline": True},
+        ],
+    )
 
 
-def build_current_voting_post_text(
+def build_current_voting_post_embed(
     vote_service: VoteService, suggestion_service: SuggestionService, vote_round: VoteRound
-) -> str:
-    """Recompute and build a round's voting post text from its current state.
+) -> discord.Embed:
+    """Recompute and build a round's voting post embed from its current state.
 
     Shared by refresh_voting_post (called after each vote) and
     handle_change_vote_end_time_completion (called after WASH Crew edits
@@ -3640,16 +3723,16 @@ def build_current_voting_post_text(
     Args:
         vote_service: Used to recompute standings.
         suggestion_service: Used to re-list the current nominees.
-        vote_round: The round to build the post text for.
+        vote_round: The round to build the post embed for.
 
     Returns:
-        The formatted post text (see build_voting_post_text).
+        The embed (see build_voting_post_embed).
     """
     candidates = get_round_candidates(suggestion_service, vote_round)
     standings_result = vote_service.calculate_standings(vote_round.id)
     standings = standings_result.standings if standings_result.success else None
     standings_error = None if standings_result.success else standings_result.message
-    return build_voting_post_text(vote_round, candidates, standings, standings_error)
+    return build_voting_post_embed(vote_round, candidates, standings, standings_error)
 
 
 async def refresh_voting_post(
@@ -3667,8 +3750,8 @@ async def refresh_voting_post(
         suggestion_service: Used to re-list the current nominees.
         vote_round: The round being voted in.
     """
-    text = build_current_voting_post_text(vote_service, suggestion_service, vote_round)
-    await interaction.message.edit(content=text)
+    embed = build_current_voting_post_embed(vote_service, suggestion_service, vote_round)
+    await interaction.message.edit(embed=embed)
 
 
 async def handle_nominee_vote(
@@ -3696,7 +3779,7 @@ async def handle_nominee_vote(
             await interaction.response.send_message(permission.message, ephemeral=True)
             return
 
-    message, ephemeral = perform_vote(vote_service, interaction.user.id, suggestion_id)
+    message, ephemeral = perform_vote(vote_service, interaction.user.id, suggestion_id, suggestion_service)
     await interaction.response.send_message(message, ephemeral=ephemeral)
 
     vote_round = vote_service.get_open_round()
@@ -3710,8 +3793,9 @@ async def handle_nominee_vote(
 async def update_voting_message(
     bot: object,
     vote_round: VoteRound,
-    content: str,
+    content: Optional[str] = None,
     *,
+    embed: Optional[discord.Embed] = None,
     clear_view: bool = False,
 ) -> None:
     """Best-effort update of a round's original voting post.
@@ -3732,7 +3816,15 @@ async def update_voting_message(
             object with an edit(...) coroutine -- a real discord.Client/Bot
             satisfies this, and tests can supply a lightweight fake.
         vote_round: The round whose original post should be updated.
-        content: The new message content.
+        content: The new plain-text message content, or None to clear
+            any existing text (e.g. when switching to embed-only, or the
+            reverse when a round closes -- see embed).
+        embed: The new embed (Release Polish Batch 2, Priority 5's
+            active-vote embed), or None to clear any existing embed. Both
+            content and embed are always passed explicitly to Discord
+            (never omitted) so switching between an open round's embed
+            and a closed round's plain-text summary always replaces the
+            other rather than leaving it stale alongside the new one.
         clear_view: When True, removes the message's interactive
             components (the persistent voting buttons) -- used once
             voting is no longer possible (ended or cancelled). Left False
@@ -3748,9 +3840,9 @@ async def update_voting_message(
             channel = await bot.fetch_channel(vote_round.channel_id)
         message = await channel.fetch_message(vote_round.message_id)
         if clear_view:
-            await message.edit(content=content, view=None)
+            await message.edit(content=content, embed=embed, view=None)
         else:
-            await message.edit(content=content)
+            await message.edit(content=content, embed=embed)
     except Exception:
         logger.exception(
             "Could not update the original voting message for round %s", vote_round.id
@@ -3918,8 +4010,8 @@ async def handle_change_vote_end_time_completion(
             channel = await bot.fetch_channel(vote_round.channel_id)
         await channel.send(notice)
 
-    text = build_current_voting_post_text(vote_service, suggestion_service, vote_round)
-    await update_voting_message(bot, vote_round, text)
+    embed = build_current_voting_post_embed(vote_service, suggestion_service, vote_round)
+    await update_voting_message(bot, vote_round, embed=embed)
 
 
 def perform_end_vote_now(
@@ -4389,7 +4481,9 @@ async def handle_add_suggestion(
         )
         return
 
-    resolution = bot.suggestion_service.resolve_database_for_channel(guild_id, channel_id)
+    resolution = bot.suggestion_service.resolve_database_for_channel(
+        guild_id, channel_id, bot.suggestion_database_configuration_repository
+    )
     if resolution.database is None:
         await interaction.response.send_message(
             resolution.error_message or "No suggestion database is available here.", ephemeral=True
@@ -5259,7 +5353,6 @@ def build_suggestion_confirmation_embed(
     embed.add_field(name="Reference", value=watch_item.reference, inline=True)
     if watch_item.poster_url:
         embed.set_thumbnail(url=watch_item.poster_url)
-    embed.set_footer(text="Watch Party Manager • TehKarmah")
     return embed
 
 
@@ -5351,6 +5444,15 @@ def perform_list_suggestions_response(
 ) -> tuple[str, bool]:
     """Build the role-aware ``/list`` response.
 
+    NOT the live ``/list`` command (see handle_list_suggestions /
+    send_suggestion_list / build_suggestion_entry_line below, registered
+    against the actual ``/list`` slash command). This is a pre-FR-033A
+    formatter kept only for its existing test coverage -- it uses
+    SuggestionListFormatter, a separate formatter from
+    build_suggestion_entry_line's active title/year rendering (Release
+    Polish Batch 2, Priority 2), so it must never be wired back up
+    without also updating it to match the corrected behavior there.
+
     The standard view is available to everyone and is ephemeral by default.
     The expanded Crew view and public posting are restricted to WASH Crew.
     """
@@ -5426,13 +5528,11 @@ def build_suggestion_entry_line(item: WatchItem) -> str:
     is meant to be a terse, at-a-glance pool of what's available for
     future voting, not a diagnostic record (Release Polish Priority 2).
     """
-    heading = item.title
-    if item.release_year:
-        heading += f" ({item.release_year})"
+    heading = format_title_with_year(item.title, item.release_year)
 
     if item.guild_id is not None and item.channel_id is not None and item.message_id is not None:
         message_url = f"https://discord.com/channels/{item.guild_id}/{item.channel_id}/{item.message_id}"
-        return f"{heading} | [Original suggestion]({message_url})"
+        return f"{heading} | [Original Suggestion]({message_url})"
 
     return heading
 

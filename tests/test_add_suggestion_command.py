@@ -435,6 +435,72 @@ class AddWithThreadDestinationTests(HandleAddSuggestionTestCase):
         self.assertGreaterEqual(len(self.confirmation_thread.sent), 1)
 
 
+class AddInvokedInsideTheConfiguredThreadTests(HandleAddSuggestionTestCase):
+    """Release Polish Batch 2, Priority 1: reproduces the exact reported
+    contradiction -- WASH (/config's "Suggestion Post Destination"
+    summary) reports a thread as the configured destination for a
+    database whose *original* channel is elsewhere, while /add, run
+    inside that same thread, previously reported no suggestion database
+    configured at all. The database's own creation-time channel and its
+    later-configured post destination are two different fields
+    (SuggestionDatabase.channel_id vs.
+    SuggestionDatabaseConfiguration.channels.suggestion_channel_id);
+    resolve_database_for_channel must recognize both.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # self.database's home channel is CHANNEL_ID (200, from
+        # HandleAddSuggestionTestCase.setUp) -- the configured
+        # destination below is a different, later-added public thread.
+        self.thread_id = 888
+        self.configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=GUILD_ID,
+                database_id=self.database.database_id,
+                display_name="Movie Night",
+                channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=self.thread_id),
+            )
+        )
+        self.confirmation_thread = FakeChannel(self.thread_id)
+        self.bot.register_channel(self.confirmation_thread)
+
+    async def test_add_run_inside_the_configured_thread_resolves_the_database(self) -> None:
+        interaction = FakeInteraction(channel_id=self.thread_id)
+
+        await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
+
+        self.assertNotIn("No suggestion database is available", interaction.response.sent_message or "")
+        self.assertEqual(1, len(self.suggestion_service.get_suggestions_for_database(self.database.database_id)))
+
+    async def test_add_run_inside_the_configured_thread_posts_the_confirmation_there(self) -> None:
+        interaction = FakeInteraction(channel_id=self.thread_id)
+
+        await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
+
+        self.assertGreaterEqual(len(self.confirmation_thread.sent), 1)
+
+    async def test_add_run_inside_the_configured_thread_retains_the_original_post_link(self) -> None:
+        interaction = FakeInteraction(channel_id=self.thread_id)
+
+        await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
+
+        item = self.suggestion_service.get_suggestions_for_database(self.database.database_id)[0]
+        self.assertEqual(item.channel_id, self.thread_id)
+        self.assertIsNotNone(item.message_id)
+
+    async def test_add_still_resolves_when_run_in_the_original_home_channel_too(self) -> None:
+        # Database ownership (home channel) and destination lookup
+        # (configured thread) must never disagree -- both resolve to the
+        # exact same database.
+        interaction = FakeInteraction(channel_id=CHANNEL_ID)
+
+        await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
+
+        self.assertNotIn("No suggestion database is available", interaction.response.sent_message or "")
+        self.assertEqual(1, len(self.suggestion_service.get_suggestions_for_database(self.database.database_id)))
+
+
 class AddWithInaccessibleDestinationTests(HandleAddSuggestionTestCase):
     """The configured suggestion channel/thread may no longer be reachable
     (deleted, WASH kicked from it, permissions revoked). The suggestion

@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import (
-    build_voting_post_text,
+    build_voting_post_embed,
     handle_nominee_vote,
     perform_start_vote,
 )
@@ -53,10 +53,12 @@ class FakeSentMessage:
 class FakeVotingPostMessage:
     def __init__(self) -> None:
         self.edited_content = None
+        self.edited_embed = None
         self.edit_call_count = 0
 
-    async def edit(self, content=None, **kwargs) -> None:
+    async def edit(self, content=None, embed=None, **kwargs) -> None:
         self.edited_content = content
+        self.edited_embed = embed
         self.edit_call_count += 1
 
 
@@ -73,7 +75,11 @@ class FakeInteraction:
         return self._original_response
 
 
-class BuildVotingPostTextTests(unittest.TestCase):
+class BuildVotingPostEmbedTests(unittest.TestCase):
+    """Release Polish Batch 2, Priority 5: the active-vote post is an
+    embed, not plain text -- candidate titles have no leading number
+    (Priority 4), and the embed carries no WASH branding footer."""
+
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
         self.suggestion_service = SuggestionService(
@@ -91,14 +97,16 @@ class BuildVotingPostTextTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
 
-    def test_lists_all_nominees(self) -> None:
+    def test_lists_all_nominees_without_a_leading_number(self) -> None:
         created = self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
         candidates = self.suggestion_service.get_suggestions()
 
-        text = build_voting_post_text(created.vote_round, candidates, standings=None, standings_error=None)
+        embed = build_voting_post_embed(created.vote_round, candidates, standings=None, standings_error=None)
 
-        self.assertIn("1. The Matrix", text)
-        self.assertIn("2. Inception", text)
+        self.assertIn("The Matrix", embed.description)
+        self.assertIn("Inception", embed.description)
+        self.assertNotIn("1. The Matrix", embed.description)
+        self.assertNotIn("2. Inception", embed.description)
 
     def test_does_not_duplicate_the_candidate_list(self) -> None:
         # FR-025: the old separate "Nominees:" list is gone -- each
@@ -106,36 +114,37 @@ class BuildVotingPostTextTests(unittest.TestCase):
         created = self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
         candidates = self.suggestion_service.get_suggestions()
 
-        text = build_voting_post_text(created.vote_round, candidates, standings=None, standings_error=None)
+        embed = build_voting_post_embed(created.vote_round, candidates, standings=None, standings_error=None)
 
-        self.assertNotIn("Nominees:", text)
-        self.assertEqual(text.count("The Matrix"), 1)
-        self.assertEqual(text.count("Inception"), 1)
+        self.assertNotIn("Nominees:", embed.description)
+        self.assertEqual(embed.description.count("The Matrix"), 1)
+        self.assertEqual(embed.description.count("Inception"), 1)
 
     def test_shows_the_voting_deadline(self) -> None:
         created = self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
         candidates = self.suggestion_service.get_suggestions()
 
-        text = build_voting_post_text(created.vote_round, candidates, standings=None, standings_error=None)
+        embed = build_voting_post_embed(created.vote_round, candidates, standings=None, standings_error=None)
 
-        self.assertIn("Voting ends:", text)
+        self.assertIn("Voting ends:", embed.description)
 
     def test_blind_round_hides_standings(self) -> None:
         created = self.vote_service.create_round(visibility=VoteVisibility.BLIND)
         candidates = self.suggestion_service.get_suggestions()
 
-        text = build_voting_post_text(created.vote_round, candidates, standings=None, standings_error=None)
+        embed = build_voting_post_embed(created.vote_round, candidates, standings=None, standings_error=None)
 
-        self.assertNotIn("Standings", text)
+        self.assertNotIn("Standings", embed.description)
 
     def test_blind_round_still_shows_total_participation_count(self) -> None:
         created = self.vote_service.create_round(visibility=VoteVisibility.BLIND)
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=1)
         candidates = self.suggestion_service.get_suggestions()
 
-        text = build_voting_post_text(created.vote_round, candidates, standings=None, standings_error=None)
+        embed = build_voting_post_embed(created.vote_round, candidates, standings=None, standings_error=None)
 
-        self.assertIn("Votes cast: 1", text)
+        votes_cast_field = next(field for field in embed.fields if field.name == "Votes Cast")
+        self.assertEqual(votes_cast_field.value, "1")
 
     def test_blind_round_does_not_reveal_nominee_totals(self) -> None:
         created = self.vote_service.create_round(visibility=VoteVisibility.BLIND)
@@ -146,12 +155,12 @@ class BuildVotingPostTextTests(unittest.TestCase):
 
         # Even if standings were computed and mistakenly passed in, a blind
         # round must never render them.
-        text = build_voting_post_text(
+        embed = build_voting_post_embed(
             created.vote_round, candidates, standings=standings_result.standings, standings_error=None
         )
 
-        self.assertNotIn("Standings", text)
-        self.assertNotIn("2 votes", text)
+        self.assertNotIn("Standings", embed.description)
+        self.assertNotIn("2 votes", embed.description)
 
     def test_visible_round_shows_standings(self) -> None:
         created = self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
@@ -159,20 +168,30 @@ class BuildVotingPostTextTests(unittest.TestCase):
         standings_result = self.vote_service.calculate_standings(created.vote_round.id)
         candidates = self.suggestion_service.get_suggestions()
 
-        text = build_voting_post_text(
+        embed = build_voting_post_embed(
             created.vote_round, candidates, standings=standings_result.standings, standings_error=None
         )
 
-        self.assertIn("1 vote", text)
-        self.assertIn("100%", text)
+        self.assertIn("1 vote", embed.description)
+        self.assertIn("100%", embed.description)
 
     def test_shows_visibility_mode(self) -> None:
         created = self.vote_service.create_round(visibility=VoteVisibility.BLIND)
         candidates = self.suggestion_service.get_suggestions()
 
-        text = build_voting_post_text(created.vote_round, candidates, standings=None, standings_error=None)
+        embed = build_voting_post_embed(created.vote_round, candidates, standings=None, standings_error=None)
 
-        self.assertIn("Blind", text)
+        visibility_field = next(field for field in embed.fields if field.name == "Visibility")
+        self.assertEqual(visibility_field.value, "Blind")
+
+    def test_uses_the_wash_yellow_accent_color_and_no_footer(self) -> None:
+        created = self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+        candidates = self.suggestion_service.get_suggestions()
+
+        embed = build_voting_post_embed(created.vote_round, candidates, standings=None, standings_error=None)
+
+        self.assertEqual(embed.color.value, 0xF5C518)
+        self.assertIsNone(embed.footer.text)
 
 
 class HandleNomineeVoteTests(unittest.IsolatedAsyncioTestCase):
@@ -255,8 +274,9 @@ class HandleNomineeVoteTests(unittest.IsolatedAsyncioTestCase):
         await handle_nominee_vote(interaction, self.vote_service, self.suggestion_service, suggestion_id=1)
 
         self.assertEqual(message.edit_call_count, 1)
-        self.assertIn("1 vote • 100%", message.edited_content)
-        self.assertIn("Votes cast: 1", message.edited_content)
+        self.assertIn("1 vote • 100%", message.edited_embed.description)
+        votes_cast_field = next(field for field in message.edited_embed.fields if field.name == "Votes Cast")
+        self.assertEqual(votes_cast_field.value, "1")
 
     async def test_blind_round_does_not_refresh_the_post(self) -> None:
         self.vote_service.create_round(visibility=VoteVisibility.BLIND)
@@ -348,9 +368,9 @@ class StartVoteCreatesAVotingPostTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(view.children), 3)
         self.assertEqual({button.suggestion_id for button in view.children}, {1, 2, 3})
 
-        post_text = build_voting_post_text(vote_round, candidates, standings=None, standings_error=None)
-        self.assertIn(f"Voting round {vote_round.id} is open!", post_text)
-        self.assertIn("1. The Matrix", post_text)
+        post_embed = build_voting_post_embed(vote_round, candidates, standings=None, standings_error=None)
+        self.assertIn(f"Voting Round {vote_round.id} is Open", post_embed.title)
+        self.assertIn("The Matrix", post_embed.description)
 
     async def test_message_ids_are_stored_after_the_post_is_sent(self) -> None:
         perform_start_vote(

@@ -22,7 +22,9 @@ class GuildConfigurationTests(unittest.TestCase):
         self.assertEqual(config.watch_party_role.join_mode, JoinMode.SELF_SERVICE)
         self.assertEqual(config.voting_defaults.candidate_count, 3)
         self.assertEqual(config.voting_defaults.duration_days, 7)
-        self.assertEqual(config.voting_defaults.visibility, GuildVoteVisibility.BLIND)
+        # Release Polish Batch 2, Priority 6: default voting visibility
+        # changed from Blind to Visible; Blind remains fully selectable.
+        self.assertEqual(config.voting_defaults.visibility, GuildVoteVisibility.VISIBLE)
         self.assertEqual(config.voting_defaults.max_vote_changes, 1)
         self.assertEqual(config.voting_defaults.tie_behavior, TieBehavior.ALL_WINNERS)
         self.assertFalse(config.feature_flags.birthday_picks)

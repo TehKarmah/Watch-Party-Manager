@@ -42,7 +42,7 @@ class FakeVotingMessage:
         self.edits: list[tuple[str, object]] = []
         self._fail = fail
 
-    async def edit(self, *, content=None, view="not-set") -> None:
+    async def edit(self, *, content=None, embed="not-set", view="not-set") -> None:
         if self._fail:
             raise SimulatedDiscordError("cannot edit message")
         self.edits.append((content, view))
