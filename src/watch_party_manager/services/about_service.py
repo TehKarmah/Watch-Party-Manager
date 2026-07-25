@@ -24,7 +24,6 @@ EXPANDED_HELP_URL = (
 )
 TAGLINE = "Organizing great watch parties, one vote at a time."
 WASH_ACCENT_COLOR = 0xF5C518
-ABOUT_FOOTER = "WASH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +79,6 @@ class AboutContent:
     description: str
     fields: tuple[AboutField, ...]
     color: int
-    footer: str
 
 
 def _format_uptime(started_at: datetime, now: datetime) -> str:
@@ -209,5 +207,4 @@ def build_about_content(
         description=description,
         fields=tuple(fields),
         color=WASH_ACCENT_COLOR,
-        footer=ABOUT_FOOTER,
     )

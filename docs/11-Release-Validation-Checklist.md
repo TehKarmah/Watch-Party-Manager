@@ -606,7 +606,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Wait for the round to reach its deadline (or use **End Now**).
   2. Observe the results announcement.
-- **Expected Result:** The original post is updated to a closed record with final standings; a single results announcement is posted with the winner, an "About Tonight's Pick" embed (poster/runtime/rating/genres when known), and a link back to the original post. No duplicate announcement is posted.
+- **Expected Result:** The original post is updated to a closed record with final standings; a single results announcement is posted with the collection, the winner, who suggested it (when recorded), an "About the Winner" embed (poster/runtime/rating/genres when known), and a link back to the original post. No duplicate announcement is posted.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -616,7 +616,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** Ability to arrange two candidates with equal votes (e.g. a 2-member test server voting for different candidates in a 2-candidate round).
 - **Steps:**
   1. Produce a tie and let the round complete.
-- **Expected Result:** Both winners are announced ("It's a tie! Winners: ..."), each gets its own "About Tonight's Pick" embed, and neither embed shows a poster thumbnail (thumbnails are suppressed for any tie).
+- **Expected Result:** Both winners are announced ("It's a tie! Winners: ..."), each gets its own "About the Winner" embed, and neither embed shows a poster thumbnail (thumbnails are suppressed for any tie).
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

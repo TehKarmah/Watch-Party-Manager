@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus, VoteVisibility
 from watch_party_manager.domain.watch_item import MediaType, WatchItem
+from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 from watch_party_manager.services.vote_announcement_formatter import (
     build_closed_voting_post_text,
     build_final_standings_lines,
@@ -42,6 +43,7 @@ def make_watch_item(
     genres=(),
     description=None,
     poster_url=None,
+    original_suggester=None,
 ) -> WatchItem:
     return WatchItem(
         title=title,
@@ -55,6 +57,7 @@ def make_watch_item(
         genres=genres,
         description=description,
         poster_url=poster_url,
+        journey=WatchItemJourney(original_suggester=original_suggester),
     )
 
 
@@ -275,18 +278,107 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
 
         self.assertIn("[The Matrix](https://discord.com/channels/100/200/300)", text)
 
-    # --- About Tonight's Pick header ---------------------------------------------------
+    # --- About the Winner header ---------------------------------------------------
 
-    def test_includes_the_about_tonights_pick_header_when_there_is_a_winner(self) -> None:
+    def test_includes_the_about_the_winner_header_when_there_is_a_winner(self) -> None:
         winner = make_watch_item("The Matrix", id=1)
         text = build_vote_completion_announcement(make_round(), self._candidates(), [winner], [], 1)
 
-        self.assertIn("About Tonight's Pick", text)
+        self.assertIn("About the Winner", text)
 
-    def test_omits_the_about_tonights_pick_header_when_there_is_no_winner(self) -> None:
+    def test_omits_the_about_the_winner_header_when_there_is_no_winner(self) -> None:
         text = build_vote_completion_announcement(make_round(), self._candidates(), [], [], 0)
 
-        self.assertNotIn("About Tonight's Pick", text)
+        self.assertNotIn("About the Winner", text)
+
+    # --- Collection name --------------------------------------------------------------
+
+    def test_includes_the_collection_name_when_given(self) -> None:
+        winner = make_watch_item("The Matrix", id=1)
+        text = build_vote_completion_announcement(
+            make_round(), self._candidates(), [winner], [], 1, collection_name="Movie Suggestions"
+        )
+
+        self.assertIn("Collection: Movie Suggestions", text)
+
+    def test_omits_the_collection_line_when_not_given(self) -> None:
+        winner = make_watch_item("The Matrix", id=1)
+        text = build_vote_completion_announcement(make_round(), self._candidates(), [winner], [], 1)
+
+        self.assertNotIn("Collection:", text)
+
+    def test_collection_line_appears_immediately_after_the_closed_header(self) -> None:
+        winner = make_watch_item("The Matrix", id=1)
+        text = build_vote_completion_announcement(
+            make_round(), self._candidates(), [winner], [], 1, collection_name="Movie Suggestions"
+        )
+
+        lines = text.splitlines()
+        self.assertEqual(lines[0], "Voting round 1 has closed!")
+        self.assertEqual(lines[1], "Collection: Movie Suggestions")
+
+    # --- Suggested by -------------------------------------------------------------------
+
+    def test_shows_who_suggested_the_winner(self) -> None:
+        winner = make_watch_item("The Matrix", id=1, original_suggester="555")
+        text = build_vote_completion_announcement(make_round(), self._candidates(), [winner], [], 1)
+
+        self.assertIn("Suggested by: <@555>", text)
+
+    def test_omits_suggested_by_when_there_is_no_winner(self) -> None:
+        text = build_vote_completion_announcement(make_round(), self._candidates(), [], [], 0)
+
+        self.assertNotIn("Suggested by", text)
+
+    def test_omits_suggested_by_when_the_winner_has_no_recorded_suggester(self) -> None:
+        winner = make_watch_item("The Matrix", id=1)
+        text = build_vote_completion_announcement(make_round(), self._candidates(), [winner], [], 1)
+
+        self.assertNotIn("Suggested by", text)
+
+    def test_lists_each_distinct_suggester_for_a_tie(self) -> None:
+        winners = [
+            make_watch_item("The Matrix", id=1, original_suggester="111"),
+            make_watch_item("Inception", id=2, original_suggester="222"),
+        ]
+        text = build_vote_completion_announcement(make_round(), self._candidates(), winners, [], 2)
+
+        self.assertIn("Suggested by: <@111>, <@222>", text)
+
+    def test_deduplicates_the_same_suggester_across_tied_winners(self) -> None:
+        winners = [
+            make_watch_item("The Matrix", id=1, original_suggester="111"),
+            make_watch_item("Inception", id=2, original_suggester="111"),
+        ]
+        text = build_vote_completion_announcement(make_round(), self._candidates(), winners, [], 2)
+
+        self.assertIn("Suggested by: <@111>", text)
+        self.assertEqual(text.count("<@111>"), 1)
+
+    # --- Section order --------------------------------------------------------------
+
+    def test_sections_appear_in_the_documented_order(self) -> None:
+        winner = make_watch_item("The Matrix", id=1, original_suggester="555")
+        text = build_vote_completion_announcement(
+            make_round(),
+            self._candidates(),
+            [winner],
+            [],
+            1,
+            "https://discord.com/channels/1/2/3",
+            "Movie Suggestions",
+        )
+
+        collection_index = text.index("Collection:")
+        winner_index = text.index("Winner:")
+        suggested_by_index = text.index("Suggested by:")
+        original_post_index = text.index("Original voting post:")
+        about_index = text.index("About the Winner")
+
+        self.assertLess(collection_index, winner_index)
+        self.assertLess(winner_index, suggested_by_index)
+        self.assertLess(suggested_by_index, original_post_index)
+        self.assertLess(original_post_index, about_index)
 
 
 class BuildClosedVotingPostTextTests(unittest.TestCase):
@@ -338,7 +430,7 @@ class BuildClosedVotingPostTextTests(unittest.TestCase):
 
 
 class BuildWinnerDetailEmbedTests(unittest.TestCase):
-    """FR-026: the "About Tonight's Pick" embed for one winning suggestion."""
+    """FR-026: the "About the Winner" embed for one winning suggestion."""
 
     def test_title_is_the_watch_items_title(self) -> None:
         watch_item = make_watch_item("Brazil (1985)", id=1)

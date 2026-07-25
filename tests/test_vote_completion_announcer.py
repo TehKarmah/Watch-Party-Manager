@@ -107,11 +107,14 @@ class FinalizeVoteCompletionTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
 
-    def _open_round(self, *, with_message_reference=True, guild_id=100, channel_id=200, message_id=999):
+    def _open_round(
+        self, *, with_message_reference=True, guild_id=100, channel_id=200, message_id=999, database_id=None
+    ):
         vote_round = self.vote_service.create_round(
             visibility=VoteVisibility.VISIBLE,
             closes_at=datetime.now(timezone.utc) + timedelta(days=1),
             candidate_suggestion_ids=[self.matrix.id, self.inception.id],
+            database_id=database_id,
         ).vote_round
         if with_message_reference:
             self.vote_service.attach_message_reference(
@@ -196,6 +199,53 @@ class FinalizeVoteCompletionTests(unittest.IsolatedAsyncioTestCase):
         stored = self.vote_service.get_round(vote_round.id)
         self.assertIsNotNone(stored.results_message_id)
         self.assertEqual(stored.results_message_id, channel.sent_messages[0]["id"])
+
+    # --- Collection name and suggester (Winner Announcement Improvements) ------------
+
+    async def test_announcement_includes_the_rounds_collection_name(self) -> None:
+        database = self.suggestion_service.create_database(
+            "Movie Suggestions", guild_id=100, channel_id=200
+        ).database
+        vote_round = self._open_round(database_id=database.database_id)
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+        result = self._complete(vote_round.id)
+        message = FakeVotingMessage()
+        channel = FakeChannel(message)
+        bot = FakeBot(channel)
+
+        await finalize_vote_completion(self.vote_service, self.suggestion_service, bot, result)
+
+        self.assertIn("Collection: Movie Suggestions", channel.sent_messages[0]["content"])
+
+    async def test_announcement_shows_unknown_collection_when_the_round_has_none_recorded(self) -> None:
+        vote_round = self._open_round()
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+        result = self._complete(vote_round.id)
+        message = FakeVotingMessage()
+        channel = FakeChannel(message)
+        bot = FakeBot(channel)
+
+        await finalize_vote_completion(self.vote_service, self.suggestion_service, bot, result)
+
+        self.assertIn("Collection: Unknown", channel.sent_messages[0]["content"])
+
+    async def test_announcement_shows_who_suggested_the_winner(self) -> None:
+        submitted = self.suggestion_service.suggest("Brazil", original_suggester="777").watch_item
+        vote_round = self.vote_service.create_round(
+            visibility=VoteVisibility.VISIBLE,
+            closes_at=datetime.now(timezone.utc) + timedelta(days=1),
+            candidate_suggestion_ids=[submitted.id, self.inception.id],
+        ).vote_round
+        self.vote_service.attach_message_reference(vote_round.id, guild_id=100, channel_id=200, message_id=999)
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=submitted.id)
+        result = self._complete(vote_round.id)
+        message = FakeVotingMessage()
+        channel = FakeChannel(message)
+        bot = FakeBot(channel)
+
+        await finalize_vote_completion(self.vote_service, self.suggestion_service, bot, result)
+
+        self.assertIn("Suggested by: <@777>", channel.sent_messages[0]["content"])
 
     # --- Original voting post update -----------------------------------------------
 

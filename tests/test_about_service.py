@@ -6,7 +6,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.services.about_service import (
-    ABOUT_FOOTER,
     COMMANDS_REFERENCE_URL,
     EXPANDED_HELP_URL,
     PROJECT_REPOSITORY_URL,
@@ -92,14 +91,12 @@ class AboutServiceEveryoneTests(unittest.TestCase):
         content = build_about_content("1.0.0", "2026.07.17")
 
         self.assertEqual(content.color, WASH_ACCENT_COLOR)
-        self.assertEqual(content.footer, ABOUT_FOOTER)
 
     def test_embed_metadata_is_discord_safe(self) -> None:
         content = build_about_content("1.0.0", "2026.07.17")
 
         self.assertGreaterEqual(content.color, 0)
         self.assertLessEqual(content.color, 0xFFFFFF)
-        self.assertLessEqual(len(content.footer), 2048)
         for field in content.fields:
             self.assertLessEqual(len(field.name), 256)
             self.assertLessEqual(len(field.value), 1024)

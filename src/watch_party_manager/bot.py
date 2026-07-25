@@ -7970,7 +7970,8 @@ async def handle_about(interaction: discord.Interaction, bot: "WatchPartyBot") -
     embed = EmbedFactory.info(
         content.title,
         content.description,
-        footer=content.footer,
+        footer=None,
+        include_timestamp=False,
         fields=[{"name": field.name, "value": field.value, "inline": field.inline} for field in content.fields],
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)

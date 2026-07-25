@@ -273,6 +273,33 @@ def _build_final_standings_block(
     return ["", "Final Standings:", *standings_lines]
 
 
+def _build_suggested_by_line(winning_items: List[WatchItem]) -> Optional[str]:
+    """Build the "Suggested by:" line naming who originally submitted the
+    winning suggestion(s).
+
+    Reuses WatchItemJourney.original_suggester -- already recorded at
+    suggestion time (see SuggestionService.suggest) -- so this never
+    performs a new lookup, only formats what's already on the WatchItem.
+    Mirrors _build_winner_summary_line's tie handling: one mention per
+    tied winner, in the same order, deduplicated if the same member
+    suggested more than one tied winner. Omitted entirely (returns None)
+    when there's no winner to attribute, or none of the winner(s) have a
+    recorded suggester (e.g. a suggestion created before FR-034 began
+    tracking one) -- matching this module's existing "omit gracefully
+    rather than show a placeholder" convention for optional lines (see
+    build_vote_link's callers).
+    """
+    suggester_ids: List[str] = []
+    for item in winning_items:
+        suggester_id = item.journey.original_suggester
+        if suggester_id and suggester_id not in suggester_ids:
+            suggester_ids.append(suggester_id)
+    if not suggester_ids:
+        return None
+    mentions = ", ".join(f"<@{suggester_id}>" for suggester_id in suggester_ids)
+    return f"Suggested by: {mentions}"
+
+
 def build_vote_completion_announcement(
     vote_round: VoteRound,
     candidates: List[WatchItem],
@@ -280,12 +307,14 @@ def build_vote_completion_announcement(
     standings: Optional[List[StandingsEntry]],
     total_votes_cast: int,
     original_vote_link: Optional[str] = None,
+    collection_name: Optional[str] = None,
 ) -> str:
     """Build the single canonical results announcement for a just-completed round.
 
-    This is FR-026's "Results" section: winner(s), final standings for
-    every nominee, and a link back to the original voting post. The
-    "About Tonight's Pick" section (poster, runtime, rating, genres,
+    This is FR-026's "Results" section: which collection the round
+    belonged to, winner(s), final standings for every nominee, who
+    suggested the winner, and a link back to the original voting post.
+    The "About the Winner" section (poster, runtime, rating, genres,
     summary) is a separate discord.Embed built by build_vote_results_embeds()
     and sent alongside this text in the same message -- see
     vote_completion_announcer.finalize_vote_completion(), the single
@@ -308,16 +337,26 @@ def build_vote_completion_announcement(
             (see _build_winner_summary_line).
         original_vote_link: A jump link to the original voting post, or
             None to omit it (e.g. missing message metadata).
+        collection_name: The collection this round belongs to, already
+            resolved by the caller (see
+            vote_completion_announcer._resolve_collection_display_name),
+            or None to omit the line -- e.g. a legacy round created
+            before rounds recorded their collection.
 
     Returns:
         The announcement text.
     """
-    lines = [
-        f"Voting round {vote_round.id} has closed!",
-        _build_winner_summary_line(winning_items, total_votes_cast),
-        f"Total votes cast: {total_votes_cast}",
-    ]
+    lines = [f"Voting round {vote_round.id} has closed!"]
+    if collection_name:
+        lines.append(f"Collection: {collection_name}")
+    lines.append(_build_winner_summary_line(winning_items, total_votes_cast))
+    lines.append(f"Total votes cast: {total_votes_cast}")
     lines.extend(_build_final_standings_block(candidates, standings))
+
+    suggested_by_line = _build_suggested_by_line(winning_items)
+    if suggested_by_line:
+        lines.append("")
+        lines.append(suggested_by_line)
 
     if original_vote_link:
         lines.append("")
@@ -325,7 +364,7 @@ def build_vote_completion_announcement(
 
     if winning_items:
         lines.append("")
-        lines.append("**About Tonight's Pick**")
+        lines.append("**About the Winner**")
 
     return "\n".join(lines)
 
@@ -377,7 +416,7 @@ def build_closed_voting_post_text(
 
 
 def build_winner_detail_embed(watch_item: WatchItem, vote_count: int, *, show_thumbnail: bool) -> discord.Embed:
-    """Build the "About Tonight's Pick" embed for one winning suggestion.
+    """Build the "About the Winner" embed for one winning suggestion.
 
     The embed's title links to the suggestion's original message when
     available -- never to IMDb (FR-026's Message Links requirement).
@@ -415,7 +454,7 @@ def build_winner_detail_embed(watch_item: WatchItem, vote_count: int, *, show_th
 def build_vote_results_embeds(
     winning_items: List[WatchItem], standings: Optional[List[StandingsEntry]]
 ) -> List[discord.Embed]:
-    """Build the "About Tonight's Pick" embed(s) for a completed round's winner(s).
+    """Build the "About the Winner" embed(s) for a completed round's winner(s).
 
     One embed per winning item. A thumbnail is only ever included when
     there is exactly one winner -- FR-026 explicitly forbids thumbnails

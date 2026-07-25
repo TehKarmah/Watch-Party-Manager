@@ -127,6 +127,18 @@ class HandleAboutEveryoneTests(AboutCommandTestCase):
         self.assertIsNone(interaction.response.sent_content)
         self.assertIsNotNone(interaction.response.sent_embed)
 
+    async def test_embed_has_no_footer_or_timestamp(self) -> None:
+        # UX Polish: Discord already shows who posted the message and
+        # when, so the "WASH" footer + timestamp badge were redundant --
+        # removed entirely rather than just its text.
+        interaction = FakeInteraction()
+
+        await handle_about(interaction, self.bot)
+
+        embed = interaction.response.sent_embed
+        self.assertIsNone(embed.footer.text)
+        self.assertIsNone(embed.timestamp)
+
     async def test_response_is_ephemeral(self) -> None:
         interaction = FakeInteraction()
 

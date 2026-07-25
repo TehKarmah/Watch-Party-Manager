@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional, Protocol
 
+from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.services.discord_message_link import build_discord_message_link
 from watch_party_manager.services.vote_announcement_formatter import (
@@ -40,7 +41,8 @@ logger = logging.getLogger(__name__)
 
 class SuggestionLookup(Protocol):
     """The subset of SuggestionService needed to resolve a round's
-    candidates and winner(s) to their WatchItems.
+    candidates and winner(s) to their WatchItems, and its collection to a
+    display name.
 
     Kept minimal and Protocol-based, matching the project's existing
     dependency pattern (see WinningSuggestionLookup in
@@ -49,6 +51,8 @@ class SuggestionLookup(Protocol):
     """
 
     def get_suggestion(self, suggestion_id: int) -> Optional[WatchItem]: ...
+
+    def get_database(self, database_id: int) -> Optional[SuggestionDatabase]: ...
 
 
 class ResultsMessageRecorder(Protocol):
@@ -83,6 +87,29 @@ def _resolve_watch_items(suggestion_service: SuggestionLookup, suggestion_ids: L
         if watch_item is not None:
             resolved.append(watch_item)
     return resolved
+
+
+def _resolve_collection_display_name(
+    suggestion_service: SuggestionLookup, database_id: Optional[int]
+) -> str:
+    """Resolve a round's collection to a display name for the completion
+    announcement.
+
+    Uses the collection's stored name (SuggestionDatabase.name) rather
+    than live-resolving its current Discord channel name: unlike bot.py's
+    _resolve_collection_name, this module deliberately has no discord.Guild
+    dependency (see the module docstring's circular-import constraint,
+    and DiscordChannelMessenger's own minimal, channel-only shape), so it
+    follows that same helper's documented fallback path -- the stored
+    name -- rather than adding a new Discord lookup solely for this one
+    line. Falls back to "Unknown" when the round predates collection
+    association (database_id is None) or the collection no longer exists.
+    """
+    if database_id is not None:
+        database = suggestion_service.get_database(database_id)
+        if database is not None:
+            return database.name
+    return "Unknown"
 
 
 async def _resolve_channel(messenger: DiscordChannelMessenger, channel_id: int):
@@ -134,7 +161,7 @@ async def finalize_vote_completion(
          disabled -- done before the announcement is sent so the
          historical record is accurate even if sending the announcement
          itself fails.
-      2. Post the results announcement (text + "About Tonight's Pick"
+      2. Post the results announcement (text + "About the Winner"
          embed(s)) to the round's channel -- the single new public
          message this produces.
       3. Persist the announcement's message reference via
@@ -186,8 +213,15 @@ async def finalize_vote_completion(
         return
 
     original_vote_link = build_vote_link(vote_round)
+    collection_name = _resolve_collection_display_name(suggestion_service, vote_round.database_id)
     announcement_text = build_vote_completion_announcement(
-        vote_round, candidates, winning_items, result.standings, result.total_votes_cast, original_vote_link
+        vote_round,
+        candidates,
+        winning_items,
+        result.standings,
+        result.total_votes_cast,
+        original_vote_link,
+        collection_name,
     )
     embeds = build_vote_results_embeds(winning_items, result.standings)
 
