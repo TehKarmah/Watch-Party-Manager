@@ -841,3 +841,221 @@ class VoteServiceDatabaseHistoryTests(unittest.TestCase):
         rounds = self.service.get_recent_closed_rounds(5, database_id=10)
 
         self.assertEqual([round_.id for round_ in rounds], [scoped.id])
+
+
+class VoteServiceCollectionScopingTests(unittest.TestCase):
+    """Release-blocking bug fix: voting must be scoped per collection
+    (VoteRound.database_id), not guild-wide -- a collection may have at
+    most one open round, but distinct collections' open rounds must
+    never block or interfere with each other.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.service = VoteService(
+            FakeSuggestionLookup(existing_ids=[1, 2, 3, 4, 5, 6, 7, 8]),
+            repository=JsonVoteRepository(Path(self._temp_dir.name) / "voting.json"),
+        )
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    # --- Two/three collections can each independently start a vote --------------
+
+    def test_two_collections_can_each_start_a_vote(self) -> None:
+        movies = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        tv_shows = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        self.assertTrue(movies.success)
+        self.assertTrue(tv_shows.success)
+        self.assertEqual(movies.vote_round.database_id, 10)
+        self.assertEqual(tv_shows.vote_round.database_id, 20)
+
+    def test_a_third_collection_can_also_start_a_vote(self) -> None:
+        self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        halloween = self.service.create_round(candidate_suggestion_ids=[5, 6], database_id=30)
+
+        self.assertTrue(halloween.success)
+        self.assertEqual(halloween.vote_round.database_id, 30)
+
+    def test_second_collections_vote_does_not_block_the_first(self) -> None:
+        first = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+
+        second = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        self.assertTrue(second.success)
+        # The first collection's round is still open and untouched.
+        self.assertEqual(self.service.get_round(first.vote_round.id).status, VoteRoundStatus.OPEN)
+
+    def test_a_collection_with_an_open_round_still_blocks_a_second_one_for_itself(self) -> None:
+        self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+
+        result = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=10)
+
+        self.assertFalse(result.success)
+        self.assertIn("already open", result.message)
+
+    def test_four_collections_can_all_have_independent_open_rounds_simultaneously(self) -> None:
+        results = [
+            self.service.create_round(candidate_suggestion_ids=[i, i + 1], database_id=database_id)
+            for i, database_id in zip((1, 3, 5, 7), (10, 20, 30, 40))
+        ]
+
+        self.assertTrue(all(result.success for result in results))
+        self.assertEqual(
+            {result.vote_round.database_id for result in results}, {10, 20, 30, 40}
+        )
+
+    # --- get_open_round(database_id) isolation -----------------------------------
+
+    def test_get_open_round_returns_only_the_matching_collections_round(self) -> None:
+        movies = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        found = self.service.get_open_round(10)
+
+        self.assertEqual(found.id, movies.vote_round.id)
+
+    def test_get_open_round_with_no_database_id_returns_any_open_round(self) -> None:
+        # Backward-compatible "no filter" behavior for existing callers
+        # that never pass database_id (see get_open_round's docstring).
+        movies = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+
+        found = self.service.get_open_round()
+
+        self.assertEqual(found.id, movies.vote_round.id)
+
+    def test_get_open_round_returns_none_for_a_collection_with_no_open_round(self) -> None:
+        self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+
+        self.assertIsNone(self.service.get_open_round(999))
+
+    # --- get_open_rounds() (restart restoration) ----------------------------------
+
+    def test_get_open_rounds_returns_every_open_round_across_collections(self) -> None:
+        movies = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        tv_shows = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        open_rounds = self.service.get_open_rounds()
+
+        self.assertEqual(
+            {round_.id for round_ in open_rounds}, {movies.vote_round.id, tv_shows.vote_round.id}
+        )
+
+    def test_get_open_rounds_excludes_closed_and_cancelled_rounds(self) -> None:
+        closed = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        self.service.close_round(closed.vote_round.id)
+        cancelled = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+        self.service.cancel_round(cancelled.vote_round.id)
+        still_open = self.service.create_round(candidate_suggestion_ids=[5, 6], database_id=30)
+
+        open_rounds = self.service.get_open_rounds()
+
+        self.assertEqual([round_.id for round_ in open_rounds], [still_open.vote_round.id])
+
+    def test_get_open_rounds_is_empty_when_nothing_is_open(self) -> None:
+        self.assertEqual(self.service.get_open_rounds(), [])
+
+    # --- get_latest_round(database_id) isolation -----------------------------------
+
+    def test_get_latest_round_scoped_to_a_collection_ignores_other_collections_newer_rounds(self) -> None:
+        movies_first = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        self.service.close_round(movies_first.vote_round.id)
+        # A newer round for a DIFFERENT collection must not shadow the result.
+        self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        latest_for_movies = self.service.get_latest_round(10)
+
+        self.assertEqual(latest_for_movies.id, movies_first.vote_round.id)
+
+    def test_get_latest_round_scoped_to_a_collection_prefers_its_own_newest_round(self) -> None:
+        movies_first = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        self.service.close_round(movies_first.vote_round.id)
+        movies_second = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=10)
+
+        latest_for_movies = self.service.get_latest_round(10)
+
+        self.assertEqual(latest_for_movies.id, movies_second.vote_round.id)
+
+    def test_get_latest_round_returns_none_for_a_collection_with_no_rounds(self) -> None:
+        self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+
+        self.assertIsNone(self.service.get_latest_round(999))
+
+    # --- get_open_round_for_suggestion / cast_vote routing -------------------------
+
+    def test_get_open_round_for_suggestion_finds_the_round_that_nominated_it(self) -> None:
+        movies = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        found = self.service.get_open_round_for_suggestion(2)
+
+        self.assertEqual(found.id, movies.vote_round.id)
+
+    def test_get_open_round_for_suggestion_returns_none_when_no_round_nominated_it(self) -> None:
+        self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        self.assertIsNone(self.service.get_open_round_for_suggestion(5))
+
+    def test_casting_a_vote_routes_to_the_correct_collections_round(self) -> None:
+        movies = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        tv_shows = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=3)
+
+        self.assertTrue(result.success)
+        self.assertIn(111, self.service.get_round(tv_shows.vote_round.id).votes)
+        self.assertNotIn(111, self.service.get_round(movies.vote_round.id).votes)
+
+    def test_votes_in_two_collections_by_the_same_member_are_independent(self) -> None:
+        movies = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        tv_shows = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        self.service.cast_vote(discord_user_id=111, suggestion_id=1)
+        self.service.cast_vote(discord_user_id=111, suggestion_id=3)
+
+        self.assertEqual(self.service.get_round(movies.vote_round.id).votes[111].suggestion_id, 1)
+        self.assertEqual(self.service.get_round(tv_shows.vote_round.id).votes[111].suggestion_id, 3)
+
+    def test_voting_for_a_suggestion_not_nominated_anywhere_is_rejected(self) -> None:
+        self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        result = self.service.cast_vote(discord_user_id=111, suggestion_id=5)
+
+        self.assertFalse(result.success)
+        self.assertIn("not a nominee", result.message)
+
+    # --- Closing one collection's round leaves others untouched --------------------
+
+    def test_closing_one_collections_round_leaves_others_open(self) -> None:
+        movies = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        tv_shows = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        self.service.close_round(movies.vote_round.id)
+
+        self.assertEqual(self.service.get_round(movies.vote_round.id).status, VoteRoundStatus.CLOSED)
+        self.assertEqual(self.service.get_round(tv_shows.vote_round.id).status, VoteRoundStatus.OPEN)
+        self.assertEqual(self.service.get_open_round(20).id, tv_shows.vote_round.id)
+
+    def test_closing_one_collections_round_lets_it_start_a_new_one_without_affecting_others(self) -> None:
+        movies = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        tv_shows = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+        self.service.close_round(movies.vote_round.id)
+
+        new_movies_round = self.service.create_round(candidate_suggestion_ids=[5, 6], database_id=10)
+
+        self.assertTrue(new_movies_round.success)
+        self.assertEqual(self.service.get_round(tv_shows.vote_round.id).status, VoteRoundStatus.OPEN)
+
+    def test_cancelling_one_collections_round_leaves_others_open(self) -> None:
+        movies = self.service.create_round(candidate_suggestion_ids=[1, 2], database_id=10)
+        tv_shows = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+
+        self.service.cancel_round(movies.vote_round.id)
+
+        self.assertEqual(self.service.get_round(movies.vote_round.id).status, VoteRoundStatus.CANCELLED)
+        self.assertEqual(self.service.get_round(tv_shows.vote_round.id).status, VoteRoundStatus.OPEN)

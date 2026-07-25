@@ -46,7 +46,7 @@ class MembershipRequest:
     Approve/Deny buttons live on, so a persistent view can be
     re-registered for every still-pending request after a bot restart
     (see bot.py's restore_persistent_membership_approval_views, mirroring
-    restore_persistent_voting_view's exact approach).
+    restore_persistent_voting_views' exact approach).
     """
 
     request_id: int

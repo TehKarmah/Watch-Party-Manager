@@ -85,7 +85,10 @@ class VoteService:
     """Manages vote rounds and votes, persisted through a vote repository.
 
     Business rules enforced here:
-      - Only one round may be open at a time.
+      - Only one round may be open at a time per collection (VoteRound.database_id)
+        -- see create_round. A round with no collection (database_id=None,
+        e.g. a guild with no collections configured at all) is scoped the
+        same way: at most one such round open at a time.
       - A member has at most one active vote per round.
       - A member may change that vote at most once (MAX_VOTE_CHANGES).
       - Voting for the suggestion a member already voted for is a no-op:
@@ -144,12 +147,13 @@ class VoteService:
                 to use the guild default.
 
         Returns:
-            VoteRoundResult. Fails if a round is already open (only one
-            round may be open at a time), or if there currently aren't
-            enough suggestions to choose between.
+            VoteRoundResult. Fails if a round is already open *for this
+            collection* (database_id) -- other collections' open rounds
+            never block this one -- or if there currently aren't enough
+            suggestions to choose between.
         """
-        if self.get_open_round() is not None:
-            return VoteRoundResult(success=False, message="A voting round is already open.")
+        if self.get_open_round(database_id) is not None:
+            return VoteRoundResult(success=False, message="A voting round is already open for this collection.")
 
         if candidate_suggestion_ids is not None:
             candidate_ids = list(candidate_suggestion_ids)
@@ -201,31 +205,101 @@ class VoteService:
             vote_round=new_round,
         )
 
-    def get_open_round(self) -> Optional[VoteRound]:
-        """Get the currently open voting round, if any.
+    def get_open_round(self, database_id: Optional[int] = None) -> Optional[VoteRound]:
+        """Get a currently open voting round, if any.
+
+        Args:
+            database_id: The collection to scope the lookup to. A
+                collection may have at most one open round at a time
+                (enforced by create_round), so this always returns that
+                single round when one exists. Omitted (the default)
+                preserves this method's original, pre-collection-scoping
+                behavior of returning whichever round is open with no
+                regard to collection -- safe for legacy/no-collection
+                context, where at most one round can exist anyway, and
+                for existing callers/tests that only ever have one round
+                open at a time.
 
         Returns:
-            The open VoteRound, or None if no round is open.
+            The matching open VoteRound, or None if none is open.
         """
         for vote_round in self._rounds.values():
-            if vote_round.status == VoteRoundStatus.OPEN:
+            if vote_round.status != VoteRoundStatus.OPEN:
+                continue
+            if database_id is None or vote_round.database_id == database_id:
                 return vote_round
         return None
 
-    def get_latest_round(self) -> Optional[VoteRound]:
+    def get_open_rounds(self) -> List[VoteRound]:
+        """Get every currently open voting round, across every collection.
+
+        Used by restart restoration (see bot.py's
+        restore_persistent_voting_views), which must re-register
+        interactive button handling for each collection's open round
+        independently -- unlike get_open_round(), this never picks just
+        one.
+
+        Returns:
+            Every OPEN VoteRound, in no particular order.
+        """
+        return [vote_round for vote_round in self._rounds.values() if vote_round.status == VoteRoundStatus.OPEN]
+
+    def get_open_round_for_suggestion(self, suggestion_id: int) -> Optional[VoteRound]:
+        """Get the open round a given suggestion is actually being voted on in.
+
+        Interactive voting's nominee buttons (see bot.py's
+        handle_nominee_vote) only ever carry a suggestion_id, never a
+        round_id -- Discord's persistent-view custom IDs were never
+        changed to encode one. Since a suggestion belongs to exactly one
+        collection, and a round's candidate_suggestion_ids is the exact
+        nominee roster WASH Crew selected for it, this is a safe and
+        precise way to recover which round a specific vote button
+        belongs to even while multiple collections each have their own
+        open round: the one (and only one) open round that actually
+        nominated this suggestion.
+
+        A round created with no candidate list at all (candidate_suggestion_ids
+        empty -- a legacy/no-collection-context round; see create_round)
+        is treated as matching any suggestion, exactly mirroring
+        cast_vote's own "empty list means unrestricted" rule.
+
+        Returns:
+            The matching open VoteRound, or None if no open round
+            nominated this suggestion.
+        """
+        for vote_round in self._rounds.values():
+            if vote_round.status != VoteRoundStatus.OPEN:
+                continue
+            if not vote_round.candidate_suggestion_ids or suggestion_id in vote_round.candidate_suggestion_ids:
+                return vote_round
+        return None
+
+    def get_latest_round(self, database_id: Optional[int] = None) -> Optional[VoteRound]:
         """Get the most recently created voting round, open or closed.
 
         Round IDs are assigned sequentially and never reused, so the round
         with the highest ID is always the most recently created one. This
         is what /vote_status shows when no round ID is specified.
 
+        Args:
+            database_id: The collection to scope the lookup to -- the
+                most recently created round belonging to that collection.
+                Omitted (the default) preserves this method's original,
+                pre-collection-scoping behavior of considering every round
+                regardless of collection.
+
         Returns:
-            The most recently created VoteRound, or None if no round has
-            ever been created.
+            The most recently created matching VoteRound, or None if no
+            round has ever been created (or none matches database_id).
         """
-        if not self._rounds:
+        candidates = (
+            self._rounds.values()
+            if database_id is None
+            else [vote_round for vote_round in self._rounds.values() if vote_round.database_id == database_id]
+        )
+        if not candidates:
             return None
-        return max(self._rounds.values(), key=lambda vote_round: vote_round.id)
+        return max(candidates, key=lambda vote_round: vote_round.id)
 
     def get_recent_closed_rounds(
         self, limit: int, database_id: Optional[int] = None
@@ -367,9 +441,19 @@ class VoteService:
         Returns:
             VoteResult indicating success or failure.
         """
-        vote_round = self.get_open_round()
+        vote_round = self.get_open_round_for_suggestion(suggestion_id)
         if vote_round is None:
-            return VoteResult(success=False, message="There's no open voting round right now.")
+            # No open round nominated this suggestion -- distinguish "no
+            # round is open at all" from "a round (or rounds) is open,
+            # just not for this suggestion" (e.g. a different collection's
+            # round, or this round's own candidate list excludes it),
+            # preserving the specific messages each case had before
+            # multiple concurrently-open rounds were possible.
+            if not self.get_open_rounds():
+                return VoteResult(success=False, message="There's no open voting round right now.")
+            if not self._suggestion_lookup.suggestion_exists(suggestion_id):
+                return VoteResult(success=False, message="That suggestion ID doesn't exist.")
+            return VoteResult(success=False, message="That suggestion is not a nominee in any open voting round.")
 
         if not self._suggestion_lookup.suggestion_exists(suggestion_id):
             return VoteResult(success=False, message="That suggestion ID doesn't exist.")

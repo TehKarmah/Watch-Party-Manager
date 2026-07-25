@@ -247,6 +247,41 @@ class FinalizeVoteCompletionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Suggested by: <@777>", channel.sent_messages[0]["content"])
 
+    async def test_finalizing_one_collections_round_announces_it_and_leaves_the_others_untouched(self) -> None:
+        # Release-blocking bug fix: with two collections each having their
+        # own open round, closing/announcing one must reference the
+        # correct collection and never disturb the other's still-open round.
+        movies = self.suggestion_service.create_database("Movies", guild_id=100, channel_id=200).database
+        tv_shows = self.suggestion_service.create_database("TV Shows", guild_id=100, channel_id=210).database
+        breaking_bad = self.suggestion_service.suggest("Breaking Bad", database_id=tv_shows.database_id).watch_item
+        the_wire = self.suggestion_service.suggest("The Wire", database_id=tv_shows.database_id).watch_item
+
+        movies_round = self._open_round(database_id=movies.database_id, channel_id=200, message_id=901)
+        tv_round = self.vote_service.create_round(
+            visibility=VoteVisibility.VISIBLE,
+            closes_at=datetime.now(timezone.utc) + timedelta(days=1),
+            candidate_suggestion_ids=[breaking_bad.id, the_wire.id],
+            database_id=tv_shows.database_id,
+        ).vote_round
+        self.vote_service.attach_message_reference(tv_round.id, guild_id=100, channel_id=210, message_id=902)
+
+        self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
+        result = self._complete(movies_round.id)
+        message = FakeVotingMessage()
+        channel = FakeChannel(message)
+        bot = FakeBot(channel)
+
+        await finalize_vote_completion(self.vote_service, self.suggestion_service, bot, result)
+
+        self.assertIn("Collection: Movies", channel.sent_messages[0]["content"])
+        self.assertNotIn("TV Shows", channel.sent_messages[0]["content"])
+        # The TV Shows round is completely unaffected -- still open, no
+        # results announcement of its own was ever sent.
+        still_open = self.vote_service.get_round(tv_round.id)
+        self.assertEqual(still_open.status.value, "open")
+        self.assertIsNone(still_open.results_message_id)
+        self.assertEqual(len(channel.sent_messages), 1)
+
     # --- Original voting post update -----------------------------------------------
 
     async def test_original_post_is_marked_closed_with_disabled_buttons(self) -> None:

@@ -298,7 +298,7 @@ class WatchPartyBot(commands.Bot):
         self.watch_party_repository = JsonWatchPartyRepository()
         self.scheduler_repository = JsonSchedulerRepository(Path("data") / "scheduled_jobs.json")
         self.backup_service = BackupService()
-        self.interactive_voting_restored = False
+        self.interactive_voting_restored = 0
         self.suggestion_views_restored = 0
         self.scheduler_host = SchedulerHost.from_json_file(
             Path("data") / "scheduled_jobs.json"
@@ -606,109 +606,11 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="vote_status")
         async def vote_status(interaction: discord.Interaction) -> None:
-            permission = self.permission_service.require_wash_crew(interaction.user)
-            if not permission.allowed:
-                await interaction.response.send_message(permission.message, ephemeral=True)
-                return
-            message = perform_vote_status(
-                vote_service=self.vote_service,
-                suggestion_service=self.suggestion_service,
-            )
-            await interaction.response.send_message(message, ephemeral=True)
+            await handle_vote_status(interaction, self)
 
         @self.tree.command(name="edit_vote")
         async def edit_vote(interaction: discord.Interaction) -> None:
-            message, ephemeral, vote_round = perform_edit_vote_open(
-                vote_service=self.vote_service,
-                suggestion_service=self.suggestion_service,
-                user=interaction.user,
-                wash_crew_role_id=self.wash_crew_role_id,
-            )
-            if vote_round is None:
-                await interaction.response.send_message(message, ephemeral=ephemeral)
-                return
-
-            round_id = vote_round.id
-
-            async def on_change_end_time(button_interaction: discord.Interaction) -> None:
-                async def on_modal_submit(
-                    modal_interaction: discord.Interaction, when_text: str
-                ) -> None:
-                    await handle_change_vote_end_time_completion(
-                        modal_interaction,
-                        vote_service=self.vote_service,
-                        suggestion_service=self.suggestion_service,
-                        wash_crew_role_id=self.wash_crew_role_id,
-                        round_id=round_id,
-                        when=when_text,
-                        bot=self,
-                        scheduler_service=self.scheduler_host.scheduler_service,
-                        guild_configuration_repository=self.guild_configuration_repository,
-                    )
-
-                await button_interaction.response.send_modal(
-                    EditVoteEndTimeModal(
-                        on_modal_submit,
-                        current_value=format_datetime_for_display(vote_round.closes_at),
-                    )
-                )
-
-            async def on_end_now(button_interaction: discord.Interaction) -> None:
-                async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-                    await handle_end_vote_now_completion(
-                        confirm_interaction,
-                        vote_completion_service=self.vote_completion_service,
-                        vote_service=self.vote_service,
-                        suggestion_service=self.suggestion_service,
-                        wash_crew_role_id=self.wash_crew_role_id,
-                        round_id=round_id,
-                        bot=self,
-                        scheduler_service=self.scheduler_host.scheduler_service,
-                    )
-
-                async def on_abort(abort_interaction: discord.Interaction) -> None:
-                    await abort_interaction.response.send_message(
-                        "No changes were made.", ephemeral=True
-                    )
-
-                confirmation_view = EditVoteConfirmationView(
-                    confirm_label="End Now", on_confirm=on_confirm, on_abort=on_abort
-                )
-                await button_interaction.response.send_message(
-                    f"Are you sure you want to end voting round {round_id} now? "
-                    "This cannot be undone.",
-                    view=confirmation_view,
-                    ephemeral=True,
-                )
-
-            async def on_cancel_vote(button_interaction: discord.Interaction) -> None:
-                async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-                    await handle_cancel_vote_now_completion(
-                        confirm_interaction,
-                        vote_service=self.vote_service,
-                        wash_crew_role_id=self.wash_crew_role_id,
-                        round_id=round_id,
-                        bot=self,
-                        scheduler_service=self.scheduler_host.scheduler_service,
-                    )
-
-                async def on_abort(abort_interaction: discord.Interaction) -> None:
-                    await abort_interaction.response.send_message(
-                        "No changes were made.", ephemeral=True
-                    )
-
-                confirmation_view = EditVoteConfirmationView(
-                    confirm_label="Cancel Vote", on_confirm=on_confirm, on_abort=on_abort
-                )
-                await button_interaction.response.send_message(
-                    f"Are you sure you want to cancel voting round {round_id}? "
-                    "This cannot be undone.",
-                    view=confirmation_view,
-                    ephemeral=True,
-                )
-
-            view = EditVoteManagementView(on_change_end_time, on_end_now, on_cancel_vote)
-            await interaction.response.send_message(message, view=view, ephemeral=ephemeral)
+            await handle_edit_vote(interaction, self)
 
         @self.tree.command(name="reject")
         async def reject(interaction: discord.Interaction, suggestion_id: int) -> None:
@@ -894,7 +796,7 @@ class WatchPartyBot(commands.Bot):
         # the same due-job check scheduler_host.start() below runs every
         # poll_interval_seconds; running it once synchronously here first
         # guarantees it has already closed an overdue round before
-        # restore_persistent_voting_view() reads current open-round state,
+        # restore_persistent_voting_views() reads current open-round state,
         # rather than racing scheduler_host.start()'s background task for
         # its first turn on the event loop.
         try:
@@ -902,7 +804,7 @@ class WatchPartyBot(commands.Bot):
         except Exception:
             logger.exception("Error while checking for due scheduled jobs during startup")
 
-        self.interactive_voting_restored = restore_persistent_voting_view(
+        self.interactive_voting_restored = restore_persistent_voting_views(
             bot=self,
             vote_service=self.vote_service,
             suggestion_service=self.suggestion_service,
@@ -942,14 +844,14 @@ class WatchPartyBot(commands.Bot):
         snapshot = self.statistics_service.snapshot()
         logger.info(
             "Startup summary: %s database(s) (%s active), %s watch item(s), "
-            "%s active suggestion(s), open voting round: %s, interactive controls restored: %s, "
+            "%s active suggestion(s), %s open voting round(s), %s interactive voting view(s) restored, "
             "%s suggestion view(s) restored",
             snapshot.total_databases,
             snapshot.active_databases,
             snapshot.total_watch_items,
             snapshot.active_suggestions,
-            "yes" if snapshot.open_vote_rounds else "no",
-            "yes" if self.interactive_voting_restored else "no",
+            snapshot.open_vote_rounds,
+            self.interactive_voting_restored,
             self.suggestion_views_restored,
         )
         logger.info("Nominee selector initialized")
@@ -3559,7 +3461,13 @@ async def handle_start_vote_completion(
         await interaction.response.send_message(message, ephemeral=True)
         return
 
-    vote_round = vote_service.get_open_round()
+    # Round IDs are sequential and never reused, and nothing else can run
+    # between create_round() succeeding (inside perform_start_vote above)
+    # and this line (no `await` in between) -- so the just-created round
+    # is always the highest-ID one, regardless of how many other
+    # collections also currently have their own round open. Safe and
+    # exact, unlike an unscoped "the open round" lookup would now be.
+    vote_round = vote_service.get_latest_round()
 
     # FR-015: schedule this round's future jobs (close_vote, and a
     # vote_reminder if enabled) now that it's confirmed created and
@@ -3687,7 +3595,11 @@ async def handle_customize_vote_submit(
     )
 
 
-def perform_vote_status(vote_service: VoteService, suggestion_service: SuggestionService) -> str:
+def perform_vote_status(
+    vote_service: VoteService,
+    suggestion_service: SuggestionService,
+    database_id: Optional[int] = None,
+) -> str:
     """Core logic for /vote_status, kept free of Discord objects entirely.
 
     Standings are shown when voting is visible, or once a blind round has
@@ -3696,11 +3608,17 @@ def perform_vote_status(vote_service: VoteService, suggestion_service: Suggestio
     Args:
         vote_service: The vote service to read round/standings from.
         suggestion_service: Used to report the current candidate count.
+        database_id: The collection to scope the lookup to -- shows that
+            collection's own most recent round rather than whichever
+            round happens to have the highest ID across every collection.
+            Optional so existing callers/tests without a resolved
+            collection keep working unchanged (see
+            VoteService.get_latest_round).
 
     Returns:
         The status message, or a clear "no round exists" message.
     """
-    vote_round = vote_service.get_latest_round()
+    vote_round = vote_service.get_latest_round(database_id)
     if vote_round is None:
         return "There is no voting round yet."
 
@@ -3724,6 +3642,35 @@ def perform_vote_status(vote_service: VoteService, suggestion_service: Suggestio
     )
     candidates = get_round_candidates(suggestion_service, vote_round)
     return build_vote_status_text(vote_round, candidate_count, standings, standings_error, candidates)
+
+
+async def handle_vote_status(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """Handle /vote_status: show the invoking collection's own vote status.
+
+    Contextual Collection Resolution: resolves which collection's round
+    to report on the same way every other collection-scoped command
+    does -- automatically when the channel unambiguously identifies one,
+    a "Which collection?" picker when it doesn't, a clear error when no
+    collection is configured at all (see resolve_database_then).
+    """
+    permission = bot.permission_service.require_wash_crew(interaction.user)
+    if not permission.allowed:
+        await interaction.response.send_message(permission.message, ephemeral=True)
+        return
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    async def on_resolved(resolved_interaction: discord.Interaction, database: SuggestionDatabase) -> None:
+        message = perform_vote_status(
+            vote_service=bot.vote_service,
+            suggestion_service=bot.suggestion_service,
+            database_id=database.database_id,
+        )
+        await resolved_interaction.response.send_message(message, ephemeral=True)
+
+    await resolve_database_then(interaction, bot, guild_id, interaction.channel_id, on_resolved)
 
 
 def build_vote_confirmation(
@@ -3812,7 +3759,12 @@ def perform_vote(
         member's own vote, and any standings shown alongside it, are for
         their eyes only.
     """
-    open_round_before = vote_service.get_open_round()
+    # Resolved by suggestion_id, not "the" open round -- a nominee button
+    # only ever carries suggestion_id (see NomineeButton.custom_id), and
+    # with multiple collections each possibly having their own open
+    # round, this is the only way to know which one this click belongs
+    # to (see VoteService.get_open_round_for_suggestion's docstring).
+    open_round_before = vote_service.get_open_round_for_suggestion(suggestion_id)
     had_existing_vote = open_round_before is not None and user_id in open_round_before.votes
 
     result = vote_service.cast_vote(discord_user_id=user_id, suggestion_id=suggestion_id)
@@ -3821,7 +3773,7 @@ def perform_vote(
 
     # cast_vote() succeeded, so there is now an open round with this
     # member's vote recorded in it.
-    vote_round = vote_service.get_open_round()
+    vote_round = vote_service.get_open_round_for_suggestion(suggestion_id)
     vote_record = vote_round.votes[user_id]
     is_first_vote = not had_existing_vote
     remaining_changes = MAX_VOTE_CHANGES - vote_record.changes_used
@@ -3862,54 +3814,67 @@ def build_voting_view(
     return VotingView(candidates, on_vote=on_vote_click)
 
 
-def restore_persistent_voting_view(
+def restore_persistent_voting_views(
     bot: object,
     vote_service: VoteService,
     suggestion_service: SuggestionService,
     permission_service: Optional[PermissionService] = None,
-) -> bool:
-    """Restore button handling for the currently open voting post.
+) -> int:
+    """Restore button handling for every currently open voting post.
 
-    Discord persistent views must be re-registered each time the bot starts.
-    The round and its Discord message reference are already persisted, so
-    this function reconstructs the same stable button custom IDs and binds
-    the view to the original message.
+    Discord persistent views must be re-registered each time the bot
+    starts. Each collection may have its own independently open round
+    (see VoteService.get_open_rounds), so every one of them needs its own
+    restored view -- restoring only the first would silently leave every
+    other collection's voting buttons dead until its round happens to be
+    the one restored after a future restart. Each round's own Discord
+    message reference is already persisted, so this reconstructs the
+    same stable button custom IDs and binds a view to each original
+    message independently; one round failing to restore (e.g. a missing
+    message ID or no resolvable nominees) never prevents the others from
+    being restored.
 
     Returns:
-        True when a view was registered, otherwise False.
+        The number of rounds whose interactive voting controls were
+        successfully restored.
     """
-    vote_round = vote_service.get_open_round()
-    if vote_round is None:
+    open_rounds = vote_service.get_open_rounds()
+    if not open_rounds:
         logger.debug("No open voting round found; no persistent view to restore")
-        return False
-    if vote_round.message_id is None:
-        logger.warning(
-            "Open voting round %s has no message ID; interactive buttons cannot be restored",
-            vote_round.id,
-        )
-        return False
+        return 0
 
-    candidates = get_round_candidates(suggestion_service, vote_round)
-    if not candidates:
-        logger.warning(
-            "Open voting round %s has no resolvable nominees; interactive buttons cannot be restored",
-            vote_round.id,
-        )
-        return False
+    restored = 0
+    for vote_round in open_rounds:
+        if vote_round.message_id is None:
+            logger.warning(
+                "Open voting round %s has no message ID; interactive buttons cannot be restored",
+                vote_round.id,
+            )
+            continue
 
-    view = build_voting_view(
-        vote_service,
-        suggestion_service,
-        candidates,
-        permission_service=permission_service,
-    )
-    bot.add_view(view, message_id=vote_round.message_id)
-    logger.info(
-        "Restored interactive voting controls for round %s on message %s",
-        vote_round.id,
-        vote_round.message_id,
-    )
-    return True
+        candidates = get_round_candidates(suggestion_service, vote_round)
+        if not candidates:
+            logger.warning(
+                "Open voting round %s has no resolvable nominees; interactive buttons cannot be restored",
+                vote_round.id,
+            )
+            continue
+
+        view = build_voting_view(
+            vote_service,
+            suggestion_service,
+            candidates,
+            permission_service=permission_service,
+        )
+        bot.add_view(view, message_id=vote_round.message_id)
+        logger.info(
+            "Restored interactive voting controls for round %s on message %s",
+            vote_round.id,
+            vote_round.message_id,
+        )
+        restored += 1
+
+    return restored
 
 
 def restore_persistent_membership_approval_views(bot: "WatchPartyBot", membership_service: MembershipService) -> int:
@@ -3918,7 +3883,7 @@ def restore_persistent_membership_approval_views(bot: "WatchPartyBot", membershi
     Every approval-request message is created fresh by this feature with
     its buttons already attached (unlike suggestion posts, which predate
     their button and needed a migration path) -- so, exactly like
-    restore_persistent_voting_view, this only needs to re-register
+    restore_persistent_voting_views, this only needs to re-register
     callback routing via bot.add_view(), never edit a message.
 
     Returns:
@@ -4337,7 +4302,10 @@ async def handle_nominee_vote(
     message, ephemeral = perform_vote(vote_service, interaction.user.id, suggestion_id, suggestion_service)
     await interaction.response.send_message(message, ephemeral=ephemeral)
 
-    vote_round = vote_service.get_open_round()
+    # Resolved by suggestion_id (see perform_vote above) so this always
+    # refreshes the post the click actually happened on, never a
+    # different collection's concurrently-open round.
+    vote_round = vote_service.get_open_round_for_suggestion(suggestion_id)
     if vote_round is not None and vote_round.visibility == VoteVisibility.VISIBLE:
         await refresh_voting_post(interaction, vote_service, suggestion_service, vote_round)
 
@@ -4428,6 +4396,7 @@ def perform_edit_vote_open(
     suggestion_service: SuggestionService,
     user: object,
     wash_crew_role_id: Optional[int],
+    database_id: Optional[int] = None,
 ) -> tuple[str, bool, Optional[VoteRound]]:
     """Core logic for /edit_vote, kept free of Discord objects except `user`.
 
@@ -4438,6 +4407,12 @@ def perform_edit_vote_open(
         user: The member invoking the command.
         wash_crew_role_id: The configured WASH Crew role ID, or None if
             unconfigured.
+        database_id: The collection whose open round should be managed.
+            Optional so existing callers/tests without a resolved
+            collection keep working unchanged (see
+            VoteService.get_open_round) -- the Discord layer always
+            resolves this via contextual collection resolution before
+            calling here (see bot.py's /edit_vote command).
 
     Returns:
         A (message, ephemeral, vote_round) tuple. vote_round is set only
@@ -4455,7 +4430,7 @@ def perform_edit_vote_open(
     if not is_wash_crew_member(user, wash_crew_role_id):
         return "You need the WASH Crew role to manage voting rounds.", True, None
 
-    vote_round = vote_service.get_open_round()
+    vote_round = vote_service.get_open_round(database_id)
     if vote_round is None:
         return "There's no active voting round to manage.", True, None
 
@@ -4465,6 +4440,112 @@ def perform_edit_vote_open(
         else suggestion_service.suggestion_count()
     )
     return build_edit_vote_management_text(vote_round, candidate_count), True, vote_round
+
+
+async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """Handle /edit_vote: manage the invoking collection's own open round.
+
+    Contextual Collection Resolution: resolves which collection's round
+    to manage the same way every other collection-scoped command does --
+    automatically when the channel unambiguously identifies one, a
+    "Which collection?" picker when it doesn't, a clear error when no
+    collection is configured at all (see resolve_database_then). The
+    WASH Crew permission check (inside perform_edit_vote_open) still
+    happens after resolution, mirroring /start_vote's own established
+    ordering.
+    """
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    async def on_resolved(resolved_interaction: discord.Interaction, database: SuggestionDatabase) -> None:
+        message, ephemeral, vote_round = perform_edit_vote_open(
+            vote_service=bot.vote_service,
+            suggestion_service=bot.suggestion_service,
+            user=resolved_interaction.user,
+            wash_crew_role_id=bot.wash_crew_role_id,
+            database_id=database.database_id,
+        )
+        if vote_round is None:
+            await resolved_interaction.response.send_message(message, ephemeral=ephemeral)
+            return
+
+        round_id = vote_round.id
+
+        async def on_change_end_time(button_interaction: discord.Interaction) -> None:
+            async def on_modal_submit(modal_interaction: discord.Interaction, when_text: str) -> None:
+                await handle_change_vote_end_time_completion(
+                    modal_interaction,
+                    vote_service=bot.vote_service,
+                    suggestion_service=bot.suggestion_service,
+                    wash_crew_role_id=bot.wash_crew_role_id,
+                    round_id=round_id,
+                    when=when_text,
+                    bot=bot,
+                    scheduler_service=bot.scheduler_host.scheduler_service,
+                    guild_configuration_repository=bot.guild_configuration_repository,
+                )
+
+            await button_interaction.response.send_modal(
+                EditVoteEndTimeModal(
+                    on_modal_submit,
+                    current_value=format_datetime_for_display(vote_round.closes_at),
+                )
+            )
+
+        async def on_end_now(button_interaction: discord.Interaction) -> None:
+            async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+                await handle_end_vote_now_completion(
+                    confirm_interaction,
+                    vote_completion_service=bot.vote_completion_service,
+                    vote_service=bot.vote_service,
+                    suggestion_service=bot.suggestion_service,
+                    wash_crew_role_id=bot.wash_crew_role_id,
+                    round_id=round_id,
+                    bot=bot,
+                    scheduler_service=bot.scheduler_host.scheduler_service,
+                )
+
+            async def on_abort(abort_interaction: discord.Interaction) -> None:
+                await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
+
+            confirmation_view = EditVoteConfirmationView(
+                confirm_label="End Now", on_confirm=on_confirm, on_abort=on_abort
+            )
+            await button_interaction.response.send_message(
+                f"Are you sure you want to end voting round {round_id} now? This cannot be undone.",
+                view=confirmation_view,
+                ephemeral=True,
+            )
+
+        async def on_cancel_vote(button_interaction: discord.Interaction) -> None:
+            async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+                await handle_cancel_vote_now_completion(
+                    confirm_interaction,
+                    vote_service=bot.vote_service,
+                    wash_crew_role_id=bot.wash_crew_role_id,
+                    round_id=round_id,
+                    bot=bot,
+                    scheduler_service=bot.scheduler_host.scheduler_service,
+                )
+
+            async def on_abort(abort_interaction: discord.Interaction) -> None:
+                await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
+
+            confirmation_view = EditVoteConfirmationView(
+                confirm_label="Cancel Vote", on_confirm=on_confirm, on_abort=on_abort
+            )
+            await button_interaction.response.send_message(
+                f"Are you sure you want to cancel voting round {round_id}? This cannot be undone.",
+                view=confirmation_view,
+                ephemeral=True,
+            )
+
+        view = EditVoteManagementView(on_change_end_time, on_end_now, on_cancel_vote)
+        await resolved_interaction.response.send_message(message, view=view, ephemeral=ephemeral)
+
+    await resolve_database_then(interaction, bot, guild_id, interaction.channel_id, on_resolved)
 
 
 def perform_change_vote_end_time(
@@ -7942,7 +8023,7 @@ async def handle_about(interaction: discord.Interaction, bot: "WatchPartyBot") -
         health = AboutHealth(
             discord_connected=bot.is_ready(),
             scheduler_running=bot.scheduler_host.is_running,
-            interactive_voting_restored=bot.interactive_voting_restored,
+            interactive_voting_restored=bool(bot.interactive_voting_restored),
             omdb_configured=bot.suggestion_input_service.is_omdb_configured,
         )
 

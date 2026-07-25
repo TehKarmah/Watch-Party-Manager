@@ -247,7 +247,7 @@ class VoteCommandTests(unittest.TestCase):
         message, ephemeral = self._start_vote()
 
         self.assertTrue(ephemeral)
-        self.assertEqual(message, "A voting round is already open.")
+        self.assertEqual(message, "A voting round is already open for this collection.")
 
     def test_confirmation_contains_the_expected_details(self) -> None:
         message, ephemeral = self._start_vote(visibility="blind", duration_hours=240)
