@@ -1,3 +1,4 @@
+<img width="2500" height="882" alt="WatchPartyManager_DiscordBanner" src="https://github.com/user-attachments/assets/b312f492-60fa-4ca1-8cea-d98e8b40d532" />
 # Watch Party Manager
 
 Watch Party Manager is a configurable, self-hosted Discord bot for managing recurring watch parties. The Discord assistant is named **WASH**, short for **Watch Party Administration & Scheduling Helper**.
