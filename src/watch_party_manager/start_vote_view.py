@@ -109,14 +109,14 @@ class CustomizeVoteModal(discord.ui.Modal):
         default_duration_display: str = "",
         default_visibility_display: str = "",
         default_reminder_enabled_display: str = "",
-        default_reminder_hours_display: str = "",
+        default_reminder_minutes_display: str = "",
     ) -> None:
         """Initialize the modal.
 
         Args:
             on_submit: Called with (interaction, nominee_count_text,
                 duration_text, visibility_text, reminder_enabled_text,
-                reminder_hours_text) once submitted.
+                reminder_minutes_text) once submitted.
             default_nominee_count_display: The guild's actual configured
                 candidate count (e.g. "5"), shown in the field's
                 placeholder so "leave blank" never leaves WASH Crew
@@ -153,19 +153,19 @@ class CustomizeVoteModal(discord.ui.Modal):
             required=False,
             placeholder=_blank_default_placeholder(default_reminder_enabled_display),
         )
-        self.reminder_hours_input = discord.ui.TextInput(
-            label="Reminder hours before close (1-720)",
+        self.reminder_minutes_input = discord.ui.TextInput(
+            label="Reminder before close",
             required=False,
             placeholder=(
-                "e.g. 1, 4, 12, 24, or 48 -- blank uses the default"
-                + (f" ({default_reminder_hours_display})" if default_reminder_hours_display else "")
+                "e.g. 10m, 1h, 12h, 1d -- blank uses the default"
+                + (f" ({default_reminder_minutes_display})" if default_reminder_minutes_display else "")
             ),
         )
         self.add_item(self.nominee_count_input)
         self.add_item(self.duration_input)
         self.add_item(self.visibility_input)
         self.add_item(self.reminder_enabled_input)
-        self.add_item(self.reminder_hours_input)
+        self.add_item(self.reminder_minutes_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Forward the raw optional field values to the configured handler."""
@@ -175,5 +175,5 @@ class CustomizeVoteModal(discord.ui.Modal):
             self.duration_input.value or None,
             self.visibility_input.value or None,
             self.reminder_enabled_input.value or None,
-            self.reminder_hours_input.value or None,
+            self.reminder_minutes_input.value or None,
         )

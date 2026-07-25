@@ -266,16 +266,17 @@ class BotHelperTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_vote_duration_hours(721)
 
-    # --- Free-text duration parsing (Hour-Based Voting Durations) ------------------
+    # --- Free-text duration parsing (Requirement 3: Standardize Duration Syntax) ---
 
-    def test_parse_duration_text_bare_number_means_days(self) -> None:
-        # Backward compatible with this field's original meaning, before
-        # hour-based durations existed.
-        self.assertEqual(parse_duration_text_to_hours("7"), 168)
-        self.assertEqual(parse_duration_text_to_hours("1"), 24)
+    def test_parse_duration_text_requires_an_explicit_unit(self) -> None:
+        # Requirement 3 standardizes on one explicit-unit syntax
+        # everywhere -- the old "bare number means days" convenience is
+        # deliberately no longer accepted.
+        with self.assertRaises(ValueError):
+            parse_duration_text_to_hours("7")
 
     def test_parse_duration_text_accepts_hour_units(self) -> None:
-        for text in ("4h", "4hr", "4hrs", "4 hour", "4 hours", "4H"):
+        for text in ("4h", "4 hour", "4 hours", "4H"):
             with self.subTest(text=text):
                 self.assertEqual(parse_duration_text_to_hours(text), 4)
 
@@ -283,6 +284,11 @@ class BotHelperTests(unittest.TestCase):
         for text in ("3d", "3 day", "3 days", "3D"):
             with self.subTest(text=text):
                 self.assertEqual(parse_duration_text_to_hours(text), 72)
+
+    def test_parse_duration_text_accepts_week_units(self) -> None:
+        self.assertEqual(parse_duration_text_to_hours("1w"), 168)
+        self.assertEqual(parse_duration_text_to_hours("1 week"), 168)
+        self.assertEqual(parse_duration_text_to_hours("2 weeks"), 336)
 
     def test_parse_duration_text_accepts_one_hour(self) -> None:
         self.assertEqual(parse_duration_text_to_hours("1h"), 1)
@@ -298,9 +304,13 @@ class BotHelperTests(unittest.TestCase):
     def test_parse_duration_text_ignores_surrounding_whitespace(self) -> None:
         self.assertEqual(parse_duration_text_to_hours("  4h  "), 4)
 
-    def test_parse_duration_text_rejects_an_unsupported_unit(self) -> None:
+    def test_parse_duration_text_rejects_minutes_that_dont_land_on_a_whole_hour(self) -> None:
+        # Reminder-before-close and Shorten/Extend Vote accept minute
+        # precision (see test_duration_parser.py); a vote's own duration
+        # is still stored as whole hours, so a non-hour-aligned minute
+        # value must be rejected rather than silently rounded.
         with self.assertRaises(ValueError):
-            parse_duration_text_to_hours("3 weeks")
+            parse_duration_text_to_hours("90m")
 
     def test_parse_duration_text_rejects_a_fractional_value(self) -> None:
         with self.assertRaises(ValueError):

@@ -127,7 +127,7 @@ class VoteService:
         candidate_suggestion_ids: Optional[List[int]] = None,
         database_id: Optional[int] = None,
         reminder_enabled: Optional[bool] = None,
-        reminder_hours_before_close: Optional[int] = None,
+        reminder_minutes_before_close: Optional[int] = None,
     ) -> VoteRoundResult:
         """Open a new voting round.
 
@@ -142,8 +142,8 @@ class VoteService:
                 configured vote-ending reminder setting, or None to use
                 the guild default (see
                 scheduler.vote_scheduling.resolve_vote_reminder_settings).
-            reminder_hours_before_close: FR-027: a per-round override of
-                how many hours before closing the reminder fires, or None
+            reminder_minutes_before_close: FR-027: a per-round override of
+                how many minutes before closing the reminder fires, or None
                 to use the guild default.
 
         Returns:
@@ -194,7 +194,7 @@ class VoteService:
             candidate_suggestion_ids=candidate_ids,
             database_id=database_id,
             reminder_enabled=reminder_enabled,
-            reminder_hours_before_close=reminder_hours_before_close,
+            reminder_minutes_before_close=reminder_minutes_before_close,
         )
         self._next_round_id += 1
         self._rounds[new_round.id] = new_round

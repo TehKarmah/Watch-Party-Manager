@@ -50,7 +50,7 @@ from watch_party_manager.services.configuration_validation import (
     validate_channel_usable,
     validate_role_exists,
 )
-from watch_party_manager.services.duration_formatter import format_duration_hours
+from watch_party_manager.services.duration_formatter import format_duration_hours, format_duration_minutes
 from watch_party_manager.services.setup_wizard_service import (
     BACKUP_INTERVAL_DAYS_EXTRA_FIELD,
     BACKUP_RETENTION_COUNT_EXTRA_FIELD,
@@ -204,7 +204,8 @@ class ConfigService:
         vote_notifications = configuration.notifications.vote
         if vote_notifications.vote_ending_reminder:
             lines.append(
-                f"Reminder Defaults: Configured (enabled, {vote_notifications.reminder_hours_before_close}h before close)"
+                "Reminder Defaults: Configured (enabled, "
+                f"{format_duration_minutes(vote_notifications.reminder_minutes_before_close)} before close)"
             )
         else:
             lines.append("Reminder Defaults: Configured (disabled)")
@@ -473,7 +474,7 @@ class ConfigService:
     # --- Reminder Defaults ------------------------------------------------------------
 
     def set_reminder_defaults(
-        self, guild_id: int, enabled: bool, hours_before_close: int
+        self, guild_id: int, enabled: bool, minutes_before_close: int
     ) -> ConfigUpdateResult:
         configuration = self.get_configuration(guild_id)
         if configuration is None:
@@ -486,13 +487,13 @@ class ConfigService:
                 vote=replace(
                     configuration.notifications.vote,
                     vote_ending_reminder=enabled,
-                    reminder_hours_before_close=hours_before_close,
+                    reminder_minutes_before_close=minutes_before_close,
                 ),
             ),
         )
         self._guild_configuration_repository.save(updated)
         message = (
-            f"Reminder defaults updated: enabled, {hours_before_close}h before close."
+            f"Reminder defaults updated: enabled, {format_duration_minutes(minutes_before_close)} before close."
             if enabled
             else "Reminder defaults updated: disabled."
         )

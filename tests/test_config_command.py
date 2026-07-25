@@ -696,7 +696,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
         modal = interaction.response.sent_modal
         modal.candidate_count_input._value = "5"
-        modal.duration_input._value = "14"
+        modal.duration_input._value = "14h"
         modal.visibility_input._value = "visible"
 
         submit_interaction = FakeInteraction()
@@ -736,7 +736,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         await send_config_reminder_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
         modal = interaction.response.sent_modal
         self.assertEqual(modal.enabled_input.default, "yes")
-        self.assertEqual(modal.hours_input.default, "24")
+        self.assertEqual(modal.minutes_input.default, "1 day")
 
     async def test_reminder_defaults_submission_saves(self) -> None:
         self._seed_completed_setup()
@@ -748,7 +748,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         await send_config_reminder_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
         modal = interaction.response.sent_modal
         modal.enabled_input._value = "no"
-        modal.hours_input._value = "24"
+        modal.minutes_input._value = "1d"
 
         submit_interaction = FakeInteraction()
         await modal.on_submit(interaction=submit_interaction)

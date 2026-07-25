@@ -184,6 +184,27 @@ class GuildConfigurationRepository:
         return 24
 
     @staticmethod
+    def _resolve_reminder_minutes_before_close(vote_notice: dict[str, Any]) -> int:
+        """Minute-Precision Reminders: backward-compatible loading, mirroring
+        _resolve_duration_hours' exact pattern.
+
+        A file already written under the new schema has
+        "reminder_minutes_before_close" and is used directly. An older
+        file has only "reminder_hours_before_close" (a whole number of
+        hours) -- converted to the exact equivalent minute count
+        (hours * 60), never requiring a manual migration. A file with
+        neither key falls back to the current 24-hour (1440-minute)
+        default. The next save rewrites the record under
+        "reminder_minutes_before_close" only, so the legacy key is
+        dropped naturally rather than through a destructive migration.
+        """
+        if "reminder_minutes_before_close" in vote_notice:
+            return vote_notice["reminder_minutes_before_close"]
+        if "reminder_hours_before_close" in vote_notice:
+            return vote_notice["reminder_hours_before_close"] * 60
+        return 24 * 60
+
+    @staticmethod
     def _merge(extra: dict[str, Any], known: dict[str, Any]) -> dict[str, Any]:
         merged = copy.deepcopy(extra)
         merged.update(known)
@@ -230,7 +251,7 @@ class GuildConfigurationRepository:
                     "vote_started": c.notifications.vote.vote_started,
                     "vote_results": c.notifications.vote.vote_results,
                     "vote_ending_reminder": c.notifications.vote.vote_ending_reminder,
-                    "reminder_hours_before_close": c.notifications.vote.reminder_hours_before_close,
+                    "reminder_minutes_before_close": c.notifications.vote.reminder_minutes_before_close,
                 }),
                 "watch": cls._merge(c.notifications.watch.extra_fields, {
                     "enabled": c.notifications.watch.enabled,
@@ -332,8 +353,11 @@ class GuildConfigurationRepository:
                 vote=VoteNotificationsConfig(
                     vote_started=vote_notice.get("vote_started", True), vote_results=vote_notice.get("vote_results", True),
                     vote_ending_reminder=vote_notice.get("vote_ending_reminder", True),
-                    reminder_hours_before_close=vote_notice.get("reminder_hours_before_close", 24),
-                    extra_fields=cls._split_known(vote_notice, {"vote_started", "vote_results", "vote_ending_reminder", "reminder_hours_before_close"}),
+                    reminder_minutes_before_close=cls._resolve_reminder_minutes_before_close(vote_notice),
+                    extra_fields=cls._split_known(
+                        vote_notice,
+                        {"vote_started", "vote_results", "vote_ending_reminder", "reminder_minutes_before_close", "reminder_hours_before_close"},
+                    ),
                 ),
                 watch=WatchNotificationsConfig(
                     enabled=watch_notice.get("enabled", True), reminder_hours_before_watch=watch_notice.get("reminder_hours_before_watch", 1),

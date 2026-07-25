@@ -154,7 +154,7 @@ class BuildVoteReminderJobTests(unittest.TestCase):
         vote_round = make_vote_round(vote_id=7)
 
         job = build_vote_reminder_job(
-            vote_round, guild_id=100, reminder_enabled=True, reminder_hours_before_close=24
+            vote_round, guild_id=100, reminder_enabled=True, reminder_minutes_before_close=1440
         )
 
         self.assertIsNotNone(job)
@@ -166,7 +166,7 @@ class BuildVoteReminderJobTests(unittest.TestCase):
         vote_round = make_vote_round(closes_at=closes_at)
 
         job = build_vote_reminder_job(
-            vote_round, guild_id=100, reminder_enabled=True, reminder_hours_before_close=24
+            vote_round, guild_id=100, reminder_enabled=True, reminder_minutes_before_close=1440
         )
 
         self.assertEqual(job.run_at, closes_at - timedelta(hours=24))
@@ -175,7 +175,7 @@ class BuildVoteReminderJobTests(unittest.TestCase):
         vote_round = make_vote_round(vote_id=7)
 
         job = build_vote_reminder_job(
-            vote_round, guild_id=100, reminder_enabled=True, reminder_hours_before_close=24
+            vote_round, guild_id=100, reminder_enabled=True, reminder_minutes_before_close=1440
         )
 
         self.assertEqual(job.payload, {"vote_id": 7})
@@ -184,7 +184,7 @@ class BuildVoteReminderJobTests(unittest.TestCase):
         vote_round = make_vote_round()
 
         job = build_vote_reminder_job(
-            vote_round, guild_id=100, reminder_enabled=False, reminder_hours_before_close=24
+            vote_round, guild_id=100, reminder_enabled=False, reminder_minutes_before_close=1440
         )
 
         self.assertIsNone(job)
@@ -193,13 +193,13 @@ class BuildVoteReminderJobTests(unittest.TestCase):
         vote_round = VoteRound(id=1, closes_at=None, candidate_suggestion_ids=[1, 2])
 
         job = build_vote_reminder_job(
-            vote_round, guild_id=100, reminder_enabled=True, reminder_hours_before_close=24
+            vote_round, guild_id=100, reminder_enabled=True, reminder_minutes_before_close=1440
         )
 
         self.assertIsNone(job)
 
     def test_a_short_duration_round_with_a_long_lead_time_still_produces_a_job(self) -> None:
-        # reminder_hours_before_close is always positive, so run_at is
+        # reminder_minutes_before_close is always positive, so run_at is
         # always strictly before closes_at -- even here, where run_at
         # ends up in the past relative to now. SchedulerService's own
         # due-job polling already handles a past run_at correctly (it's
@@ -208,7 +208,7 @@ class BuildVoteReminderJobTests(unittest.TestCase):
         vote_round = make_vote_round(closes_at=closes_at)
 
         job = build_vote_reminder_job(
-            vote_round, guild_id=100, reminder_enabled=True, reminder_hours_before_close=24
+            vote_round, guild_id=100, reminder_enabled=True, reminder_minutes_before_close=1440
         )
 
         self.assertIsNotNone(job)
@@ -220,7 +220,7 @@ class BuildVoteScheduledJobsTests(unittest.TestCase):
         vote_round = make_vote_round(vote_id=7)
 
         jobs = build_vote_scheduled_jobs(
-            vote_round, guild_id=100, reminder_enabled=True, reminder_hours_before_close=24
+            vote_round, guild_id=100, reminder_enabled=True, reminder_minutes_before_close=1440
         )
 
         job_types = {job.job_type for job in jobs}
@@ -230,7 +230,7 @@ class BuildVoteScheduledJobsTests(unittest.TestCase):
         vote_round = make_vote_round()
 
         jobs = build_vote_scheduled_jobs(
-            vote_round, guild_id=100, reminder_enabled=False, reminder_hours_before_close=24
+            vote_round, guild_id=100, reminder_enabled=False, reminder_minutes_before_close=1440
         )
 
         self.assertEqual(len(jobs), 1)
@@ -240,7 +240,7 @@ class BuildVoteScheduledJobsTests(unittest.TestCase):
         vote_round = VoteRound(id=1, closes_at=None, candidate_suggestion_ids=[1, 2])
 
         jobs = build_vote_scheduled_jobs(
-            vote_round, guild_id=100, reminder_enabled=True, reminder_hours_before_close=24
+            vote_round, guild_id=100, reminder_enabled=True, reminder_minutes_before_close=1440
         )
 
         self.assertEqual(jobs, [])
@@ -249,7 +249,7 @@ class BuildVoteScheduledJobsTests(unittest.TestCase):
         vote_round = make_vote_round()
 
         jobs = build_vote_scheduled_jobs(
-            vote_round, guild_id=100, reminder_enabled=True, reminder_hours_before_close=24
+            vote_round, guild_id=100, reminder_enabled=True, reminder_minutes_before_close=1440
         )
 
         self.assertEqual(jobs[0].job_type, CLOSE_VOTE_JOB_TYPE)
@@ -266,33 +266,33 @@ class ResolveVoteReminderSettingsTests(unittest.TestCase):
         self._temp_dir.cleanup()
 
     def test_falls_back_to_documented_defaults_when_no_repository_is_given(self) -> None:
-        enabled, hours = resolve_vote_reminder_settings(None, guild_id=100)
+        enabled, minutes = resolve_vote_reminder_settings(None, guild_id=100)
 
         defaults = VoteNotificationsConfig()
         self.assertEqual(enabled, defaults.vote_ending_reminder)
-        self.assertEqual(hours, defaults.reminder_hours_before_close)
+        self.assertEqual(minutes, defaults.reminder_minutes_before_close)
 
     def test_falls_back_to_defaults_when_no_configuration_exists_for_the_guild(self) -> None:
-        enabled, hours = resolve_vote_reminder_settings(self.repository, guild_id=100)
+        enabled, minutes = resolve_vote_reminder_settings(self.repository, guild_id=100)
 
         defaults = VoteNotificationsConfig()
         self.assertEqual(enabled, defaults.vote_ending_reminder)
-        self.assertEqual(hours, defaults.reminder_hours_before_close)
+        self.assertEqual(minutes, defaults.reminder_minutes_before_close)
 
     def test_uses_the_guilds_configured_settings_when_present(self) -> None:
         configuration = GuildConfiguration(
             guild_id=100,
             guild_name="Example Guild",
             notifications=NotificationsConfig(
-                vote=VoteNotificationsConfig(vote_ending_reminder=False, reminder_hours_before_close=6)
+                vote=VoteNotificationsConfig(vote_ending_reminder=False, reminder_minutes_before_close=360)
             ),
         )
         self.repository.save(configuration)
 
-        enabled, hours = resolve_vote_reminder_settings(self.repository, guild_id=100)
+        enabled, minutes = resolve_vote_reminder_settings(self.repository, guild_id=100)
 
         self.assertFalse(enabled)
-        self.assertEqual(hours, 6)
+        self.assertEqual(minutes, 360)
 
     def test_a_different_guilds_settings_do_not_leak_across(self) -> None:
         self.repository.save(
@@ -300,15 +300,15 @@ class ResolveVoteReminderSettingsTests(unittest.TestCase):
                 guild_id=100,
                 guild_name="Guild One",
                 notifications=NotificationsConfig(
-                    vote=VoteNotificationsConfig(reminder_hours_before_close=6)
+                    vote=VoteNotificationsConfig(reminder_minutes_before_close=360)
                 ),
             )
         )
 
-        enabled, hours = resolve_vote_reminder_settings(self.repository, guild_id=200)
+        enabled, minutes = resolve_vote_reminder_settings(self.repository, guild_id=200)
 
         defaults = VoteNotificationsConfig()
-        self.assertEqual(hours, defaults.reminder_hours_before_close)
+        self.assertEqual(minutes, defaults.reminder_minutes_before_close)
 
     # --- FR-027: per-round overrides -------------------------------------------
 
@@ -325,20 +325,20 @@ class ResolveVoteReminderSettingsTests(unittest.TestCase):
 
         self.assertFalse(enabled)
 
-    def test_round_reminder_hours_override_takes_precedence_over_the_guild_default(self) -> None:
+    def test_round_reminder_minutes_override_takes_precedence_over_the_guild_default(self) -> None:
         self.repository.save(
             GuildConfiguration(
                 guild_id=100,
                 guild_name="Example Guild",
-                notifications=NotificationsConfig(vote=VoteNotificationsConfig(reminder_hours_before_close=6)),
+                notifications=NotificationsConfig(vote=VoteNotificationsConfig(reminder_minutes_before_close=360)),
             )
         )
 
-        _, hours = resolve_vote_reminder_settings(
-            self.repository, guild_id=100, round_reminder_hours_before_close=4
+        _, minutes = resolve_vote_reminder_settings(
+            self.repository, guild_id=100, round_reminder_minutes_before_close=240
         )
 
-        self.assertEqual(hours, 4)
+        self.assertEqual(minutes, 240)
 
     def test_round_overrides_fall_back_to_the_guild_default_when_none(self) -> None:
         self.repository.save(
@@ -346,35 +346,35 @@ class ResolveVoteReminderSettingsTests(unittest.TestCase):
                 guild_id=100,
                 guild_name="Example Guild",
                 notifications=NotificationsConfig(
-                    vote=VoteNotificationsConfig(vote_ending_reminder=False, reminder_hours_before_close=6)
+                    vote=VoteNotificationsConfig(vote_ending_reminder=False, reminder_minutes_before_close=360)
                 ),
             )
         )
 
-        enabled, hours = resolve_vote_reminder_settings(
-            self.repository, guild_id=100, round_reminder_enabled=None, round_reminder_hours_before_close=None
+        enabled, minutes = resolve_vote_reminder_settings(
+            self.repository, guild_id=100, round_reminder_enabled=None, round_reminder_minutes_before_close=None
         )
 
         self.assertFalse(enabled)
-        self.assertEqual(hours, 6)
+        self.assertEqual(minutes, 360)
 
     def test_each_override_is_resolved_independently(self) -> None:
-        # Only reminder_enabled is overridden -- reminder_hours_before_close
+        # Only reminder_enabled is overridden -- reminder_minutes_before_close
         # must still fall through to the guild's configured value.
         self.repository.save(
             GuildConfiguration(
                 guild_id=100,
                 guild_name="Example Guild",
                 notifications=NotificationsConfig(
-                    vote=VoteNotificationsConfig(vote_ending_reminder=True, reminder_hours_before_close=6)
+                    vote=VoteNotificationsConfig(vote_ending_reminder=True, reminder_minutes_before_close=360)
                 ),
             )
         )
 
-        enabled, hours = resolve_vote_reminder_settings(self.repository, guild_id=100, round_reminder_enabled=False)
+        enabled, minutes = resolve_vote_reminder_settings(self.repository, guild_id=100, round_reminder_enabled=False)
 
         self.assertFalse(enabled)
-        self.assertEqual(hours, 6)
+        self.assertEqual(minutes, 360)
 
 
 class ScheduleVoteJobsTests(unittest.IsolatedAsyncioTestCase):
@@ -459,13 +459,13 @@ class ScheduleVoteJobsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(scheduled), 1)
         self.assertEqual(scheduled[0].job_type, CLOSE_VOTE_JOB_TYPE)
 
-    async def test_round_level_reminder_hours_override_changes_the_reminder_run_at(self) -> None:
+    async def test_round_level_reminder_minutes_override_changes_the_reminder_run_at(self) -> None:
         closes_at = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
         vote_round = VoteRound(
             id=7,
             closes_at=closes_at,
             candidate_suggestion_ids=[1, 2, 3],
-            reminder_hours_before_close=4,
+            reminder_minutes_before_close=240,
         )
 
         scheduled = await schedule_vote_jobs(self.scheduler_service, vote_round, guild_id=100)
@@ -635,7 +635,7 @@ class RescheduleVoteJobsTests(unittest.IsolatedAsyncioTestCase):
             id=7,
             closes_at=datetime.now(timezone.utc) + timedelta(days=7),
             candidate_suggestion_ids=[1, 2, 3],
-            reminder_hours_before_close=4,
+            reminder_minutes_before_close=240,
         )
         await schedule_vote_jobs(self.scheduler_service, vote_round, guild_id=100)
 

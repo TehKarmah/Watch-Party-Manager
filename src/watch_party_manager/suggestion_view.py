@@ -11,13 +11,16 @@ and the existing SuggestionService, reused unchanged.
 
 from __future__ import annotations
 
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Optional
 
 import discord
 
 from watch_party_manager.domain.watch_item import WatchItem, WatchItemStatus
 
 OnToggleRejectionCallback = Callable[[discord.Interaction, int], Awaitable[None]]
+OnUndoRejectionCallback = Callable[[discord.Interaction, int], Awaitable[None]]
+
+REJECTION_CONFIRMATION_TIMEOUT_SECONDS = 300
 
 
 def build_reject_button_custom_id(suggestion_id: int) -> str:
@@ -129,3 +132,42 @@ class SuggestionView(discord.ui.View):
                 on_toggle=on_toggle,
             )
         )
+
+
+class UndoRejectionButton(discord.ui.Button):
+    """The rejection confirmation's one-click "Undo Rejection" control."""
+
+    def __init__(self, suggestion_id: int, on_undo: OnUndoRejectionCallback) -> None:
+        super().__init__(label="Undo Rejection", style=discord.ButtonStyle.secondary)
+        self.suggestion_id = suggestion_id
+        self._on_undo = on_undo
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_undo(interaction, self.suggestion_id)
+
+
+class RejectionConfirmationView(discord.ui.View):
+    """Shown alongside /reject's confirmation so a member can immediately
+    undo their own rejection without needing to remember /unreject or
+    the suggestion's ID.
+
+    requester_id restricts the button to the rejecting member as a second
+    layer of defense -- the confirmation is already ephemeral (only they
+    can see it in Discord's own client), matching the convention used
+    elsewhere for ephemeral controls (see setup_wizard_view.SetupWizardStepView).
+    """
+
+    def __init__(
+        self, suggestion_id: int, on_undo: OnUndoRejectionCallback, *, requester_id: Optional[int] = None
+    ) -> None:
+        super().__init__(timeout=REJECTION_CONFIRMATION_TIMEOUT_SECONDS)
+        self._requester_id = requester_id
+        self.add_item(UndoRejectionButton(suggestion_id, on_undo))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self._requester_id is not None and interaction.user.id != self._requester_id:
+            await interaction.response.send_message(
+                "Only the member who rejected this suggestion can undo it.", ephemeral=True
+            )
+            return False
+        return True

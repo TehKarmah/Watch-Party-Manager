@@ -205,11 +205,11 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** Test 2.4b passed, reached the Collection step.
 - **Steps:**
   1. Choose **Create New**; confirm a "What type of collection would you like to create?" screen appears with **Movies (Recommended)**, **TV Shows**, **Special Collection**, **Custom**, and **Import Existing Database**.
-  2. Choose **Movies**; confirm no name prompt and no destination-choice screen appear -- a thread named "Movies" is created directly under the home channel and the wizard advances.
-  3. In the server, open the new "Movies" thread and run `/add` with any title; confirm the public suggestion post is created immediately in that thread, with no "no suggestion channel is configured" error.
-  4. Separately, repeat with **Special Collection** or **Custom**; confirm a name prompt appears first, then the thread is created using that name.
+  2. Choose **Movies**; confirm no name prompt and no destination-choice screen appear -- a thread named "Movie Suggestions" (the descriptive default, not the bare type name "Movies") is created directly under the home channel and the wizard advances. Repeat with **TV Shows** and confirm its default thread name is "TV Suggestions".
+  3. In the server, open the new "Movie Suggestions" thread and run `/add` with any title; confirm the public suggestion post is created immediately in that thread, with no "no suggestion channel is configured" error.
+  4. Separately, repeat with **Special Collection** or **Custom**; confirm a name prompt appears first (still fully custom, unaffected by the Movies/TV Shows default naming), then the thread is created using that name.
   5. Separately, click **Import Existing Database**; confirm WASH explains that `/import` must be run as its own command (Discord does not allow attaching a file from inside this wizard) and offers a way back to the type-choice screen.
-- **Expected Result:** Movies/TV Shows create a collection named exactly that with no name prompt; Special Collection/Custom collect a name first; every creation path ends with the collection's suggestion thread created as a sibling under the home channel and immediately persisted as that collection's Suggestion Destination (and, internally, all remain ordinary `SuggestionDatabase` records). `/add` works in the new thread right away. Import Existing never fakes an in-wizard upload.
+- **Expected Result:** Movies/TV Shows create a collection using their descriptive default thread name ("Movie Suggestions"/"TV Suggestions") with no name prompt; Special Collection/Custom collect a name first; every creation path ends with the collection's suggestion thread created as a sibling under the home channel and immediately persisted as that collection's Suggestion Destination (and, internally, all remain ordinary `SuggestionDatabase` records). `/add` works in the new thread right away. Import Existing never fakes an in-wizard upload.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -255,10 +255,10 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Open the modal (**Set Voting Defaults**).
   2. Enter a candidate count (try an in-range value, e.g. `4`).
-  3. Enter a duration using a natural value (try `4h`, then separately try a bare number like `3`, then `3 days` -- confirm all three are accepted and mean what you'd expect).
+  3. Enter a duration using WASH's shared duration syntax (try `4h`, then separately `3d`, then `3 days` -- confirm all are accepted and mean what you'd expect). Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
   4. Set visibility to `visible` or `blind`.
   5. Submit.
-- **Expected Result:** Values in range are accepted; the modal defaults to **24 hours** (shown as "1 day") on a brand-new server. An out-of-range duration (e.g. `31 days` / `0`) is rejected with a clear, specific error naming the 1 hour-30 day range.
+- **Expected Result:** Values in range are accepted; the modal defaults to **1 day** on a brand-new server. An out-of-range duration (e.g. `31d` / `0h`) is rejected with a clear, specific error naming the 1 hour-30 day range; a unitless value is rejected with a clear syntax error.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -289,9 +289,9 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm the remaining two Voting-adjacent steps save correctly.
 - **Preconditions:** Test 2.7 passed.
 - **Steps:**
-  1. Configure (or disable) the vote-ending reminder and its lead time.
+  1. Configure (or disable) the vote-ending reminder and its lead time, using WASH's shared duration syntax -- try minute precision (e.g. `10m`, `30m`) as well as hours/days (e.g. `1h`, `1d`).
   2. Configure the automatic-backup interval and retention count.
-- **Expected Result:** Both steps accept valid values and reject out-of-range ones with clear errors.
+- **Expected Result:** Both steps accept valid values (the reminder field accepts minute precision, not just whole hours) and reject out-of-range ones with clear errors.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -481,14 +481,16 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 4.10 Suggestion rejection ("I WILL NOT WATCH") and retirement
 
-- **Objective:** Confirm the rejection-threshold/retirement workflow, including `/reject` and `/unreject`.
+- **Objective:** Confirm the rejection-threshold/retirement workflow, including `/reject`, `/unreject`, and `/reject`'s Undo Rejection button.
 - **Preconditions:** A suggestion with its public confirmation post visible.
 - **Steps:**
   1. Click **I WILL NOT WATCH** on the confirmation post as one member; confirm the count updates and the button state changes.
   2. Click it again as the same member; confirm the rejection is removed (toggle, not additive).
-  3. As a Watch Party member (WASH Crew inherit this too, but it is not WASH Crew-only), run `/reject suggestion_id:<id>` and `/unreject suggestion_id:<id>` directly.
-  4. Reach the configured rejection threshold and confirm the suggestion is retired (archived) and excluded from further selection.
-- **Expected Result:** Rejections never double-count per member; retirement happens automatically at the configured threshold; retired items remain visible via `/list status:Retired` and can be reactivated through `/add`.
+  3. As a Watch Party member (WASH Crew inherit this too, but it is not WASH Crew-only), run `/reject suggestion_id:<id>`; confirm the confirmation includes a link back to the suggestion's original public post and an **Undo Rejection** button.
+  4. Click **Undo Rejection**; confirm the rejection is removed, the confirmation message updates to say so, and the suggestion post's rejection count refreshes. Confirm another member cannot use your Undo Rejection button.
+  5. Reject again, then run `/unreject suggestion_id:<id>` directly to confirm it still works independently of the button.
+  6. Reach the configured rejection threshold and confirm the suggestion is retired (archived) and excluded from further selection.
+- **Expected Result:** Rejections never double-count per member; the Undo Rejection button works exactly once per rejection and gracefully reports "haven't rejected" if clicked after the rejection was already reverted another way; retirement happens automatically at the configured threshold; retired items remain visible via `/list status:Retired` and can be reactivated through `/add`.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -549,8 +551,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/start_vote` -> **Customize This Vote**.
   2. Enter a duration of `1h`, submit, and confirm the round's end time is ~1 hour out.
-  3. Repeat with `4h`, `12h`, and a bare number (e.g. `3`, meaning 3 days) to confirm all forms are accepted.
-- **Expected Result:** All forms are accepted; the resulting end time matches; a value outside 1 hour-30 days (e.g. `0`, `31 weeks`) is rejected with a clear, actionable error.
+  3. Repeat with `4h`, `12h`, and `3d` to confirm all forms are accepted. Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
+- **Expected Result:** All forms with an explicit unit are accepted; the resulting end time matches; a value outside 1 hour-30 days (e.g. `0h`, `31w`) is rejected with a clear, actionable error.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -607,10 +609,13 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm WASH Crew's administrative controls over an in-progress round.
 - **Preconditions:** An open round; WASH Crew role.
 - **Steps:**
-  1. Run `/edit_vote` -> **Change End Time**; confirm the quick options **End Now**, **In 5 Minutes**, **In 1 Hour**, and **In 1 Day** each apply immediately when clicked, and that the public post and a public notice both reflect the new deadline, with a Discord relative timestamp shown.
-  2. Use **Change End Time** -> **Custom Time...**; confirm the modal presents a single "Discord Timestamp" field with placeholder `<t:1785639600:F>` and help text explaining how to generate one (type `@time` in any normal Discord message box, pick a date/time, then copy the generated timestamp here). Confirm a malformed value (e.g. plain text, or a timestamp missing the `<t:...>` wrapper), and a validly-formatted but past timestamp, are each rejected with a clear message; confirm a valid future timestamp (in any of the standard styles, e.g. `<t:1785639600:F>` or `<t:1785639600:R>`) reschedules correctly.
-  3. Start a second round (after the first completes or is cancelled) and use `/edit_vote` -> **End Now**; confirm it closes immediately with correct results.
-  4. Start a third round and use `/edit_vote` -> **Cancel Vote**; confirm it's cancelled with no winner announced and the original post's buttons are disabled.
+  1. Run `/edit_vote` -> **Change End Time**; confirm the menu offers **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
+  2. Use **Shorten Vote** -> **1 Hour**; confirm the round's end time moves 1 hour *earlier than its current deadline* (not 1 hour from now), and that the public post and a public notice both reflect the new deadline with a Discord relative timestamp shown. Repeat with **Extend Vote** -> **1 Day** and confirm it moves 1 day *later* than the current deadline.
+  3. Use **Shorten Vote** -> **Custom...**; confirm the modal is titled "Shorten Vote" with a "Duration" field (placeholder `e.g. 10m, 1h, 1d, 1w`). Try `10m`, `2h`. Repeat with **Extend Vote** -> **Custom...** (modal titled "Extend Vote"). Confirm a malformed value (e.g. a bare number with no unit) is rejected with a clear error.
+  4. On a round closing soon, use **Shorten Vote** with an amount larger than the time remaining; confirm it's rejected with a clear "would move the end time into the past" message rather than silently succeeding.
+  5. Use **Set Exact End Time**; confirm the modal presents a single "Discord Timestamp" field with placeholder `<t:1785639600:F>` and help text explaining how to generate one (type `@time` in any normal Discord message box, pick a date/time, then copy the generated timestamp here). Confirm a malformed value (e.g. plain text, or a timestamp missing the `<t:...>` wrapper), and a validly-formatted but past timestamp, are each rejected with a clear message; confirm a valid future timestamp (in any of the standard styles, e.g. `<t:1785639600:F>` or `<t:1785639600:R>`) reschedules correctly.
+  6. Start a second round (after the first completes or is cancelled) and use `/edit_vote` -> **End Now**; confirm it closes immediately with correct results (a confirmation prompt appears first, since this can't be undone).
+  7. Start a third round and use `/edit_vote` -> **Cancel Vote**; confirm it's cancelled with no winner announced and the original post's buttons are disabled.
 - **Expected Result:** All actions behave exactly as described, and each updates the original voting post appropriately (new deadline / closed with results / cancelled notice). Every new deadline is still stored and scheduled internally as UTC.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________

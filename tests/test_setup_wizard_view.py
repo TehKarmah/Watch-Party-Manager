@@ -529,19 +529,19 @@ class ReminderDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
         modal = ReminderDefaultsModal(_noop)
         self.assertEqual(len(modal.children), 2)
         self.assertEqual(modal.enabled_input.default, "yes")
-        self.assertEqual(modal.hours_input.default, "24")
+        self.assertEqual(modal.minutes_input.default, "1 day")
 
     async def test_submission_forwards_both_values(self) -> None:
         calls = []
 
-        async def on_submit(interaction, enabled, hours) -> None:
-            calls.append((enabled, hours))
+        async def on_submit(interaction, enabled, minutes) -> None:
+            calls.append((enabled, minutes))
 
         modal = ReminderDefaultsModal(on_submit)
         modal.enabled_input._value = "no"
-        modal.hours_input._value = "48"
+        modal.minutes_input._value = "2d"
         await modal.on_submit(interaction=object())
-        self.assertEqual(calls, [("no", "48")])
+        self.assertEqual(calls, [("no", "2d")])
 
 
 class BackupDefaultsModalTests(unittest.IsolatedAsyncioTestCase):

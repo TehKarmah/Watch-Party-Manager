@@ -22,12 +22,13 @@ from watch_party_manager.bot import (
     parse_setup_backup_interval_days,
     parse_setup_backup_retention_count,
     parse_setup_reminder_enabled,
-    parse_setup_reminder_hours_before_close,
+    parse_setup_reminder_minutes_before_close,
     parse_setup_voting_candidate_count,
     parse_setup_voting_duration_hours,
     parse_setup_voting_visibility,
     perform_setup_permission_check,
     perform_setup_redirect_check,
+    post_suggestion_confirmation,
     resolve_startup_role_ids,
     send_setup_preparation_screen,
     send_setup_wizard_step,
@@ -211,15 +212,17 @@ class ParseSetupFieldsTests(unittest.TestCase):
             parse_setup_voting_candidate_count("abc")
 
     def test_voting_duration_hours_valid_and_invalid(self):
-        # A bare number is interpreted as days, backward compatible with
-        # this field's original meaning.
-        self.assertEqual(parse_setup_voting_duration_hours("10"), 240)
+        # Requirement 3: one standardized duration syntax -- an explicit
+        # unit is always required, no more bare-number-means-days.
+        self.assertEqual(parse_setup_voting_duration_hours("10d"), 240)
         self.assertEqual(parse_setup_voting_duration_hours("4h"), 4)
         self.assertEqual(parse_setup_voting_duration_hours("3 days"), 72)
         with self.assertRaises(ValueError):
-            parse_setup_voting_duration_hours("0")
+            parse_setup_voting_duration_hours("10")
         with self.assertRaises(ValueError):
-            parse_setup_voting_duration_hours("31")  # 31 days = 744 hours, above the 720-hour maximum
+            parse_setup_voting_duration_hours("0h")
+        with self.assertRaises(ValueError):
+            parse_setup_voting_duration_hours("31d")  # 31 days = 744 hours, above the 720-hour maximum
 
     def test_voting_visibility_valid_and_invalid(self):
         self.assertEqual(parse_setup_voting_visibility("Blind"), GuildVoteVisibility.BLIND)
@@ -234,12 +237,13 @@ class ParseSetupFieldsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_setup_reminder_enabled("maybe")
 
-    def test_reminder_hours_before_close_valid_and_invalid(self):
-        self.assertEqual(parse_setup_reminder_hours_before_close("48"), 48)
+    def test_reminder_minutes_before_close_valid_and_invalid(self):
+        self.assertEqual(parse_setup_reminder_minutes_before_close("48h"), 48 * 60)
+        self.assertEqual(parse_setup_reminder_minutes_before_close("10m"), 10)
         with self.assertRaises(ValueError):
-            parse_setup_reminder_hours_before_close("0")
+            parse_setup_reminder_minutes_before_close("0h")
         with self.assertRaises(ValueError):
-            parse_setup_reminder_hours_before_close("721")
+            parse_setup_reminder_minutes_before_close("721h")
 
     def test_backup_interval_days_valid_and_invalid(self):
         self.assertEqual(parse_setup_backup_interval_days("2"), 2)
@@ -919,7 +923,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         await configure_button.callback(interaction=configure_interaction)
         modal: VotingDefaultsModal = configure_interaction.response.sent_modal
         modal.candidate_count_input._value = "3"
-        modal.duration_input._value = "7"
+        modal.duration_input._value = "7d"
         modal.visibility_input._value = "blind"
 
         submit_interaction = FakeInteraction()
@@ -1376,13 +1380,16 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         movies_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await movies_button.callback(interaction=movies_interaction)
 
+        # Requirement 6: the default thread name is the more descriptive
+        # "Movie Suggestions", not the bare collection type "Movies".
         self.assertEqual(
-            fake_home_channel.created_with, ("Movies", __import__("discord").ChannelType.public_thread)
+            fake_home_channel.created_with,
+            ("Movie Suggestions", __import__("discord").ChannelType.public_thread),
         )
         persisted = self.wizard_repository.get(GUILD_ID)
-        self.assertEqual(persisted.draft.suggestion_database_name, "Movies")
+        self.assertEqual(persisted.draft.suggestion_database_name, "Movie Suggestions")
         databases = self.suggestion_service.list_databases(GUILD_ID)
-        self.assertEqual(databases[0].name, "Movies")
+        self.assertEqual(databases[0].name, "Movie Suggestions")
         self.assertEqual(databases[0].channel_id, 701)
 
     async def test_tv_shows_option_creates_a_database_named_tv_shows_in_a_new_thread(self) -> None:
@@ -1395,7 +1402,7 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         await tv_shows_button.callback(interaction=tv_interaction)
 
         databases = self.suggestion_service.list_databases(GUILD_ID)
-        self.assertEqual(databases[0].name, "TV Shows")
+        self.assertEqual(databases[0].name, "TV Suggestions")
         self.assertEqual(databases[0].channel_id, 702)
 
     async def test_special_collection_option_asks_for_a_name_first(self) -> None:
@@ -1533,6 +1540,99 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, databases[0].database_id)
         self.assertIsNotNone(configuration)
         self.assertEqual(configuration.channels.suggestion_channel_id, 705)
+
+    async def test_add_immediately_posts_to_the_new_thread_with_no_configuration_error(self) -> None:
+        # Requirement 7 validation: after setup creates a collection
+        # thread, /add's public confirmation post must succeed in it
+        # immediately -- no further configuration should be needed, and
+        # post_suggestion_confirmation must never report "no suggestion
+        # channel is configured".
+        type_view = await self._reach_collection_type_choice()
+        movies_button = type_view.children[0]
+
+        fake_home_channel = self.FakeHomeChannel(thread_id=706)
+        movies_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await movies_button.callback(interaction=movies_interaction)
+
+        database = self.suggestion_service.list_databases(GUILD_ID)[0]
+        watch_item = self.suggestion_service.suggest(
+            "Alien", database_id=database.database_id, guild_id=GUILD_ID, channel_id=706
+        ).watch_item
+
+        class FakePostMessage:
+            def __init__(self, message_id: int) -> None:
+                self.id = message_id
+
+        class FakePostChannel:
+            def __init__(self) -> None:
+                self.sent = []
+
+            async def send(self, *, embed, view):
+                self.sent.append((embed, view))
+                return FakePostMessage(999)
+
+        post_channel = FakePostChannel()
+
+        class FakePostBot:
+            def __init__(self, suggestion_service, suggestion_database_configuration_repository, channel):
+                self.suggestion_service = suggestion_service
+                self.suggestion_database_configuration_repository = suggestion_database_configuration_repository
+                self.rotation_service = None
+                self.permission_service = None
+                self._channel = channel
+
+            def get_channel(self, channel_id):
+                return self._channel
+
+            async def fetch_channel(self, channel_id):
+                return self._channel
+
+        fake_bot = FakePostBot(
+            self.suggestion_service, self.suggestion_database_configuration_repository, post_channel
+        )
+        add_interaction = FakeInteraction()
+
+        posted, note = await post_suggestion_confirmation(fake_bot, watch_item, database, add_interaction)
+
+        self.assertTrue(posted)
+        self.assertEqual(note, "")
+        self.assertEqual(len(post_channel.sent), 1)
+
+    async def test_watched_destination_thread_is_created_as_a_sibling_of_the_suggestion_thread(self) -> None:
+        # Requirement 5 (Collections default to threads): the watched
+        # destination thread must be created directly under the home
+        # channel -- a sibling of the suggestion thread -- never nested
+        # beneath it.
+        type_view = await self._reach_collection_type_choice()
+        movies_button = type_view.children[0]
+
+        fake_home_channel = self.FakeHomeChannel(thread_id=707)
+        movies_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await movies_button.callback(interaction=movies_interaction)
+
+        state = self.wizard_repository.get(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.WATCH_DESTINATION)
+        interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        create_thread_button = interaction.response.sent_view.children[1]
+
+        create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await create_thread_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        name_modal.name_input._value = "Watched Movies"
+
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        # The watched-destination thread was created directly against the
+        # SAME home channel object the suggestion thread used -- a
+        # sibling, never nested under the suggestion thread itself.
+        self.assertEqual(
+            fake_home_channel.created_with,
+            ("Watched Movies", __import__("discord").ChannelType.public_thread),
+        )
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.watch_destination_channel_id, 707)
 
 
 if __name__ == "__main__":

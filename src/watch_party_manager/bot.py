@@ -116,7 +116,8 @@ from watch_party_manager.services.config_service import (
 from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
 )
-from watch_party_manager.services.duration_formatter import format_duration_hours
+from watch_party_manager.services.duration_formatter import format_duration_hours, format_duration_minutes
+from watch_party_manager.services.duration_parser import parse_duration_to_minutes
 from watch_party_manager.services.embed_factory import EmbedFactory
 from watch_party_manager.services.help_service import HelpResponse, build_help_response
 from watch_party_manager.services.membership_service import (
@@ -184,10 +185,12 @@ from watch_party_manager.edit_suggestion_view import (
     EditSuggestionActionView,
 )
 from watch_party_manager.edit_vote_view import (
+    CustomDurationModal,
     CustomVoteEndTimeModal,
+    DurationDeltaChoiceView,
     EditVoteConfirmationView,
     EditVoteManagementView,
-    VoteEndTimeQuickPickView,
+    VoteEndTimeMenuView,
 )
 from watch_party_manager.config_view import (
     DATABASE_SETTING_SUGGESTION_DESTINATION,
@@ -243,7 +246,11 @@ from watch_party_manager.start_vote_view import (
     CustomizeVoteModal,
     StartVoteChoiceView,
 )
-from watch_party_manager.suggestion_view import SuggestionView, build_reject_button_custom_id
+from watch_party_manager.suggestion_view import (
+    RejectionConfirmationView,
+    SuggestionView,
+    build_reject_button_custom_id,
+)
 from watch_party_manager.version import __build__, __version__
 from watch_party_manager.voting_view import VotingView
 
@@ -316,7 +323,7 @@ class WatchPartyBot(commands.Bot):
                 self.vote_service,
                 self.suggestion_service,
                 self,
-                on_finalized=lambda result: sync_vote_winner_status_embeds(self, result),
+                on_finalized=lambda result: sync_vote_completion_status_embeds(self, result),
             ),
         )
         self.scheduler_host.scheduler_service.register_handler(
@@ -558,7 +565,7 @@ class WatchPartyBot(commands.Bot):
                     duration_text: Optional[str],
                     visibility_text: Optional[str],
                     reminder_enabled_text: Optional[str],
-                    reminder_hours_text: Optional[str],
+                    reminder_minutes_text: Optional[str],
                 ) -> None:
                     await handle_customize_vote_submit(
                         modal_interaction,
@@ -571,7 +578,7 @@ class WatchPartyBot(commands.Bot):
                         duration_text=duration_text,
                         visibility_text=visibility_text,
                         reminder_enabled_text=reminder_enabled_text,
-                        reminder_hours_text=reminder_hours_text,
+                        reminder_minutes_text=reminder_minutes_text,
                         scheduler_service=self.scheduler_host.scheduler_service,
                         guild_configuration_repository=self.guild_configuration_repository,
                         rotation_service=self.rotation_service,
@@ -604,7 +611,7 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="reject")
         async def reject(interaction: discord.Interaction, suggestion_id: int) -> None:
-            message, ephemeral = perform_reject_suggestion(
+            message, ephemeral, watch_item = perform_reject_suggestion(
                 suggestion_service=self.suggestion_service,
                 suggestion_database_configuration_repository=self.suggestion_database_configuration_repository,
                 permission_service=self.permission_service,
@@ -612,7 +619,22 @@ class WatchPartyBot(commands.Bot):
                 guild_id=interaction.guild_id,
                 suggestion_id=suggestion_id,
             )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
+            content = build_rejection_confirmation_text(message, watch_item)
+            view = None
+            if watch_item is not None:
+
+                async def on_undo(undo_interaction: discord.Interaction, undo_suggestion_id: int) -> None:
+                    await handle_undo_rejection(
+                        undo_interaction,
+                        self.suggestion_service,
+                        self.suggestion_database_configuration_repository,
+                        self.permission_service,
+                        self,
+                        undo_suggestion_id,
+                    )
+
+                view = RejectionConfirmationView(watch_item.id, on_undo, requester_id=interaction.user.id)
+            await interaction.response.send_message(content, view=view, ephemeral=ephemeral)
 
         @self.tree.command(name="unreject")
         async def unreject(interaction: discord.Interaction, suggestion_id: int) -> None:
@@ -1091,7 +1113,7 @@ def build_customize_vote_modal_defaults(
     # (guild_configuration_repository.get(0) simply finds nothing, same
     # as guild_configuration_repository being None) and keeps this
     # resolution identical to what starting the vote will actually use.
-    reminder_enabled, reminder_hours = resolve_vote_reminder_settings(
+    reminder_enabled, reminder_minutes = resolve_vote_reminder_settings(
         guild_configuration_repository, guild_id or 0
     )
 
@@ -1100,25 +1122,23 @@ def build_customize_vote_modal_defaults(
         "default_duration_display": format_duration_hours(default_duration_hours),
         "default_visibility_display": default_visibility.value.title(),
         "default_reminder_enabled_display": "Yes" if reminder_enabled else "No",
-        "default_reminder_hours_display": format_duration_hours(reminder_hours),
+        "default_reminder_minutes_display": format_duration_minutes(reminder_minutes),
     }
-
-
-_DURATION_TEXT_PATTERN = re.compile(
-    r"^(\d+)\s*(h|hr|hrs|hour|hours|d|day|days)?$", re.IGNORECASE
-)
 
 
 def parse_duration_text_to_hours(text: str) -> int:
     """Parse free-text voting-duration input into whole hours.
 
-    Accepts a bare positive whole number (interpreted as **days**, matching
-    this field's original meaning before Hour-Based Voting Durations, so
-    existing muscle memory like typing "3" for three days keeps working
-    unchanged) or a number immediately followed by an hour unit ("4h",
-    "4 hours") or day unit ("3d", "3 days"). Does not perform range
-    validation -- see parse_vote_duration_hours/parse_setup_voting_duration_hours
-    for that, applied by each caller with its own error wording.
+    Standardized on WASH's one shared duration syntax (Requirement 3):
+    a whole number immediately followed by a unit -- m/minutes, h/hours,
+    d/days, or w/weeks (see services.duration_parser). A vote's duration
+    is still stored as whole hours internally, so a value that doesn't
+    land on a whole hour (e.g. "10m", "90m") is rejected with a clear
+    message rather than silently rounded -- unlike reminder-before-close
+    or Shorten/Extend Vote, which do support minute precision. Does not
+    perform range validation -- see
+    parse_vote_duration_hours/parse_setup_voting_duration_hours for that,
+    applied by each caller with its own error wording.
 
     Args:
         text: The raw duration text (already known to be non-blank).
@@ -1127,56 +1147,65 @@ def parse_duration_text_to_hours(text: str) -> int:
         The equivalent whole number of hours.
 
     Raises:
-        ValueError: If text isn't a positive whole number optionally
-            followed by a recognized hour/day unit.
+        ValueError: If text isn't valid duration syntax, or doesn't
+            amount to a whole number of hours.
     """
-    match = _DURATION_TEXT_PATTERN.match(text.strip())
-    if not match:
+    total_minutes = parse_duration_to_minutes(text)
+    if total_minutes % 60 != 0:
         raise ValueError(
-            "Duration must be a whole number, optionally followed by 'h'/'hours' or "
-            "'d'/'days' (e.g. '4h', '3 days', or '7' for 7 days)."
+            "Vote duration must amount to a whole number of hours (e.g. '1h', '1d', '1w') -- "
+            "minute-level precision isn't supported for a vote's duration."
         )
-    amount = int(match.group(1))
-    unit = (match.group(2) or "").lower()
-    if unit in ("h", "hr", "hrs", "hour", "hours"):
-        return amount
-    return amount * 24
+    return total_minutes // 60
 
 
-# Bounds for a per-round reminder-hours override, matching
-# VoteNotificationsConfig.reminder_hours_before_close's own guild-level
+# Bounds for a per-round reminder-before-close override, matching
+# VoteNotificationsConfig.reminder_minutes_before_close's own guild-level
 # bounds (domain/guild_configuration.py) so a round can never be
 # configured with a value the guild-level setting itself would reject.
-MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE = 1
-MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE = 720
+MIN_VOTE_REMINDER_MINUTES_BEFORE_CLOSE = 1
+MAX_VOTE_REMINDER_MINUTES_BEFORE_CLOSE = 720 * 60
 
 
-def parse_vote_reminder_hours_before_close(hours: Optional[int]) -> Optional[int]:
-    """Validate a /start_vote reminder-hours-before-close override.
+def parse_vote_reminder_minutes_before_close(minutes: Optional[int]) -> Optional[int]:
+    """Validate a /start_vote reminder-before-close override, in minutes.
 
     Args:
-        hours: The raw reminder_hours option, or None to use the guild's
-            configured default (see
+        minutes: The raw reminder minutes value, or None to use the
+            guild's configured default (see
             scheduler.vote_scheduling.resolve_vote_reminder_settings).
 
     Returns:
-        None if hours is None (use the guild default), otherwise hours
-        itself once validated.
+        None if minutes is None (use the guild default), otherwise
+        minutes itself once validated.
 
     Raises:
-        ValueError: If hours is outside
-            [MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE, MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE].
+        ValueError: If minutes is outside
+            [MIN_VOTE_REMINDER_MINUTES_BEFORE_CLOSE, MAX_VOTE_REMINDER_MINUTES_BEFORE_CLOSE].
     """
-    if hours is None:
+    if minutes is None:
         return None
 
-    if not (MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE <= hours <= MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE):
+    if not (MIN_VOTE_REMINDER_MINUTES_BEFORE_CLOSE <= minutes <= MAX_VOTE_REMINDER_MINUTES_BEFORE_CLOSE):
         raise ValueError(
-            f"reminder_hours must be between {MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE} and "
-            f"{MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE}."
+            f"Reminder before close must be between {format_duration_minutes(MIN_VOTE_REMINDER_MINUTES_BEFORE_CLOSE)} "
+            f"and {format_duration_minutes(MAX_VOTE_REMINDER_MINUTES_BEFORE_CLOSE)}."
         )
 
-    return hours
+    return minutes
+
+
+def parse_optional_reminder_minutes_field(value: Optional[str]) -> Optional[int]:
+    """Parse an optional reminder-before-close field from a Discord modal
+    into minutes, using WASH's one shared duration syntax (Requirement 3).
+
+    Blank means "use the configured default", matching every other
+    optional modal field's convention. Range validation remains in
+    parse_vote_reminder_minutes_before_close, applied by the caller.
+    """
+    if value is None or not value.strip():
+        return None
+    return parse_duration_to_minutes(value)
 
 
 def parse_vote_nominee_count(value: Optional[int], default: int = DEFAULT_VOTE_CANDIDATE_COUNT) -> int:
@@ -1357,7 +1386,7 @@ def perform_start_vote(
     guild_id: Optional[int] = None,
     channel_id: Optional[int] = None,
     reminder_enabled: Optional[bool] = None,
-    reminder_hours_before_close: Optional[int] = None,
+    reminder_minutes_before_close: Optional[int] = None,
     rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
@@ -1396,8 +1425,8 @@ def perform_start_vote(
         reminder_enabled: FR-027: a per-round override of the guild's
             configured vote-ending reminder setting, or None to use the
             guild default.
-        reminder_hours_before_close: FR-027: a per-round override of how
-            many hours before closing the reminder fires, or None to use
+        reminder_minutes_before_close: FR-027: a per-round override of how
+            many minutes before closing the reminder fires, or None to use
             the guild default.
         rotation_service: FR-033B: used, together with
             suggestion_database_configuration_repository, to resolve the
@@ -1460,7 +1489,7 @@ def perform_start_vote(
         return str(exc), True
 
     try:
-        reminder_hours_before_close = parse_vote_reminder_hours_before_close(reminder_hours_before_close)
+        reminder_minutes_before_close = parse_vote_reminder_minutes_before_close(reminder_minutes_before_close)
     except ValueError as exc:
         return str(exc), True
 
@@ -1520,7 +1549,7 @@ def perform_start_vote(
         candidate_suggestion_ids=[candidate.id for candidate in candidates],
         database_id=(resolution.database.database_id if resolution is not None else None),
         reminder_enabled=reminder_enabled,
-        reminder_hours_before_close=reminder_hours_before_close,
+        reminder_minutes_before_close=reminder_minutes_before_close,
     )
     if not result.success:
         return result.message, True
@@ -1719,22 +1748,28 @@ def parse_setup_reminder_enabled(value: str) -> bool:
     return parsed
 
 
-def parse_setup_reminder_hours_before_close(value: str) -> int:
-    """Validate a Reminder Defaults modal's hours-before-close field.
+def parse_setup_reminder_minutes_before_close(value: str) -> int:
+    """Validate a Reminder Defaults modal's before-close field.
 
-    Reuses the same bounds as a /start_vote per-round reminder override
-    (MIN/MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE).
+    Standardized on WASH's one shared duration syntax (Requirement 3):
+    a whole number immediately followed by a unit -- m/minutes, h/hours,
+    d/days, or w/weeks. Reuses the same bounds as a /start_vote per-round
+    reminder override (MIN/MAX_VOTE_REMINDER_MINUTES_BEFORE_CLOSE).
     """
     try:
-        hours = int(value.strip())
+        minutes = parse_duration_to_minutes(value)
     except ValueError:
-        raise ValueError("Reminder hours before close must be a whole number.")
-    if not (MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE <= hours <= MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE):
         raise ValueError(
-            "Reminder hours before close must be between "
-            f"{MIN_VOTE_REMINDER_HOURS_BEFORE_CLOSE} and {MAX_VOTE_REMINDER_HOURS_BEFORE_CLOSE}."
+            "Reminder before close must be a whole number immediately followed by a unit "
+            "-- m/minutes, h/hours, d/days, or w/weeks (e.g. '10m', '1h', '1d')."
         )
-    return hours
+    if not (MIN_VOTE_REMINDER_MINUTES_BEFORE_CLOSE <= minutes <= MAX_VOTE_REMINDER_MINUTES_BEFORE_CLOSE):
+        raise ValueError(
+            "Reminder before close must be between "
+            f"{format_duration_minutes(MIN_VOTE_REMINDER_MINUTES_BEFORE_CLOSE)} and "
+            f"{format_duration_minutes(MAX_VOTE_REMINDER_MINUTES_BEFORE_CLOSE)}."
+        )
+    return minutes
 
 
 def parse_setup_backup_interval_days(value: str) -> int:
@@ -1796,7 +1831,7 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
     if configuration.notifications.vote.vote_ending_reminder:
         lines.append(
             "Reminder Defaults: enabled, "
-            f"{configuration.notifications.vote.reminder_hours_before_close}h before close"
+            f"{format_duration_minutes(configuration.notifications.vote.reminder_minutes_before_close)} before close"
         )
     else:
         lines.append("Reminder Defaults: disabled")
@@ -2088,10 +2123,14 @@ async def send_setup_wizard_step(
             await send_setup_wizard_step(interaction_for_edit, bot, updated, edit=True, requester_id=requester_id)
 
         async def on_movies(movies_interaction: discord.Interaction) -> None:
-            await create_collection_thread(movies_interaction, "Movies")
+            # Requirement 6 (Setup Wizard Polish): the default thread name
+            # is the more descriptive "Movie Suggestions" (matching the
+            # recommended tree: Watch Party / Movie Suggestions / TV
+            # Suggestions / ...), not the bare collection type "Movies".
+            await create_collection_thread(movies_interaction, "Movie Suggestions")
 
         async def on_tv_shows(tv_shows_interaction: discord.Interaction) -> None:
-            await create_collection_thread(tv_shows_interaction, "TV Shows")
+            await create_collection_thread(tv_shows_interaction, "TV Suggestions")
 
         async def on_special_collection(special_interaction: discord.Interaction) -> None:
             async def on_name_submit(modal_interaction: discord.Interaction, name: str) -> None:
@@ -2264,19 +2303,19 @@ async def send_setup_wizard_step(
         reminder_defaults_prefill = (
             "yes" if state.draft.reminder_enabled is None or state.draft.reminder_enabled else "no",
             (
-                str(state.draft.reminder_hours_before_close)
-                if state.draft.reminder_hours_before_close is not None
-                else "24"
+                format_duration_minutes(state.draft.reminder_minutes_before_close)
+                if state.draft.reminder_minutes_before_close is not None
+                else "1 day"
             ),
         )
 
         async def on_configure(configure_interaction: discord.Interaction) -> None:
             async def on_submit(
-                modal_interaction: discord.Interaction, enabled_text: str, hours_text: str
+                modal_interaction: discord.Interaction, enabled_text: str, minutes_text: str
             ) -> None:
                 try:
                     enabled = parse_setup_reminder_enabled(enabled_text)
-                    hours_before_close = parse_setup_reminder_hours_before_close(hours_text)
+                    minutes_before_close = parse_setup_reminder_minutes_before_close(minutes_text)
                 except ValueError as exc:
                     await modal_interaction.response.edit_message(
                         content=body + f"\n\n⚠ {exc}",
@@ -2292,7 +2331,7 @@ async def send_setup_wizard_step(
                     )
                     return
 
-                updated = setup_wizard_service.set_reminder_defaults(state, enabled, hours_before_close)
+                updated = setup_wizard_service.set_reminder_defaults(state, enabled, minutes_before_close)
                 await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
 
             await configure_interaction.response.send_modal(
@@ -2308,7 +2347,7 @@ async def send_setup_wizard_step(
             custom_id="wpm_setup_reminder_defaults_configure",
             requester_id=requester_id,
         )
-        body += "\n\nConfigure whether a vote-ending reminder is sent, and how many hours before close."
+        body += "\n\nConfigure whether a vote-ending reminder is sent, and how long before close."
 
     elif step == SetupWizardStep.BACKUP_DEFAULTS:
 
@@ -2878,10 +2917,10 @@ async def send_config_reminder_defaults_modal(
     async def on_retry(retry_interaction: discord.Interaction) -> None:
         await send_config_reminder_defaults_modal(retry_interaction, bot, guild_id, on_back)
 
-    async def on_submit(modal_interaction: discord.Interaction, enabled_text: str, hours_text: str) -> None:
+    async def on_submit(modal_interaction: discord.Interaction, enabled_text: str, minutes_text: str) -> None:
         try:
             enabled = parse_setup_reminder_enabled(enabled_text)
-            hours_before_close = parse_setup_reminder_hours_before_close(hours_text)
+            minutes_before_close = parse_setup_reminder_minutes_before_close(minutes_text)
         except ValueError as exc:
             view = ConfigModalRetryView(
                 on_retry, on_back, button_label="Try Again", custom_id="wpm_config_reminder_defaults_retry"
@@ -2891,14 +2930,14 @@ async def send_config_reminder_defaults_modal(
             )
             return
 
-        result = config_service.set_reminder_defaults(guild_id, enabled, hours_before_close)
+        result = config_service.set_reminder_defaults(guild_id, enabled, minutes_before_close)
         await send_config_result(modal_interaction, bot, guild_id, result)
 
     configuration = bot.config_service.get_configuration(guild_id)
     vote_notifications = configuration.notifications.vote
     defaults = (
         "yes" if vote_notifications.vote_ending_reminder else "no",
-        str(vote_notifications.reminder_hours_before_close),
+        format_duration_minutes(vote_notifications.reminder_minutes_before_close),
     )
     await interaction.response.send_modal(ReminderDefaultsModal(on_submit, defaults=defaults))
 
@@ -3379,7 +3418,7 @@ def parse_start_vote_overrides(
     duration_text: Optional[str],
     visibility_text: Optional[str],
     reminder_enabled_text: Optional[str] = None,
-    reminder_hours_text: Optional[str] = None,
+    reminder_minutes_text: Optional[str] = None,
 ) -> tuple[Optional[int], Optional[int], Optional[str], Optional[bool], Optional[int]]:
     """Parse raw customization-modal values into start-vote arguments.
 
@@ -3390,18 +3429,19 @@ def parse_start_vote_overrides(
     value (Release Polish Batch 2, Priority 6). Blank reminder fields
     remain ``None`` so the guild's configured reminder default is used
     (see scheduler.vote_scheduling.resolve_vote_reminder_settings).
-    duration_text accepts the same flexible hour/day text as the Setup
-    Wizard/`/config` Voting Defaults field (see
-    parse_optional_duration_field/parse_duration_text_to_hours) and is
-    already resolved to whole hours here. Range and enum validation
+    duration_text and reminder_minutes_text both accept WASH's one shared
+    duration syntax (Requirement 3; see parse_optional_duration_field/
+    parse_duration_text_to_hours and parse_optional_reminder_minutes_field)
+    -- duration_text is already resolved to whole hours here, while
+    reminder_minutes_text resolves to minutes. Range and enum validation
     remain centralized in :func:`perform_start_vote`.
     """
     nominee_count = parse_optional_int_field(nominee_count_text)
     duration_hours = parse_optional_duration_field(duration_text)
     visibility = (visibility_text or "").strip() or None
     reminder_enabled = parse_optional_bool_field(reminder_enabled_text)
-    reminder_hours_before_close = parse_optional_int_field(reminder_hours_text)
-    return nominee_count, duration_hours, visibility, reminder_enabled, reminder_hours_before_close
+    reminder_minutes_before_close = parse_optional_reminder_minutes_field(reminder_minutes_text)
+    return nominee_count, duration_hours, visibility, reminder_enabled, reminder_minutes_before_close
 
 
 async def handle_start_vote_completion(
@@ -3417,7 +3457,7 @@ async def handle_start_vote_completion(
     scheduler_service: Optional[SchedulerService] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
     reminder_enabled: Optional[bool] = None,
-    reminder_hours_before_close: Optional[int] = None,
+    reminder_minutes_before_close: Optional[int] = None,
     rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
     resolved_database_id: Optional[int] = None,
@@ -3427,7 +3467,7 @@ async def handle_start_vote_completion(
     scheduler_service/guild_configuration_repository default to None so
     existing callers that don't pass them keep working unchanged; passing
     None simply skips scheduling (see schedule_vote_jobs).
-    reminder_enabled/reminder_hours_before_close default to None so
+    reminder_enabled/reminder_minutes_before_close default to None so
     existing callers keep working unchanged too; passing None uses the
     guild's configured reminder default (see FR-027's
     resolve_vote_reminder_settings).
@@ -3462,7 +3502,7 @@ async def handle_start_vote_completion(
                     scheduler_service=scheduler_service,
                     guild_configuration_repository=guild_configuration_repository,
                     reminder_enabled=reminder_enabled,
-                    reminder_hours_before_close=reminder_hours_before_close,
+                    reminder_minutes_before_close=reminder_minutes_before_close,
                     rotation_service=rotation_service,
                     suggestion_database_configuration_repository=suggestion_database_configuration_repository,
                     resolved_database_id=database_id,
@@ -3496,7 +3536,7 @@ async def handle_start_vote_completion(
         guild_id=interaction.guild_id,
         channel_id=interaction.channel_id,
         reminder_enabled=reminder_enabled,
-        reminder_hours_before_close=reminder_hours_before_close,
+        reminder_minutes_before_close=reminder_minutes_before_close,
         rotation_service=rotation_service,
         suggestion_database_configuration_repository=suggestion_database_configuration_repository,
         guild_configuration_repository=guild_configuration_repository,
@@ -3604,7 +3644,7 @@ async def handle_customize_vote_submit(
     duration_text: Optional[str],
     visibility_text: Optional[str],
     reminder_enabled_text: Optional[str] = None,
-    reminder_hours_text: Optional[str] = None,
+    reminder_minutes_text: Optional[str] = None,
     scheduler_service: Optional[SchedulerService] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
     rotation_service: Optional[RotationService] = None,
@@ -3612,9 +3652,9 @@ async def handle_customize_vote_submit(
 ) -> None:
     """Start a round using optional one-time modal overrides."""
     try:
-        nominee_count, duration_hours, visibility_str, reminder_enabled, reminder_hours_before_close = (
+        nominee_count, duration_hours, visibility_str, reminder_enabled, reminder_minutes_before_close = (
             parse_start_vote_overrides(
-                nominee_count_text, duration_text, visibility_text, reminder_enabled_text, reminder_hours_text
+                nominee_count_text, duration_text, visibility_text, reminder_enabled_text, reminder_minutes_text
             )
         )
     except ValueError as exc:
@@ -3634,7 +3674,7 @@ async def handle_customize_vote_submit(
         scheduler_service=scheduler_service,
         guild_configuration_repository=guild_configuration_repository,
         reminder_enabled=reminder_enabled,
-        reminder_hours_before_close=reminder_hours_before_close,
+        reminder_minutes_before_close=reminder_minutes_before_close,
         rotation_service=rotation_service,
         suggestion_database_configuration_repository=suggestion_database_configuration_repository,
     )
@@ -4544,10 +4584,29 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
                     ephemeral=True,
                 )
 
-            async def on_quick_pick(pick_interaction: discord.Interaction, minutes: int) -> None:
-                new_closes_at = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+            async def apply_end_time_delta(delta_interaction: discord.Interaction, delta_minutes: int) -> None:
+                """Shared completion for Shorten/Extend Vote: apply a delta
+                (negative to shorten, positive to extend) to the round's
+                *current* end time -- never to "now" -- rejecting the
+                result up front if it would land in the past rather than
+                letting VoteService reject it with a less specific message.
+                """
+                current_round = bot.vote_service.get_round(round_id)
+                if current_round is None or current_round.closes_at is None:
+                    await delta_interaction.response.send_message(
+                        "That voting round doesn't exist or has no end time to adjust.", ephemeral=True
+                    )
+                    return
+                new_closes_at = current_round.closes_at + timedelta(minutes=delta_minutes)
+                if new_closes_at <= datetime.now(timezone.utc):
+                    await delta_interaction.response.send_message(
+                        "That would move the end time into the past. Choose a smaller amount, "
+                        "or use End Now instead.",
+                        ephemeral=True,
+                    )
+                    return
                 await handle_reschedule_vote_completion(
-                    pick_interaction,
+                    delta_interaction,
                     vote_service=bot.vote_service,
                     suggestion_service=bot.suggestion_service,
                     wash_crew_role_id=bot.wash_crew_role_id,
@@ -4558,7 +4617,59 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
                     guild_configuration_repository=bot.guild_configuration_repository,
                 )
 
-            async def on_choose_custom(custom_interaction: discord.Interaction) -> None:
+            async def on_shorten(pick_interaction: discord.Interaction) -> None:
+                async def on_quick_pick(quick_interaction: discord.Interaction, minutes: int) -> None:
+                    await apply_end_time_delta(quick_interaction, -minutes)
+
+                async def on_choose_custom(custom_interaction: discord.Interaction) -> None:
+                    async def on_custom_submit(modal_interaction: discord.Interaction, duration_text: str) -> None:
+                        try:
+                            minutes = parse_duration_to_minutes(duration_text)
+                        except ValueError as exc:
+                            await modal_interaction.response.send_message(str(exc), ephemeral=True)
+                            return
+                        await apply_end_time_delta(modal_interaction, -minutes)
+
+                    await custom_interaction.response.send_modal(
+                        CustomDurationModal(on_custom_submit, title="Shorten Vote")
+                    )
+
+                await pick_interaction.response.send_message(
+                    f"Voting round {round_id} currently ends: {format_datetime_for_display(vote_round.closes_at)}\n\n"
+                    "Shorten it by how much?",
+                    view=DurationDeltaChoiceView(
+                        on_quick_pick, on_choose_custom, custom_id_prefix="wpm_edit_vote_shorten_pick"
+                    ),
+                    ephemeral=True,
+                )
+
+            async def on_extend(pick_interaction: discord.Interaction) -> None:
+                async def on_quick_pick(quick_interaction: discord.Interaction, minutes: int) -> None:
+                    await apply_end_time_delta(quick_interaction, minutes)
+
+                async def on_choose_custom(custom_interaction: discord.Interaction) -> None:
+                    async def on_custom_submit(modal_interaction: discord.Interaction, duration_text: str) -> None:
+                        try:
+                            minutes = parse_duration_to_minutes(duration_text)
+                        except ValueError as exc:
+                            await modal_interaction.response.send_message(str(exc), ephemeral=True)
+                            return
+                        await apply_end_time_delta(modal_interaction, minutes)
+
+                    await custom_interaction.response.send_modal(
+                        CustomDurationModal(on_custom_submit, title="Extend Vote")
+                    )
+
+                await pick_interaction.response.send_message(
+                    f"Voting round {round_id} currently ends: {format_datetime_for_display(vote_round.closes_at)}\n\n"
+                    "Extend it by how much?",
+                    view=DurationDeltaChoiceView(
+                        on_quick_pick, on_choose_custom, custom_id_prefix="wpm_edit_vote_extend_pick"
+                    ),
+                    ephemeral=True,
+                )
+
+            async def on_set_exact(custom_interaction: discord.Interaction) -> None:
                 async def on_custom_submit(modal_interaction: discord.Interaction, timestamp_text: str) -> None:
                     try:
                         new_closes_at = parse_discord_timestamp_vote_end_time(timestamp_text)
@@ -4581,11 +4692,11 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
 
             await button_interaction.response.send_message(
                 f"Voting round {round_id} currently ends: {format_datetime_for_display(vote_round.closes_at)}\n\n"
-                "Choose a new end time below.\n\n"
-                "**Custom Time:** Create a Discord timestamp by typing `@time` in any normal Discord message "
-                "box, selecting the desired date/time, then copying and pasting the generated timestamp "
-                "into WASH.",
-                view=VoteEndTimeQuickPickView(on_end_now_quick_pick, on_quick_pick, on_choose_custom),
+                "Choose how to change it below.\n\n"
+                "**Set Exact End Time:** Create a Discord timestamp by typing `@time` in any normal Discord "
+                "message box, selecting the desired date/time, then copying and pasting the generated "
+                "timestamp into WASH.",
+                view=VoteEndTimeMenuView(on_end_now_quick_pick, on_shorten, on_extend, on_set_exact),
                 ephemeral=True,
             )
 
@@ -4806,7 +4917,7 @@ async def handle_end_vote_now_completion(
     await cancel_vote_jobs(scheduler_service, round_id)
 
     await finalize_vote_completion(vote_service, suggestion_service, bot, result)
-    await sync_vote_winner_status_embeds(bot, result)
+    await sync_vote_completion_status_embeds(bot, result)
 
 
 def perform_cancel_vote_now(
@@ -5101,9 +5212,9 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
     and the status itself is already correctly persisted regardless of
     whether the embed could be refreshed. Called after every status
     change this milestone introduces admin control over: archive,
-    reactivate, and /edit_suggestion's Change Status action. Vote wins
-    are synchronized separately, once per winning suggestion, by
-    sync_vote_winner_status_embeds() -- called after both completion
+    reactivate, and /edit_suggestion's Change Status action. Vote
+    completion is synchronized separately, once per candidate, by
+    sync_vote_completion_status_embeds() -- called after both completion
     paths (a scheduled close_vote job and /edit_vote's "End Now").
     """
     if watch_item.channel_id is None or watch_item.message_id is None:
@@ -5148,13 +5259,22 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
         )
 
 
-async def sync_vote_winner_status_embeds(bot: "WatchPartyBot", result: VoteCompletionResult) -> None:
-    """Sync every winning suggestion's own confirmation-post Status field
-    to Vote Winner once a round completes (Requirement 7), regardless of
-    whether completion happened via a scheduled close_vote job or /edit_vote's
-    "End Now" -- both call this after finalize_vote_completion().
+async def sync_vote_completion_status_embeds(bot: "WatchPartyBot", result: VoteCompletionResult) -> None:
+    """Sync every candidate's own confirmation-post Status field once a
+    round completes, regardless of whether completion happened via a
+    scheduled close_vote job or /edit_vote's "End Now" -- both call this
+    after finalize_vote_completion().
+
+    Every candidate, not just the winner(s), must be refreshed here: a
+    losing nominee was already recorded as "presented" in this rotation
+    when the round started (see RotationService.record_presentation()),
+    so it's already on Rotation Cooldown internally the moment the round
+    completes -- but its public post keeps showing whatever status it
+    had when last synced (typically Available) until something actually
+    edits it. Syncing only the winner (the original bug) left every
+    losing nominee's post stuck on a stale status indefinitely.
     """
-    for suggestion_id in result.winning_suggestion_ids:
+    for suggestion_id in result.vote_round.candidate_suggestion_ids:
         watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
         if watch_item is not None:
             await sync_suggestion_status_embed(bot, watch_item)
@@ -6395,7 +6515,7 @@ def perform_reject_suggestion(
     user: object,
     guild_id: Optional[int],
     suggestion_id: int,
-) -> tuple[str, bool]:
+) -> tuple[str, bool, Optional[WatchItem]]:
     """Core logic for /reject, kept free of Discord objects except `user`.
 
     Args:
@@ -6408,16 +6528,20 @@ def perform_reject_suggestion(
         suggestion_id: The suggestion being rejected.
 
     Returns:
-        A (message, ephemeral) tuple. Always ephemeral -- a member's own
-        rejection is for their eyes only.
+        A (message, ephemeral, watch_item) tuple. Always ephemeral -- a
+        member's own rejection is for their eyes only. watch_item is the
+        suggestion's current state on success (used to link back to its
+        public post and to offer an Undo Rejection control), or None on
+        any failure (permission denied, nonexistent suggestion, already
+        archived, or already rejected by this member).
     """
     permission = permission_service.require_watch_party_member(user)
     if not permission.allowed:
-        return permission.message, True
+        return permission.message, True, None
 
     watch_item = suggestion_service.get_suggestion(suggestion_id)
     if watch_item is None:
-        return "That suggestion doesn't exist.", True
+        return "That suggestion doesn't exist.", True, None
 
     threshold = resolve_rejection_threshold(
         suggestion_database_configuration_repository, guild_id, watch_item.database_id
@@ -6425,7 +6549,7 @@ def perform_reject_suggestion(
     result = suggestion_service.reject_suggestion(
         suggestion_id, user.id, rejection_threshold=threshold
     )
-    return result.message, True
+    return result.message, True, result.watch_item
 
 
 def perform_remove_rejection(
@@ -6451,6 +6575,84 @@ def perform_remove_rejection(
 
     result = suggestion_service.remove_rejection(suggestion_id, user.id)
     return result.message, True
+
+
+def build_suggestion_message_link(watch_item: WatchItem) -> Optional[str]:
+    """Build a link back to a suggestion's original public post, or None
+    if it was never publicly confirmed (or that reference is incomplete).
+    """
+    if watch_item.guild_id is None or watch_item.channel_id is None or watch_item.message_id is None:
+        return None
+    return f"https://discord.com/channels/{watch_item.guild_id}/{watch_item.channel_id}/{watch_item.message_id}"
+
+
+def build_rejection_confirmation_text(message: str, watch_item: Optional[WatchItem]) -> str:
+    """Append a link back to the original suggestion post to a rejection
+    confirmation, when one is known (Requirement 2).
+    """
+    link = build_suggestion_message_link(watch_item) if watch_item is not None else None
+    if link is None:
+        return message
+    return f"{message}\n[View Suggestion]({link})"
+
+
+async def handle_undo_rejection(
+    interaction: discord.Interaction,
+    suggestion_service: SuggestionService,
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository],
+    permission_service: Optional[PermissionService],
+    bot: "WatchPartyBot",
+    suggestion_id: int,
+) -> None:
+    """Handle a click on a rejection confirmation's "Undo Rejection" button.
+
+    Reuses perform_remove_rejection() for the actual removal -- the exact
+    logic /unreject already uses -- then edits the confirmation message in
+    place to say what happened and refreshes the suggestion's own public
+    post so its rejection count stays accurate. Gracefully handles a
+    suggestion post that's since been deleted (or otherwise unreachable),
+    and a rejection that's already been undone some other way (e.g. the
+    same member separately toggled it off via the public "I WILL NOT
+    WATCH" button first) -- both are reported in the edited confirmation
+    text rather than raising.
+    """
+    if permission_service is None:
+        await interaction.response.edit_message(
+            content="Watch Party member permissions have not been configured.", view=None
+        )
+        return
+
+    message, _ = perform_remove_rejection(
+        suggestion_service=suggestion_service,
+        permission_service=permission_service,
+        user=interaction.user,
+        suggestion_id=suggestion_id,
+    )
+    await interaction.response.edit_message(content=message, view=None)
+
+    watch_item = suggestion_service.get_suggestion(suggestion_id)
+    if watch_item is None or watch_item.channel_id is None or watch_item.message_id is None:
+        return
+
+    view = build_suggestion_view(
+        suggestion_service,
+        suggestion_database_configuration_repository,
+        watch_item,
+        watch_item.guild_id,
+        permission_service=permission_service,
+    )
+    try:
+        channel = bot.get_channel(watch_item.channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(watch_item.channel_id)
+        post = await channel.fetch_message(watch_item.message_id)
+        await post.edit(view=view)
+    except Exception:
+        logger.warning(
+            "Could not refresh suggestion %s's post after an undone rejection; leaving it as-is",
+            suggestion_id,
+            exc_info=True,
+        )
 
 
 def perform_toggle_suggestion_rejection(

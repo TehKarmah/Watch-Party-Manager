@@ -13,13 +13,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.edit_vote_view import (
+    DURATION_DELTA_QUICK_PICKS,
     EDIT_VOTE_CONFIRMATION_TIMEOUT_SECONDS,
     EDIT_VOTE_VIEW_TIMEOUT_SECONDS,
-    VOTE_END_TIME_QUICK_PICKS,
+    CustomDurationModal,
     CustomVoteEndTimeModal,
+    DurationDeltaChoiceView,
     EditVoteConfirmationView,
     EditVoteManagementView,
-    VoteEndTimeQuickPickView,
+    VoteEndTimeMenuView,
 )
 
 
@@ -71,26 +73,30 @@ class EditVoteManagementViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, ["cancel_vote"])
 
 
-class VoteEndTimeQuickPickViewTests(unittest.IsolatedAsyncioTestCase):
+class VoteEndTimeMenuViewTests(unittest.IsolatedAsyncioTestCase):
     async def _noop_end_now(self, interaction) -> None:
         pass
 
-    async def _noop_pick(self, interaction, minutes) -> None:
+    async def _noop_shorten(self, interaction) -> None:
         pass
 
-    async def _noop_custom(self, interaction) -> None:
+    async def _noop_extend(self, interaction) -> None:
         pass
 
-    def _view(self, on_end_now=None, on_quick_pick=None, on_choose_custom=None) -> VoteEndTimeQuickPickView:
-        return VoteEndTimeQuickPickView(
+    async def _noop_set_exact(self, interaction) -> None:
+        pass
+
+    def _view(self, on_end_now=None, on_shorten=None, on_extend=None, on_set_exact=None) -> VoteEndTimeMenuView:
+        return VoteEndTimeMenuView(
             on_end_now or self._noop_end_now,
-            on_quick_pick or self._noop_pick,
-            on_choose_custom or self._noop_custom,
+            on_shorten or self._noop_shorten,
+            on_extend or self._noop_extend,
+            on_set_exact or self._noop_set_exact,
         )
 
-    def test_has_five_buttons(self) -> None:
+    def test_has_four_buttons(self) -> None:
         view = self._view()
-        self.assertEqual(len(view.children), 5)
+        self.assertEqual(len(view.children), 4)
 
     def test_uses_the_expected_timeout(self) -> None:
         view = self._view()
@@ -99,9 +105,7 @@ class VoteEndTimeQuickPickViewTests(unittest.IsolatedAsyncioTestCase):
     def test_button_labels_match_the_specified_options_in_order(self) -> None:
         view = self._view()
         labels = [button.label for button in view.children]
-        self.assertEqual(
-            labels, ["End Now", "In 5 Minutes", "In 1 Hour", "In 1 Day", "Custom Time..."]
-        )
+        self.assertEqual(labels, ["End Now", "Shorten Vote", "Extend Vote", "Set Exact End Time"])
 
     async def test_end_now_button_triggers_its_callback(self) -> None:
         calls = []
@@ -114,27 +118,76 @@ class VoteEndTimeQuickPickViewTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, ["end_now"])
 
-    async def test_quick_pick_button_forwards_its_minutes_value(self) -> None:
+    async def test_shorten_button_triggers_its_callback(self) -> None:
         calls = []
 
-        async def on_quick_pick(interaction, minutes) -> None:
-            calls.append(minutes)
+        async def on_shorten(interaction) -> None:
+            calls.append("shorten")
 
-        view = self._view(on_quick_pick=on_quick_pick)
+        view = self._view(on_shorten=on_shorten)
         await view.children[1].callback(interaction=object())
 
-        self.assertEqual(calls, [5])
+        self.assertEqual(calls, ["shorten"])
+
+    async def test_extend_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_extend(interaction) -> None:
+            calls.append("extend")
+
+        view = self._view(on_extend=on_extend)
+        await view.children[2].callback(interaction=object())
+
+        self.assertEqual(calls, ["extend"])
+
+    async def test_set_exact_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_set_exact(interaction) -> None:
+            calls.append("set_exact")
+
+        view = self._view(on_set_exact=on_set_exact)
+        await view.children[3].callback(interaction=object())
+
+        self.assertEqual(calls, ["set_exact"])
+
+
+class DurationDeltaChoiceViewTests(unittest.IsolatedAsyncioTestCase):
+    async def _noop_pick(self, interaction, minutes) -> None:
+        pass
+
+    async def _noop_custom(self, interaction) -> None:
+        pass
+
+    def _view(self, on_quick_pick=None, on_choose_custom=None) -> DurationDeltaChoiceView:
+        return DurationDeltaChoiceView(
+            on_quick_pick or self._noop_pick,
+            on_choose_custom or self._noop_custom,
+            custom_id_prefix="wpm_edit_vote_test_pick",
+        )
+
+    def test_has_three_buttons(self) -> None:
+        view = self._view()
+        self.assertEqual(len(view.children), 3)
+
+    def test_uses_the_expected_timeout(self) -> None:
+        view = self._view()
+        self.assertEqual(view.timeout, EDIT_VOTE_VIEW_TIMEOUT_SECONDS)
+
+    def test_button_labels_match_the_specified_options_in_order(self) -> None:
+        view = self._view()
+        labels = [button.label for button in view.children]
+        self.assertEqual(labels, ["1 Hour", "1 Day", "Custom..."])
 
     async def test_each_quick_pick_matches_its_declared_minutes(self) -> None:
-        for index, (_, minutes) in enumerate(VOTE_END_TIME_QUICK_PICKS):
+        for index, (_, minutes) in enumerate(DURATION_DELTA_QUICK_PICKS):
             calls = []
 
             async def on_quick_pick(interaction, picked_minutes, calls=calls) -> None:
                 calls.append(picked_minutes)
 
             view = self._view(on_quick_pick=on_quick_pick)
-            # +1 to skip past the leading End Now button.
-            await view.children[index + 1].callback(interaction=object())
+            await view.children[index].callback(interaction=object())
 
             self.assertEqual(calls, [minutes])
 
@@ -145,9 +198,58 @@ class VoteEndTimeQuickPickViewTests(unittest.IsolatedAsyncioTestCase):
             calls.append("custom")
 
         view = self._view(on_choose_custom=on_choose_custom)
-        await view.children[4].callback(interaction=object())
+        await view.children[2].callback(interaction=object())
 
         self.assertEqual(calls, ["custom"])
+
+    def test_custom_id_prefix_distinguishes_shorten_from_extend(self) -> None:
+        shorten_view = DurationDeltaChoiceView(
+            self._noop_pick, self._noop_custom, custom_id_prefix="wpm_edit_vote_shorten_pick"
+        )
+        extend_view = DurationDeltaChoiceView(
+            self._noop_pick, self._noop_custom, custom_id_prefix="wpm_edit_vote_extend_pick"
+        )
+        shorten_ids = {child.custom_id for child in shorten_view.children if child.custom_id}
+        extend_ids = {child.custom_id for child in extend_view.children if child.custom_id}
+        self.assertTrue(shorten_ids & {"wpm_edit_vote_shorten_pick_0", "wpm_edit_vote_shorten_pick_1"})
+        self.assertTrue(extend_ids & {"wpm_edit_vote_extend_pick_0", "wpm_edit_vote_extend_pick_1"})
+        self.assertFalse(shorten_ids & extend_ids)
+
+
+class CustomDurationModalTests(unittest.IsolatedAsyncioTestCase):
+    def _modal(self, on_submit=None, *, title="Shorten Vote") -> CustomDurationModal:
+        async def noop(interaction, duration_text) -> None:
+            pass
+
+        return CustomDurationModal(on_submit or noop, title=title)
+
+    def test_has_one_required_field(self) -> None:
+        modal = self._modal()
+        self.assertEqual(len(modal.children), 1)
+        self.assertTrue(modal.duration_input.required)
+
+    def test_field_uses_the_expected_label_and_placeholder(self) -> None:
+        modal = self._modal()
+        self.assertEqual(modal.duration_input.label, "Duration")
+        self.assertEqual(modal.duration_input.placeholder, "e.g. 10m, 1h, 1d, 1w")
+
+    def test_title_names_the_action_being_customized(self) -> None:
+        shorten_modal = self._modal(title="Shorten Vote")
+        extend_modal = self._modal(title="Extend Vote")
+        self.assertEqual(shorten_modal.title, "Shorten Vote")
+        self.assertEqual(extend_modal.title, "Extend Vote")
+
+    async def test_submission_forwards_the_raw_text_to_the_callback(self) -> None:
+        calls = []
+
+        async def on_submit(interaction, duration_text) -> None:
+            calls.append(duration_text)
+
+        modal = self._modal(on_submit=on_submit)
+        modal.duration_input._value = "10m"
+        await modal.on_submit(interaction=object())
+
+        self.assertEqual(calls, ["10m"])
 
 
 class CustomVoteEndTimeModalTests(unittest.IsolatedAsyncioTestCase):

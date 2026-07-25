@@ -928,19 +928,21 @@ class VotingDefaultsIntroView(SetupWizardStepView):
 
 
 class ReminderDefaultsModal(discord.ui.Modal):
-    """Step 7: whether a vote-ending reminder is sent, and how many hours before close."""
+    """Step 7: whether a vote-ending reminder is sent, and how long before close."""
 
     def __init__(self, on_submit: OnReminderDefaultsSubmit, *, defaults: Optional[Tuple[str, str]] = None) -> None:
         super().__init__(title="Reminder Defaults")
         self._submit_callback = on_submit
-        enabled_default, hours_default = defaults or ("yes", "24")
+        enabled_default, minutes_default = defaults or ("yes", "1 day")
         self.enabled_input = discord.ui.TextInput(label="Reminder enabled? (yes/no)", default=enabled_default)
-        self.hours_input = discord.ui.TextInput(label="Reminder hours before close (1-720)", default=hours_default)
+        self.minutes_input = discord.ui.TextInput(
+            label="Reminder before close (e.g. 10m, 1h, 1d)", default=minutes_default
+        )
         self.add_item(self.enabled_input)
-        self.add_item(self.hours_input)
+        self.add_item(self.minutes_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        await self._submit_callback(interaction, self.enabled_input.value, self.hours_input.value)
+        await self._submit_callback(interaction, self.enabled_input.value, self.minutes_input.value)
 
 
 class BackupDefaultsModal(discord.ui.Modal):

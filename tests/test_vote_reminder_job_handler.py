@@ -431,7 +431,7 @@ class VoteReminderJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTe
             vote_round,
             guild_id=100,
             reminder_enabled=True,
-            reminder_hours_before_close=48,  # in the past relative to closes_at - 1h
+            reminder_minutes_before_close=2880,  # in the past relative to closes_at - 1h
         )
         await scheduler_service.schedule(job)
 
@@ -465,7 +465,7 @@ class VoteReminderJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTe
             vote_round,
             guild_id=100,
             reminder_enabled=True,
-            reminder_hours_before_close=48,
+            reminder_minutes_before_close=2880,
         )
         await scheduler_service.schedule(job)
 
@@ -497,7 +497,7 @@ class VoteReminderJobHandlerSchedulerIntegrationTests(unittest.IsolatedAsyncioTe
             vote_round.id, guild_id=100, channel_id=200, message_id=999
         )
         job = build_vote_reminder_job(
-            vote_round, guild_id=100, reminder_enabled=True, reminder_hours_before_close=48
+            vote_round, guild_id=100, reminder_enabled=True, reminder_minutes_before_close=2880,
         )
 
         first_scheduler_service = SchedulerService(JsonSchedulerRepository(scheduler_repository_path))

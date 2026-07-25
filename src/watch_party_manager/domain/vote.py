@@ -118,7 +118,7 @@ class VoteRound:
     database_id: Optional[int] = None
     candidate_suggestion_ids: list[int] = field(default_factory=list)
     reminder_enabled: Optional[bool] = None
-    reminder_hours_before_close: Optional[int] = None
+    reminder_minutes_before_close: Optional[int] = None
     reminder_sent_at: Optional[datetime] = None
 
     def __post_init__(self) -> None:
@@ -131,7 +131,7 @@ class VoteRound:
         self._validate_results_message_id()
         self._validate_database_id()
         self._validate_candidate_suggestion_ids()
-        self._validate_reminder_hours_before_close()
+        self._validate_reminder_minutes_before_close()
         self._validate_reminder_sent_at()
 
     def _validate_id(self) -> None:
@@ -176,16 +176,17 @@ class VoteRound:
             raise ValueError("candidate_suggestion_ids must not contain duplicates")
         self.candidate_suggestion_ids = candidate_ids
 
-    def _validate_reminder_hours_before_close(self) -> None:
-        # A per-round override of VoteNotificationsConfig.reminder_hours_before_close
+    def _validate_reminder_minutes_before_close(self) -> None:
+        # A per-round override of VoteNotificationsConfig.reminder_minutes_before_close
         # (see domain/guild_configuration.py); None means "use the guild's
-        # configured default". Practical range bounds (1-720, matching that
-        # same config's own bounds) are enforced at the command layer (see
-        # bot.py's parse_vote_reminder_hours_before_close), not here -- this
-        # mirrors how duration_hours/nominee_count business-rule bounds are
-        # validated in bot.py rather than in this domain model.
-        if self.reminder_hours_before_close is not None and self.reminder_hours_before_close <= 0:
-            raise ValueError("reminder_hours_before_close must be a positive integer when provided")
+        # configured default". Practical range bounds (1-43200 minutes,
+        # matching that same config's own bounds) are enforced at the
+        # command layer (see bot.py's parse_vote_reminder_minutes_before_close),
+        # not here -- this mirrors how duration_hours/nominee_count
+        # business-rule bounds are validated in bot.py rather than in this
+        # domain model.
+        if self.reminder_minutes_before_close is not None and self.reminder_minutes_before_close <= 0:
+            raise ValueError("reminder_minutes_before_close must be a positive integer when provided")
 
     def _validate_reminder_sent_at(self) -> None:
         if self.reminder_sent_at is not None and self.reminder_sent_at.tzinfo is None:

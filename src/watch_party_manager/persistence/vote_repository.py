@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Union
+from typing import Iterable, Optional, Union
 
 from watch_party_manager.domain.vote import (
     VoteRecord,
@@ -113,7 +113,7 @@ class JsonVoteRepository:
             "database_id": vote_round.database_id,
             "candidate_suggestion_ids": list(vote_round.candidate_suggestion_ids),
             "reminder_enabled": vote_round.reminder_enabled,
-            "reminder_hours_before_close": vote_round.reminder_hours_before_close,
+            "reminder_minutes_before_close": vote_round.reminder_minutes_before_close,
             "reminder_sent_at": vote_round.reminder_sent_at.isoformat() if vote_round.reminder_sent_at else None,
             "votes": [
                 JsonVoteRepository._serialize_vote(vote_record)
@@ -156,9 +156,28 @@ class JsonVoteRepository:
             database_id=entry.get("database_id"),
             candidate_suggestion_ids=entry.get("candidate_suggestion_ids", []),
             reminder_enabled=entry.get("reminder_enabled"),
-            reminder_hours_before_close=entry.get("reminder_hours_before_close"),
+            reminder_minutes_before_close=JsonVoteRepository._resolve_reminder_minutes_before_close(entry),
             reminder_sent_at=datetime.fromisoformat(reminder_sent_at_raw) if reminder_sent_at_raw else None,
         )
+
+    @staticmethod
+    def _resolve_reminder_minutes_before_close(entry: dict) -> Optional[int]:
+        """Minute-Precision Reminders: backward-compatible loading for a
+        per-round reminder override, mirroring
+        GuildConfigurationRepository._resolve_reminder_minutes_before_close.
+
+        A record already written under the new schema has
+        "reminder_minutes_before_close" (including an explicit None) and
+        is used directly. An older record has only the now-legacy
+        "reminder_hours_before_close" -- converted to the exact
+        equivalent minute count (hours * 60). A record with neither key
+        (the common case: no per-round override was ever set) resolves
+        to None, matching the field's own "use the guild default" meaning.
+        """
+        if "reminder_minutes_before_close" in entry:
+            return entry["reminder_minutes_before_close"]
+        legacy_hours = entry.get("reminder_hours_before_close")
+        return legacy_hours * 60 if legacy_hours is not None else None
 
     @staticmethod
     def _deserialize_vote(entry: dict) -> VoteRecord:

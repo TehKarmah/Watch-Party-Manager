@@ -14,7 +14,7 @@ after a WASH or scheduler restart -- see VoteService.mark_reminder_sent().
 
 See the module docstring of vote_scheduling.py for the job this handler
 executes (created by schedule_vote_jobs() in FR-015, with FR-027's
-per-round reminder_enabled/reminder_hours_before_close overrides applied
+per-round reminder_enabled/reminder_minutes_before_close overrides applied
 via resolve_vote_reminder_settings()).
 """
 

@@ -50,7 +50,7 @@ from watch_party_manager.services.configuration_validation import (
     validate_channel_usable,
     validate_role_exists,
 )
-from watch_party_manager.services.duration_formatter import format_duration_hours
+from watch_party_manager.services.duration_formatter import format_duration_hours, format_duration_minutes
 from watch_party_manager.services.suggestion_service import SuggestionService
 
 # Backup schedule/retention have no dedicated persisted "Application
@@ -310,10 +310,10 @@ class SetupWizardService:
         return self._advance(state, SetupWizardStep.VOTING_DEFAULTS, draft)
 
     def set_reminder_defaults(
-        self, state: SetupWizardState, enabled: bool, hours_before_close: int
+        self, state: SetupWizardState, enabled: bool, minutes_before_close: int
     ) -> SetupWizardState:
         draft = replace(
-            state.draft, reminder_enabled=enabled, reminder_hours_before_close=hours_before_close
+            state.draft, reminder_enabled=enabled, reminder_minutes_before_close=minutes_before_close
         )
         return self._advance(state, SetupWizardStep.REMINDER_DEFAULTS, draft)
 
@@ -393,7 +393,8 @@ class SetupWizardService:
         if draft.reminder_enabled is not None:
             if draft.reminder_enabled:
                 lines.append(
-                    f"Reminder Defaults: Configured (enabled, {draft.reminder_hours_before_close}h before close)"
+                    "Reminder Defaults: Configured (enabled, "
+                    f"{format_duration_minutes(draft.reminder_minutes_before_close)} before close)"
                 )
             else:
                 lines.append("Reminder Defaults: Configured (disabled)")
@@ -542,7 +543,7 @@ class SetupWizardService:
             updated_vote_notifications = replace(
                 base.notifications.vote,
                 vote_ending_reminder=draft.reminder_enabled,
-                reminder_hours_before_close=draft.reminder_hours_before_close,
+                reminder_minutes_before_close=draft.reminder_minutes_before_close,
             )
             updated = replace(
                 updated,

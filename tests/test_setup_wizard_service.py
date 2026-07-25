@@ -538,7 +538,7 @@ class ReminderDefaultsStepTests(SetupWizardServiceTestCase):
         state, _ = self.service.start_or_resume(GUILD_ID)
         updated = self.service.set_reminder_defaults(state, True, 24)
         self.assertTrue(updated.draft.reminder_enabled)
-        self.assertEqual(updated.draft.reminder_hours_before_close, 24)
+        self.assertEqual(updated.draft.reminder_minutes_before_close, 24)
         self.assertEqual(updated.current_step, SetupWizardStep.BACKUP_DEFAULTS)
 
     def test_disabled_reminder_is_saved(self):
@@ -549,7 +549,7 @@ class ReminderDefaultsStepTests(SetupWizardServiceTestCase):
     def test_timing_is_saved(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
         updated = self.service.set_reminder_defaults(state, True, 72)
-        self.assertEqual(updated.draft.reminder_hours_before_close, 72)
+        self.assertEqual(updated.draft.reminder_minutes_before_close, 72)
 
 
 class BackupDefaultsStepTests(SetupWizardServiceTestCase):

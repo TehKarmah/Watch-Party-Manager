@@ -107,7 +107,7 @@ class SetupWizardDraft:
     voting_candidate_selection: Optional[CandidateSelectionMode] = None
 
     reminder_enabled: Optional[bool] = None
-    reminder_hours_before_close: Optional[int] = None
+    reminder_minutes_before_close: Optional[int] = None
 
     backup_interval_days: Optional[int] = None
     backup_retention_count: Optional[int] = None

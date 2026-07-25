@@ -30,7 +30,7 @@ class GuildConfigurationTests(unittest.TestCase):
         self.assertEqual(config.voting_defaults.tie_behavior, TieBehavior.ALL_WINNERS)
         self.assertFalse(config.feature_flags.birthday_picks)
         self.assertTrue(config.watch_history.allow_repeat_watches)
-        self.assertEqual(config.notifications.vote.reminder_hours_before_close, 24)
+        self.assertEqual(config.notifications.vote.reminder_minutes_before_close, 24 * 60)
         self.assertEqual(config.notifications.watch.reminder_hours_before_watch, 1)
         self.assertEqual(config.notifications.administrative.low_suggestion_pool_threshold, 10)
 

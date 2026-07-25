@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from watch_party_manager.bot import (
     build_suggestion_confirmation_embed,
     sync_suggestion_status_embed,
-    sync_vote_winner_status_embeds,
+    sync_vote_completion_status_embeds,
 )
 from watch_party_manager.domain.watch_item import MediaType, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
@@ -97,15 +97,15 @@ class FakeMessage:
 
 
 class FakeChannel:
-    def __init__(self, message: FakeMessage, *, fail_fetch: bool = False) -> None:
-        self._message = message
+    def __init__(self, *messages: FakeMessage, fail_fetch: bool = False) -> None:
+        self._messages = {message.id: message for message in messages}
         self._fail_fetch = fail_fetch
         self.sent_messages = []
 
     async def fetch_message(self, message_id):
         if self._fail_fetch:
             raise RuntimeError("simulated fetch failure")
-        return self._message
+        return self._messages[message_id]
 
     async def send(self, *args, **kwargs):
         self.sent_messages.append((args, kwargs))
@@ -113,10 +113,10 @@ class FakeChannel:
 
 
 class FakeBot:
-    def __init__(self, suggestion_service: SuggestionService, channel: FakeChannel) -> None:
+    def __init__(self, suggestion_service: SuggestionService, channel: FakeChannel, *, rotation_service=None) -> None:
         self.suggestion_service = suggestion_service
         self.suggestion_database_configuration_repository = None
-        self.rotation_service = None
+        self.rotation_service = rotation_service
         self.permission_service = None
         self._channel = channel
 
@@ -162,12 +162,13 @@ class SyncSuggestionStatusEmbedTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_op_when_no_message_reference_exists(self) -> None:
         watch_item = make_item(database_id=self.database.database_id)
-        channel = FakeChannel(FakeMessage(message_id=1))
+        message = FakeMessage(message_id=1)
+        channel = FakeChannel(message)
         bot = FakeBot(self.suggestion_service, channel)
 
         await sync_suggestion_status_embed(bot, watch_item)
 
-        self.assertEqual(0, channel._message.edit_calls)
+        self.assertEqual(0, message.edit_calls)
 
     async def test_silently_skips_an_unreachable_message(self) -> None:
         watch_item = self.suggestion_service.suggest(
@@ -183,7 +184,14 @@ class SyncSuggestionStatusEmbedTests(unittest.IsolatedAsyncioTestCase):
         await sync_suggestion_status_embed(bot, watch_item)
 
 
-class SyncVoteWinnerStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
+class SyncVoteCompletionStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
+    """Requirement 1 (Rotation Cooldown Bug): a losing nominee's own
+    confirmation post must be refreshed to Rotation Cooldown right along
+    with the winner's refresh to Vote Winner -- the original bug synced
+    only the winner, leaving every losing nominee's post stuck showing
+    whatever status it had before the round completed.
+    """
+
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._temp_dir.cleanup)
@@ -193,27 +201,52 @@ class SyncVoteWinnerStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
             database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
         )
         self.database = self.suggestion_service.create_database("Movies", GUILD_ID, CHANNEL_ID).database
+        from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 
-    async def test_syncs_every_winning_suggestion(self) -> None:
+        self.rotation_service = RotationService(
+            self.suggestion_service, repository=JsonRotationRepository(root / "rotations.json")
+        )
+
+    def _status_of(self, embed) -> str:
+        return next(field.value for field in embed.fields if field.name == "Status")
+
+    async def test_syncs_the_winner_to_vote_winner_and_the_loser_to_rotation_cooldown(self) -> None:
+        from watch_party_manager.domain.vote import VoteRound
+
         winner = self.suggestion_service.suggest(
             "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).watch_item
+        loser = self.suggestion_service.suggest(
+            "Predator", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
         self.suggestion_service.set_confirmation_post_reference(winner.id, GUILD_ID, CHANNEL_ID, 777)
+        self.suggestion_service.set_confirmation_post_reference(loser.id, GUILD_ID, CHANNEL_ID, 778)
+
+        # Both candidates are marked "presented" when the round starts --
+        # this is what RotationService.record_presentation() does at
+        # nominee-selection time, well before anyone knows the winner.
+        self.rotation_service.record_presentation(self.database.database_id, [winner.id, loser.id])
         self.suggestion_service.record_vote_win(winner.id, None)
-        winner = self.suggestion_service.get_suggestion(winner.id)
 
-        message = FakeMessage(message_id=777)
-        channel = FakeChannel(message)
-        bot = FakeBot(self.suggestion_service, channel)
+        winner_message = FakeMessage(message_id=777)
+        loser_message = FakeMessage(message_id=778)
+        channel = FakeChannel(winner_message, loser_message)
+        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
 
-        result = VoteCompletionResult(
-            vote_round=None, winning_suggestion_ids=[winner.id], standings=(), total_votes_cast=0
+        vote_round = VoteRound(
+            id=1,
+            database_id=self.database.database_id,
+            candidate_suggestion_ids=[winner.id, loser.id],
         )
-        await sync_vote_winner_status_embeds(bot, result)
+        result = VoteCompletionResult(
+            vote_round=vote_round, winning_suggestion_ids=[winner.id], standings=(), total_votes_cast=2
+        )
+        await sync_vote_completion_status_embeds(bot, result)
 
-        self.assertEqual(1, message.edit_calls)
-        status_field = next(field for field in message.edited_embed.fields if field.name == "Status")
-        self.assertEqual("🟣 Vote Winner", status_field.value)
+        self.assertEqual(1, winner_message.edit_calls)
+        self.assertEqual("🟣 Vote Winner", self._status_of(winner_message.edited_embed))
+        self.assertEqual(1, loser_message.edit_calls)
+        self.assertEqual("🟡 Rotation Cooldown", self._status_of(loser_message.edited_embed))
 
 
 class RotationCooldownAutomaticallyRevertsTests(unittest.TestCase):

@@ -591,7 +591,7 @@ class ReminderDefaultsSectionTests(ConfigServiceTestCase):
         self.assertTrue(result.success)
         vote_notifications = self.guild_configuration_repository.get(GUILD_ID).notifications.vote
         self.assertTrue(vote_notifications.vote_ending_reminder)
-        self.assertEqual(vote_notifications.reminder_hours_before_close, 48)
+        self.assertEqual(vote_notifications.reminder_minutes_before_close, 48)
 
     def test_disabled_is_saved(self) -> None:
         self._seed_completed_setup()
@@ -603,7 +603,7 @@ class ReminderDefaultsSectionTests(ConfigServiceTestCase):
         self._seed_completed_setup()
         self.service.set_reminder_defaults(GUILD_ID, True, 72)
         self.assertEqual(
-            self.guild_configuration_repository.get(GUILD_ID).notifications.vote.reminder_hours_before_close, 72
+            self.guild_configuration_repository.get(GUILD_ID).notifications.vote.reminder_minutes_before_close, 72
         )
 
 

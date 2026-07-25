@@ -139,11 +139,11 @@ class VoteNotificationsConfig:
     vote_started: bool = True
     vote_results: bool = True
     vote_ending_reminder: bool = True
-    reminder_hours_before_close: int = 24
+    reminder_minutes_before_close: int = 24 * 60
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
-        _validate_positive_int(self.reminder_hours_before_close, "reminder_hours_before_close", 1, 720)
+        _validate_positive_int(self.reminder_minutes_before_close, "reminder_minutes_before_close", 1, 720 * 60)
         _validate_extra_fields(self.extra_fields)
 
 

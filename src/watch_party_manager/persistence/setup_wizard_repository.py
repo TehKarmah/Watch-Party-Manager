@@ -116,6 +116,7 @@ class SetupWizardRepository:
                 "suggestion_database_is_new": draft.suggestion_database_is_new,
                 "admin_channel_id": draft.admin_channel_id,
                 "admin_channel_skipped": draft.admin_channel_skipped,
+                "home_channel_id": draft.home_channel_id,
                 "watch_destination_channel_id": draft.watch_destination_channel_id,
                 "watch_destination_skipped": draft.watch_destination_skipped,
                 "voting_candidate_count": draft.voting_candidate_count,
@@ -125,7 +126,7 @@ class SetupWizardRepository:
                     draft.voting_candidate_selection.value if draft.voting_candidate_selection else None
                 ),
                 "reminder_enabled": draft.reminder_enabled,
-                "reminder_hours_before_close": draft.reminder_hours_before_close,
+                "reminder_minutes_before_close": draft.reminder_minutes_before_close,
                 "backup_interval_days": draft.backup_interval_days,
                 "backup_retention_count": draft.backup_retention_count,
             },
@@ -147,6 +148,7 @@ class SetupWizardRepository:
             suggestion_database_is_new=draft_entry.get("suggestion_database_is_new", False),
             admin_channel_id=draft_entry.get("admin_channel_id"),
             admin_channel_skipped=draft_entry.get("admin_channel_skipped", False),
+            home_channel_id=draft_entry.get("home_channel_id"),
             watch_destination_channel_id=draft_entry.get("watch_destination_channel_id"),
             watch_destination_skipped=draft_entry.get("watch_destination_skipped", False),
             voting_candidate_count=draft_entry.get("voting_candidate_count"),
@@ -156,7 +158,7 @@ class SetupWizardRepository:
                 CandidateSelectionMode(candidate_selection_raw) if candidate_selection_raw else None
             ),
             reminder_enabled=draft_entry.get("reminder_enabled"),
-            reminder_hours_before_close=draft_entry.get("reminder_hours_before_close"),
+            reminder_minutes_before_close=draft_entry.get("reminder_minutes_before_close"),
             backup_interval_days=draft_entry.get("backup_interval_days"),
             backup_retention_count=draft_entry.get("backup_retention_count"),
         )

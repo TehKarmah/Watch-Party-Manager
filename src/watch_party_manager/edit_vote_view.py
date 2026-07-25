@@ -20,9 +20,13 @@ OnChangeEndTime = Callable[[discord.Interaction], Awaitable[None]]
 OnCancelVote = Callable[[discord.Interaction], Awaitable[None]]
 OnEditVoteConfirmed = Callable[[discord.Interaction], Awaitable[None]]
 OnEditVoteAborted = Callable[[discord.Interaction], Awaitable[None]]
-OnQuickEndTimePick = Callable[[discord.Interaction, int], Awaitable[None]]
 OnEndNowQuickPick = Callable[[discord.Interaction], Awaitable[None]]
-OnChooseCustomEndTime = Callable[[discord.Interaction], Awaitable[None]]
+OnShortenVote = Callable[[discord.Interaction], Awaitable[None]]
+OnExtendVote = Callable[[discord.Interaction], Awaitable[None]]
+OnSetExactEndTime = Callable[[discord.Interaction], Awaitable[None]]
+OnDurationDeltaPick = Callable[[discord.Interaction, int], Awaitable[None]]
+OnChooseCustomDelta = Callable[[discord.Interaction], Awaitable[None]]
+OnCustomDurationSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnCustomEndTimeSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 
 # A short timeout is appropriate here, matching StartVoteChoiceView -- this
@@ -67,8 +71,8 @@ class CancelVoteButton(discord.ui.Button):
 
 class EditVoteManagementView(discord.ui.View):
     """The /edit_vote management prompt: change end time (which now
-    includes ending it immediately as one of its quick options -- see
-    VoteEndTimeQuickPickView), or cancel the vote outright.
+    includes ending it immediately as one of its options -- see
+    VoteEndTimeMenuView), or cancel the vote outright.
     """
 
     def __init__(
@@ -88,7 +92,7 @@ class EditVoteManagementView(discord.ui.View):
 
 
 class EndNowQuickPickButton(discord.ui.Button):
-    """Ends the vote immediately -- the first, most-final quick option."""
+    """Ends the vote immediately -- the first, most-final option."""
 
     def __init__(self, on_click: OnEndNowQuickPick) -> None:
         super().__init__(
@@ -100,10 +104,78 @@ class EndNowQuickPickButton(discord.ui.Button):
         await self._callback(interaction)
 
 
-class QuickEndTimeButton(discord.ui.Button):
-    """One "In N Minutes/Hour/Day" quick-pick option."""
+class ShortenVoteButton(discord.ui.Button):
+    """Opens the Shorten Vote submenu (1 Hour / 1 Day / Custom...)."""
 
-    def __init__(self, label: str, minutes: int, on_click: OnQuickEndTimePick, *, custom_id: str) -> None:
+    def __init__(self, on_click: OnShortenVote) -> None:
+        super().__init__(
+            label="Shorten Vote", style=discord.ButtonStyle.primary, custom_id="wpm_edit_vote_shorten"
+        )
+        self._callback = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._callback(interaction)
+
+
+class ExtendVoteButton(discord.ui.Button):
+    """Opens the Extend Vote submenu (1 Hour / 1 Day / Custom...)."""
+
+    def __init__(self, on_click: OnExtendVote) -> None:
+        super().__init__(
+            label="Extend Vote", style=discord.ButtonStyle.primary, custom_id="wpm_edit_vote_extend"
+        )
+        self._callback = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._callback(interaction)
+
+
+class SetExactEndTimeButton(discord.ui.Button):
+    """Opens the Discord Timestamp modal (formerly "Custom Time...")."""
+
+    def __init__(self, on_click: OnSetExactEndTime) -> None:
+        super().__init__(
+            label="Set Exact End Time",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_edit_vote_set_exact_end_time",
+        )
+        self._callback = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._callback(interaction)
+
+
+class VoteEndTimeMenuView(discord.ui.View):
+    """The "Change End Time" flow's top-level menu: End Now, Shorten Vote,
+    Extend Vote, or Set Exact End Time.
+    """
+
+    def __init__(
+        self,
+        on_end_now: OnEndNowQuickPick,
+        on_shorten: OnShortenVote,
+        on_extend: OnExtendVote,
+        on_set_exact: OnSetExactEndTime,
+    ) -> None:
+        """Initialize the view.
+
+        Args:
+            on_end_now: Called when "End Now" is clicked.
+            on_shorten: Called when "Shorten Vote" is clicked.
+            on_extend: Called when "Extend Vote" is clicked.
+            on_set_exact: Called when "Set Exact End Time" is clicked.
+        """
+        super().__init__(timeout=EDIT_VOTE_VIEW_TIMEOUT_SECONDS)
+        self.add_item(EndNowQuickPickButton(on_end_now))
+        self.add_item(ShortenVoteButton(on_shorten))
+        self.add_item(ExtendVoteButton(on_extend))
+        self.add_item(SetExactEndTimeButton(on_set_exact))
+
+
+class DurationDeltaButton(discord.ui.Button):
+    """One "1 Hour"/"1 Day" quick-pick option within Shorten/Extend Vote."""
+
+    def __init__(self, label: str, minutes: int, on_click: OnDurationDeltaPick, *, custom_id: str) -> None:
         super().__init__(label=label, style=discord.ButtonStyle.primary, custom_id=custom_id)
         self._minutes = minutes
         self._callback = on_click
@@ -112,14 +184,14 @@ class QuickEndTimeButton(discord.ui.Button):
         await self._callback(interaction, self._minutes)
 
 
-class ChooseCustomEndTimeButton(discord.ui.Button):
-    """Opens the Custom Time modal."""
+class ChooseCustomDeltaButton(discord.ui.Button):
+    """Opens the Custom Duration modal within Shorten/Extend Vote."""
 
-    def __init__(self, on_click: OnChooseCustomEndTime) -> None:
+    def __init__(self, on_click: OnChooseCustomDelta, *, custom_id: str) -> None:
         super().__init__(
-            label="Custom Time...",
+            label="Custom...",
             style=discord.ButtonStyle.secondary,
-            custom_id="wpm_edit_vote_choose_custom_end_time",
+            custom_id=custom_id,
         )
         self._callback = on_click
 
@@ -127,50 +199,74 @@ class ChooseCustomEndTimeButton(discord.ui.Button):
         await self._callback(interaction)
 
 
-# (label, minutes-from-now) for each timed quick pick, in display order
-# (after End Now, before Custom Time...). Kept as minutes (rather than
-# pre-built timedeltas) so bot.py can compute "now" itself right at click
-# time, matching how every other "must be in the future" check works.
-VOTE_END_TIME_QUICK_PICKS: tuple[tuple[str, int], ...] = (
-    ("In 5 Minutes", 5),
-    ("In 1 Hour", 60),
-    ("In 1 Day", 24 * 60),
+# (label, minutes) for Shorten/Extend Vote's quick picks, in display order.
+DURATION_DELTA_QUICK_PICKS: tuple[tuple[str, int], ...] = (
+    ("1 Hour", 60),
+    ("1 Day", 24 * 60),
 )
 
 
-class VoteEndTimeQuickPickView(discord.ui.View):
-    """The guided "Change End Time" flow's menu: End Now, timed quick
-    options, or a hand-off to the Custom Time modal for anything else.
+class DurationDeltaChoiceView(discord.ui.View):
+    """Shorten/Extend Vote's shared submenu: 1 Hour, 1 Day, or a hand-off
+    to the Custom Duration modal for anything else. The direction (add
+    for Extend, subtract for Shorten) is entirely the caller's concern --
+    this view only collects a magnitude in minutes.
     """
 
     def __init__(
         self,
-        on_end_now: OnEndNowQuickPick,
-        on_quick_pick: OnQuickEndTimePick,
-        on_choose_custom: OnChooseCustomEndTime,
+        on_quick_pick: OnDurationDeltaPick,
+        on_choose_custom: OnChooseCustomDelta,
+        *,
+        custom_id_prefix: str,
     ) -> None:
         """Initialize the view.
 
         Args:
-            on_end_now: Called when "End Now" is clicked.
-            on_quick_pick: Called with (interaction, minutes_from_now) when
-                one of the timed quick-pick buttons is clicked.
-            on_choose_custom: Called when "Custom Time..." is clicked.
+            on_quick_pick: Called with (interaction, minutes) when "1 Hour"
+                or "1 Day" is clicked.
+            on_choose_custom: Called when "Custom..." is clicked.
+            custom_id_prefix: Distinguishes this menu's button custom_ids
+                from the other one (Shorten vs. Extend), since both are
+                otherwise identical.
         """
         super().__init__(timeout=EDIT_VOTE_VIEW_TIMEOUT_SECONDS)
-        self.add_item(EndNowQuickPickButton(on_end_now))
-        for index, (label, minutes) in enumerate(VOTE_END_TIME_QUICK_PICKS):
+        for index, (label, minutes) in enumerate(DURATION_DELTA_QUICK_PICKS):
             self.add_item(
-                QuickEndTimeButton(
-                    label, minutes, on_quick_pick, custom_id=f"wpm_edit_vote_quick_end_time_{index}"
-                )
+                DurationDeltaButton(label, minutes, on_quick_pick, custom_id=f"{custom_id_prefix}_{index}")
             )
-        self.add_item(ChooseCustomEndTimeButton(on_choose_custom))
+        self.add_item(ChooseCustomDeltaButton(on_choose_custom, custom_id=f"{custom_id_prefix}_custom"))
+
+
+class CustomDurationModal(discord.ui.Modal):
+    """Collects a single free-text duration (e.g. "10m", "1h", "1d", "1w")
+    for Shorten/Extend Vote's Custom... option, using WASH's one shared
+    duration syntax (see services.duration_parser).
+
+    Parsing and validation happen in bot.py; this modal only collects the
+    raw text. title is caller-supplied ("Shorten Vote" or "Extend Vote")
+    so the modal itself names the action being customized.
+    """
+
+    def __init__(self, on_submit: OnCustomDurationSubmit, *, title: str) -> None:
+        super().__init__(title=title)
+        self._submit_callback = on_submit
+
+        self.duration_input = discord.ui.TextInput(
+            label="Duration",
+            placeholder="e.g. 10m, 1h, 1d, 1w",
+            required=True,
+        )
+        self.add_item(self.duration_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """Forward the raw duration text to the configured handler."""
+        await self._submit_callback(interaction, self.duration_input.value)
 
 
 class CustomVoteEndTimeModal(discord.ui.Modal):
     """Collects a single Discord-native timestamp (e.g. "<t:1785639600:F>")
-    rather than typed date/time fields.
+    rather than typed date/time fields, for "Set Exact End Time".
 
     Parsing -- validating the syntax and rejecting a malformed or past
     timestamp -- happens in bot.py's
@@ -179,7 +275,7 @@ class CustomVoteEndTimeModal(discord.ui.Modal):
     """
 
     def __init__(self, on_submit: OnCustomEndTimeSubmit) -> None:
-        super().__init__(title="Custom Time")
+        super().__init__(title="Set Exact End Time")
         self._submit_callback = on_submit
 
         self.timestamp_input = discord.ui.TextInput(

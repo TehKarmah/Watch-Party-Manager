@@ -46,6 +46,7 @@ class SetupWizardRepositoryTests(unittest.TestCase):
             suggestion_database_is_new=True,
             admin_channel_id=300,
             admin_channel_skipped=False,
+            home_channel_id=500,
             watch_destination_channel_id=400,
             watch_destination_skipped=False,
             voting_candidate_count=4,
@@ -53,7 +54,7 @@ class SetupWizardRepositoryTests(unittest.TestCase):
             voting_visibility=GuildVoteVisibility.VISIBLE,
             voting_candidate_selection=CandidateSelectionMode.ROTATION_POOL,
             reminder_enabled=True,
-            reminder_hours_before_close=48,
+            reminder_minutes_before_close=48 * 60,
             backup_interval_days=2,
             backup_retention_count=15,
         )
@@ -77,12 +78,13 @@ class SetupWizardRepositoryTests(unittest.TestCase):
         self.assertTrue(loaded.draft.suggestion_database_is_new)
         self.assertEqual(loaded.draft.admin_channel_id, 300)
         self.assertFalse(loaded.draft.admin_channel_skipped)
+        self.assertEqual(loaded.draft.home_channel_id, 500)
         self.assertEqual(loaded.draft.voting_candidate_count, 4)
         self.assertEqual(loaded.draft.voting_duration_hours, 10)
         self.assertEqual(loaded.draft.voting_visibility, GuildVoteVisibility.VISIBLE)
         self.assertEqual(loaded.draft.voting_candidate_selection, CandidateSelectionMode.ROTATION_POOL)
         self.assertTrue(loaded.draft.reminder_enabled)
-        self.assertEqual(loaded.draft.reminder_hours_before_close, 48)
+        self.assertEqual(loaded.draft.reminder_minutes_before_close, 48 * 60)
         self.assertEqual(loaded.draft.backup_interval_days, 2)
         self.assertEqual(loaded.draft.backup_retention_count, 15)
 
@@ -135,6 +137,17 @@ class SetupWizardRepositoryTests(unittest.TestCase):
         loaded = self.repo.get(1)
         self.assertTrue(loaded.draft.admin_channel_skipped)
         self.assertIsNone(loaded.draft.admin_channel_id)
+
+    def test_home_channel_id_round_trips_across_a_save_and_reload(self):
+        # Regression test: home_channel_id was entirely missing from the
+        # repository's serialize/deserialize -- every collection thread
+        # created after a Save & Finish Later + resume would silently
+        # lose its home channel, resolving to None and failing with
+        # "WASH's home channel is no longer available."
+        draft = SetupWizardDraft(home_channel_id=600)
+        self.repo.save(SetupWizardState(guild_id=1, draft=draft))
+        loaded = self.repo.get(1)
+        self.assertEqual(loaded.draft.home_channel_id, 600)
 
     def test_round_trips_a_skipped_and_incomplete_draft(self):
         draft = SetupWizardDraft(watch_destination_skipped=True)

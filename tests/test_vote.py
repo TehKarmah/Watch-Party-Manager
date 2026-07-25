@@ -252,20 +252,20 @@ class VoteRoundModelTests(unittest.TestCase):
         vote_round = VoteRound(id=1)
 
         self.assertIsNone(vote_round.reminder_enabled)
-        self.assertIsNone(vote_round.reminder_hours_before_close)
+        self.assertIsNone(vote_round.reminder_minutes_before_close)
         self.assertIsNone(vote_round.reminder_sent_at)
 
     def test_accepts_a_reminder_enabled_override(self) -> None:
         self.assertTrue(VoteRound(id=1, reminder_enabled=True).reminder_enabled)
         self.assertFalse(VoteRound(id=1, reminder_enabled=False).reminder_enabled)
 
-    def test_accepts_a_reminder_hours_before_close_override(self) -> None:
-        vote_round = VoteRound(id=1, reminder_hours_before_close=4)
-        self.assertEqual(vote_round.reminder_hours_before_close, 4)
+    def test_accepts_a_reminder_minutes_before_close_override(self) -> None:
+        vote_round = VoteRound(id=1, reminder_minutes_before_close=240)
+        self.assertEqual(vote_round.reminder_minutes_before_close, 240)
 
-    def test_rejects_a_non_positive_reminder_hours_before_close(self) -> None:
+    def test_rejects_a_non_positive_reminder_minutes_before_close(self) -> None:
         with self.assertRaises(ValueError):
-            VoteRound(id=1, reminder_hours_before_close=0)
+            VoteRound(id=1, reminder_minutes_before_close=0)
 
     def test_accepts_a_timezone_aware_reminder_sent_at(self) -> None:
         sent_at = utc_now()

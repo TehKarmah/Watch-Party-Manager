@@ -72,7 +72,7 @@ def build_vote_reminder_job(
     guild_id: int,
     *,
     reminder_enabled: bool,
-    reminder_hours_before_close: int,
+    reminder_minutes_before_close: int,
 ) -> Optional[ScheduledJob]:
     """Build the pre-close reminder job for this vote, if reminders are enabled.
 
@@ -81,15 +81,15 @@ def build_vote_reminder_job(
         guild_id: The Discord guild this round belongs to.
         reminder_enabled: Whether vote-ending reminders are turned on for
             this guild (see resolve_vote_reminder_settings).
-        reminder_hours_before_close: How many hours before the vote closes
-            the reminder should fire.
+        reminder_minutes_before_close: How many minutes before the vote
+            closes the reminder should fire.
 
     Returns:
         The vote_reminder job, or None if reminders are disabled or the
         round has no closes_at. A short-duration round combined with a
         long reminder lead time can still produce a job whose run_at
         falls in the past relative to now (though always strictly before
-        closes_at, since reminder_hours_before_close is always positive)
+        closes_at, since reminder_minutes_before_close is always positive)
         -- SchedulerService's own due-job polling already handles a
         past run_at correctly (it's simply immediately due), so no
         special-case guard is needed here for that.
@@ -97,7 +97,7 @@ def build_vote_reminder_job(
     if not reminder_enabled or vote_round.closes_at is None:
         return None
 
-    run_at = vote_round.closes_at - timedelta(hours=reminder_hours_before_close)
+    run_at = vote_round.closes_at - timedelta(minutes=reminder_minutes_before_close)
 
     return ScheduledJob(
         guild_id=guild_id,
@@ -113,7 +113,7 @@ def build_vote_scheduled_jobs(
     guild_id: int,
     *,
     reminder_enabled: bool,
-    reminder_hours_before_close: int,
+    reminder_minutes_before_close: int,
 ) -> list[ScheduledJob]:
     """Build every job a newly created voting round needs scheduled.
 
@@ -126,7 +126,7 @@ def build_vote_scheduled_jobs(
         guild_id: The Discord guild this round belongs to.
         reminder_enabled: Whether vote-ending reminders are turned on for
             this guild.
-        reminder_hours_before_close: How many hours before close the
+        reminder_minutes_before_close: How many minutes before close the
             reminder should fire.
 
     Returns:
@@ -143,7 +143,7 @@ def build_vote_scheduled_jobs(
         vote_round,
         guild_id,
         reminder_enabled=reminder_enabled,
-        reminder_hours_before_close=reminder_hours_before_close,
+        reminder_minutes_before_close=reminder_minutes_before_close,
     )
     if reminder_job is not None:
         jobs.append(reminder_job)
@@ -156,20 +156,20 @@ def resolve_vote_reminder_settings(
     guild_id: int,
     *,
     round_reminder_enabled: Optional[bool] = None,
-    round_reminder_hours_before_close: Optional[int] = None,
+    round_reminder_minutes_before_close: Optional[int] = None,
 ) -> tuple[bool, int]:
-    """Resolve (reminder_enabled, reminder_hours_before_close) for a round.
+    """Resolve (reminder_enabled, reminder_minutes_before_close) for a round.
 
     FR-027: a voting round may override either setting individually via
     its own "Customize This Vote" fields (see bot.py's
     CustomizeVoteModal); each is resolved independently, falling through
     to the guild's configured default, and finally to
-    VoteNotificationsConfig's own documented defaults (enabled, 24 hours)
-    when no guild_configuration_repository was supplied, or none exists
-    for this guild yet -- there is currently no way for WASH Crew to have
-    configured guild-wide defaults (no /setup or /config command exists
-    yet), so an unconfigured guild is the common case today, not an error
-    condition.
+    VoteNotificationsConfig's own documented defaults (enabled, 1440
+    minutes / 24 hours) when no guild_configuration_repository was
+    supplied, or none exists for this guild yet -- there is currently no
+    way for WASH Crew to have configured guild-wide defaults (no /setup
+    or /config command exists yet), so an unconfigured guild is the
+    common case today, not an error condition.
 
     Args:
         guild_configuration_repository: Where to look up the guild's
@@ -177,11 +177,11 @@ def resolve_vote_reminder_settings(
         guild_id: The Discord guild to look up.
         round_reminder_enabled: The round's own override, or None to use
             the guild's configured value.
-        round_reminder_hours_before_close: The round's own override, or
+        round_reminder_minutes_before_close: The round's own override, or
             None to use the guild's configured value.
 
     Returns:
-        (reminder_enabled, reminder_hours_before_close).
+        (reminder_enabled, reminder_minutes_before_close).
     """
     configuration = (
         guild_configuration_repository.get(guild_id)
@@ -190,15 +190,17 @@ def resolve_vote_reminder_settings(
     )
     if configuration is None:
         defaults = VoteNotificationsConfig()
-        guild_enabled, guild_hours = defaults.vote_ending_reminder, defaults.reminder_hours_before_close
+        guild_enabled, guild_minutes = defaults.vote_ending_reminder, defaults.reminder_minutes_before_close
     else:
         vote_notifications = configuration.notifications.vote
         guild_enabled = vote_notifications.vote_ending_reminder
-        guild_hours = vote_notifications.reminder_hours_before_close
+        guild_minutes = vote_notifications.reminder_minutes_before_close
 
     enabled = round_reminder_enabled if round_reminder_enabled is not None else guild_enabled
-    hours = round_reminder_hours_before_close if round_reminder_hours_before_close is not None else guild_hours
-    return enabled, hours
+    minutes = (
+        round_reminder_minutes_before_close if round_reminder_minutes_before_close is not None else guild_minutes
+    )
+    return enabled, minutes
 
 
 async def schedule_vote_jobs(
@@ -241,17 +243,17 @@ async def schedule_vote_jobs(
     if scheduler_service is None:
         return []
 
-    reminder_enabled, reminder_hours_before_close = resolve_vote_reminder_settings(
+    reminder_enabled, reminder_minutes_before_close = resolve_vote_reminder_settings(
         guild_configuration_repository,
         guild_id,
         round_reminder_enabled=vote_round.reminder_enabled,
-        round_reminder_hours_before_close=vote_round.reminder_hours_before_close,
+        round_reminder_minutes_before_close=vote_round.reminder_minutes_before_close,
     )
     jobs = build_vote_scheduled_jobs(
         vote_round,
         guild_id,
         reminder_enabled=reminder_enabled,
-        reminder_hours_before_close=reminder_hours_before_close,
+        reminder_minutes_before_close=reminder_minutes_before_close,
     )
 
     scheduled: list[ScheduledJob] = []

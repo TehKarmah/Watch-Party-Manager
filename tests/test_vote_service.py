@@ -325,17 +325,17 @@ class VoteServiceTests(unittest.TestCase):
         result = self.service.create_round()
 
         self.assertIsNone(result.vote_round.reminder_enabled)
-        self.assertIsNone(result.vote_round.reminder_hours_before_close)
+        self.assertIsNone(result.vote_round.reminder_minutes_before_close)
 
     def test_create_round_accepts_a_reminder_enabled_override(self) -> None:
         result = self.service.create_round(reminder_enabled=False)
 
         self.assertFalse(result.vote_round.reminder_enabled)
 
-    def test_create_round_accepts_a_reminder_hours_override(self) -> None:
-        result = self.service.create_round(reminder_hours_before_close=4)
+    def test_create_round_accepts_a_reminder_minutes_override(self) -> None:
+        result = self.service.create_round(reminder_minutes_before_close=240)
 
-        self.assertEqual(result.vote_round.reminder_hours_before_close, 4)
+        self.assertEqual(result.vote_round.reminder_minutes_before_close, 240)
 
     def test_mark_reminder_sent_updates_the_round(self) -> None:
         created = self.service.create_round()

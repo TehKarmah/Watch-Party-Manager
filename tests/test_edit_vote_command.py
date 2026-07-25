@@ -677,6 +677,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
 
         message = FakeMessage(message_id=999)
         bot = FakeBot(FakeChannel(message))
+        bot.suggestion_service = self.suggestion_service
         interaction = FakeInteraction(self._authorized_user())
 
         await handle_end_vote_now_completion(
@@ -722,6 +723,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
 
         message = FakeMessage(message_id=999)
         bot = FakeBot(FakeChannel(message))
+        bot.suggestion_service = self.suggestion_service
         interaction = FakeInteraction(self._authorized_user())
 
         await handle_end_vote_now_completion(
@@ -765,6 +767,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
 
         message = FakeMessage(message_id=999)
         bot = FakeBot(FakeChannel(message))
+        bot.suggestion_service = self.suggestion_service
         interaction = FakeInteraction(self._authorized_user())
 
         await handle_end_vote_now_completion(
@@ -784,6 +787,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
 
         message = FakeMessage(message_id=999)
         bot = FakeBot(FakeChannel(message))
+        bot.suggestion_service = self.suggestion_service
         interaction = FakeInteraction(self._authorized_user())
 
         await handle_end_vote_now_completion(
@@ -804,6 +808,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
         message = FakeMessage(message_id=999)
         channel = FakeChannel(message)
         bot = FakeBot(channel)
+        bot.suggestion_service = self.suggestion_service
 
         await handle_end_vote_now_completion(
             FakeInteraction(self._authorized_user()),
