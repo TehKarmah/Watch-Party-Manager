@@ -113,7 +113,7 @@ class SuggestionCommandTests(unittest.TestCase):
 
         self.assertTrue(ephemeral)
         self.assertIsNone(watch_item)
-        self.assertIn("configure a suggestion database", message)
+        self.assertIn("create a collection first", message)
         self.assertEqual(self.suggestion_service.suggestion_count(), 0)
 
     def test_add_still_accepts_an_imdb_url(self) -> None:
@@ -193,7 +193,7 @@ class SuggestionCommandGuildScopingTests(unittest.TestCase):
 
         self.assertTrue(ephemeral)
         self.assertIsNone(watch_item)
-        self.assertIn("configure a suggestion database", message)
+        self.assertIn("create a collection first", message)
 
 
 class SuggestionInputCommandIntegrationTests(unittest.IsolatedAsyncioTestCase):

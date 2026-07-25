@@ -183,7 +183,7 @@ class IntegrityService:
                     IntegrityIssue(
                         code="orphaned_watch_item",
                         severity=IntegritySeverity.WARNING,
-                        message=f'Watch item "{item.title}" is not assigned to a suggestion database.',
+                        message=f'Watch item "{item.title}" is not assigned to a collection.',
                     )
                 )
                 continue

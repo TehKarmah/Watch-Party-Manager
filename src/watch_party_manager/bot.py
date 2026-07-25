@@ -386,7 +386,7 @@ class WatchPartyBot(commands.Bot):
                 discord.app_commands.Choice(name="Member", value="member"),
                 discord.app_commands.Choice(name="Suggestion", value="suggestion"),
                 discord.app_commands.Choice(name="Rotation", value="rotation"),
-                discord.app_commands.Choice(name="Database", value="database"),
+                discord.app_commands.Choice(name="Collection", value="database"),
             ]
         )
         async def stats(
@@ -1535,7 +1535,7 @@ def perform_start_vote(
     if resolved_database_id is not None and nominee_selection_service is not None:
         chosen = suggestion_service.get_database(resolved_database_id)
         if chosen is None or (guild_id is not None and chosen.guild_id != guild_id):
-            return "That suggestion database no longer exists.", True
+            return "That collection no longer exists.", True
         resolution = DatabaseResolution(database=chosen)
     elif guild_id is not None and channel_id is not None and nominee_selection_service is not None:
         resolution = suggestion_service.resolve_database_for_channel(
@@ -5246,11 +5246,11 @@ def build_restore_summary_text(summary: RestoreSummary) -> str:
     if summary.backup_type is not None:
         lines.append(f"Backup type: {summary.backup_type.value.replace('_', ' ').title()}")
     if summary.database_name:
-        lines.append(f"Database: {summary.database_name} (ID {summary.database_id})")
+        lines.append(f"Collection: {summary.database_name} (ID {summary.database_id})")
     if summary.guild_id is not None:
         lines.append(f"Guild ID: {summary.guild_id}")
     if summary.suggestion_database_count is not None:
-        lines.append(f"Suggestion databases: {summary.suggestion_database_count}")
+        lines.append(f"Collections: {summary.suggestion_database_count}")
     if summary.suggestion_count is not None:
         lines.append(f"Suggestions: {summary.suggestion_count}")
     if summary.vote_round_count is not None:
@@ -5457,7 +5457,7 @@ async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPa
         return
     if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
         await interaction.response.send_message(
-            "You need the WASH Crew role to back up a suggestion database.", ephemeral=True
+            "You need the WASH Crew role to back up a collection.", ephemeral=True
         )
         return
 
@@ -5468,7 +5468,7 @@ async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPa
 
     databases = bot.suggestion_service.list_databases(guild_id)
     if not databases:
-        await interaction.response.send_message("No suggestion databases are configured yet.", ephemeral=True)
+        await interaction.response.send_message("No collections are configured yet.", ephemeral=True)
         return
 
     async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
@@ -5489,9 +5489,9 @@ async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPa
 
     options = build_database_admin_options(bot.suggestion_service, databases, interaction.guild, bot.suggestion_database_configuration_repository)
     view = DatabaseAdminSelectView(
-        options, on_select, custom_id="wpm_database_backup_select", placeholder="Choose a suggestion database to back up..."
+        options, on_select, custom_id="wpm_database_backup_select", placeholder="Choose a collection to back up..."
     )
-    await interaction.response.send_message("Choose which suggestion database to back up:", view=view, ephemeral=True)
+    await interaction.response.send_message("Choose which collection to back up:", view=view, ephemeral=True)
 
 
 async def handle_database_restore(
@@ -5509,7 +5509,7 @@ async def handle_database_restore(
         return
     if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
         await interaction.response.send_message(
-            "You need the WASH Crew role to restore a suggestion database.", ephemeral=True
+            "You need the WASH Crew role to restore a collection.", ephemeral=True
         )
         return
 
@@ -5565,7 +5565,7 @@ async def handle_database_restore(
         return
 
     text += (
-        f"\n\n{restore_mode.value.title()} this suggestion database? "
+        f"\n\n{restore_mode.value.title()} this collection? "
         "A safety backup of your current data will be made automatically first."
     )
 
@@ -5602,9 +5602,9 @@ async def handle_database_restore(
 
 def build_database_reset_summary_text(summary) -> str:
     return (
-        f'**Reset Suggestion Database "{summary.database_name}"**\n\n'
-        f"This will permanently remove {summary.suggestion_count} suggestion(s) from this database.\n"
-        "The database itself, its configuration, and every other database will NOT be affected."
+        f'**Reset Collection "{summary.database_name}"**\n\n'
+        f"This will permanently remove {summary.suggestion_count} suggestion(s) from this collection.\n"
+        "The collection itself, its configuration, and every other collection will NOT be affected."
     )
 
 
@@ -5625,7 +5625,7 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
         return
     if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
         await interaction.response.send_message(
-            "You need the WASH Crew role to reset a suggestion database.", ephemeral=True
+            "You need the WASH Crew role to reset a collection.", ephemeral=True
         )
         return
 
@@ -5636,7 +5636,7 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
 
     databases = bot.suggestion_service.list_databases(guild_id)
     if not databases:
-        await interaction.response.send_message("No suggestion databases are configured yet.", ephemeral=True)
+        await interaction.response.send_message("No collections are configured yet.", ephemeral=True)
         return
 
     async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
@@ -5645,7 +5645,7 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
         )
         if summary is None:
             await select_interaction.response.send_message(
-                "No suggestion database with that ID exists in this server.", ephemeral=True
+                "No collection with that ID exists in this server.", ephemeral=True
             )
             return
 
@@ -5654,7 +5654,7 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
                 confirm_interaction.user, bot.wash_crew_role_id
             ):
                 await confirm_interaction.response.send_message(
-                    "You need the WASH Crew role to reset a suggestion database.", ephemeral=True
+                    "You need the WASH Crew role to reset a collection.", ephemeral=True
                 )
                 return
             result = reset_suggestion_database(
@@ -5668,7 +5668,7 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
         confirmation_view = DestructiveConfirmationView(
             button_label="Reset",
             required_text="RESET",
-            modal_title="Reset Suggestion Database",
+            modal_title="Reset Collection",
             custom_id_prefix="database_reset",
             on_confirm=on_confirm,
             on_cancel=on_cancel,
@@ -5679,9 +5679,9 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
 
     options = build_database_admin_options(bot.suggestion_service, databases, interaction.guild, bot.suggestion_database_configuration_repository)
     view = DatabaseAdminSelectView(
-        options, on_select, custom_id="wpm_database_reset_select", placeholder="Choose a suggestion database to reset..."
+        options, on_select, custom_id="wpm_database_reset_select", placeholder="Choose a collection to reset..."
     )
-    await interaction.response.send_message("Choose which suggestion database to reset:", view=view, ephemeral=True)
+    await interaction.response.send_message("Choose which collection to reset:", view=view, ephemeral=True)
 
 
 # --- FR-032C: factory reset -----------------------------------------------------------
@@ -5693,7 +5693,7 @@ def build_factory_reset_summary_text(summary) -> str:
         "",
         "This will permanently remove ALL WASH-managed data for this server, including:",
         f"- Guild configuration: {'present' if summary.configuration_present else 'not configured'}",
-        f"- Suggestion databases: {summary.suggestion_database_count}",
+        f"- Collections: {summary.suggestion_database_count}",
         f"- Suggestions: {summary.suggestion_count}",
         f"- Vote rounds: {summary.vote_round_count}",
         f"- Membership requests: {summary.membership_request_count}",
@@ -5826,7 +5826,7 @@ async def handle_import(
         return
 
     text += (
-        "\n\nChoose how to import this backup's suggestion databases, suggestions, and vote rounds. "
+        "\n\nChoose how to import this backup's collections, suggestions, and vote rounds. "
         "Your Discord role/channel configuration and guild ID will never be changed by an import."
     )
 
@@ -5980,6 +5980,7 @@ async def perform_repair_suggestions(
     """Run the WASH Crew-only suggestion repair workflow."""
     if wash_crew_role_id is None:
         return (
+            "WASH Crew permissions have not been configured. "
             "Set WASH_CREW_ROLE_ID before using this command.",
             True,
         )
@@ -6334,7 +6335,7 @@ def build_database_add_confirmation(database: SuggestionDatabase) -> str:
         A confirmation naming the database, its ID, and its channel.
     """
     return (
-        f'Suggestion database "{database.name}" created.\n'
+        f'Collection "{database.name}" created.\n'
         f"Database ID: {database.database_id}\n"
         f"Channel: <#{database.channel_id}>"
     )
@@ -6520,7 +6521,7 @@ def build_removal_option_label(item: WatchItem, suggestion_service: SuggestionSe
     database, and status (Section 6's "Show a selector including...").
     """
     database = suggestion_service.get_database(item.database_id) if item.database_id is not None else None
-    database_name = database.name if database is not None else "Unknown database"
+    database_name = database.name if database is not None else "Unknown collection"
     year_part = f" ({item.release_year})" if item.release_year else ""
     status_part = item.status.value.replace("_", " ").title()
     return f"{item.reference} {item.title}{year_part} -- {database_name} -- {status_part}"
@@ -6672,7 +6673,9 @@ async def handle_edit_suggestion(
         destination = bot.suggestion_service.get_database(new_database_id)
         if destination is None or not destination.active or destination.guild_id != item.guild_id:
             await interaction.response.send_message(
-                "That destination suggestion database is not available.", ephemeral=True
+                "That destination collection is not available -- it may not exist, be inactive, "
+                "or belong to a different server.",
+                ephemeral=True,
             )
             return
 
@@ -6780,7 +6783,7 @@ def perform_database_add(
         )
 
     if not is_wash_crew_member(user, wash_crew_role_id):
-        return "You need the WASH Crew role to configure a suggestion database.", True
+        return "You need the WASH Crew role to create a collection.", True
 
     if guild_id is None:
         return "This command can only be used in a Discord server.", True
@@ -6827,14 +6830,14 @@ def perform_database_list(
         )
 
     if not is_wash_crew_member(user, wash_crew_role_id):
-        return "You need the WASH Crew role to view suggestion databases.", True
+        return "You need the WASH Crew role to view collections.", True
 
     if guild_id is None:
         return "This command can only be used in a Discord server.", True
 
     databases = suggestion_service.list_databases(guild_id)
     if not databases:
-        return "No suggestion databases are configured yet.", True
+        return "No collections are configured yet.", True
 
     return build_database_list_text(suggestion_service, databases), True
 
@@ -6874,7 +6877,7 @@ def perform_database_remove(
         )
 
     if not is_wash_crew_member(user, wash_crew_role_id):
-        return "You need the WASH Crew role to remove a suggestion database.", True
+        return "You need the WASH Crew role to remove a collection.", True
 
     if guild_id is None:
         return "This command can only be used in a Discord server.", True
@@ -6901,7 +6904,7 @@ async def handle_database_remove(interaction: discord.Interaction, bot: "WatchPa
         return
     if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
         await interaction.response.send_message(
-            "You need the WASH Crew role to remove a suggestion database.", ephemeral=True
+            "You need the WASH Crew role to remove a collection.", ephemeral=True
         )
         return
 
@@ -6912,7 +6915,7 @@ async def handle_database_remove(interaction: discord.Interaction, bot: "WatchPa
 
     databases = bot.suggestion_service.list_databases(guild_id)
     if not databases:
-        await interaction.response.send_message("No suggestion databases are configured yet.", ephemeral=True)
+        await interaction.response.send_message("No collections are configured yet.", ephemeral=True)
         return
 
     async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
@@ -6927,9 +6930,9 @@ async def handle_database_remove(interaction: discord.Interaction, bot: "WatchPa
 
     options = build_database_admin_options(bot.suggestion_service, databases, interaction.guild, bot.suggestion_database_configuration_repository)
     view = DatabaseAdminSelectView(
-        options, on_select, custom_id="wpm_database_remove_select", placeholder="Choose a suggestion database to remove..."
+        options, on_select, custom_id="wpm_database_remove_select", placeholder="Choose a collection to remove..."
     )
-    await interaction.response.send_message("Choose which suggestion database to remove:", view=view, ephemeral=True)
+    await interaction.response.send_message("Choose which collection to remove:", view=view, ephemeral=True)
 
 
 def parse_watch_party_schedule_time(value: str) -> datetime:
@@ -7452,9 +7455,9 @@ def build_statistics_text(snapshot: StatisticsSnapshot) -> str:
             f"Active suggestions: {format_count(snapshot.active_suggestions, 'suggestion')}",
             f"Watched: {format_count(snapshot.watched_items, 'watch item')}",
             "",
-            "**Suggestion Databases**",
-            f"Total: {format_count(snapshot.total_databases, 'database')}",
-            f"Active: {format_count(snapshot.active_databases, 'database')}",
+            "**Collections**",
+            f"Total: {format_count(snapshot.total_databases, 'collection')}",
+            f"Active: {format_count(snapshot.active_databases, 'collection')}",
             "",
             "**Voting**",
             f"Rounds: {format_count(snapshot.total_vote_rounds, 'round')}",
@@ -7627,7 +7630,7 @@ def build_rotation_statistics_text(stats: RotationStatistics, database_name: str
         lines.extend(build_rotation_progress_lines(stats.current_progress))
     else:
         lines.append("**Current Rotation**")
-        lines.append("No rotation has been started for this database yet.")
+        lines.append("No rotation has been started for this collection yet.")
     lines.extend(
         [
             "",
@@ -7644,7 +7647,7 @@ def build_rotation_statistics_text(stats: RotationStatistics, database_name: str
 def build_database_statistics_text(stats: DatabaseStatistics) -> str:
     """Format FR-034 Section 9's database statistics for Discord."""
     lines = [
-        f"**Database Statistics -- {stats.database_name}**",
+        f"**Collection Statistics -- {stats.database_name}**",
         "",
         f"Active suggestions: {format_count(stats.active_suggestions, 'suggestion')}",
         f"Archived suggestions: {format_count(stats.archived_suggestions, 'suggestion')}",
@@ -7657,7 +7660,7 @@ def build_database_statistics_text(stats: DatabaseStatistics) -> str:
         if stats.rotation.current_rotation_id is not None:
             lines.extend(build_rotation_progress_lines(stats.rotation.current_progress))
         else:
-            lines.append("No rotation has been started for this database yet.")
+            lines.append("No rotation has been started for this collection yet.")
         lines.append(f"Completed rotations: {stats.rotation.completed_rotations}")
     return "\n".join(lines)
 
@@ -7806,7 +7809,8 @@ async def send_rotation_statistics(
         stats = bot.statistics_service.rotation_statistics(database.database_id)
         if stats is None:
             await target_interaction.response.send_message(
-                "Rotation statistics are not available.", ephemeral=True
+                "Rotation statistics aren't available right now -- the rotation service isn't configured.",
+                ephemeral=True,
             )
             return
         await send_paginated_stats(target_interaction, build_rotation_statistics_text(stats, database.name), public)
@@ -7821,7 +7825,7 @@ async def send_database_statistics(
         stats = bot.statistics_service.database_statistics(database.database_id)
         if stats is None:
             await target_interaction.response.send_message(
-                "That suggestion database no longer exists.", ephemeral=True
+                "That collection no longer exists.", ephemeral=True
             )
             return
         await send_paginated_stats(target_interaction, build_database_statistics_text(stats), public)
@@ -7860,7 +7864,7 @@ async def handle_stats(
         resolved_type = StatsType(stats_type)
     except ValueError:
         await interaction.response.send_message(
-            "Choose Server, Member, Suggestion, Rotation, or Database.", ephemeral=True
+            "Choose Server, Member, Suggestion, Rotation, or Collection.", ephemeral=True
         )
         return
 
@@ -7889,7 +7893,7 @@ async def handle_stats(
 
 
 def resolve_active_database_display_name(suggestion_service: SuggestionService, guild_id: int) -> str:
-    """Build a display-ready "Active suggestion database" string for /about.
+    """Build a display-ready "Active collection" string for /about.
 
     Mirrors the same active-database filtering build_database_list_text
     and ConfigService.build_summary_lines already use -- zero active

@@ -115,7 +115,7 @@ class DatabaseCommandTests(unittest.TestCase):
         )
 
         self.assertTrue(ephemeral)
-        self.assertIn("already has a suggestion database", message)
+        self.assertIn("already has a collection", message)
         self.assertEqual(len(self.suggestion_service.list_databases()), 1)
 
     def test_database_add_rejects_a_non_wash_crew_member(self) -> None:
@@ -154,7 +154,7 @@ class DatabaseCommandTests(unittest.TestCase):
         )
 
         self.assertTrue(ephemeral)
-        self.assertIn("No suggestion databases", message)
+        self.assertIn("No collections", message)
 
     def test_database_list_with_one_database(self) -> None:
         self.suggestion_service.create_database("Sunday Watch Party", guild_id=GUILD_ID, channel_id=CHANNEL_ID)

@@ -476,7 +476,7 @@ class SuggestionServiceDatabaseTests(unittest.TestCase):
         result = self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=200)
 
         self.assertFalse(result.success)
-        self.assertIn("already has a suggestion database", result.message)
+        self.assertIn("already has a collection", result.message)
 
     def test_create_database_allows_the_same_channel_id_in_a_different_guild(self) -> None:
         self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
@@ -694,7 +694,7 @@ class SuggestionServiceDatabaseTests(unittest.TestCase):
         resolution = self.service.resolve_database_for_channel(100, created.database.channel_id)
 
         self.assertIsNone(resolution.database)
-        self.assertIn("configure a suggestion database", resolution.error_message)
+        self.assertIn("create a collection first", resolution.error_message)
 
     def test_resolve_database_for_channel_ignores_an_inactive_database_as_the_sole_database(self) -> None:
         self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200, active=False)
@@ -702,7 +702,7 @@ class SuggestionServiceDatabaseTests(unittest.TestCase):
         resolution = self.service.resolve_database_for_channel(100, 999)
 
         self.assertIsNone(resolution.database)
-        self.assertIn("configure a suggestion database", resolution.error_message)
+        self.assertIn("create a collection first", resolution.error_message)
 
     def test_resolve_database_for_channel_uses_the_only_active_database(self) -> None:
         self.service.create_database("Retired", guild_id=100, channel_id=200, active=False)
@@ -828,7 +828,7 @@ class SuggestionServiceDatabaseAssociationTests(unittest.TestCase):
     def test_resolve_database_for_channel_fails_when_no_databases_exist(self) -> None:
         resolution = self.service.resolve_database_for_channel(100, 999)
         self.assertIsNone(resolution.database)
-        self.assertIn("configure a suggestion database", resolution.error_message)
+        self.assertIn("create a collection first", resolution.error_message)
 
     # --- Discord message reference -------------------------------------------
 
@@ -1003,7 +1003,7 @@ class ResolveDatabaseForChannelWithConfiguredDestinationTests(unittest.TestCase)
         )
 
         self.assertFalse(result.success)
-        self.assertIn("already the suggestion post destination", result.message)
+        self.assertIn("already the suggestion destination", result.message)
 
 
 class DatabaseCreationRestartSafetyTests(unittest.TestCase):
@@ -1096,7 +1096,7 @@ class SuggestionDatabaseScopingTests(unittest.TestCase):
         resolution = self.service.resolve_database_for_channel(guild_id=1, channel_id=999)
 
         self.assertIsNone(resolution.database)
-        self.assertIn("configure a suggestion database", resolution.error_message)
+        self.assertIn("create a collection first", resolution.error_message)
 
     def test_resolution_uses_only_the_sole_database_in_the_requested_guild(self) -> None:
         self.service.create_database("Guild One", guild_id=1, channel_id=100)
@@ -1142,7 +1142,7 @@ class SuggestionDatabaseScopingTests(unittest.TestCase):
         result = self.service.remove_suggestion("The Matrix")
 
         self.assertFalse(result.success)
-        self.assertIn("more than one suggestion database", result.message)
+        self.assertIn("more than one collection", result.message)
         self.assertEqual(self.service.suggestion_count(), 2)
 
     def test_removal_with_database_context_removes_only_the_matching_item(self) -> None:

@@ -227,7 +227,7 @@ class SetupWizardService:
         """
         database = self._suggestion_service.get_database(database_id)
         if database is None or database.guild_id != guild_id:
-            return state, "That suggestion database doesn't exist."
+            return state, "That collection doesn't exist."
 
         if not database.active:
             self._suggestion_service.activate_database(database_id, guild_id)
@@ -239,7 +239,7 @@ class SetupWizardService:
             suggestion_database_is_new=False,
         )
         return self._advance(state, SetupWizardStep.SUGGESTION_DATABASE, draft), (
-            f'Selected suggestion database "{database.name}".'
+            f'Selected collection "{database.name}".'
         )
 
     def create_new_database(
@@ -434,10 +434,10 @@ class SetupWizardService:
             issues.append(ValidationIssue(SetupWizardStep.ADMIN_CHANNEL, admin_channel_error))
 
         if draft.suggestion_database_id is None:
-            issues.append(ValidationIssue(SetupWizardStep.SUGGESTION_DATABASE, "No suggestion database was selected."))
+            issues.append(ValidationIssue(SetupWizardStep.SUGGESTION_DATABASE, "No collection was selected."))
         elif self._suggestion_service.get_database(draft.suggestion_database_id) is None:
             issues.append(
-                ValidationIssue(SetupWizardStep.SUGGESTION_DATABASE, "The selected suggestion database no longer exists.")
+                ValidationIssue(SetupWizardStep.SUGGESTION_DATABASE, "The selected collection no longer exists.")
             )
 
         destination_error = validate_channel_usable(draft.watch_destination_channel_id, guild)

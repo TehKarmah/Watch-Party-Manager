@@ -157,7 +157,7 @@ class DefaultBehaviorTests(HandleStatsTestCase):
 
         await handle_stats(interaction, self.bot, "not_a_real_type", False, None)
 
-        self.assertIn("Choose Server, Member, Suggestion, Rotation, or Database.", interaction.response.sent_message)
+        self.assertIn("Choose Server, Member, Suggestion, Rotation, or Collection.", interaction.response.sent_message)
 
 
 class PrivacyTests(HandleStatsTestCase):
@@ -329,7 +329,7 @@ class RotationTypeTests(HandleStatsTestCase):
 
         await handle_stats(interaction, self.bot, "rotation", False, None)
 
-        self.assertIn("No rotation has been started for this database yet.", interaction.response.sent_message)
+        self.assertIn("No rotation has been started for this collection yet.", interaction.response.sent_message)
 
     async def test_reports_current_rotation_progress(self) -> None:
         self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
@@ -357,7 +357,7 @@ class DatabaseTypeTests(HandleStatsTestCase):
 
         await handle_stats(interaction, self.bot, "database", False, None)
 
-        self.assertIn("Database Statistics -- Movie Night", interaction.response.sent_message)
+        self.assertIn("Collection Statistics -- Movie Night", interaction.response.sent_message)
         self.assertIn("Active suggestions: 0 suggestions", interaction.response.sent_message)
 
     async def test_reports_suggestion_counts(self) -> None:
@@ -385,7 +385,7 @@ class DatabaseTypeTests(HandleStatsTestCase):
 
         await handle_stats(interaction, empty_bot, "database", False, None)
 
-        self.assertIn("must configure a suggestion database", interaction.response.sent_message)
+        self.assertIn("must create a collection first", interaction.response.sent_message)
 
 
 class PaginationTests(HandleStatsTestCase):

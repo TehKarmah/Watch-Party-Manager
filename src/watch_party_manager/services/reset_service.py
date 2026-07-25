@@ -111,7 +111,7 @@ def reset_suggestion_database(
         None,
     )
     if database is None:
-        return DatabaseResetResult(False, "No suggestion database with that ID exists in this server.")
+        return DatabaseResetResult(False, "No collection with that ID exists in this server.")
 
     try:
         safety_backup = backup_service.create_backup(BackupKind.MANUAL, enforce_retention=False).archive_path
@@ -127,8 +127,8 @@ def reset_suggestion_database(
 
     return DatabaseResetResult(
         True,
-        f'Suggestion database "{database.name}" has been reset: {removed_count} suggestion(s) removed. '
-        "The database, its configuration, and other databases were not affected. "
+        f'Collection "{database.name}" has been reset: {removed_count} suggestion(s) removed. '
+        "The collection, its configuration, and other collections were not affected. "
         f"A safety backup was made first: `{safety_backup.name}`.",
         removed_count=removed_count,
         safety_backup=safety_backup,

@@ -373,7 +373,7 @@ class ConfigService:
     ) -> ConfigUpdateResult:
         database = self._get_database_for_guild(guild_id, database_id)
         if database is None:
-            return ConfigUpdateResult(False, "That suggestion database doesn't exist.")
+            return ConfigUpdateResult(False, "That collection doesn't exist.")
 
         error = validate_channel_usable(channel_id, guild)
         if error:
@@ -400,7 +400,7 @@ class ConfigService:
     ) -> ConfigUpdateResult:
         database = self._get_database_for_guild(guild_id, database_id)
         if database is None:
-            return ConfigUpdateResult(False, "That suggestion database doesn't exist.")
+            return ConfigUpdateResult(False, "That collection doesn't exist.")
 
         error = validate_channel_usable(channel_id, guild)
         if error:
@@ -414,7 +414,7 @@ class ConfigService:
     def clear_database_watch_destination(self, guild_id: int, database_id: int) -> ConfigUpdateResult:
         database = self._get_database_for_guild(guild_id, database_id)
         if database is None:
-            return ConfigUpdateResult(False, "That suggestion database doesn't exist.")
+            return ConfigUpdateResult(False, "That collection doesn't exist.")
 
         self._save_database_channel(guild_id, database, None, field_name="watch_history_channel_id")
         return ConfigUpdateResult(
@@ -426,7 +426,7 @@ class ConfigService:
     ) -> ConfigUpdateResult:
         database = self._get_database_for_guild(guild_id, database_id)
         if database is None:
-            return ConfigUpdateResult(False, "That suggestion database doesn't exist.")
+            return ConfigUpdateResult(False, "That collection doesn't exist.")
 
         base = self.get_database_configuration(guild_id, database_id)
         self._suggestion_database_configuration_repository.save(

@@ -187,7 +187,7 @@ class HandleDatabaseResetTests(ResetImportCommandTestCase):
 
         await handle_database_reset(interaction, self.bot)
 
-        self.assertIn("No suggestion databases", interaction.response.sent_message)
+        self.assertIn("No collections", interaction.response.sent_message)
 
     async def test_shows_a_database_picker_naming_each_database(self) -> None:
         self._seed_database(name="Movie Night")
@@ -271,7 +271,7 @@ class HandleDatabaseRemoveTests(ResetImportCommandTestCase):
         await handle_database_remove(interaction, self.bot)
 
         self.assertIsNone(interaction.response.sent_view)
-        self.assertIn("No suggestion databases", interaction.response.sent_message)
+        self.assertIn("No collections", interaction.response.sent_message)
 
     async def test_shows_a_database_picker_naming_each_database(self) -> None:
         self._seed_database(name="Movie Night")

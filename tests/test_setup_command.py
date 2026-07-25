@@ -1467,7 +1467,7 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
 
         # create_new_database's failure re-renders the current step with
         # a clear error rather than silently advancing.
-        self.assertIn("already has a suggestion database", channel_interaction.response.edited_content)
+        self.assertIn("already has a collection", channel_interaction.response.edited_content)
         databases = self.suggestion_service.list_databases(GUILD_ID)
         self.assertEqual(len(databases), 1)
         self.assertEqual(databases[0].name, "Movies")

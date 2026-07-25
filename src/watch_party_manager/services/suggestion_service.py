@@ -584,8 +584,8 @@ class SuggestionService:
                 return SuggestionResult(
                     success=False,
                     message=(
-                        "That title appears in more than one suggestion database. "
-                        "Choose the database before removing it."
+                        "That title appears in more than one collection. "
+                        "Choose the collection before removing it."
                     ),
                 )
             key, watch_item = matches[0]
@@ -723,7 +723,7 @@ class SuggestionService:
         if new_key != old_key and new_key in self._suggestions:
             return SuggestionResult(
                 success=False,
-                message="A suggestion with that title already exists in the destination database.",
+                message="A suggestion with that title already exists in the destination collection.",
             )
 
         metadata_ids = dict(watch_item.metadata_ids)
@@ -791,7 +791,7 @@ class SuggestionService:
         if not name or not name.strip():
             return SuggestionDatabaseResult(
                 success=False,
-                message="I need a name before I can create a suggestion database.",
+                message="I need a name before I can create a collection.",
             )
 
         trimmed_name = name.strip()
@@ -803,19 +803,19 @@ class SuggestionService:
             if database.name.lower() == name_lower:
                 return SuggestionDatabaseResult(
                     success=False,
-                    message=f'A suggestion database named "{trimmed_name}" already exists in this server.',
+                    message=f'A collection named "{trimmed_name}" already exists in this server.',
                 )
             if database.channel_id == channel_id:
                 return SuggestionDatabaseResult(
                     success=False,
-                    message="This channel already has a suggestion database.",
+                    message="This channel already has a collection.",
                 )
             if suggestion_database_configuration_repository is not None:
                 configuration = suggestion_database_configuration_repository.get(guild_id, database.database_id)
                 if configuration is not None and configuration.channels.suggestion_channel_id == channel_id:
                     return SuggestionDatabaseResult(
                         success=False,
-                        message="This channel is already the suggestion post destination for another database.",
+                        message="This channel is already the suggestion destination for another collection.",
                     )
 
         is_first_database = len(self._databases) == 0
@@ -842,7 +842,7 @@ class SuggestionService:
 
         return SuggestionDatabaseResult(
             success=True,
-            message=f'Created suggestion database "{trimmed_name}".',
+            message=f'Created collection "{trimmed_name}".',
             database=database,
         )
 
@@ -969,20 +969,20 @@ class SuggestionService:
         if database is None or database.guild_id != guild_id:
             return SuggestionDatabaseResult(
                 success=False,
-                message="That suggestion database doesn't exist.",
+                message="That collection doesn't exist.",
             )
 
         if not database.active:
             return SuggestionDatabaseResult(
                 success=False,
-                message="That suggestion database is already inactive.",
+                message="That collection is already inactive.",
             )
 
         database.active = False
         self._save_databases()
         return SuggestionDatabaseResult(
             success=True,
-            message=f'Suggestion database "{database.name}" has been deactivated.',
+            message=f'Collection "{database.name}" has been deactivated.',
             database=database,
         )
 
@@ -1008,20 +1008,20 @@ class SuggestionService:
         if database is None or database.guild_id != guild_id:
             return SuggestionDatabaseResult(
                 success=False,
-                message="That suggestion database doesn't exist.",
+                message="That collection doesn't exist.",
             )
 
         if database.active:
             return SuggestionDatabaseResult(
                 success=False,
-                message="That suggestion database is already active.",
+                message="That collection is already active.",
             )
 
         database.active = True
         self._save_databases()
         return SuggestionDatabaseResult(
             success=True,
-            message=f'Suggestion database "{database.name}" has been activated.',
+            message=f'Collection "{database.name}" has been activated.',
             database=database,
         )
 
@@ -1102,7 +1102,7 @@ class SuggestionService:
             return DatabaseResolution(ambiguous_candidates=tuple(databases))
 
         return DatabaseResolution(
-            error_message="WASH Crew must configure a suggestion database first."
+            error_message="WASH Crew must create a collection first -- run `/database_add` or `/setup`."
         )
 
     def _migrate_orphaned_suggestions_to(self, database_id: int) -> None:

@@ -128,7 +128,7 @@ def create_database_backup(
         None,
     )
     if database is None:
-        return DatabaseBackupResult(False, "No suggestion database with that ID exists in this server.")
+        return DatabaseBackupResult(False, "No collection with that ID exists in this server.")
 
     suggestions = [item for item in suggestion_repository.load().watch_items if item.database_id == database_id]
     configuration = configuration_repository.get(guild_id, database_id)
@@ -174,7 +174,7 @@ def create_database_backup(
     )
     return DatabaseBackupResult(
         True,
-        f'Backup created for suggestion database "{database.name}".',
+        f'Backup created for collection "{database.name}".',
         creation=creation,
         display_filename=display_filename,
     )
@@ -215,13 +215,13 @@ def restore_database_backup(
 
     manifest = validation.manifest
     if manifest.backup_type is not BackupType.SUGGESTION_DATABASE:
-        return DatabaseRestoreResult(False, "That backup is not a suggestion database backup.")
+        return DatabaseRestoreResult(False, "That backup is not a collection backup.")
     if manifest.guild_id is not None and manifest.guild_id != guild_id:
         return DatabaseRestoreResult(
             False, "That backup was created in a different Discord server and cannot be restored here."
         )
     if manifest.database_id is None:
-        return DatabaseRestoreResult(False, "That backup does not record which database it belongs to.")
+        return DatabaseRestoreResult(False, "That backup does not record which collection it belongs to.")
 
     try:
         with TemporaryDirectory() as temporary_directory:
@@ -340,7 +340,7 @@ def _replace_database(
 
     return DatabaseRestoreResult(
         True,
-        f'Suggestion database "{restored_database.name}" replaced '
+        f'Collection "{restored_database.name}" replaced '
         f"({len(restored_suggestions)} suggestion(s) restored). "
         f"A safety backup was made first: `{safety_backup.name}`.",
         imported_count=len(restored_suggestions),
@@ -375,7 +375,7 @@ def _merge_database(
     if existing_database is None:
         return DatabaseRestoreResult(
             False,
-            "No existing suggestion database with that ID was found to merge into. "
+            "No existing collection with that ID was found to merge into. "
             "Use Replace if you want to recreate it from this backup.",
             safety_backup=safety_backup,
         )

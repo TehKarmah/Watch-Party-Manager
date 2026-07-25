@@ -521,8 +521,8 @@ class CreateDatabaseNameModal(discord.ui.Modal):
         self,
         on_submit: OnDatabaseNameSubmit,
         *,
-        title: str = "New Suggestion Database",
-        label: str = "Database name",
+        title: str = "New Collection",
+        label: str = "Collection name",
         placeholder: Optional[str] = None,
     ) -> None:
         super().__init__(title=title)
@@ -1025,7 +1025,7 @@ class SaveSetupButton(discord.ui.Button):
 class EditSectionSelect(discord.ui.Select):
     def __init__(self, section_options: List[Tuple[str, str]], on_select: OnEditSection) -> None:
         options = [discord.SelectOption(label=label, value=value) for value, label in section_options]
-        super().__init__(placeholder="Go back and edit a section...", options=options, custom_id="wpm_setup_review_edit_section")
+        super().__init__(placeholder="Choose a section to edit...", options=options, custom_id="wpm_setup_review_edit_section")
         self._on_select = on_select
 
     async def callback(self, interaction: discord.Interaction) -> None:

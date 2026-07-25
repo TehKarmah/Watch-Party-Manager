@@ -126,7 +126,7 @@ class CreateDatabaseBackupTests(DatabaseBackupServiceTestCase):
         )
 
         self.assertFalse(result.success)
-        self.assertIn("No suggestion database", result.message)
+        self.assertIn("No collection", result.message)
 
     def test_excludes_suggestions_from_other_databases(self) -> None:
         self._seed_database(database_id=1, name="A")
@@ -250,7 +250,7 @@ class RestoreDatabaseBackupReplaceTests(DatabaseBackupServiceTestCase):
         )
 
         self.assertFalse(result.success)
-        self.assertIn("not a suggestion database backup", result.message)
+        self.assertIn("not a collection backup", result.message)
 
     def test_rejects_a_backup_from_a_different_guild(self) -> None:
         self._seed_database(guild_id=OTHER_GUILD_ID, name="Foreign DB")
@@ -404,7 +404,7 @@ class RestoreDatabaseBackupMergeTests(DatabaseBackupServiceTestCase):
         )
 
         self.assertFalse(result.success)
-        self.assertIn("No existing suggestion database", result.message)
+        self.assertIn("No existing collection", result.message)
 
     def test_merge_reassigns_a_colliding_suggestion_id(self) -> None:
         self._seed_database(name="Movie Night")

@@ -175,7 +175,7 @@ Automatic expiration, closing, and winner announcements are fully implemented, d
 `/diagnostics` no longer exists as a separate command -- its information was consolidated into `/about`, WASH's single status and information dashboard. Everyone gets WASH's identity and documentation links; WASH Crew additionally see:
 
 - **Health** -- Discord connection quality, scheduler status, interactive voting restoration state, and whether OMDb (`OMDB_API_KEY`) is configured.
-- **Configuration** -- the active suggestion database, suggestion database count, watch item count, scheduled watch party count, and whether a voting round is currently open.
+- **Configuration** -- the active collection, collection count, watch item count, scheduled watch party count, and whether a voting round is currently open.
 - **Runtime** -- Python and discord.py versions, uptime, and the current server's name.
 
 WASH also runs integrity checks against persisted data and writes operational information through the logging system. Review console and log output when startup reports an issue.
@@ -312,13 +312,13 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 - **Server** (the default) -- watch parties, voting rounds (open/closed/cancelled, blind/visible, ties), participation, average candidates per round, and average vote duration.
 - **Member** -- the requesting member's own suggestions submitted/watched/retired, votes cast, participation percentage, and winning suggestions. There is no way to target another member's statistics, by design.
 - **Suggestion** -- one suggestion's created date, submitter, current status, nomination history (count, first/last nominated), watch/retirement history, and rotations participated in. `suggestion` accepts the same reference-number-or-exact-title matching `/remove` and `/edit_suggestion` use; multiple matches show a picker.
-- **Rotation** -- the target database's current rotation progress (presented/remaining/retired/watched/completion) plus historical rotation count, average duration, and average size. Database selection follows `/list`'s automatic-then-picker pattern.
-- **Database** -- one database's active/archived/watched/retired suggestion counts alongside its current rotation summary.
+- **Rotation** -- the target collection's current rotation progress (presented/remaining/retired/watched/completion) plus historical rotation count, average duration, and average size. Collection selection follows `/list`'s automatic-then-picker pattern.
+- **Collection** -- one collection's active/archived/watched/retired suggestion counts alongside its current rotation summary.
 
 ### Privacy
 
 - Every Watch Party member may use `/stats`; every response is ephemeral by default, for every member including WASH Crew.
-- WASH Crew may set `public:true` to post Server, Suggestion, Rotation, or Database statistics publicly -- the same pattern `/list` already uses.
+- WASH Crew may set `public:true` to post Server, Suggestion, Rotation, or Collection statistics publicly -- the same pattern `/list` already uses.
 - **Member statistics are the one exception**: any member (not just WASH Crew) may set `public:true` to post their *own* member statistics publicly, since that's a self-consenting disclosure of their own data rather than an aggregate view. WASH Crew cannot retrieve or post another member's statistics under any circumstance -- there is no parameter to target one.
 - A member's statistics remain fully available even after they leave the Watch Party role, since they're derived from Discord user IDs recorded on suggestions and votes, never from live role membership.
 

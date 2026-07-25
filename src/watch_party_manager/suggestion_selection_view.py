@@ -35,7 +35,7 @@ class ListDatabaseSelect(discord.ui.Select):
             for database_id, name in databases[:25]
         ]
         super().__init__(
-            placeholder="Choose a suggestion database...",
+            placeholder="Choose a collection...",
             options=options,
             custom_id="wpm_list_database_select",
         )

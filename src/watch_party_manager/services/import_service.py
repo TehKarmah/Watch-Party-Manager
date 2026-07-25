@@ -343,8 +343,8 @@ def _merge_import(
     vote_repository.save(local_rounds, next_round_id)
 
     message = (
-        f"Merge import complete: {databases_imported} database(s) imported, {databases_skipped} matched an "
-        f"existing database by name, {suggestions_imported} suggestion(s) imported, "
+        f"Merge import complete: {databases_imported} collection(s) imported, {databases_skipped} matched an "
+        f"existing collection by name, {suggestions_imported} suggestion(s) imported, "
         f"{suggestions_skipped} skipped as duplicates, {vote_rounds_imported} vote round(s) imported, "
         f"{ids_reassigned} identifier(s) reassigned. "
         f"A safety backup was made first: `{safety_backup.name}`."
@@ -457,7 +457,7 @@ def _replace_import(
     vote_repository.save(remaining_rounds, next_round_id)
 
     message = (
-        f"Replace import complete: {databases_imported} database(s), {suggestions_imported} suggestion(s), "
+        f"Replace import complete: {databases_imported} collection(s), {suggestions_imported} suggestion(s), "
         f"and {vote_rounds_imported} vote round(s) imported, replacing this server's previous suggestion "
         f"data. Your Discord role and channel configuration was not changed. "
         f"A safety backup was made first: `{safety_backup.name}`."

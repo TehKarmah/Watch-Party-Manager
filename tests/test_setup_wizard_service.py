@@ -358,7 +358,7 @@ class SuggestionDatabaseStepTests(SetupWizardServiceTestCase):
         issues = self.service.validate(state, guild)
         self.assertTrue(
             any(
-                issue.step == SetupWizardStep.SUGGESTION_DATABASE and "No suggestion database" in issue.message
+                issue.step == SetupWizardStep.SUGGESTION_DATABASE and "No collection" in issue.message
                 for issue in issues
             )
         )

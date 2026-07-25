@@ -152,7 +152,7 @@ class ResetSuggestionDatabaseTests(ResetServiceTestCase):
         )
 
         self.assertFalse(result.success)
-        self.assertIn("No suggestion database", result.message)
+        self.assertIn("No collection", result.message)
 
     async def test_aborts_and_leaves_data_unchanged_when_safety_backup_fails(self) -> None:
         self._seed_database()

@@ -129,8 +129,8 @@ def _build_health_field(health: AboutHealth, latency_ms: Optional[float]) -> Abo
 
 def _build_configuration_field(configuration: AboutConfiguration) -> AboutField:
     lines = [
-        f"Active suggestion database: {configuration.active_database_name}",
-        f"Suggestion databases: {configuration.database_count}",
+        f"Active collection: {configuration.active_database_name}",
+        f"Collections: {configuration.database_count}",
         f"Watch items: {configuration.watch_item_count}",
         f"Scheduled watch parties: {configuration.scheduled_watch_party_count}",
         f"Active voting round: {'Yes' if configuration.open_vote_round else 'No'}",

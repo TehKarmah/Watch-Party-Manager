@@ -26,11 +26,11 @@ Required Role reflects WASH's three-tier permission model:
 | `/help` | Everyone | Show the WASH command guide. |
 | `/about` | Everyone | View WASH's status, health, and configuration info. |
 | `/join_watch_party` | Everyone | Join or leave the Watch Party. |
-| `/stats` | Watch Party Member | Show server, member, suggestion, rotation, or database statistics. |
+| `/stats` | Watch Party Member | Show server, member, suggestion, rotation, or collection statistics. |
 
-`/stats` takes an optional `type` (Server, Member, Suggestion, Rotation, or Database; defaults to Server) and `public` option. Members may always post their own Member statistics publicly; posting any other type publicly requires WASH Crew.
+`/stats` takes an optional `type` (Server, Member, Suggestion, Rotation, or Collection; defaults to Server) and `public` option. Members may always post their own Member statistics publicly; posting any other type publicly requires WASH Crew.
 
-`/about` answers "tell me about this running instance of WASH": everyone sees WASH's identity and Documentation links; WASH Crew additionally see Health (Discord connection, scheduler, interactive-voting restoration, OMDb configuration), Configuration (active suggestion database, database/watch-item/scheduled-watch-party counts, whether a voting round is open), and Runtime (Python/discord.py versions, uptime, server name) -- the information the former, separate `/diagnostics` command used to show. There is no longer a standalone `/diagnostics` command.
+`/about` answers "tell me about this running instance of WASH": everyone sees WASH's identity and Documentation links; WASH Crew additionally see Health (Discord connection, scheduler, interactive-voting restoration, OMDb configuration), Configuration (active collection, collection/watch-item/scheduled-watch-party counts, whether a voting round is open), and Runtime (Python/discord.py versions, uptime, server name) -- the information the former, separate `/diagnostics` command used to show. There is no longer a standalone `/diagnostics` command.
 
 ## Watch Items
 
@@ -39,7 +39,7 @@ Required Role reflects WASH's three-tier permission model:
 | `/add` | Watch Party Member | Add a watch item by title or IMDb link. |
 | `/list` | Watch Party Member | List watch items by status. |
 | `/remove` | WASH Crew | Remove a watch item. |
-| `/edit_suggestion` | WASH Crew | Edit a suggestion's details or database. |
+| `/edit_suggestion` | WASH Crew | Edit a suggestion's details or collection. |
 | `/reject` | Watch Party Member | Mark a suggestion "I WILL NOT WATCH". |
 | `/unreject` | Watch Party Member | Remove your own rejection from a suggestion. |
 
@@ -70,18 +70,18 @@ Casting a vote itself happens through the interactive buttons on the voting post
 
 `/setup` is a one-time guided first-run flow; once setup is complete, `/config` edits individual settings section by section (roles, channels, Manage Collections -- pick a collection to edit its suggestion destination, watched-movie destination override, and candidate selection -- a guild-wide default Watched Movie Destination, and voting/reminder/backup defaults) without repeating the whole wizard. Every collection must have exactly one dedicated suggestion destination, so Manage Collections can only change it to a different channel or thread, never clear it; a collection's watched-movie destination remains optional and may be cleared to fall back to the guild-wide default.
 
-## WASH Crew: Suggestion Databases
+## WASH Crew: Collections
 
 | Command | Required Role | Description |
 | --- | --- | --- |
-| `/database_add` | WASH Crew | Create a suggestion database. |
-| `/database_list` | WASH Crew | List this server's suggestion databases. |
-| `/database_remove` | WASH Crew | Deactivate a suggestion database. |
-| `/database_backup` | WASH Crew | Back up a single suggestion database. |
-| `/database_restore` | WASH Crew | Restore a database backup. |
-| `/database_reset` | WASH Crew | Clear one database's suggestions. |
+| `/database_add` | WASH Crew | Create a collection. |
+| `/database_list` | WASH Crew | List this server's collections. |
+| `/database_remove` | WASH Crew | Deactivate a collection. |
+| `/database_backup` | WASH Crew | Back up a single collection. |
+| `/database_restore` | WASH Crew | Restore a collection backup. |
+| `/database_reset` | WASH Crew | Clear one collection's suggestions. |
 
-`/database_backup`, `/database_reset`, and `/database_remove` take no ID parameter -- running the command shows a picker of this server's suggestion databases (name, Active/Inactive status, and watch-item count) to choose from instead.
+`/database_backup`, `/database_reset`, and `/database_remove` take no ID parameter -- running the command shows a picker of this server's collections (name, Active/Inactive status, and watch-item count) to choose from instead.
 
 ## WASH Crew: Watch Parties
 

@@ -203,7 +203,7 @@ class ConfigDatabaseSelect(discord.ui.Select):
             discord.SelectOption(label=name[:100], value=str(database_id))
             for database_id, name in databases[:25]
         ]
-        super().__init__(placeholder="Choose a suggestion database", options=options, custom_id="wpm_config_database_select")
+        super().__init__(placeholder="Choose a collection", options=options, custom_id="wpm_config_database_select")
         self._on_select = on_select
 
     async def callback(self, interaction: discord.Interaction) -> None:

@@ -272,7 +272,7 @@ class HandleDatabaseBackupTests(RestoreCommandTestCase):
 
         self.assertIsNone(interaction.response.sent_file)
         self.assertIsNone(interaction.response.sent_view)
-        self.assertIn("No suggestion databases", interaction.response.sent_message)
+        self.assertIn("No collections", interaction.response.sent_message)
 
     async def test_non_wash_crew_is_rejected(self) -> None:
         self._seed_database()
@@ -320,7 +320,7 @@ class HandleDatabaseRestoreTests(RestoreCommandTestCase):
         )
 
         content, ephemeral, view = interaction.followup.sent[0]
-        self.assertIn("Replace this suggestion database", content)
+        self.assertIn("Replace this collection", content)
         self.assertIsNotNone(view)
 
         confirm_interaction = FakeInteraction(user=self._wash_crew_member())

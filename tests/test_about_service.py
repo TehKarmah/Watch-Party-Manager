@@ -192,8 +192,8 @@ class AboutServiceExpandedTests(unittest.TestCase):
         content = self._content()
 
         configuration = _field(content, "Configuration").value
-        self.assertIn("Active suggestion database: Movie Night", configuration)
-        self.assertIn("Suggestion databases: 3", configuration)
+        self.assertIn("Active collection: Movie Night", configuration)
+        self.assertIn("Collections: 3", configuration)
         self.assertIn("Watch items: 12", configuration)
         self.assertIn("Scheduled watch parties: 2", configuration)
         self.assertIn("Active voting round: Yes", configuration)

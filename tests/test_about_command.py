@@ -206,8 +206,8 @@ class HandleAboutWashCrewTests(AboutCommandTestCase):
         await handle_about(interaction, self.bot)
 
         configuration = self._fields_by_name(interaction.response.sent_embed)["Configuration"]
-        self.assertIn("Active suggestion database: Movie Night", configuration)
-        self.assertIn("Suggestion databases: 1", configuration)
+        self.assertIn("Active collection: Movie Night", configuration)
+        self.assertIn("Collections: 1", configuration)
         self.assertIn("Watch items: 1", configuration)
         self.assertIn("Scheduled watch parties: 1", configuration)
         self.assertIn("Active voting round: No", configuration)
@@ -218,7 +218,7 @@ class HandleAboutWashCrewTests(AboutCommandTestCase):
         await handle_about(interaction, self.bot)
 
         configuration = self._fields_by_name(interaction.response.sent_embed)["Configuration"]
-        self.assertIn("Active suggestion database: None configured", configuration)
+        self.assertIn("Active collection: None configured", configuration)
 
     async def test_runtime_reflects_guild_name_and_uptime(self) -> None:
         interaction = FakeInteraction(user=self._crew_member(), guild=FakeGuild(name="Movie Club"))

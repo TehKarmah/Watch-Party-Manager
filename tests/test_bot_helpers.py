@@ -46,7 +46,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("**General**", help_text)
         self.assertIn("**Watch Items**", help_text)
         self.assertIn("**Voting**", help_text)
-        self.assertIn("**WASH Crew: Suggestion Databases**", help_text)
+        self.assertIn("**WASH Crew: Collections**", help_text)
         self.assertIn("**WASH Crew: Configuration**", help_text)
 
         expected_commands = (
@@ -72,7 +72,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertLess(help_text.index("**General**"), help_text.index("**Watch Items**"))
         self.assertLess(
             help_text.index("**Watch Items**"),
-            help_text.index("**WASH Crew: Suggestion Databases**"),
+            help_text.index("**WASH Crew: Collections**"),
         )
 
     def test_help_text_links_to_reference_documentation(self) -> None:
@@ -92,7 +92,7 @@ class BotHelperTests(unittest.TestCase):
 
         self.assertIn("**General**", help_text)
         self.assertNotIn("**Watch Items**", help_text)
-        self.assertNotIn("**WASH Crew: Suggestion Databases**", help_text)
+        self.assertNotIn("**WASH Crew: Collections**", help_text)
         self.assertNotIn("**WASH Crew: Configuration**", help_text)
         self.assertNotIn("/add", help_text)
         self.assertNotIn("/list", help_text)
@@ -120,7 +120,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("/remove", help_text)
         self.assertNotIn("/vote_status", help_text)
         self.assertNotIn("/watch_party_status", help_text)
-        self.assertNotIn("**WASH Crew: Suggestion Databases**", help_text)
+        self.assertNotIn("**WASH Crew: Collections**", help_text)
         self.assertNotIn("**WASH Crew: Configuration**", help_text)
         self.assertNotIn("/database_add", help_text)
         self.assertNotIn("/database_list", help_text)

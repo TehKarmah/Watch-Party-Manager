@@ -103,7 +103,7 @@ class HelpRegistryTests(unittest.TestCase):
                 "Watch Items",
                 "WASH Crew: Voting",
                 "Voting",
-                "WASH Crew: Suggestion Databases",
+                "WASH Crew: Collections",
                 "WASH Crew: Maintenance",
                 "Watch Parties",
                 "WASH Crew: Watch Parties",
