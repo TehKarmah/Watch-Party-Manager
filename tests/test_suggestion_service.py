@@ -1072,6 +1072,98 @@ class DatabaseCreationRestartSafetyTests(unittest.TestCase):
         self.assertEqual(tv_resolution.database.name, "TV Shows")
 
 
+class ReloadFromRepositoryTests(unittest.TestCase):
+    """reload_suggestions()/reload_databases(): release-blocking bug fix
+    for /database_reset (and factory_reset) reporting success while
+    /list and /add's duplicate detection kept seeing "removed"
+    suggestions. Both methods bring self._suggestions/self._databases
+    back in sync after something writes to the repository through a
+    *different* repository object than the one this service wraps --
+    exactly what bot.py's reset/backup/restore code paths do
+    deliberately (see WatchPartyBot.__init__ and reset_service.py).
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self._temp_dir.name)
+        self.suggestion_path = self.root / "suggestions.json"
+        self.database_path = self.root / "suggestion_databases.json"
+        # Two independent repository objects pointed at the same files,
+        # mirroring bot.py's real wiring (bot.suggestion_service's own
+        # internal repository vs. bot.suggestion_repository).
+        self.service = SuggestionService(
+            repository=JsonSuggestionRepository(self.suggestion_path),
+            database_repository=JsonSuggestionDatabaseRepository(self.database_path),
+        )
+        self.external_suggestion_repository = JsonSuggestionRepository(self.suggestion_path)
+        self.external_database_repository = JsonSuggestionDatabaseRepository(self.database_path)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_reload_suggestions_picks_up_an_external_repository_write(self) -> None:
+        self.service.create_database("Movies", guild_id=100, channel_id=200)
+        self.service.suggest("Dogma", database_id=1, guild_id=100)
+        self.assertEqual(1, self.service.suggestion_count_for_database(1))
+
+        # Simulate reset_service.py: write through the OTHER repository
+        # object, bypassing self.service entirely.
+        self.external_suggestion_repository.save([], next_id=2)
+        self.assertEqual(1, self.service.suggestion_count_for_database(1))  # still stale before reload
+
+        self.service.reload_suggestions()
+
+        self.assertEqual(0, self.service.suggestion_count_for_database(1))
+
+    def test_reload_suggestions_clears_duplicate_detection_for_a_removed_title(self) -> None:
+        self.service.create_database("Movies", guild_id=100, channel_id=200)
+        self.service.suggest("Dogma", database_id=1, guild_id=100)
+
+        self.external_suggestion_repository.save([], next_id=2)
+        self.service.reload_suggestions()
+
+        result = self.service.suggest("Dogma", database_id=1, guild_id=100)
+
+        self.assertTrue(result.success)
+
+    def test_reload_suggestions_does_not_lose_items_still_on_disk(self) -> None:
+        self.service.create_database("Movies", guild_id=100, channel_id=200)
+        self.service.create_database("TV Shows", guild_id=100, channel_id=201)
+        self.service.suggest("Dogma", database_id=1, guild_id=100)
+        self.service.suggest("Breaking Bad", database_id=2, guild_id=100)
+
+        # External write removes only database 1's suggestion.
+        remaining = [item for item in self.external_suggestion_repository.load().watch_items if item.database_id != 1]
+        self.external_suggestion_repository.save(remaining, next_id=3)
+        self.service.reload_suggestions()
+
+        self.assertEqual(0, self.service.suggestion_count_for_database(1))
+        self.assertEqual(1, self.service.suggestion_count_for_database(2))
+
+    def test_reload_databases_picks_up_an_external_repository_write(self) -> None:
+        self.service.create_database("Movies", guild_id=100, channel_id=200)
+        self.assertEqual(1, len(self.service.list_databases(100)))
+
+        self.external_database_repository.save([], next_id=1)
+        self.assertEqual(1, len(self.service.list_databases(100)))  # still stale before reload
+
+        self.service.reload_databases()
+
+        self.assertEqual(0, len(self.service.list_databases(100)))
+
+    def test_reload_preserves_unrelated_in_memory_state(self) -> None:
+        # Reloading suggestions must not disturb the independently-loaded
+        # database index, and vice versa.
+        self.service.create_database("Movies", guild_id=100, channel_id=200)
+        self.service.suggest("Dogma", database_id=1, guild_id=100)
+
+        self.service.reload_suggestions()
+        self.assertEqual(1, len(self.service.list_databases(100)))
+
+        self.service.reload_databases()
+        self.assertEqual(1, self.service.suggestion_count_for_database(1))
+
+
 if __name__ == "__main__":
     unittest.main()
 

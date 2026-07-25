@@ -5658,7 +5658,12 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
                 )
                 return
             result = reset_suggestion_database(
-                bot.backup_service, bot.suggestion_database_repository, bot.suggestion_repository, guild_id, database_id
+                bot.backup_service,
+                bot.suggestion_database_repository,
+                bot.suggestion_repository,
+                bot.suggestion_service,
+                guild_id,
+                database_id,
             )
             await confirm_interaction.response.send_message(result.message, ephemeral=True)
 
@@ -5747,6 +5752,7 @@ async def handle_factory_reset(interaction: discord.Interaction, bot: "WatchPart
             setup_wizard_repository=bot.setup_wizard_repository,
             database_repository=bot.suggestion_database_repository,
             suggestion_repository=bot.suggestion_repository,
+            suggestion_service=bot.suggestion_service,
             configuration_repository=bot.suggestion_database_configuration_repository,
             vote_repository=bot.vote_repository,
             membership_request_repository=bot.membership_request_repository,

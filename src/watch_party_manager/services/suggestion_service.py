@@ -82,10 +82,23 @@ class SuggestionService:
                 location.
         """
         self._repository = repository if repository is not None else JsonSuggestionRepository()
-        # Store suggestions as a dict with lowercase title as key for duplicate detection
-        # Value is the actual WatchItem with original casing
-        self._suggestions: dict[tuple[Optional[int], str], WatchItem] = {}
+        self._database_repository = (
+            database_repository if database_repository is not None else JsonSuggestionDatabaseRepository()
+        )
+        self._load_suggestions_from_repository()
+        self._load_databases_from_repository()
+
+    def _load_suggestions_from_repository(self) -> None:
+        """(Re)populate self._suggestions and self._next_id from self._repository.
+
+        Store suggestions as a dict with lowercase title as key for
+        duplicate detection; the value is the actual WatchItem with
+        original casing. Rebuilds the dict from scratch rather than
+        merging into whatever is already there, so a reload never leaves
+        stale entries behind.
+        """
         load_result = self._repository.load()
+        self._suggestions: dict[tuple[Optional[int], str], WatchItem] = {}
         for watch_item in load_result.watch_items:
             self._suggestions[(watch_item.database_id, watch_item.title.lower())] = watch_item
         self._next_id = load_result.next_id
@@ -94,15 +107,42 @@ class SuggestionService:
             # assigned IDs back so they're stable from now on.
             self._save()
 
-        self._database_repository = (
-            database_repository if database_repository is not None else JsonSuggestionDatabaseRepository()
-        )
-        # Keyed by database_id, in creation order.
-        self._databases: dict[int, SuggestionDatabase] = {}
+    def _load_databases_from_repository(self) -> None:
+        """(Re)populate self._databases and self._next_database_id from
+        self._database_repository, keyed by database_id in creation order.
+        """
         database_load_result = self._database_repository.load()
+        self._databases: dict[int, SuggestionDatabase] = {}
         for database in database_load_result.databases:
             self._databases[database.database_id] = database
         self._next_database_id = database_load_result.next_id
+
+    def reload_suggestions(self) -> None:
+        """Discard this service's in-memory suggestions and re-read every
+        one from the repository.
+
+        Required after anything writes to the suggestion repository
+        without going through this service's own methods -- e.g.
+        reset_service.py's reset_suggestion_database()/factory_reset(),
+        which intentionally operate on the repository directly rather
+        than reaching into this service's private state (see that
+        module's docstring). Without an explicit reload, self._suggestions
+        would keep serving whatever was in memory at construction time --
+        stale duplicate-detection entries and all -- since it's otherwise
+        only ever mutated by this service's own methods, never re-read
+        from disk on every call.
+        """
+        self._load_suggestions_from_repository()
+
+    def reload_databases(self) -> None:
+        """Discard this service's in-memory suggestion databases and
+        re-read every one from the repository.
+
+        Mirrors reload_suggestions()'s exact rationale, applied to
+        self._databases instead -- needed after anything writes to the
+        database repository directly (e.g. factory_reset()).
+        """
+        self._load_databases_from_repository()
 
     def suggest(
         self,

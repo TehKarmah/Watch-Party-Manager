@@ -9,6 +9,21 @@ same repositories every other service in this project already uses
 persistence mechanism, matching FR-032B's database_backup_service.py's
 approach to guild-scoped filtering.
 
+Release validation bug fix: writing straight to the repositories (as
+described above) updates disk correctly, but bot.py's live
+SuggestionService instance keeps its own in-memory index of every
+suggestion/database, populated once at startup and otherwise only ever
+mutated by that service's own methods (see suggestion_service.py's
+_suggestions/_databases dicts). A repository write made through a
+*different* repository object -- exactly what reset does, deliberately,
+per the paragraph above -- is invisible to that index until something
+tells it to reload. That gap is why a reset used to report success
+while /list and /add's duplicate detection kept seeing the "removed"
+suggestions: the file was correct, the live service's cache was stale.
+Both reset functions below now take the live SuggestionService, call
+its reload_suggestions()/reload_databases() immediately after writing,
+and verify the target is actually empty before reporting success.
+
 Factory reset guild-scopes every WASH-managed store: it never wipes
 another guild's data even though several of these JSON files are not
 strictly single-guild documents. Backup archives, environment files,
@@ -20,6 +35,7 @@ those locations.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -36,6 +52,9 @@ from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.persistence.watch_party_repository import JsonWatchPartyRepository
 from watch_party_manager.scheduler.json_scheduler_repository import JsonSchedulerRepository
 from watch_party_manager.services.backup_service import BackupError, BackupKind, BackupService
+from watch_party_manager.services.suggestion_service import SuggestionService
+
+logger = logging.getLogger(__name__)
 
 # --- Suggestion database reset (Section 1) ------------------------------------------
 
@@ -93,6 +112,7 @@ def reset_suggestion_database(
     backup_service: BackupService,
     database_repository: JsonSuggestionDatabaseRepository,
     suggestion_repository: JsonSuggestionRepository,
+    suggestion_service: SuggestionService,
     guild_id: int,
     database_id: int,
 ) -> DatabaseResetResult:
@@ -101,6 +121,21 @@ def reset_suggestion_database(
     The database record, its configuration, and every other database
     (including other databases in this same guild) are left completely
     untouched -- only suggestions.json is written.
+
+    suggestion_service is the live, in-process SuggestionService (see
+    bot.py's bot.suggestion_service) -- the one /list, /add's duplicate
+    detection, and every other command actually read through. It is
+    passed a *different* repository object than the one that service
+    wraps internally (see this module's docstring), so after writing
+    suggestions.json directly, this function calls
+    suggestion_service.reload_suggestions() to bring that live index
+    back in sync, then verifies the target database is actually empty
+    before reporting success. removed_count is a verified disk read
+    (how many records for this database existed in suggestions.json
+    immediately before the write) rather than the live service's own
+    count -- deliberately independent of whatever suggestion_service's
+    cache happened to hold beforehand, so a pre-existing, unrelated
+    staleness in that cache can never cause this to under-report.
     """
     database = next(
         (
@@ -121,9 +156,31 @@ def reset_suggestion_database(
         )
 
     suggestion_load = suggestion_repository.load()
+    before_count = sum(1 for item in suggestion_load.watch_items if item.database_id == database_id)
     remaining = [item for item in suggestion_load.watch_items if item.database_id != database_id]
-    removed_count = len(suggestion_load.watch_items) - len(remaining)
     suggestion_repository.save(remaining, suggestion_load.next_id)
+
+    suggestion_service.reload_suggestions()
+    after_count = suggestion_service.suggestion_count_for_database(database_id)
+
+    if after_count != 0:
+        logger.error(
+            "Post-reset verification failed for database %s (guild %s): "
+            "%d suggestion(s) still present after reset (safety backup: %s)",
+            database_id,
+            guild_id,
+            after_count,
+            safety_backup,
+        )
+        return DatabaseResetResult(
+            False,
+            f'Collection "{database.name}" could not be verified as reset -- some suggestions may still be '
+            f"present. Live data was NOT confirmed clean; a safety backup was made first: "
+            f"`{safety_backup.name}`. Please contact an administrator before trying again.",
+            safety_backup=safety_backup,
+        )
+
+    removed_count = before_count - after_count
 
     return DatabaseResetResult(
         True,
@@ -199,6 +256,7 @@ async def factory_reset(
     setup_wizard_repository: SetupWizardRepository,
     database_repository: JsonSuggestionDatabaseRepository,
     suggestion_repository: JsonSuggestionRepository,
+    suggestion_service: SuggestionService,
     configuration_repository: SuggestionDatabaseConfigurationRepository,
     vote_repository: JsonVoteRepository,
     membership_request_repository: MembershipRequestRepository,
@@ -214,6 +272,14 @@ async def factory_reset(
     other removal happens while the guild is still considered "set up";
     once it's gone, /setup is required again through the existing,
     unmodified perform_setup_redirect_check() logic.
+
+    suggestion_service is the live, in-process SuggestionService -- see
+    reset_suggestion_database's docstring for why writing
+    suggestions.json/suggestion_databases.json through a separate
+    repository object requires this explicit reload afterward, and why
+    that same staleness would otherwise let this function report success
+    while the live service kept serving this guild's "removed"
+    collections and suggestions.
     """
     try:
         safety_backup = backup_service.create_backup(BackupKind.MANUAL, enforce_retention=False).archive_path
@@ -231,6 +297,30 @@ async def factory_reset(
     suggestion_repository.save(
         [item for item in suggestion_load.watch_items if item.guild_id != guild_id], suggestion_load.next_id
     )
+
+    suggestion_service.reload_databases()
+    suggestion_service.reload_suggestions()
+
+    remaining_databases = suggestion_service.list_databases(guild_id)
+    remaining_suggestions = [
+        item for item in suggestion_service.get_suggestions() if item.guild_id == guild_id
+    ]
+    if remaining_databases or remaining_suggestions:
+        logger.error(
+            "Post-factory-reset verification failed for guild %s: "
+            "%d collection(s) and %d suggestion(s) still present (safety backup: %s)",
+            guild_id,
+            len(remaining_databases),
+            len(remaining_suggestions),
+            safety_backup,
+        )
+        return FactoryResetResult(
+            False,
+            "Factory reset could not be verified -- some collections or suggestions may still be present. "
+            f"Live data was NOT confirmed clean; a safety backup was made first: `{safety_backup.name}`. "
+            "Please contact an administrator before trying again.",
+            safety_backup=safety_backup,
+        )
 
     configuration_repository.delete_for_guild(guild_id)
 

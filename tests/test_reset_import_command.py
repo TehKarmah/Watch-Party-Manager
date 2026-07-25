@@ -225,6 +225,110 @@ class HandleDatabaseResetTests(ResetImportCommandTestCase):
         self.assertIn("reset", confirm_interaction.response.sent_message.lower())
         self.assertEqual([], self.bot.suggestion_repository.load().watch_items)
 
+    async def test_success_response_reports_the_actual_removed_count(self) -> None:
+        self._seed_database(name="Movie Night")
+        # Seeded through the live service, like every real /add would --
+        # matches how bot.suggestion_service actually gets populated in
+        # production, unlike a raw repository write it would never see.
+        self.bot.suggestion_service.suggest("Alien", database_id=1, guild_id=GUILD_ID)
+        self.bot.suggestion_service.suggest("Aliens", database_id=1, guild_id=GUILD_ID)
+        self.bot.suggestion_service.suggest("Alien 3", database_id=1, guild_id=GUILD_ID)
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_reset(interaction, self.bot)
+        select_interaction = await _select_database(interaction.response.sent_view)
+        view = select_interaction.response.sent_view
+
+        confirm_interaction = await _submit_modal(view, 0, "RESET")
+
+        self.assertIn("3 suggestion(s) removed", confirm_interaction.response.sent_message)
+
+    async def test_list_immediately_shows_the_empty_state_after_reset(self) -> None:
+        # Regression for the reported bug: /database_reset reported
+        # success but /list still showed the "removed" items, because
+        # the write bypassed bot.suggestion_service's in-memory cache.
+        self._seed_database(name="Movie Night")
+        self.bot.suggestion_repository.save(
+            [WatchItem(title="Dogma", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
+        )
+        # Populate the live service's cache the same way a real command
+        # would have, before the reset -- it must already know about the
+        # item for this test to prove anything about staleness.
+        self.bot.suggestion_service.reload_suggestions()
+        self.assertEqual(1, self.bot.suggestion_service.suggestion_count_for_database(1))
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_reset(interaction, self.bot)
+        select_interaction = await _select_database(interaction.response.sent_view)
+        view = select_interaction.response.sent_view
+
+        await _submit_modal(view, 0, "RESET")
+
+        # This mirrors exactly what /list reads: bot.suggestion_service's
+        # live, in-memory state, not the repository file directly.
+        self.assertEqual(0, self.bot.suggestion_service.suggestion_count_for_database(1))
+        self.assertEqual([], self.bot.suggestion_service.get_suggestions_for_database(1))
+
+    async def test_add_immediately_accepts_a_previously_removed_title(self) -> None:
+        self._seed_database(name="Movie Night")
+        self.bot.suggestion_repository.save(
+            [WatchItem(title="Dogma", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
+        )
+        self.bot.suggestion_service.reload_suggestions()
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_reset(interaction, self.bot)
+        select_interaction = await _select_database(interaction.response.sent_view)
+        view = select_interaction.response.sent_view
+        await _submit_modal(view, 0, "RESET")
+
+        # This mirrors what /add's duplicate check reads -- the live
+        # service, not a fresh repository read.
+        result = self.bot.suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+
+        self.assertTrue(result.success)
+
+    async def test_restart_simulation_preserves_the_empty_state(self) -> None:
+        self._seed_database(name="Movie Night")
+        self.bot.suggestion_repository.save(
+            [WatchItem(title="Dogma", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
+        )
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_reset(interaction, self.bot)
+        select_interaction = await _select_database(interaction.response.sent_view)
+        view = select_interaction.response.sent_view
+        await _submit_modal(view, 0, "RESET")
+
+        # A brand-new SuggestionService loading only from disk -- simulates
+        # the bot process restarting.
+        restarted_service = SuggestionService(
+            repository=self.bot.suggestion_repository, database_repository=self.bot.suggestion_database_repository
+        )
+        self.assertEqual(0, restarted_service.suggestion_count_for_database(1))
+
+    async def test_picker_selection_targets_the_selected_collection_not_another(self) -> None:
+        self._seed_database(database_id=1, name="Movies", channel_id=555)
+        self._seed_database(database_id=2, name="TV Shows", channel_id=556)
+        self.bot.suggestion_repository.save(
+            [
+                WatchItem(title="Dogma", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID),
+                WatchItem(title="Breaking Bad", media_type=MediaType.MOVIE, database_id=2, guild_id=GUILD_ID),
+            ],
+            next_id=3,
+        )
+        self.bot.suggestion_service.reload_suggestions()
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_reset(interaction, self.bot)
+
+        # Select the SECOND collection (TV Shows), not the first.
+        select_interaction = await _select_database(interaction.response.sent_view, database_id=2)
+        self.assertIn("TV Shows", select_interaction.response.sent_message)
+        view = select_interaction.response.sent_view
+
+        await _submit_modal(view, 0, "RESET")
+
+        self.assertEqual(1, self.bot.suggestion_service.suggestion_count_for_database(1))
+        self.assertEqual(0, self.bot.suggestion_service.suggestion_count_for_database(2))
+        remaining_titles = {item.title for item in self.bot.suggestion_service.get_suggestions()}
+        self.assertEqual({"Dogma"}, remaining_titles)
+
     async def test_wrong_confirmation_text_does_not_reset(self) -> None:
         self._seed_database(name="Movie Night")
         self.bot.suggestion_repository.save(
@@ -254,6 +358,64 @@ class HandleDatabaseResetTests(ResetImportCommandTestCase):
 
         self.assertIn("cancelled", cancel_interaction.response.sent_message.lower())
         self.assertEqual(1, len(self.bot.suggestion_repository.load().watch_items))
+
+
+class ContextualResolutionAfterResetTests(ResetImportCommandTestCase):
+    """/database_reset uses an explicit picker rather than contextual
+    (channel-based) resolution (Release Polish: Discord-native UX) -- it
+    must reset exactly the picker-selected collection regardless of
+    which channel/thread the command was run from, and the collection's
+    channel must still resolve correctly through contextual resolution
+    (/add, /list, /start_vote, etc.) once the reset completes.
+    """
+
+    async def test_reset_targets_the_picker_selected_collection_from_an_unrelated_channel(self) -> None:
+        self._seed_database(database_id=1, name="Movies", channel_id=555)
+        self._seed_database(database_id=2, name="TV Shows", channel_id=556)
+        self.bot.suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+        self.bot.suggestion_service.suggest("Breaking Bad", database_id=2, guild_id=GUILD_ID)
+        # Run the command from a channel that belongs to neither collection.
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        interaction.channel_id = 999999
+
+        await handle_database_reset(interaction, self.bot)
+        select_interaction = await _select_database(interaction.response.sent_view, database_id=1)
+        view = select_interaction.response.sent_view
+        await _submit_modal(view, 0, "RESET")
+
+        self.assertEqual(0, self.bot.suggestion_service.suggestion_count_for_database(1))
+        self.assertEqual(1, self.bot.suggestion_service.suggestion_count_for_database(2))
+
+    async def test_channel_still_resolves_to_the_retained_collection_after_reset(self) -> None:
+        database = self._seed_database(database_id=1, name="Movies", channel_id=555)
+        self.bot.suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_reset(interaction, self.bot)
+        select_interaction = await _select_database(interaction.response.sent_view)
+        view = select_interaction.response.sent_view
+        await _submit_modal(view, 0, "RESET")
+
+        resolution = self.bot.suggestion_service.resolve_database_for_channel(GUILD_ID, database.channel_id)
+
+        self.assertIsNotNone(resolution.database)
+        self.assertEqual(database.database_id, resolution.database.database_id)
+        self.assertEqual("Movies", resolution.database.name)
+
+    async def test_add_in_the_collections_home_channel_resolves_correctly_after_reset(self) -> None:
+        database = self._seed_database(database_id=1, name="Movies", channel_id=555)
+        self.bot.suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_reset(interaction, self.bot)
+        select_interaction = await _select_database(interaction.response.sent_view)
+        view = select_interaction.response.sent_view
+        await _submit_modal(view, 0, "RESET")
+
+        resolution = self.bot.suggestion_service.resolve_database_for_channel(GUILD_ID, database.channel_id)
+        result = self.bot.suggestion_service.suggest(
+            "Dogma", database_id=resolution.database.database_id, guild_id=GUILD_ID
+        )
+
+        self.assertTrue(result.success)
 
 
 class HandleDatabaseRemoveTests(ResetImportCommandTestCase):
@@ -349,6 +511,22 @@ class HandleFactoryResetTests(ResetImportCommandTestCase):
 
         self.assertIn("cancelled", cancel_interaction.response.sent_message.lower())
         self.assertIsNotNone(self.bot.guild_configuration_repository.get(GUILD_ID))
+
+    async def test_live_state_is_cleared_immediately(self) -> None:
+        # Same live-state-staleness bug as /database_reset: factory reset
+        # writes suggestions.json/suggestion_databases.json directly, so
+        # bot.suggestion_service must be explicitly resynced afterward.
+        self.bot.guild_configuration_repository.save(GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild"))
+        self._seed_database(name="Movie Night")
+        self.bot.suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_factory_reset(interaction, self.bot)
+        view = interaction.response.sent_view
+
+        await _submit_modal(view, 0, "RESET")
+
+        self.assertEqual([], self.bot.suggestion_service.list_databases(GUILD_ID))
+        self.assertEqual(0, len(self.bot.suggestion_service.get_suggestions()))
 
 
 class HandleImportTests(ResetImportCommandTestCase):

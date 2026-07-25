@@ -11,6 +11,7 @@ from unittest.mock import patch
 from watch_party_manager.domain.guild_configuration import GuildConfiguration
 from watch_party_manager.domain.membership_request import MembershipRequest
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
+from watch_party_manager.domain.suggestion_database_configuration import SuggestionDatabaseConfiguration
 from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus, VoteVisibility
 from watch_party_manager.domain.watch_item import MediaType, WatchItem
 from watch_party_manager.domain.watch_party import WatchParty, WatchPartyStatus
@@ -33,6 +34,7 @@ from watch_party_manager.services.reset_service import (
     factory_reset,
     reset_suggestion_database,
 )
+from watch_party_manager.services.suggestion_service import SuggestionService
 
 GUILD_ID = 100
 OTHER_GUILD_ID = 200
@@ -66,6 +68,21 @@ class ResetServiceTestCase(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
+
+    def _make_suggestion_service(self) -> SuggestionService:
+        """Build the live, in-process SuggestionService every other
+        command actually reads through -- wired to the exact same
+        repository objects reset writes to directly, mirroring bot.py's
+        real wiring (see WatchPartyBot.__init__'s "separate repository
+        instances... both point at the same files" comment). Called
+        after seeding test data via the raw repositories, so its initial
+        in-memory state matches what a real bot would have loaded at
+        startup; called again (fresh) wherever a test needs to confirm
+        what a brand-new instance sees after reset, simulating a restart.
+        """
+        return SuggestionService(
+            repository=self.suggestion_repository, database_repository=self.database_repository
+        )
 
     def _seed_database(self, database_id=1, guild_id=GUILD_ID, name="Movie Night", channel_id=555) -> SuggestionDatabase:
         database = SuggestionDatabase(
@@ -111,8 +128,9 @@ class ResetSuggestionDatabaseTests(ResetServiceTestCase):
             next_id=3,
         )
 
+        suggestion_service = self._make_suggestion_service()
         result = reset_suggestion_database(
-            self.backup_service, self.database_repository, self.suggestion_repository, GUILD_ID, 1
+            self.backup_service, self.database_repository, self.suggestion_repository, suggestion_service, GUILD_ID, 1
         )
 
         self.assertTrue(result.success)
@@ -120,18 +138,37 @@ class ResetSuggestionDatabaseTests(ResetServiceTestCase):
         titles = {item.title for item in self.suggestion_repository.load().watch_items}
         self.assertEqual({"Untouched"}, titles)
 
-    async def test_preserves_the_database_record_and_configuration(self) -> None:
+    async def test_preserves_the_database_record(self) -> None:
         database = self._seed_database(name="Movie Night")
         self.suggestion_repository.save(
             [WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
         )
 
+        suggestion_service = self._make_suggestion_service()
         reset_suggestion_database(
-            self.backup_service, self.database_repository, self.suggestion_repository, GUILD_ID, 1
+            self.backup_service, self.database_repository, self.suggestion_repository, suggestion_service, GUILD_ID, 1
         )
 
         remaining_databases = self.database_repository.load().databases
         self.assertEqual([database], remaining_databases)
+
+    async def test_preserves_the_databases_configuration(self) -> None:
+        self._seed_database(name="Movie Night")
+        self.suggestion_repository.save(
+            [WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
+        )
+        self.configuration_repository.save(
+            SuggestionDatabaseConfiguration(guild_id=GUILD_ID, database_id=1, display_name="Movie Night")
+        )
+
+        suggestion_service = self._make_suggestion_service()
+        reset_suggestion_database(
+            self.backup_service, self.database_repository, self.suggestion_repository, suggestion_service, GUILD_ID, 1
+        )
+
+        preserved = self.configuration_repository.get(GUILD_ID, 1)
+        self.assertIsNotNone(preserved)
+        self.assertEqual("Movie Night", preserved.display_name)
 
     async def test_creates_a_safety_backup(self) -> None:
         self._seed_database()
@@ -139,16 +176,18 @@ class ResetSuggestionDatabaseTests(ResetServiceTestCase):
             [WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
         )
 
+        suggestion_service = self._make_suggestion_service()
         result = reset_suggestion_database(
-            self.backup_service, self.database_repository, self.suggestion_repository, GUILD_ID, 1
+            self.backup_service, self.database_repository, self.suggestion_repository, suggestion_service, GUILD_ID, 1
         )
 
         self.assertIsNotNone(result.safety_backup)
         self.assertTrue(result.safety_backup.is_file())
 
     async def test_rejects_an_unknown_database(self) -> None:
+        suggestion_service = self._make_suggestion_service()
         result = reset_suggestion_database(
-            self.backup_service, self.database_repository, self.suggestion_repository, GUILD_ID, 999
+            self.backup_service, self.database_repository, self.suggestion_repository, suggestion_service, GUILD_ID, 999
         )
 
         self.assertFalse(result.success)
@@ -160,16 +199,134 @@ class ResetSuggestionDatabaseTests(ResetServiceTestCase):
             [WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
         )
         original_titles = {item.title for item in self.suggestion_repository.load().watch_items}
+        suggestion_service = self._make_suggestion_service()
 
         with patch.object(self.backup_service, "create_backup", side_effect=BackupError("disk full")):
             result = reset_suggestion_database(
-                self.backup_service, self.database_repository, self.suggestion_repository, GUILD_ID, 1
+                self.backup_service,
+                self.database_repository,
+                self.suggestion_repository,
+                suggestion_service,
+                GUILD_ID,
+                1,
             )
 
         self.assertFalse(result.success)
         self.assertIn("NOT changed", result.message)
         remaining_titles = {item.title for item in self.suggestion_repository.load().watch_items}
         self.assertEqual(original_titles, remaining_titles)
+
+
+class _NoOpSaveSuggestionRepository:
+    """Wraps a real JsonSuggestionRepository but silently drops save() --
+    simulates a persistence failure that doesn't raise (e.g. a disk or
+    permission problem swallowed somewhere below this layer), so
+    reset_suggestion_database's post-write verification is the only thing
+    that can catch it.
+    """
+
+    def __init__(self, real_repository: JsonSuggestionRepository) -> None:
+        self._real = real_repository
+
+    def load(self):
+        return self._real.load()
+
+    def save(self, watch_items, next_id) -> None:  # intentionally a no-op
+        pass
+
+
+class ResetSuggestionDatabaseLiveStateTests(ResetServiceTestCase):
+    """Release-blocking bug fix: a reset that writes suggestions.json
+    correctly used to still be invisible to /list and /add's duplicate
+    detection, because bot.py's live SuggestionService instance caches
+    every suggestion in memory and was never told to reload after a
+    reset wrote through a *different* repository object. These tests
+    exercise the fix directly against SuggestionService, the same class
+    every Discord command reads through.
+    """
+
+    async def test_reset_clears_duplicate_detection_immediately(self) -> None:
+        self._seed_database()
+        suggestion_service = self._make_suggestion_service()
+        suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+
+        result = reset_suggestion_database(
+            self.backup_service, self.database_repository, self.suggestion_repository, suggestion_service, GUILD_ID, 1
+        )
+
+        self.assertTrue(result.success)
+        # Re-suggesting the exact same title must succeed as a brand-new
+        # suggestion, not be rejected as a duplicate of the "removed" one.
+        second_attempt = suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+        self.assertTrue(second_attempt.success)
+
+    async def test_reset_updates_the_live_services_in_memory_count(self) -> None:
+        self._seed_database()
+        suggestion_service = self._make_suggestion_service()
+        suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+        self.assertEqual(1, suggestion_service.suggestion_count_for_database(1))
+
+        reset_suggestion_database(
+            self.backup_service, self.database_repository, self.suggestion_repository, suggestion_service, GUILD_ID, 1
+        )
+
+        self.assertEqual(0, suggestion_service.suggestion_count_for_database(1))
+
+    async def test_reset_persists_the_empty_state_for_a_freshly_constructed_service(self) -> None:
+        # Simulates a bot restart: a brand-new SuggestionService, loading
+        # only from disk, must also see the collection as empty.
+        self._seed_database()
+        suggestion_service = self._make_suggestion_service()
+        suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+
+        reset_suggestion_database(
+            self.backup_service, self.database_repository, self.suggestion_repository, suggestion_service, GUILD_ID, 1
+        )
+
+        restarted_service = self._make_suggestion_service()
+        self.assertEqual(0, restarted_service.suggestion_count_for_database(1))
+
+    async def test_reset_does_not_affect_other_collections_live_state(self) -> None:
+        self._seed_database(database_id=1, name="Movies")
+        self._seed_database(database_id=2, name="TV Shows", channel_id=777)
+        suggestion_service = self._make_suggestion_service()
+        suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+        suggestion_service.suggest("Breaking Bad", database_id=2, guild_id=GUILD_ID)
+
+        reset_suggestion_database(
+            self.backup_service, self.database_repository, self.suggestion_repository, suggestion_service, GUILD_ID, 1
+        )
+
+        self.assertEqual(0, suggestion_service.suggestion_count_for_database(1))
+        self.assertEqual(1, suggestion_service.suggestion_count_for_database(2))
+        remaining_titles = {item.title for item in suggestion_service.get_suggestions()}
+        self.assertEqual({"Breaking Bad"}, remaining_titles)
+
+    async def test_verification_catches_a_silent_persistence_failure(self) -> None:
+        self._seed_database()
+        self.suggestion_repository.save(
+            [WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
+        )
+        suggestion_service = self._make_suggestion_service()
+        broken_repository = _NoOpSaveSuggestionRepository(self.suggestion_repository)
+
+        with self.assertLogs("watch_party_manager.services.reset_service", level="ERROR") as logs:
+            result = reset_suggestion_database(
+                self.backup_service, self.database_repository, broken_repository, suggestion_service, GUILD_ID, 1
+            )
+
+        self.assertFalse(result.success)
+        self.assertIn("could not be verified", result.message.lower())
+        # No stack trace or exception text should be surfaced to Discord.
+        self.assertNotIn("Traceback", result.message)
+        # A diagnosable log entry naming the database/guild must exist.
+        self.assertTrue(any("1" in entry and str(GUILD_ID) in entry for entry in logs.output))
+        # The safety backup must still be preserved even though
+        # verification failed -- it's the recovery path for exactly this case.
+        self.assertIsNotNone(result.safety_backup)
+        self.assertTrue(result.safety_backup.is_file())
+        # The live service must still show the item -- no false "removed" claim.
+        self.assertEqual(1, suggestion_service.suggestion_count_for_database(1))
 
 
 class BuildFactoryResetSummaryTests(ResetServiceTestCase):
@@ -216,13 +373,14 @@ class BuildFactoryResetSummaryTests(ResetServiceTestCase):
 
 
 class FactoryResetTests(ResetServiceTestCase):
-    async def _factory_reset(self, guild_id=GUILD_ID):
+    async def _factory_reset(self, guild_id=GUILD_ID, suggestion_service=None):
         return await factory_reset(
             backup_service=self.backup_service,
             guild_configuration_repository=self.guild_configuration_repository,
             setup_wizard_repository=self.setup_wizard_repository,
             database_repository=self.database_repository,
             suggestion_repository=self.suggestion_repository,
+            suggestion_service=suggestion_service or self._make_suggestion_service(),
             configuration_repository=self.configuration_repository,
             vote_repository=self.vote_repository,
             membership_request_repository=self.membership_request_repository,
@@ -340,6 +498,101 @@ class FactoryResetTests(ResetServiceTestCase):
         self.assertIn("NOT changed", result.message)
         self.assertIsNotNone(self.guild_configuration_repository.get(GUILD_ID))
         self.assertEqual(1, len(self.database_repository.load().databases))
+
+
+class FactoryResetLiveStateTests(ResetServiceTestCase):
+    """Same live-state-staleness bug as ResetSuggestionDatabaseLiveStateTests,
+    verified against factory_reset -- it writes suggestions.json and
+    suggestion_databases.json through the same bypass pattern.
+    """
+
+    async def test_factory_reset_clears_duplicate_detection_immediately(self) -> None:
+        self._seed_database(guild_id=GUILD_ID)
+        suggestion_service = self._make_suggestion_service()
+        suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+
+        result = await factory_reset(
+            backup_service=self.backup_service,
+            guild_configuration_repository=self.guild_configuration_repository,
+            setup_wizard_repository=self.setup_wizard_repository,
+            database_repository=self.database_repository,
+            suggestion_repository=self.suggestion_repository,
+            suggestion_service=suggestion_service,
+            configuration_repository=self.configuration_repository,
+            vote_repository=self.vote_repository,
+            membership_request_repository=self.membership_request_repository,
+            watch_party_repository=self.watch_party_repository,
+            scheduler_repository=self.scheduler_repository,
+            guild_id=GUILD_ID,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual([], suggestion_service.list_databases(GUILD_ID))
+        self.assertEqual(0, len(suggestion_service.get_suggestions()))
+        # Re-creating a same-named, same-channel collection and re-suggesting
+        # the same title must both work -- nothing stale remains cached.
+        recreated = suggestion_service.create_database("Movie Night", guild_id=GUILD_ID, channel_id=555)
+        self.assertTrue(recreated.success)
+        resuggested = suggestion_service.suggest("Dogma", database_id=recreated.database.database_id, guild_id=GUILD_ID)
+        self.assertTrue(resuggested.success)
+
+    async def test_factory_reset_persists_the_empty_state_for_a_freshly_constructed_service(self) -> None:
+        self._seed_database(guild_id=GUILD_ID)
+        suggestion_service = self._make_suggestion_service()
+        suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
+
+        await factory_reset(
+            backup_service=self.backup_service,
+            guild_configuration_repository=self.guild_configuration_repository,
+            setup_wizard_repository=self.setup_wizard_repository,
+            database_repository=self.database_repository,
+            suggestion_repository=self.suggestion_repository,
+            suggestion_service=suggestion_service,
+            configuration_repository=self.configuration_repository,
+            vote_repository=self.vote_repository,
+            membership_request_repository=self.membership_request_repository,
+            watch_party_repository=self.watch_party_repository,
+            scheduler_repository=self.scheduler_repository,
+            guild_id=GUILD_ID,
+        )
+
+        restarted_service = self._make_suggestion_service()
+        self.assertEqual([], restarted_service.list_databases(GUILD_ID))
+        self.assertEqual(0, len(restarted_service.get_suggestions()))
+
+    async def test_verification_catches_a_silent_suggestion_persistence_failure(self) -> None:
+        self.guild_configuration_repository.save(GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild"))
+        self._seed_database(guild_id=GUILD_ID)
+        self.suggestion_repository.save(
+            [WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID)], next_id=2
+        )
+        suggestion_service = self._make_suggestion_service()
+        broken_repository = _NoOpSaveSuggestionRepository(self.suggestion_repository)
+
+        with self.assertLogs("watch_party_manager.services.reset_service", level="ERROR"):
+            result = await factory_reset(
+                backup_service=self.backup_service,
+                guild_configuration_repository=self.guild_configuration_repository,
+                setup_wizard_repository=self.setup_wizard_repository,
+                database_repository=self.database_repository,
+                suggestion_repository=broken_repository,
+                suggestion_service=suggestion_service,
+                configuration_repository=self.configuration_repository,
+                vote_repository=self.vote_repository,
+                membership_request_repository=self.membership_request_repository,
+                watch_party_repository=self.watch_party_repository,
+                scheduler_repository=self.scheduler_repository,
+                guild_id=GUILD_ID,
+            )
+
+        self.assertFalse(result.success)
+        self.assertIn("could not be verified", result.message.lower())
+        self.assertNotIn("Traceback", result.message)
+        self.assertIsNotNone(result.safety_backup)
+        self.assertTrue(result.safety_backup.is_file())
+        # Guild configuration must NOT have been deleted -- verification
+        # runs before the point of no return.
+        self.assertIsNotNone(self.guild_configuration_repository.get(GUILD_ID))
 
 
 if __name__ == "__main__":
