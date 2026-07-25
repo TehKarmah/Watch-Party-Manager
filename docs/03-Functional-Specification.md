@@ -44,31 +44,21 @@ Where configuration options exist, this document describes the intended behavior
 
 # 2. Watch Item Lifecycle
 
-Every Watch Item progresses through one or more states.
+Every Watch Item shows one of four statuses:
 
 ```text
-Suggested
-    │
-    ▼
-Eligible
-    │
-    ▼
-Current Rotation
-    │
-    ▼
-Selected for Vote
-    │
-    ▼
-Scheduled
-    │
-    ▼
-Watched
-    │
-    ▼
-Rewatch Eligible
+🟢 Available  ──▶  🟡 Rotation Cooldown  ──▶  🟣 Vote Winner
+       ▲                    │                       │
+       └────────────────────┘                       ▼
+                                              🔴 Retired
 ```
 
-A Watch Item may return to the Current Rotation multiple times throughout its lifetime.
+- **Available** -- eligible for future voting.
+- **Rotation Cooldown** -- already presented in the database's current rotation; computed at display time, not separately stored, so it automatically returns to Available the moment a fresh rotation begins.
+- **Vote Winner** -- won a voting round. WASH knows a suggestion won a vote; it does not yet know the group actually watched it -- confirming an actual viewing is a future watch-history milestone, tracked separately from this status.
+- **Retired** -- archived, whether by `/remove`, an "I WILL NOT WATCH" rejection threshold, or WASH Crew directly setting it via `/edit_suggestion`.
+
+A Watch Item may return to Rotation Cooldown, and from there back to Available, multiple times throughout its lifetime as rotations begin and complete.
 
 The complete history of every viewing is preserved.
 

@@ -39,11 +39,11 @@ Required Role reflects WASH's three-tier permission model:
 | `/add` | Watch Party Member | Add a watch item by title or IMDb link. |
 | `/list` | Watch Party Member | List watch items by status. |
 | `/remove` | WASH Crew | Remove a watch item. |
-| `/edit_suggestion` | WASH Crew | Edit a suggestion's details or collection. |
+| `/edit_suggestion` | WASH Crew | Change a suggestion's status or move it to another collection. |
 | `/reject` | Watch Party Member | Mark a suggestion "I WILL NOT WATCH". |
 | `/unreject` | Watch Party Member | Remove your own rejection from a suggestion. |
 
-`/add` takes a `title` and optional `imdb_url` and `release_year`. `/list` takes an optional `status` (Available, Watched, or Retired; defaults to Available) and a `public` option (WASH Crew only). `/reject` and `/unreject` both take a `suggestion_id` and mirror the suggestion post's own "I WILL NOT WATCH" button; results are always ephemeral, since a member's rejection is for their eyes only. `/edit_suggestion`'s optional `database_id` (to move a suggestion to a different collection) offers live autocomplete of this server's collections by name -- it's never necessary to type a raw ID.
+`/add` takes a `title` and optional `imdb_url` and `release_year`. `/list` takes an optional `status` (Available, Vote Winner, or Retired; defaults to Available) and a `public` option (WASH Crew only). `/reject` and `/unreject` both take a `suggestion_id` and mirror the suggestion post's own "I WILL NOT WATCH" button; results are always ephemeral, since a member's rejection is for their eyes only. `/edit_suggestion` takes only a `reference` and then presents Change Status, Move to Another Collection, or Cancel -- IMDb-derived details (title, release year, IMDb link, etc.) are read-only and shown for reference, never manually edited. Change Status offers a dropdown of the three settable statuses (Available, Vote Winner, Retired); Move to Another Collection offers a dropdown of this server's collections -- neither requires typing a raw ID.
 
 ## Voting
 

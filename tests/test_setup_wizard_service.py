@@ -151,6 +151,7 @@ class WizardFlowTests(SetupWizardServiceTestCase):
         state, _ = self.service.start_or_resume(GUILD_ID)
         state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
         state = self.service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         state, _ = self.service.create_new_database(state, "Movies", DESTINATION_CHANNEL_ID, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
@@ -370,14 +371,14 @@ class AdminChannelStepTests(SetupWizardServiceTestCase):
         updated = self.service.set_admin_channel(state, DESTINATION_CHANNEL_ID)
         self.assertEqual(updated.draft.admin_channel_id, DESTINATION_CHANNEL_ID)
         self.assertFalse(updated.draft.admin_channel_skipped)
-        self.assertEqual(updated.current_step, SetupWizardStep.SUGGESTION_DATABASE)
+        self.assertEqual(updated.current_step, SetupWizardStep.HOME_CHANNEL)
 
     def test_skipping_advances_and_marks_skipped(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
         updated = self.service.skip_admin_channel(state)
         self.assertTrue(updated.draft.admin_channel_skipped)
         self.assertIsNone(updated.draft.admin_channel_id)
-        self.assertEqual(updated.current_step, SetupWizardStep.SUGGESTION_DATABASE)
+        self.assertEqual(updated.current_step, SetupWizardStep.HOME_CHANNEL)
 
     def test_review_line_reflects_configured_skipped_and_incomplete_states(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
@@ -412,6 +413,7 @@ class AdminChannelStepTests(SetupWizardServiceTestCase):
         state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
         state = self.service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.SELF_SERVICE)
         state = self.service.set_admin_channel(state, DESTINATION_CHANNEL_ID)
+        state = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
@@ -425,6 +427,49 @@ class AdminChannelStepTests(SetupWizardServiceTestCase):
 
         self.assertTrue(result.success)
         self.assertEqual(result.configuration.channels.admin_channel_id, DESTINATION_CHANNEL_ID)
+
+
+class HomeChannelStepTests(SetupWizardServiceTestCase):
+    """Requirement 4: WASH's home channel -- the parent every collection's
+    suggestion thread (and, by default, the watched-movie destination
+    thread) is created under. No skip option: always required.
+    """
+
+    def test_setting_a_channel_advances(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        updated = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        self.assertEqual(updated.draft.home_channel_id, DESTINATION_CHANNEL_ID)
+        self.assertEqual(updated.current_step, SetupWizardStep.SUGGESTION_DATABASE)
+
+    def test_review_line_reflects_configured_and_incomplete_states(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        self.assertIn("Home Channel: Incomplete", self.service.build_review_lines(state))
+
+        configured = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        self.assertIn(
+            f"Home Channel: Configured (<#{DESTINATION_CHANNEL_ID}>)",
+            self.service.build_review_lines(configured),
+        )
+
+    def test_missing_home_channel_fails_validation(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        guild = self._full_guild()
+        issues = self.service.validate(state, guild)
+        self.assertTrue(any(issue.step == SetupWizardStep.HOME_CHANNEL for issue in issues))
+
+    def test_invalid_home_channel_fails_validation(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_home_channel(state, 555)
+        guild = FakeGuild(role_ids=set(), channel_ids=set())
+        issues = self.service.validate(state, guild)
+        self.assertTrue(any(issue.step == SetupWizardStep.HOME_CHANNEL for issue in issues))
+
+    def test_configured_home_channel_passes_validation(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        guild = self._full_guild()
+        issues = self.service.validate(state, guild)
+        self.assertFalse(any(issue.step == SetupWizardStep.HOME_CHANNEL for issue in issues))
 
 
 class WatchDestinationStepTests(SetupWizardServiceTestCase):
@@ -526,6 +571,7 @@ class ValidationTests(SetupWizardServiceTestCase):
         state, _ = self.service.start_or_resume(GUILD_ID)
         state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
         state = self.service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.SELF_SERVICE)
+        state = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
 
@@ -535,6 +581,7 @@ class ValidationTests(SetupWizardServiceTestCase):
     def test_incomplete_optional_sections_are_not_validation_failures(self):
         database = self._create_database()
         state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.skip_watch_destination(state)
 
@@ -556,6 +603,7 @@ class CompletionTests(SetupWizardServiceTestCase):
         state, _ = self.service.start_or_resume(GUILD_ID)
         state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
         state = self.service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(

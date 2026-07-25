@@ -60,11 +60,10 @@ class CategorizeWatchItemTests(unittest.TestCase):
     def test_active_status_categorized_as_active(self) -> None:
         self.assertEqual(DuplicateMatchCategory.ACTIVE, categorize_watch_item(self._item(WatchItemStatus.SUGGESTED)))
 
-    def test_eligible_status_categorized_as_active(self) -> None:
-        self.assertEqual(DuplicateMatchCategory.ACTIVE, categorize_watch_item(self._item(WatchItemStatus.ELIGIBLE)))
-
-    def test_watched_status_categorized_as_watched(self) -> None:
-        self.assertEqual(DuplicateMatchCategory.WATCHED, categorize_watch_item(self._item(WatchItemStatus.WATCHED)))
+    def test_vote_winner_status_categorized_as_vote_winner(self) -> None:
+        self.assertEqual(
+            DuplicateMatchCategory.VOTE_WINNER, categorize_watch_item(self._item(WatchItemStatus.VOTE_WINNER))
+        )
 
     def test_archived_with_rejections_categorized_as_archived_rejected(self) -> None:
         item = self._item(WatchItemStatus.ARCHIVED, rejected_ids=(1, 2))
@@ -175,9 +174,9 @@ class FindDuplicatesTests(unittest.TestCase):
         self.assertEqual(DuplicateMatchCategory.ARCHIVED_REJECTED, result.matches[0].category)
 
     def test_checks_watched_items(self) -> None:
-        existing = [self._item("Alien", year=1979, status=WatchItemStatus.WATCHED)]
+        existing = [self._item("Alien", year=1979, status=WatchItemStatus.VOTE_WINNER)]
         result = find_duplicates(title="Alien", release_year=1979, imdb_url=None, existing_items=existing)
-        self.assertEqual(DuplicateMatchCategory.WATCHED, result.matches[0].category)
+        self.assertEqual(DuplicateMatchCategory.VOTE_WINNER, result.matches[0].category)
 
     def test_excludes_the_candidates_own_id(self) -> None:
         existing = [self._item("Alien", year=1979, item_id=42)]

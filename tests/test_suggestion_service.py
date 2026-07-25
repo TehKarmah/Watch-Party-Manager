@@ -1662,7 +1662,7 @@ class ArchiveAndReactivateSuggestionTests(unittest.TestCase):
 
     def test_reactivate_suggestion_returns_a_watched_item_to_suggested(self) -> None:
         item = self.service.get_suggestion(self.matrix.id)
-        item.status = WatchItemStatus.WATCHED
+        item.status = WatchItemStatus.VOTE_WINNER
 
         result = self.service.reactivate_suggestion(self.matrix.id)
 
@@ -1710,6 +1710,64 @@ class ArchiveAndReactivateSuggestionTests(unittest.TestCase):
 
         items = self.service.get_suggestions_for_database(self.database.database_id, include_archived=True)
         self.assertEqual(1, len(items))
+
+
+class SetSuggestionStatusTests(unittest.TestCase):
+    """/edit_suggestion's Change Status action (Requirement 8): an
+    unconditional administrative override to any of the three persisted
+    statuses.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.database = self.service.create_database("Movie Night", guild_id=1, channel_id=100).database
+        self.matrix = self.service.suggest("The Matrix", database_id=self.database.database_id).watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_sets_vote_winner(self) -> None:
+        result = self.service.set_suggestion_status(self.matrix.id, WatchItemStatus.VOTE_WINNER)
+        self.assertTrue(result.success)
+        self.assertEqual(WatchItemStatus.VOTE_WINNER, self.service.get_suggestion(self.matrix.id).status)
+
+    def test_sets_archived(self) -> None:
+        result = self.service.set_suggestion_status(self.matrix.id, WatchItemStatus.ARCHIVED)
+        self.assertTrue(result.success)
+        self.assertEqual(WatchItemStatus.ARCHIVED, self.service.get_suggestion(self.matrix.id).status)
+
+    def test_sets_suggested_even_from_archived(self) -> None:
+        self.service.archive_suggestion(self.matrix.id)
+
+        result = self.service.set_suggestion_status(self.matrix.id, WatchItemStatus.SUGGESTED)
+
+        self.assertTrue(result.success)
+        self.assertEqual(WatchItemStatus.SUGGESTED, self.service.get_suggestion(self.matrix.id).status)
+
+    def test_unconditional_even_when_already_that_status(self) -> None:
+        self.service.set_suggestion_status(self.matrix.id, WatchItemStatus.ARCHIVED)
+
+        result = self.service.set_suggestion_status(self.matrix.id, WatchItemStatus.ARCHIVED)
+
+        self.assertTrue(result.success)
+
+    def test_rejects_an_unknown_id(self) -> None:
+        result = self.service.set_suggestion_status(999999, WatchItemStatus.ARCHIVED)
+        self.assertFalse(result.success)
+
+    def test_preserves_id_and_journey(self) -> None:
+        self.service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=5)
+
+        self.service.set_suggestion_status(self.matrix.id, WatchItemStatus.VOTE_WINNER)
+
+        item = self.service.get_suggestion(self.matrix.id)
+        self.assertEqual(self.matrix.id, item.id)
+        self.assertEqual((1,), item.journey.rejected_by_discord_user_ids)
 
 
 class FindMatchesForRemovalTests(unittest.TestCase):

@@ -1,4 +1,9 @@
-"""Tests for FR-033A's Crew-only /edit_suggestion command."""
+"""Tests for FR-033A/Requirement 8's Crew-only /edit_suggestion command.
+
+Requirement 8 replaced the old field-editing command (title/release_year/
+imdb_url/database_id options) with an action picker: Change Status, Move
+to Another Collection, Cancel. IMDb-derived metadata is read-only.
+"""
 
 from __future__ import annotations
 
@@ -6,11 +11,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from watch_party_manager.bot import build_database_autocomplete_choices, handle_edit_suggestion
-from watch_party_manager.domain.watch_item import MetadataProvider
+from watch_party_manager.bot import build_edit_suggestion_summary, handle_edit_suggestion
+from watch_party_manager.domain.watch_item import MetadataProvider, WatchItemStatus
+from watch_party_manager.edit_suggestion_view import (
+    ChangeStatusSelectView,
+    EditSuggestionActionView,
+)
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.services.suggestion_service import SuggestionService
+from watch_party_manager.suggestion_selection_view import DatabaseAdminSelectView
 
 GUILD_ID = 100
 CHANNEL_ID = 200
@@ -28,33 +38,52 @@ class FakeMember:
         self.id = user_id
 
 
+class FakeGuild:
+    def __init__(self, guild_id: int) -> None:
+        self.id = guild_id
+
+    def get_channel_or_thread(self, channel_id):
+        return None
+
+
 class FakeResponse:
     def __init__(self) -> None:
         self.sent_message = None
         self.sent_ephemeral = None
         self.sent_view = None
+        self.edited_content = None
+        self.edited_view = "not-edited"
 
     async def send_message(self, content, ephemeral=False, view=None) -> None:
         self.sent_message = content
         self.sent_ephemeral = ephemeral
         self.sent_view = view
 
+    async def edit_message(self, content=None, *, view=None) -> None:
+        self.edited_content = content
+        self.edited_view = view
+
 
 class FakeInteraction:
-    def __init__(self, user=None) -> None:
+    def __init__(self, user=None, *, guild_id: int = GUILD_ID) -> None:
         self.user = user if user is not None else FakeMember([WASH_CREW_ROLE_ID])
         self.response = FakeResponse()
+        self.guild_id = guild_id
+        self.guild = FakeGuild(guild_id) if guild_id is not None else None
 
 
 class FakeBot:
     def __init__(self, suggestion_service, wash_crew_role_id=WASH_CREW_ROLE_ID) -> None:
         self.suggestion_service = suggestion_service
+        self.suggestion_database_configuration_repository = None
+        self.rotation_service = None
         self.wash_crew_role_id = wash_crew_role_id
 
 
 class EditSuggestionTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp_dir.cleanup)
         root = Path(self._temp_dir.name)
         self.suggestion_service = SuggestionService(
             repository=JsonSuggestionRepository(root / "suggestions.json"),
@@ -65,7 +94,7 @@ class EditSuggestionTestCase(unittest.IsolatedAsyncioTestCase):
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
         self.item = self.suggestion_service.suggest(
-            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, release_year=1979
         ).watch_item
 
 
@@ -73,120 +102,24 @@ class EditPermissionTests(EditSuggestionTestCase):
     async def test_non_wash_crew_is_rejected(self) -> None:
         interaction = FakeInteraction(user=FakeMember([]))
 
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", "New Title", None, None, None)
+        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}")
 
         self.assertIn("WASH Crew", interaction.response.sent_message)
-        self.assertEqual("Alien", self.suggestion_service.get_suggestion(self.item.id).title)
 
-
-class EditFieldTests(EditSuggestionTestCase):
-    async def test_edits_the_title(self) -> None:
+    async def test_unconfigured_role_fails_closed(self) -> None:
+        self.bot.wash_crew_role_id = None
         interaction = FakeInteraction()
 
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", "Aliens", None, None, None)
+        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}")
 
-        self.assertEqual("Aliens", self.suggestion_service.get_suggestion(self.item.id).title)
+        self.assertIn("not been configured", interaction.response.sent_message)
 
-    async def test_edits_the_release_year(self) -> None:
-        interaction = FakeInteraction()
 
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", None, 1979, None, None)
-
-        self.assertEqual(1979, self.suggestion_service.get_suggestion(self.item.id).release_year)
-
-    async def test_edits_the_imdb_url_and_normalizes_it(self) -> None:
-        interaction = FakeInteraction()
-
-        await handle_edit_suggestion(
-            interaction, self.bot, f"#{self.item.id}", None, None, "imdb.com/title/tt0078748", None
-        )
-
-        stored = self.suggestion_service.get_suggestion(self.item.id)
-        self.assertEqual("https://www.imdb.com/title/tt0078748/", stored.metadata_ids[MetadataProvider.IMDB])
-
-    async def test_rejects_an_invalid_imdb_url(self) -> None:
-        interaction = FakeInteraction()
-
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", None, None, "not-a-link", None)
-
-        self.assertIn("valid IMDb", interaction.response.sent_message)
-        self.assertNotIn(MetadataProvider.IMDB, self.suggestion_service.get_suggestion(self.item.id).metadata_ids)
-
-    async def test_moves_to_another_database(self) -> None:
-        other_database = self.suggestion_service.create_database(
-            "Other DB", guild_id=GUILD_ID, channel_id=555
-        ).database
-        interaction = FakeInteraction()
-
-        await handle_edit_suggestion(
-            interaction, self.bot, f"#{self.item.id}", None, None, None, other_database.database_id
-        )
-
-        self.assertEqual(other_database.database_id, self.suggestion_service.get_suggestion(self.item.id).database_id)
-
-    async def test_rejects_moving_to_an_inactive_database(self) -> None:
-        other_database = self.suggestion_service.create_database(
-            "Other DB", guild_id=GUILD_ID, channel_id=555
-        ).database
-        self.suggestion_service.deactivate_database(other_database.database_id, guild_id=GUILD_ID)
-        interaction = FakeInteraction()
-
-        await handle_edit_suggestion(
-            interaction, self.bot, f"#{self.item.id}", None, None, None, other_database.database_id
-        )
-
-        self.assertIn("not available", interaction.response.sent_message)
-        self.assertEqual(self.database.database_id, self.suggestion_service.get_suggestion(self.item.id).database_id)
-
-    async def test_rejects_an_unknown_destination_database(self) -> None:
-        interaction = FakeInteraction()
-
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", None, None, None, 999999)
-
-        self.assertIn("not available", interaction.response.sent_message)
-
-    async def test_no_fields_given_reports_no_changes(self) -> None:
-        interaction = FakeInteraction()
-
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", None, None, None, None)
-
-        self.assertIn("No changes were made", interaction.response.sent_message)
-
-    async def test_preserves_the_stable_id(self) -> None:
-        interaction = FakeInteraction()
-
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", "Aliens", None, None, None)
-
-        self.assertEqual(self.item.id, self.suggestion_service.get_suggestion(self.item.id).id)
-
-    async def test_preserves_history(self) -> None:
-        self.suggestion_service.reject_suggestion(self.item.id, discord_user_id=1, rejection_threshold=99)
-        interaction = FakeInteraction()
-
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", "Aliens", None, None, None)
-
-        stored = self.suggestion_service.get_suggestion(self.item.id)
-        self.assertEqual((1,), stored.journey.rejected_by_discord_user_ids)
-
-    async def test_response_shows_the_diff(self) -> None:
-        interaction = FakeInteraction()
-
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", "Aliens", None, None, None)
-
-        self.assertIn("Alien", interaction.response.sent_message)
-        self.assertIn("Aliens", interaction.response.sent_message)
-
-    async def test_matches_by_exact_title(self) -> None:
-        interaction = FakeInteraction()
-
-        await handle_edit_suggestion(interaction, self.bot, "Alien", "Aliens", None, None, None)
-
-        self.assertEqual("Aliens", self.suggestion_service.get_suggestion(self.item.id).title)
-
+class ResolveAndPresentTests(EditSuggestionTestCase):
     async def test_no_match_returns_a_clear_response(self) -> None:
         interaction = FakeInteraction()
 
-        await handle_edit_suggestion(interaction, self.bot, "Nonexistent", "New Title", None, None, None)
+        await handle_edit_suggestion(interaction, self.bot, "Nonexistent")
 
         self.assertIn("No suggestion matches", interaction.response.sent_message)
 
@@ -197,102 +130,261 @@ class EditFieldTests(EditSuggestionTestCase):
         self.suggestion_service.suggest("Alien", database_id=other_database.database_id)
         interaction = FakeInteraction()
 
-        await handle_edit_suggestion(interaction, self.bot, "Alien", "Aliens", None, None, None)
+        await handle_edit_suggestion(interaction, self.bot, "Alien")
 
         self.assertIn("Multiple suggestions match", interaction.response.sent_message)
 
-
-class EditDuplicateDetectionTests(EditSuggestionTestCase):
-    async def test_edit_blocked_by_a_definite_duplicate(self) -> None:
-        self.suggestion_service.suggest("Aliens", database_id=self.database.database_id, release_year=1986)
+    async def test_matches_by_exact_title(self) -> None:
         interaction = FakeInteraction()
 
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", "Aliens", 1986, None, None)
+        await handle_edit_suggestion(interaction, self.bot, "Alien")
 
-        self.assertIn("would duplicate", interaction.response.sent_message)
-        self.assertEqual("Alien", self.suggestion_service.get_suggestion(self.item.id).title)
+        self.assertIsInstance(interaction.response.sent_view, EditSuggestionActionView)
+
+    async def test_shows_the_action_picker_with_a_read_only_summary(self) -> None:
+        interaction = FakeInteraction()
+
+        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}")
+
+        self.assertIn("Alien", interaction.response.sent_message)
+        self.assertIn("(1979)", interaction.response.sent_message)
+        self.assertIn("Movie Night", interaction.response.sent_message)
+        self.assertIsInstance(interaction.response.sent_view, EditSuggestionActionView)
+
+    async def test_summary_shows_the_current_status(self) -> None:
+        summary = build_edit_suggestion_summary(self.item, self.suggestion_service)
+        self.assertIn("🟢 Available", summary)
+
+    async def test_summary_shows_imdb_link_when_present(self) -> None:
+        item_with_imdb = self.suggestion_service.suggest(
+            "Aliens", database_id=self.database.database_id, imdb_url="https://www.imdb.com/title/tt0090605/"
+        ).watch_item
+        summary = build_edit_suggestion_summary(item_with_imdb, self.suggestion_service)
+        self.assertIn("tt0090605", summary)
+
+
+class ChangeStatusActionTests(EditSuggestionTestCase):
+    async def _open_change_status(self):
+        interaction = FakeInteraction()
+        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}")
+        action_view = interaction.response.sent_view
+        change_status_button = action_view.children[0]
+        button_interaction = FakeInteraction()
+        await change_status_button.callback(button_interaction)
+        return button_interaction
+
+    async def test_change_status_button_shows_a_status_dropdown(self) -> None:
+        button_interaction = await self._open_change_status()
+        self.assertIsInstance(button_interaction.response.edited_view, ChangeStatusSelectView)
+
+    async def test_selecting_vote_winner_sets_the_status(self) -> None:
+        button_interaction = await self._open_change_status()
+        select = button_interaction.response.edited_view.children[0]
+        select._values = ["vote_winner"]
+
+        select_interaction = FakeInteraction()
+        await select.callback(select_interaction)
+
+        self.assertEqual(
+            WatchItemStatus.VOTE_WINNER, self.suggestion_service.get_suggestion(self.item.id).status
+        )
+        self.assertIn("Vote Winner", select_interaction.response.sent_message)
+
+    async def test_selecting_retired_archives_the_suggestion(self) -> None:
+        button_interaction = await self._open_change_status()
+        select = button_interaction.response.edited_view.children[0]
+        select._values = ["archived"]
+
+        select_interaction = FakeInteraction()
+        await select.callback(select_interaction)
+
+        self.assertEqual(WatchItemStatus.ARCHIVED, self.suggestion_service.get_suggestion(self.item.id).status)
+
+    async def test_selecting_available_restores_suggested(self) -> None:
+        self.suggestion_service.archive_suggestion(self.item.id)
+        button_interaction = await self._open_change_status()
+        select = button_interaction.response.edited_view.children[0]
+        select._values = ["suggested"]
+
+        select_interaction = FakeInteraction()
+        await select.callback(select_interaction)
+
+        self.assertEqual(
+            WatchItemStatus.SUGGESTED, self.suggestion_service.get_suggestion(self.item.id).status
+        )
+
+    async def test_status_dropdown_never_offers_rotation_cooldown(self) -> None:
+        button_interaction = await self._open_change_status()
+        select = button_interaction.response.edited_view.children[0]
+        offered_values = {option.value for option in select.options}
+        self.assertEqual({"suggested", "vote_winner", "archived"}, offered_values)
+
+
+class MoveCollectionActionTests(EditSuggestionTestCase):
+    async def _open_move_collection(self):
+        interaction = FakeInteraction()
+        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}")
+        action_view = interaction.response.sent_view
+        move_button = action_view.children[1]
+        button_interaction = FakeInteraction()
+        await move_button.callback(button_interaction)
+        return button_interaction
+
+    async def test_move_button_shows_a_collection_dropdown(self) -> None:
+        button_interaction = await self._open_move_collection()
+        self.assertIsInstance(button_interaction.response.edited_view, DatabaseAdminSelectView)
+
+    async def test_moves_to_another_database(self) -> None:
+        other_database = self.suggestion_service.create_database(
+            "Other DB", guild_id=GUILD_ID, channel_id=555
+        ).database
+        button_interaction = await self._open_move_collection()
+        select = button_interaction.response.edited_view.children[0]
+        select._values = [str(other_database.database_id)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(select_interaction)
+
+        self.assertEqual(
+            other_database.database_id, self.suggestion_service.get_suggestion(self.item.id).database_id
+        )
+
+    async def test_move_preserves_the_suggestions_status(self) -> None:
+        self.suggestion_service.set_suggestion_status(self.item.id, WatchItemStatus.VOTE_WINNER)
+        other_database = self.suggestion_service.create_database(
+            "Other DB", guild_id=GUILD_ID, channel_id=555
+        ).database
+        button_interaction = await self._open_move_collection()
+        select = button_interaction.response.edited_view.children[0]
+        select._values = [str(other_database.database_id)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(select_interaction)
+
+        moved = self.suggestion_service.get_suggestion(self.item.id)
+        self.assertEqual(other_database.database_id, moved.database_id)
+        self.assertEqual(WatchItemStatus.VOTE_WINNER, moved.status)
+
+    async def test_move_preserves_title_and_release_year(self) -> None:
+        other_database = self.suggestion_service.create_database(
+            "Other DB", guild_id=GUILD_ID, channel_id=555
+        ).database
+        button_interaction = await self._open_move_collection()
+        select = button_interaction.response.edited_view.children[0]
+        select._values = [str(other_database.database_id)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(select_interaction)
+
+        moved = self.suggestion_service.get_suggestion(self.item.id)
+        self.assertEqual("Alien", moved.title)
+        self.assertEqual(1979, moved.release_year)
+
+    async def test_rejects_moving_to_an_inactive_database(self) -> None:
+        other_database = self.suggestion_service.create_database(
+            "Other DB", guild_id=GUILD_ID, channel_id=555
+        ).database
+        self.suggestion_service.deactivate_database(other_database.database_id, guild_id=GUILD_ID)
+        button_interaction = await self._open_move_collection()
+        select = button_interaction.response.edited_view.children[0]
+        select._values = [str(other_database.database_id)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(select_interaction)
+
+        self.assertIn("not available", select_interaction.response.sent_message)
+        self.assertEqual(
+            self.database.database_id, self.suggestion_service.get_suggestion(self.item.id).database_id
+        )
+
+    async def test_moving_to_the_same_collection_is_a_no_op_with_a_clear_message(self) -> None:
+        button_interaction = await self._open_move_collection()
+        select = button_interaction.response.edited_view.children[0]
+        select._values = [str(self.database.database_id)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(select_interaction)
+
+        self.assertIn("already in that collection", select_interaction.response.sent_message)
+
+    async def test_move_blocked_by_a_definite_duplicate(self) -> None:
+        other_database = self.suggestion_service.create_database(
+            "Other DB", guild_id=GUILD_ID, channel_id=555
+        ).database
+        self.suggestion_service.suggest("Alien", database_id=other_database.database_id, release_year=1979)
+        button_interaction = await self._open_move_collection()
+        select = button_interaction.response.edited_view.children[0]
+        select._values = [str(other_database.database_id)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(select_interaction)
+
+        self.assertIn("would duplicate", select_interaction.response.sent_message)
+        self.assertEqual(
+            self.database.database_id, self.suggestion_service.get_suggestion(self.item.id).database_id
+        )
 
     async def test_possible_duplicate_requires_crew_confirmation(self) -> None:
-        self.suggestion_service.suggest("Aliens", database_id=self.database.database_id, release_year=1986)
-        interaction = FakeInteraction()
+        other_database = self.suggestion_service.create_database(
+            "Other DB", guild_id=GUILD_ID, channel_id=555
+        ).database
+        self.suggestion_service.suggest("Alien", database_id=other_database.database_id)
+        button_interaction = await self._open_move_collection()
+        select = button_interaction.response.edited_view.children[0]
+        select._values = [str(other_database.database_id)]
 
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", "Aliens", None, None, None)
+        select_interaction = FakeInteraction()
+        await select.callback(select_interaction)
 
-        self.assertIsNotNone(interaction.response.sent_view)
-        self.assertEqual("Alien", self.suggestion_service.get_suggestion(self.item.id).title)
+        self.assertIsNotNone(select_interaction.response.sent_view)
+        self.assertEqual(
+            self.database.database_id, self.suggestion_service.get_suggestion(self.item.id).database_id
+        )
 
-    async def test_confirming_a_possible_duplicate_with_an_identical_title_still_hits_the_uniqueness_constraint(
+    async def test_confirming_an_identical_title_possible_duplicate_still_hits_the_uniqueness_constraint(
         self,
     ) -> None:
-        # Known limitation (mirrors /add's equivalent case): a "possible
-        # duplicate" match is only ever raised when the normalized title
-        # already matches an existing item -- and SuggestionService's
-        # storage has always been keyed by (database_id, normalized
-        # title), so confirming "Save Anyway" for an identical title
-        # still reports the pre-existing uniqueness constraint rather
-        # than creating a second same-titled record. Redesigning that
-        # storage key is out of this milestone's scope.
-        self.suggestion_service.suggest("Aliens", database_id=self.database.database_id, release_year=1986)
-        interaction = FakeInteraction()
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", "Aliens", None, None, None)
-        view = interaction.response.sent_view
-        self.assertIsNotNone(view)
+        # Known limitation (mirrors /add's and the old /edit_suggestion's
+        # equivalent case): a "possible duplicate" match only ever fires
+        # when the normalized title already matches an existing item, and
+        # SuggestionService's storage has always been keyed by
+        # (database_id, normalized title) -- so confirming "Move Anyway"
+        # into a collection that already has that exact title still
+        # reports the pre-existing uniqueness constraint instead of
+        # creating a second same-titled record there.
+        other_database = self.suggestion_service.create_database(
+            "Other DB", guild_id=GUILD_ID, channel_id=555
+        ).database
+        self.suggestion_service.suggest("Alien", database_id=other_database.database_id)
+        button_interaction = await self._open_move_collection()
+        select = button_interaction.response.edited_view.children[0]
+        select._values = [str(other_database.database_id)]
+        select_interaction = FakeInteraction()
+        await select.callback(select_interaction)
+        view = select_interaction.response.sent_view
 
         confirm_interaction = FakeInteraction()
         await view.children[0].callback(confirm_interaction)
 
         self.assertIn("already exists", confirm_interaction.response.sent_message)
-        self.assertEqual("Alien", self.suggestion_service.get_suggestion(self.item.id).title)
+        self.assertEqual(
+            self.database.database_id, self.suggestion_service.get_suggestion(self.item.id).database_id
+        )
 
-    async def test_editing_does_not_conflict_with_itself(self) -> None:
-        # Editing an item's year without changing its title must not
-        # treat the item's own unchanged record as a duplicate of itself.
+
+class CancelActionTests(EditSuggestionTestCase):
+    async def test_cancel_makes_no_changes(self) -> None:
         interaction = FakeInteraction()
+        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}")
+        action_view = interaction.response.sent_view
+        cancel_button = action_view.children[2]
 
-        await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}", None, 1979, None, None)
+        cancel_interaction = FakeInteraction()
+        await cancel_button.callback(cancel_interaction)
 
-        self.assertIsNone(interaction.response.sent_view)
-        self.assertEqual(1979, self.suggestion_service.get_suggestion(self.item.id).release_year)
-
-
-class DatabaseIdAutocompleteTests(EditSuggestionTestCase):
-    """database_id is an internal reference administrators should almost
-    never type; autocomplete is the practical alternative to manual entry.
-    """
-
-    def test_lists_matching_collections_by_name(self) -> None:
-        self.suggestion_service.create_database("TV Shows", guild_id=GUILD_ID, channel_id=555)
-
-        matches = build_database_autocomplete_choices(
-            self.suggestion_service, None, GUILD_ID, None, ""
-        )
-
-        self.assertEqual({name for name, _ in matches}, {"Movie Night", "TV Shows"})
-
-    def test_filters_case_insensitively_by_current_input(self) -> None:
-        self.suggestion_service.create_database("TV Shows", guild_id=GUILD_ID, channel_id=555)
-
-        matches = build_database_autocomplete_choices(
-            self.suggestion_service, None, GUILD_ID, None, "tv"
-        )
-
-        self.assertEqual([name for name, _ in matches], ["TV Shows"])
-
-    def test_returns_the_database_id_as_the_value(self) -> None:
-        matches = build_database_autocomplete_choices(
-            self.suggestion_service, None, GUILD_ID, None, "Movie"
-        )
-
-        self.assertEqual(matches, [("Movie Night", self.database.database_id)])
-
-    def test_other_guilds_databases_are_excluded(self) -> None:
-        self.suggestion_service.create_database("Other Guild DB", guild_id=999, channel_id=555)
-
-        matches = build_database_autocomplete_choices(
-            self.suggestion_service, None, GUILD_ID, None, ""
-        )
-
-        self.assertNotIn("Other Guild DB", [name for name, _ in matches])
+        self.assertIn("No changes were made", cancel_interaction.response.edited_content)
+        self.assertEqual(self.database.database_id, self.suggestion_service.get_suggestion(self.item.id).database_id)
+        self.assertEqual(WatchItemStatus.SUGGESTED, self.suggestion_service.get_suggestion(self.item.id).status)
 
 
 if __name__ == "__main__":

@@ -114,6 +114,21 @@ class FakeInteraction:
         self.guild = guild
 
 
+class FakeUsablePermissions:
+    view_channel = True
+    send_messages = True
+
+
+class FakeUsableChannel:
+    """A channel/thread that validate_channel_usable() accepts -- used by
+    finalize()-time FakeGuilds so a persisted home_channel_id resolves
+    successfully instead of failing "no longer exists".
+    """
+
+    def permissions_for(self, member) -> FakeUsablePermissions:
+        return FakeUsablePermissions()
+
+
 class WatchPartyBotWiringTests(unittest.TestCase):
     def test_constructor_wires_up_the_setup_wizard_service(self) -> None:
         bot = WatchPartyBot(token="test-token")
@@ -245,13 +260,13 @@ class BuildSetupStepHeaderTests(unittest.TestCase):
     def test_shows_position_and_title_for_first_step(self):
         state = SetupWizardState(guild_id=GUILD_ID)
         header = build_setup_step_header(state)
-        self.assertIn("Step 1 of 9", header)
+        self.assertIn("Step 1 of 10", header)
         self.assertIn("WASH Crew Role", header)
 
     def test_shows_position_and_title_for_review_step(self):
         state = SetupWizardState(guild_id=GUILD_ID, current_step=SetupWizardStep.REVIEW)
         header = build_setup_step_header(state)
-        self.assertIn("Step 9 of 9", header)
+        self.assertIn("Step 10 of 10", header)
         self.assertIn("Review", header)
 
 
@@ -315,7 +330,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
 
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
-        self.assertIn("Step 1 of 9", interaction.response.sent_message)
+        self.assertIn("Step 1 of 10", interaction.response.sent_message)
         self.assertTrue(interaction.response.sent_ephemeral)
         self.assertIsInstance(interaction.response.sent_view, WashCrewRoleStepView)
 
@@ -333,7 +348,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         select_interaction = FakeInteraction()
         await role_select.callback(interaction=select_interaction)
 
-        self.assertIn("Step 2 of 9", select_interaction.response.edited_content)
+        self.assertIn("Step 2 of 10", select_interaction.response.edited_content)
         self.assertIsInstance(select_interaction.response.edited_view, WatchPartyRoleStepView)
 
     async def test_admin_channel_step_renders_and_advances_to_suggestion_database(self) -> None:
@@ -346,7 +361,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
 
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
-        self.assertIn("Step 3 of 9", interaction.response.sent_message)
+        self.assertIn("Step 3 of 10", interaction.response.sent_message)
         self.assertIn("Admin Channel", interaction.response.sent_message)
         self.assertIsInstance(interaction.response.sent_view, AdminChannelStepView)
 
@@ -354,7 +369,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         skip_interaction = FakeInteraction()
         await skip_button.callback(interaction=skip_interaction)
 
-        self.assertIn("Step 4 of 9", skip_interaction.response.edited_content)
+        self.assertIn("Step 4 of 10", skip_interaction.response.edited_content)
 
     async def test_voting_defaults_step_sends_a_modal_with_valid_component_labels(self) -> None:
         # Regression test: Voting Defaults previously crashed with
@@ -447,6 +462,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
         state = self.bot.setup_wizard_service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.bot.setup_wizard_service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         state, _ = self.bot.setup_wizard_service.select_existing_database(
             state, database_result.database.database_id, guild_id=GUILD_ID
         )
@@ -469,6 +485,8 @@ class SetupCommandFlowTests(SetupCommandTestCase):
                 return FakeRole(role_id)
 
             def get_channel_or_thread(self, channel_id):
+                if channel_id == DESTINATION_CHANNEL_ID:
+                    return FakeUsableChannel()
                 return None
 
             me = object()
@@ -514,7 +532,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         back_interaction = FakeInteraction()
         await back_button.callback(interaction=back_interaction)
 
-        self.assertIn("Step 1 of 9", back_interaction.response.edited_content)
+        self.assertIn("Step 1 of 10", back_interaction.response.edited_content)
         self.assertIsInstance(back_interaction.response.edited_view, WashCrewRoleStepView)
 
     async def test_back_does_not_clear_the_previously_saved_value(self) -> None:
@@ -577,7 +595,6 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         back_interaction = FakeInteraction()
         await back_button.callback(interaction=back_interaction)
 
-        self.assertIn("Step 8 of 9", back_interaction.response.edited_content)
         self.assertIsInstance(back_interaction.response.edited_view, ModalStepIntroView)
 
     async def test_admin_channel_step_shows_a_back_button_to_watch_party_role(self) -> None:
@@ -935,6 +952,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
         state = self.bot.setup_wizard_service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.bot.setup_wizard_service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         state, _ = self.bot.setup_wizard_service.select_existing_database(
             state, database_result.database.database_id, guild_id=GUILD_ID
         )
@@ -958,6 +976,8 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
                 return FakeRole(role_id)
 
             def get_channel_or_thread(self, channel_id):
+                if channel_id == DESTINATION_CHANNEL_ID:
+                    return FakeUsableChannel()
                 return None
 
             me = object()
@@ -995,6 +1015,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
         state = self.bot.setup_wizard_service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.bot.setup_wizard_service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         state, _ = self.bot.setup_wizard_service.select_existing_database(
             state, database_result.database.database_id, guild_id=GUILD_ID
         )
@@ -1012,6 +1033,8 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
                 return FakeRole(role_id)
 
             def get_channel_or_thread(self, channel_id):
+                if channel_id == DESTINATION_CHANNEL_ID:
+                    return FakeUsableChannel()
                 return None
 
             me = object()
@@ -1041,6 +1064,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
         state = self.bot.setup_wizard_service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.bot.setup_wizard_service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         state, _ = self.bot.setup_wizard_service.select_existing_database(
             state, database_result.database.database_id, guild_id=GUILD_ID
         )
@@ -1058,6 +1082,8 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
                 return FakeRole(role_id)
 
             def get_channel_or_thread(self, channel_id):
+                if channel_id == DESTINATION_CHANNEL_ID:
+                    return FakeUsableChannel()
                 return None
 
             me = object()
@@ -1102,7 +1128,7 @@ class SetupPreparationScreenIntegrationTests(SetupCommandTestCase):
         begin_interaction = FakeInteraction()
         await begin_button.callback(interaction=begin_interaction)
 
-        self.assertIn("Step 1 of 9", begin_interaction.response.edited_content)
+        self.assertIn("Step 1 of 10", begin_interaction.response.edited_content)
         self.assertIsInstance(begin_interaction.response.edited_view, WashCrewRoleStepView)
 
     async def test_cancel_from_preparation_screen_discards_the_draft(self) -> None:
@@ -1159,8 +1185,12 @@ class WatchPartyRoleWordingTests(SetupCommandTestCase):
 
 class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
     """Setup Wizard UX Polish: Watch Destination wording, navigation
-    controls, and the new create-new-thread option.
+    controls, and the create-new-thread option (Requirement 5: created as
+    a sibling thread under WASH's home channel, never asking for a parent
+    -- that's already been established by the Home Channel step).
     """
+
+    HOME_CHANNEL_ID = 600
 
     class FakeThread:
         def __init__(self, thread_id: int) -> None:
@@ -1170,7 +1200,7 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         status = 403
         reason = "Forbidden"
 
-    class FakeParentChannel:
+    class FakeHomeChannel:
         def __init__(self, *, thread_id: int = 999, fail: bool = False) -> None:
             self._thread_id = thread_id
             self._fail = fail
@@ -1195,6 +1225,7 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
 
     async def _render_step(self):
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_home_channel(state, self.HOME_CHANNEL_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.WATCH_DESTINATION)
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
@@ -1220,7 +1251,7 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         select_interaction = FakeInteraction()
         await channel_select.callback(interaction=select_interaction)
 
-        self.assertIn("Step 6 of 9", select_interaction.response.edited_content)
+        self.assertIn("Step 7 of 10", select_interaction.response.edited_content)
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertEqual(persisted.draft.watch_destination_channel_id, DESTINATION_CHANNEL_ID)
         self.assertFalse(persisted.draft.watch_destination_skipped)
@@ -1229,23 +1260,20 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         interaction = await self._render_step()
         create_thread_button = interaction.response.sent_view.children[1]
 
-        create_interaction = FakeInteraction()
+        fake_home_channel = self.FakeHomeChannel(thread_id=777)
+        create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await create_thread_button.callback(interaction=create_interaction)
-        parent_select_view = create_interaction.response.edited_view
-        parent_select = parent_select_view.children[0]
-        parent_select._values = [type("FakeChannelValue", (), {"id": 500})()]
-
-        parent_interaction = FakeInteraction()
-        await parent_select.callback(interaction=parent_interaction)
-        name_modal = parent_interaction.response.sent_modal
+        name_modal = create_interaction.response.sent_modal
+        self.assertEqual(name_modal.name_input.default, "Watched Movies")
         name_modal.name_input._value = "Watched Movies"
 
-        fake_channel = self.FakeParentChannel(thread_id=777)
-        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_channel))
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await name_modal.on_submit(interaction=submit_interaction)
 
-        self.assertEqual(fake_channel.created_with, ("Watched Movies", __import__("discord").ChannelType.public_thread))
-        self.assertIn("Step 6 of 9", submit_interaction.response.edited_content)
+        self.assertEqual(
+            fake_home_channel.created_with, ("Watched Movies", __import__("discord").ChannelType.public_thread)
+        )
+        self.assertIn("Step 7 of 10", submit_interaction.response.edited_content)
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertEqual(persisted.draft.watch_destination_channel_id, 777)
 
@@ -1253,17 +1281,12 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         interaction = await self._render_step()
         create_thread_button = interaction.response.sent_view.children[1]
 
-        create_interaction = FakeInteraction()
+        failing_channel = self.FakeHomeChannel(fail=True)
+        create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(failing_channel))
         await create_thread_button.callback(interaction=create_interaction)
-        parent_select = create_interaction.response.edited_view.children[0]
-        parent_select._values = [type("FakeChannelValue", (), {"id": 500})()]
-
-        parent_interaction = FakeInteraction()
-        await parent_select.callback(interaction=parent_interaction)
-        name_modal = parent_interaction.response.sent_modal
+        name_modal = create_interaction.response.sent_modal
         name_modal.name_input._value = "Watched Movies"
 
-        failing_channel = self.FakeParentChannel(fail=True)
         submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(failing_channel))
         await name_modal.on_submit(interaction=submit_interaction)
 
@@ -1285,15 +1308,54 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
 
 class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
     """Contextual Database Resolution: Setup Wizard's guided "what type of
-    collection" flow, replacing the old direct "Create a Suggestion
-    Database" name prompt. Every option still ends up calling
-    SetupWizardService.create_new_database() unchanged.
+    collection" flow. Requirement 5 ("Collections should default to
+    threads") means every option now creates its suggestion destination
+    automatically as a sibling thread under WASH's home channel -- no
+    separate destination choice is offered, since Requirement 4's Home
+    Channel step already answered "where do things go." Every option
+    still ends up calling SetupWizardService.create_new_database()
+    unchanged, and Requirement 6 requires the created thread be persisted
+    immediately as that collection's Suggestion Destination.
     """
+
+    HOME_CHANNEL_ID = 600
+
+    class FakeThread:
+        def __init__(self, thread_id: int) -> None:
+            self.id = thread_id
+
+    class FakeHTTPResponse:
+        status = 403
+        reason = "Forbidden"
+
+    class FakeHomeChannel:
+        def __init__(self, *, thread_id: int = 999, fail: bool = False) -> None:
+            self._thread_id = thread_id
+            self._fail = fail
+            self.created_with = None
+
+        async def create_thread(self, *, name, type):
+            self.created_with = (name, type)
+            if self._fail:
+                import discord
+
+                raise discord.HTTPException(
+                    response=GuidedCollectionCreationIntegrationTests.FakeHTTPResponse(), message="boom"
+                )
+            return GuidedCollectionCreationIntegrationTests.FakeThread(self._thread_id)
+
+    class FakeGuildWithChannel:
+        def __init__(self, channel) -> None:
+            self._channel = channel
+
+        def get_channel(self, channel_id):
+            return self._channel
 
     async def _reach_collection_type_choice(self):
         from watch_party_manager.setup_wizard_view import CollectionTypeChoiceView, SuggestionDatabaseChoiceView
 
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_home_channel(state, self.HOME_CHANNEL_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.SUGGESTION_DATABASE)
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
@@ -1305,59 +1367,36 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         self.assertIsInstance(type_interaction.response.edited_view, CollectionTypeChoiceView)
         return type_interaction.response.edited_view
 
-    async def _reach_channel_select_from_creation_choice(self, creation_choice_view):
-        # DestinationCreationChoiceView: [Create New Channel, Use Existing
-        # Channel, Use Existing Thread, Cancel]. Tests exercise the
-        # existing-channel branch, matching the old single-step flow.
-        existing_channel_button = creation_choice_view.children[1]
-        self.assertEqual(existing_channel_button.label, "Use Existing Channel")
-        existing_interaction = FakeInteraction()
-        await existing_channel_button.callback(interaction=existing_interaction)
-        return existing_interaction.response.edited_view.children[0]
-
-    async def test_movies_option_creates_a_database_named_movies(self) -> None:
+    async def test_movies_option_creates_a_database_named_movies_in_a_new_thread(self) -> None:
         type_view = await self._reach_collection_type_choice()
         movies_button = type_view.children[0]
         self.assertEqual(movies_button.label, "Movies (Recommended)")
 
-        movies_interaction = FakeInteraction()
+        fake_home_channel = self.FakeHomeChannel(thread_id=701)
+        movies_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await movies_button.callback(interaction=movies_interaction)
-        channel_select = await self._reach_channel_select_from_creation_choice(
-            movies_interaction.response.edited_view
+
+        self.assertEqual(
+            fake_home_channel.created_with, ("Movies", __import__("discord").ChannelType.public_thread)
         )
-
-        class FakeChannelValue:
-            id = DESTINATION_CHANNEL_ID
-
-        channel_select._values = [FakeChannelValue()]
-        channel_interaction = FakeInteraction()
-        await channel_select.callback(interaction=channel_interaction)
-
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertEqual(persisted.draft.suggestion_database_name, "Movies")
         databases = self.suggestion_service.list_databases(GUILD_ID)
         self.assertEqual(databases[0].name, "Movies")
+        self.assertEqual(databases[0].channel_id, 701)
 
-    async def test_tv_shows_option_creates_a_database_named_tv_shows(self) -> None:
+    async def test_tv_shows_option_creates_a_database_named_tv_shows_in_a_new_thread(self) -> None:
         type_view = await self._reach_collection_type_choice()
         tv_shows_button = type_view.children[1]
         self.assertEqual(tv_shows_button.label, "TV Shows")
 
-        tv_interaction = FakeInteraction()
+        fake_home_channel = self.FakeHomeChannel(thread_id=702)
+        tv_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await tv_shows_button.callback(interaction=tv_interaction)
-        channel_select = await self._reach_channel_select_from_creation_choice(
-            tv_interaction.response.edited_view
-        )
-
-        class FakeChannelValue:
-            id = DESTINATION_CHANNEL_ID
-
-        channel_select._values = [FakeChannelValue()]
-        channel_interaction = FakeInteraction()
-        await channel_select.callback(interaction=channel_interaction)
 
         databases = self.suggestion_service.list_databases(GUILD_ID)
         self.assertEqual(databases[0].name, "TV Shows")
+        self.assertEqual(databases[0].channel_id, 702)
 
     async def test_special_collection_option_asks_for_a_name_first(self) -> None:
         from watch_party_manager.setup_wizard_view import CreateDatabaseNameModal
@@ -1372,21 +1411,14 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         modal = special_interaction.response.sent_modal
         self.assertIsInstance(modal, CreateDatabaseNameModal)
         modal.name_input._value = "Horror Movies"
-        submit_interaction = FakeInteraction()
+
+        fake_home_channel = self.FakeHomeChannel(thread_id=703)
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await modal.on_submit(interaction=submit_interaction)
-        channel_select = await self._reach_channel_select_from_creation_choice(
-            submit_interaction.response.edited_view
-        )
-
-        class FakeChannelValue:
-            id = DESTINATION_CHANNEL_ID
-
-        channel_select._values = [FakeChannelValue()]
-        channel_interaction = FakeInteraction()
-        await channel_select.callback(interaction=channel_interaction)
 
         databases = self.suggestion_service.list_databases(GUILD_ID)
         self.assertEqual(databases[0].name, "Horror Movies")
+        self.assertEqual(databases[0].channel_id, 703)
 
     async def test_custom_option_asks_for_any_name(self) -> None:
         from watch_party_manager.setup_wizard_view import CreateDatabaseNameModal
@@ -1401,21 +1433,14 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         modal = custom_interaction.response.sent_modal
         self.assertIsInstance(modal, CreateDatabaseNameModal)
         modal.name_input._value = "Book Club Adaptations"
-        submit_interaction = FakeInteraction()
+
+        fake_home_channel = self.FakeHomeChannel(thread_id=704)
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await modal.on_submit(interaction=submit_interaction)
-        channel_select = await self._reach_channel_select_from_creation_choice(
-            submit_interaction.response.edited_view
-        )
-
-        class FakeChannelValue:
-            id = DESTINATION_CHANNEL_ID
-
-        channel_select._values = [FakeChannelValue()]
-        channel_interaction = FakeInteraction()
-        await channel_select.callback(interaction=channel_interaction)
 
         databases = self.suggestion_service.list_databases(GUILD_ID)
         self.assertEqual(databases[0].name, "Book Club Adaptations")
+        self.assertEqual(databases[0].channel_id, 704)
 
     async def test_import_existing_explains_running_import_separately(self) -> None:
         from watch_party_manager.setup_wizard_view import ImportExistingDatabaseNoticeView
@@ -1444,7 +1469,7 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
 
         self.assertIsInstance(back_interaction.response.edited_view, CollectionTypeChoiceView)
 
-    async def test_creating_a_second_database_on_an_already_used_channel_is_rejected(self) -> None:
+    async def test_creating_a_second_database_on_an_already_used_thread_is_rejected(self) -> None:
         # Conflict Prevention: a channel/thread can never route to two
         # databases at once, even when the second one is created through
         # the guided flow during setup.
@@ -1452,182 +1477,62 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         type_view = await self._reach_collection_type_choice()
         tv_shows_button = type_view.children[1]
 
-        tv_interaction = FakeInteraction()
+        fake_home_channel = self.FakeHomeChannel(thread_id=DESTINATION_CHANNEL_ID)
+        tv_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await tv_shows_button.callback(interaction=tv_interaction)
-        channel_select = await self._reach_channel_select_from_creation_choice(
-            tv_interaction.response.edited_view
-        )
-
-        class FakeChannelValue:
-            id = DESTINATION_CHANNEL_ID
-
-        channel_select._values = [FakeChannelValue()]
-        channel_interaction = FakeInteraction()
-        await channel_select.callback(interaction=channel_interaction)
 
         # create_new_database's failure re-renders the current step with
         # a clear error rather than silently advancing.
-        self.assertIn("already has a collection", channel_interaction.response.edited_content)
+        self.assertIn("already has a collection", tv_interaction.response.edited_content)
         databases = self.suggestion_service.list_databases(GUILD_ID)
         self.assertEqual(len(databases), 1)
         self.assertEqual(databases[0].name, "Movies")
 
+    async def test_missing_home_channel_shows_a_warning_and_returns_to_type_choice(self) -> None:
+        from watch_party_manager.setup_wizard_view import CollectionTypeChoiceView
 
-class SuggestionDestinationCreationIntegrationTests(SetupCommandTestCase):
-    """Contextual Collection Model Refinement: after choosing a collection
-    type, administrators choose HOW the one required suggestion
-    destination is obtained -- create a new channel (with a suggested or
-    custom name), or pick an existing channel/thread -- never forced into
-    a default.
-    """
+        type_view = await self._reach_collection_type_choice()
+        movies_button = type_view.children[0]
 
-    class FakeChannel:
-        def __init__(self, channel_id: int) -> None:
-            self.id = channel_id
+        movies_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(None))
+        await movies_button.callback(interaction=movies_interaction)
 
-    class FakeHTTPResponse:
-        status = 403
-        reason = "Forbidden"
-
-    class FakeGuild:
-        def __init__(self, *, channel_id: int = 888, fail: bool = False) -> None:
-            self._channel_id = channel_id
-            self._fail = fail
-            self.created_with = None
-
-        async def create_text_channel(self, *, name):
-            self.created_with = name
-            if self._fail:
-                import discord
-
-                raise discord.HTTPException(
-                    response=SuggestionDestinationCreationIntegrationTests.FakeHTTPResponse(), message="boom"
-                )
-            return SuggestionDestinationCreationIntegrationTests.FakeChannel(self._channel_id)
-
-    async def _reach_creation_choice(self):
-        from watch_party_manager.setup_wizard_view import CollectionTypeChoiceView, SuggestionDatabaseChoiceView
-
-        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
-        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.SUGGESTION_DATABASE)
-        interaction = FakeInteraction()
-        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
-        self.assertIsInstance(interaction.response.sent_view, SuggestionDatabaseChoiceView)
-        create_new_button = interaction.response.sent_view.children[1]
-
-        type_interaction = FakeInteraction()
-        await create_new_button.callback(interaction=type_interaction)
-        self.assertIsInstance(type_interaction.response.edited_view, CollectionTypeChoiceView)
-
-        tv_shows_button = type_interaction.response.edited_view.children[1]
-        tv_interaction = FakeInteraction()
-        await tv_shows_button.callback(interaction=tv_interaction)
-        return tv_interaction.response.edited_view
-
-    async def test_creation_choice_offers_create_existing_channel_and_existing_thread(self) -> None:
-        from watch_party_manager.setup_wizard_view import DestinationCreationChoiceView
-
-        creation_choice_view = await self._reach_creation_choice()
-        self.assertIsInstance(creation_choice_view, DestinationCreationChoiceView)
-        labels = [getattr(c, "label", None) for c in creation_choice_view.children]
-        self.assertIn("Create New Channel (Recommended)", labels)
-        self.assertIn("Use Existing Channel", labels)
-        self.assertIn("Use Existing Thread", labels)
-
-    async def test_use_existing_thread_offers_a_thread_only_picker(self) -> None:
-        import discord
-
-        creation_choice_view = await self._reach_creation_choice()
-        use_thread_button = creation_choice_view.children[2]
-        self.assertEqual(use_thread_button.label, "Use Existing Thread")
-
-        thread_interaction = FakeInteraction()
-        await use_thread_button.callback(interaction=thread_interaction)
-        thread_select = thread_interaction.response.edited_view.children[0]
-        self.assertEqual(
-            set(thread_select.channel_types),
-            {discord.ChannelType.public_thread, discord.ChannelType.private_thread},
-        )
-
-    async def test_create_new_channel_offers_suggested_names_and_custom_name(self) -> None:
-        from watch_party_manager.setup_wizard_view import (
-            CUSTOM_DESTINATION_NAME_VALUE,
-            DestinationNameChoiceView,
-        )
-
-        creation_choice_view = await self._reach_creation_choice()
-        create_button = creation_choice_view.children[0]
-        self.assertEqual(create_button.label, "Create New Channel (Recommended)")
-
-        create_interaction = FakeInteraction()
-        await create_button.callback(interaction=create_interaction)
-        self.assertIsInstance(create_interaction.response.edited_view, DestinationNameChoiceView)
-        name_select = create_interaction.response.edited_view.children[0]
-        values = [option.value for option in name_select.options]
-        self.assertIn("TV Suggestions", values)
-        self.assertIn("Movie Suggestions", values)
-        self.assertIn("Halloween", values)
-        self.assertIn(CUSTOM_DESTINATION_NAME_VALUE, values)
-
-    async def test_choosing_a_suggested_name_creates_the_channel_and_the_collection(self) -> None:
-        creation_choice_view = await self._reach_creation_choice()
-        create_button = creation_choice_view.children[0]
-        create_interaction = FakeInteraction()
-        await create_button.callback(interaction=create_interaction)
-        name_select = create_interaction.response.edited_view.children[0]
-
-        fake_guild = self.FakeGuild(channel_id=4242)
-        name_select._values = ["TV Suggestions"]
-        name_interaction = FakeInteraction(guild=fake_guild)
-        await name_select.callback(interaction=name_interaction)
-
-        self.assertEqual(fake_guild.created_with, "TV Suggestions")
-        databases = self.suggestion_service.list_databases(GUILD_ID)
-        self.assertEqual(databases[0].name, "TV Shows")
-        self.assertEqual(databases[0].channel_id, 4242)
-
-    async def test_choosing_custom_name_asks_for_a_name_then_creates_the_channel(self) -> None:
-        from watch_party_manager.setup_wizard_view import CUSTOM_DESTINATION_NAME_VALUE, CreateDatabaseNameModal
-
-        creation_choice_view = await self._reach_creation_choice()
-        create_button = creation_choice_view.children[0]
-        create_interaction = FakeInteraction()
-        await create_button.callback(interaction=create_interaction)
-        name_select = create_interaction.response.edited_view.children[0]
-
-        name_select._values = [CUSTOM_DESTINATION_NAME_VALUE]
-        custom_interaction = FakeInteraction()
-        await name_select.callback(interaction=custom_interaction)
-        modal = custom_interaction.response.sent_modal
-        self.assertIsInstance(modal, CreateDatabaseNameModal)
-
-        fake_guild = self.FakeGuild(channel_id=5150)
-        modal.name_input._value = "Season Premieres"
-        submit_interaction = FakeInteraction(guild=fake_guild)
-        await modal.on_submit(interaction=submit_interaction)
-
-        self.assertEqual(fake_guild.created_with, "Season Premieres")
-        databases = self.suggestion_service.list_databases(GUILD_ID)
-        self.assertEqual(databases[0].channel_id, 5150)
-
-    async def test_channel_creation_failure_shows_an_error_and_stays_recoverable(self) -> None:
-        from watch_party_manager.setup_wizard_view import DestinationCreationChoiceView
-
-        creation_choice_view = await self._reach_creation_choice()
-        create_button = creation_choice_view.children[0]
-        create_interaction = FakeInteraction()
-        await create_button.callback(interaction=create_interaction)
-        name_select = create_interaction.response.edited_view.children[0]
-
-        fake_guild = self.FakeGuild(fail=True)
-        name_select._values = ["Halloween"]
-        name_interaction = FakeInteraction(guild=fake_guild)
-        await name_select.callback(interaction=name_interaction)
-
-        self.assertIn("Could not create the channel", name_interaction.response.edited_content)
-        self.assertIsInstance(name_interaction.response.edited_view, DestinationCreationChoiceView)
+        self.assertIn("home channel is no longer available", movies_interaction.response.edited_content)
+        self.assertIsInstance(movies_interaction.response.edited_view, CollectionTypeChoiceView)
         databases = self.suggestion_service.list_databases(GUILD_ID)
         self.assertEqual(databases, [])
+
+    async def test_thread_creation_failure_shows_an_error_and_stays_recoverable(self) -> None:
+        from watch_party_manager.setup_wizard_view import CollectionTypeChoiceView
+
+        type_view = await self._reach_collection_type_choice()
+        movies_button = type_view.children[0]
+
+        failing_channel = self.FakeHomeChannel(fail=True)
+        movies_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(failing_channel))
+        await movies_button.callback(interaction=movies_interaction)
+
+        self.assertIn("Could not create the thread", movies_interaction.response.edited_content)
+        self.assertIsInstance(movies_interaction.response.edited_view, CollectionTypeChoiceView)
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        self.assertEqual(databases, [])
+
+    async def test_created_thread_is_persisted_as_the_collections_suggestion_destination(self) -> None:
+        # Setup Bug fix (Requirement 6): the thread setup creates must be
+        # saved immediately as the collection's Suggestion Destination,
+        # not merely as its operational home channel -- otherwise /add
+        # reports no suggestion channel is configured (Requirement 7).
+        type_view = await self._reach_collection_type_choice()
+        movies_button = type_view.children[0]
+
+        fake_home_channel = self.FakeHomeChannel(thread_id=705)
+        movies_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await movies_button.callback(interaction=movies_interaction)
+
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, databases[0].database_id)
+        self.assertIsNotNone(configuration)
+        self.assertEqual(configuration.channels.suggestion_channel_id, 705)
 
 
 if __name__ == "__main__":

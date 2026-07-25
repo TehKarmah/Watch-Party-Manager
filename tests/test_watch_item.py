@@ -44,9 +44,9 @@ class WatchItemModelTests(unittest.TestCase):
     def test_watch_item_status_can_be_updated(self) -> None:
         item = WatchItem(title="Blade Runner", media_type=MediaType.MOVIE, runtime_minutes=117)
 
-        item.status = WatchItemStatus.CURRENT_ROTATION
+        item.status = WatchItemStatus.VOTE_WINNER
 
-        self.assertEqual(item.status, WatchItemStatus.CURRENT_ROTATION)
+        self.assertEqual(item.status, WatchItemStatus.VOTE_WINNER)
 
     def test_metadata_ids_require_provider_keys(self) -> None:
         with self.assertRaises(TypeError):

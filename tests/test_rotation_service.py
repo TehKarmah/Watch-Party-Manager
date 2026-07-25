@@ -104,10 +104,10 @@ class RotationCompletionTests(RotationServiceTestCase):
 
         self.assertTrue(self.rotation_service._is_exhausted(rotation))
 
-    def test_completion_via_watched_status(self) -> None:
+    def test_completion_via_vote_winner_status(self) -> None:
         item = self._add("Alien")
         rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)
-        item.status = WatchItemStatus.WATCHED
+        item.status = WatchItemStatus.VOTE_WINNER
 
         self.assertTrue(self.rotation_service._is_exhausted(rotation))
 

@@ -183,22 +183,33 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Confirm the confirmation message explains how to resume.
   3. Run `/setup` again.
   4. Choose **Continue Setup**.
-- **Expected Result:** The save confirmation is clear and non-destructive (setup is not marked complete). Running `/setup` again shows a resume prompt naming how many of 9 steps are complete and the current step; **Continue Setup** returns to exactly where you left off with all prior answers intact.
+- **Expected Result:** The save confirmation is clear and non-destructive (setup is not marked complete). Running `/setup` again shows a resume prompt naming how many of 10 steps are complete and the current step; **Continue Setup** returns to exactly where you left off with all prior answers intact.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 2.4b Home Channel
+
+- **Objective:** Confirm WASH's home channel can be created fresh or pointed at an existing channel, and that every collection's suggestion thread (and, by default, the watched-movie destination thread) is created inside it.
+- **Preconditions:** Test 2.4 passed.
+- **Steps:**
+  1. Reach the Home Channel step; confirm it offers **Create New Channel (Recommended)** and **Use Existing Channel**.
+  2. Choose **Create New Channel**; confirm the name prompt defaults to "Watch Party" and can be changed; confirm the channel is actually created in the server.
+  3. Separately, repeat choosing **Use Existing Channel**; confirm it shows a channel picker and saves the selected channel.
+- **Expected Result:** Either path advances the wizard with a home channel saved; this channel becomes the parent for every thread created in later steps.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
 ### 2.5 Collection (suggestion destination)
 
-- **Objective:** Confirm a collection (internally an ordinary `SuggestionDatabase` record) can be created with exactly one dedicated suggestion destination during setup, via the guided collection-type flow, and that administrators are never forced into a default channel name.
-- **Preconditions:** Test 2.1 in progress, reached the Collection step.
+- **Objective:** Confirm a collection (internally an ordinary `SuggestionDatabase` record) is created with its own suggestion thread automatically created as a sibling under WASH's home channel, and that thread is immediately saved as that collection's Suggestion Destination -- no separate destination choice, and no additional configuration needed before `/add` works in it.
+- **Preconditions:** Test 2.4b passed, reached the Collection step.
 - **Steps:**
   1. Choose **Create New**; confirm a "What type of collection would you like to create?" screen appears with **Movies (Recommended)**, **TV Shows**, **Special Collection**, **Custom**, and **Import Existing Database**.
-  2. Choose **Movies**; confirm no name prompt appears and a "How should ... get its suggestion destination?" screen opens with **Create New Channel (Recommended)**, **Use Existing Channel**, and **Use Existing Thread**.
-  3. Choose **Create New Channel**; confirm suggested names (e.g. "Movie Suggestions", "TV Suggestions", "Halloween") plus a **Custom Name** option appear, and that choosing **Custom Name** opens a modal instead of forcing one of the suggestions. Confirm the new text channel is actually created in the server.
-  4. Separately, repeat choosing **Use Existing Channel**, then **Use Existing Thread**; confirm each shows a picker filtered to that type only.
-  5. Separately, repeat with **Special Collection** or **Custom**; confirm a name prompt appears before the destination-creation choice.
-  6. Separately, click **Import Existing Database**; confirm WASH explains that `/import` must be run as its own command (Discord does not allow attaching a file from inside this wizard) and offers a way back to the type-choice screen.
-- **Expected Result:** Movies/TV Shows create a collection named exactly that with no name prompt; Special Collection/Custom collect a name first; every creation path ends with the collection associated with the chosen or newly-created channel/thread, which becomes its one required suggestion destination (and, internally, all remain ordinary `SuggestionDatabase` records). Import Existing never fakes an in-wizard upload.
+  2. Choose **Movies**; confirm no name prompt and no destination-choice screen appear -- a thread named "Movies" is created directly under the home channel and the wizard advances.
+  3. In the server, open the new "Movies" thread and run `/add` with any title; confirm the public suggestion post is created immediately in that thread, with no "no suggestion channel is configured" error.
+  4. Separately, repeat with **Special Collection** or **Custom**; confirm a name prompt appears first, then the thread is created using that name.
+  5. Separately, click **Import Existing Database**; confirm WASH explains that `/import` must be run as its own command (Discord does not allow attaching a file from inside this wizard) and offers a way back to the type-choice screen.
+- **Expected Result:** Movies/TV Shows create a collection named exactly that with no name prompt; Special Collection/Custom collect a name first; every creation path ends with the collection's suggestion thread created as a sibling under the home channel and immediately persisted as that collection's Suggestion Destination (and, internally, all remain ordinary `SuggestionDatabase` records). `/add` works in the new thread right away. Import Existing never fakes an in-wizard upload.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -214,11 +225,12 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 2.6 Watched Movie Destination
 
-- **Objective:** Confirm the watched-movie destination step accepts a channel or can be skipped.
+- **Objective:** Confirm the watched-movie destination step accepts an existing channel/thread, can create a new thread as a sibling under the home channel, or can be skipped.
 - **Preconditions:** Test 2.5 passed.
 - **Steps:**
-  1. Select a destination channel, or click **Skip for Now**.
-- **Expected Result:** The choice advances the wizard and is reflected correctly on the Review step.
+  1. Select an existing destination channel or thread, or click **Skip for Now**.
+  2. Separately, repeat and instead choose **Create New Thread**; confirm the name prompt defaults to "Watched Movies" and the new thread is created as a sibling under the home channel (never nested under a suggestion thread).
+- **Expected Result:** Every choice advances the wizard and is reflected correctly on the Review step.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -292,7 +304,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Compare every listed value against what was actually selected in Tests 2.2-2.10.
   3. Click **Back** once, confirm it returns to the immediately preceding step.
   4. Return to Review and click **Save**.
-- **Expected Result:** Every section (roles, join mode, admin channel, suggestion database, watched-movie destination, voting defaults including candidate selection, reminders, backup) is shown accurately, using natural-language duration (e.g. "4 hours" or "3 days", never "72 hours"). Save marks setup complete and shows a final completion summary matching the same values.
+- **Expected Result:** Every section (roles, join mode, admin channel, home channel, suggestion database, watched-movie destination, voting defaults including candidate selection, reminders, backup) is shown accurately, using natural-language duration (e.g. "4 hours" or "3 days", never "72 hours"). Save marks setup complete and shows a final completion summary matching the same values.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -435,14 +447,14 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.7 `/list` -- Watched and Retired
+### 4.7 `/list` -- Vote Winner and Retired
 
 - **Objective:** Confirm the other two status filters work.
-- **Preconditions:** At least one retired suggestion (reject one below the retirement threshold in Test 4.10 first, if none exist yet).
+- **Preconditions:** At least one retired suggestion (reject one below the retirement threshold in Test 4.10 first, if none exist yet) and at least one completed vote (a suggestion should now be Vote Winner).
 - **Steps:**
   1. Run `/list status:Retired`.
-  2. Run `/list status:Watched` (expected to be empty -- see Notes).
-- **Expected Result:** Retired shows retired/archived items. Watched is expected to be empty in this build -- no code path yet marks an item Watched (a documented, known limitation, not a bug).
+  2. Run `/list status:Vote Winner`.
+- **Expected Result:** Retired shows retired/archived items. Vote Winner shows the suggestion(s) that have won a voting round -- their public confirmation post's Status field should also read "🟣 Vote Winner".
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -482,12 +494,15 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 4.11 `/remove` and `/edit_suggestion`
 
-- **Objective:** Confirm WASH Crew administrative editing/removal works, including the duplicate re-check on edit.
-- **Preconditions:** WASH Crew role; at least one suggestion.
+- **Objective:** Confirm WASH Crew administrative status-changing/moving/removal works, including the duplicate re-check on a collection move.
+- **Preconditions:** WASH Crew role; at least one suggestion; at least two collections in the guild.
 - **Steps:**
-  1. Run `/edit_suggestion` to change a title; confirm the duplicate check re-runs against the (possibly new) destination database.
-  2. Run `/remove` with a reference number, then again with an exact title; confirm both resolve correctly and archive (not delete) the record.
-- **Expected Result:** Matches [Administration](05-Administration.md) Section 3 exactly; history and stable ID are preserved through both operations.
+  1. Run `/edit_suggestion`; confirm it shows a read-only summary (title, year, collection, status, IMDb link) plus Change Status, Move to Another Collection, and Cancel -- no title/release year/IMDb link fields to type into.
+  2. Choose Change Status; confirm the dropdown offers only Available, Vote Winner, and Retired (never Rotation Cooldown); pick one and confirm the suggestion's status updates and its public confirmation post's Status field updates in place.
+  3. Choose Move to Another Collection; confirm the duplicate check re-runs against the destination collection, and that the suggestion's status is unchanged after the move.
+  4. Choose Cancel; confirm nothing changes.
+  5. Run `/remove` with a reference number, then again with an exact title; confirm both resolve correctly and archive (not delete) the record.
+- **Expected Result:** Matches [Administration](05-Administration.md) Section 3 exactly; history, stable ID, and (for a move) status are preserved throughout.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -592,10 +607,11 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm WASH Crew's administrative controls over an in-progress round.
 - **Preconditions:** An open round; WASH Crew role.
 - **Steps:**
-  1. Run `/edit_vote` -> change the end time to a new value; confirm the public post and a public notice both reflect the new deadline.
-  2. Start a second round (after the first completes or is cancelled) and use `/edit_vote` -> **End Now**; confirm it closes immediately with correct results.
-  3. Start a third round and use `/edit_vote` -> **Cancel Vote**; confirm it's cancelled with no winner announced and the original post's buttons are disabled.
-- **Expected Result:** All three actions behave exactly as described, and each updates the original voting post appropriately (new deadline / closed with results / cancelled notice).
+  1. Run `/edit_vote` -> **Change End Time**; confirm the quick options **End Now**, **In 5 Minutes**, **In 1 Hour**, and **In 1 Day** each apply immediately when clicked, and that the public post and a public notice both reflect the new deadline, with a Discord relative timestamp shown.
+  2. Use **Change End Time** -> **Custom Time...**; confirm the modal presents a single "Discord Timestamp" field with placeholder `<t:1785639600:F>` and help text explaining how to generate one (type `@time` in any normal Discord message box, pick a date/time, then copy the generated timestamp here). Confirm a malformed value (e.g. plain text, or a timestamp missing the `<t:...>` wrapper), and a validly-formatted but past timestamp, are each rejected with a clear message; confirm a valid future timestamp (in any of the standard styles, e.g. `<t:1785639600:F>` or `<t:1785639600:R>`) reschedules correctly.
+  3. Start a second round (after the first completes or is cancelled) and use `/edit_vote` -> **End Now**; confirm it closes immediately with correct results.
+  4. Start a third round and use `/edit_vote` -> **Cancel Vote**; confirm it's cancelled with no winner announced and the original post's buttons are disabled.
+- **Expected Result:** All actions behave exactly as described, and each updates the original voting post appropriately (new deadline / closed with results / cancelled notice). Every new deadline is still stored and scheduled internally as UTC.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

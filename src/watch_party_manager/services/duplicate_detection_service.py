@@ -1,4 +1,4 @@
-"""FR-033A: duplicate detection across active, archived, and watched suggestions.
+"""FR-033A: duplicate detection across active, archived, and vote-winner suggestions.
 
 Pure, Discord-free logic reused by both /add and /edit_suggestion. Never
 guesses: a title match where either side's release year is unknown is
@@ -51,7 +51,7 @@ class DuplicateMatchCategory(str, Enum):
     ACTIVE = "active"
     ARCHIVED_REJECTED = "archived_rejected"
     ARCHIVED_OTHER = "archived_other"
-    WATCHED = "watched"
+    VOTE_WINNER = "vote_winner"
 
 
 class DuplicateMatchKind(str, Enum):
@@ -107,8 +107,8 @@ def categorize_watch_item(watch_item: WatchItem) -> DuplicateMatchCategory:
     none was archived some other way (e.g. WASH Crew directly archiving
     it via /remove).
     """
-    if watch_item.status is WatchItemStatus.WATCHED:
-        return DuplicateMatchCategory.WATCHED
+    if watch_item.status is WatchItemStatus.VOTE_WINNER:
+        return DuplicateMatchCategory.VOTE_WINNER
     if watch_item.status is WatchItemStatus.ARCHIVED:
         if watch_item.journey.rejected_by_discord_user_ids:
             return DuplicateMatchCategory.ARCHIVED_REJECTED

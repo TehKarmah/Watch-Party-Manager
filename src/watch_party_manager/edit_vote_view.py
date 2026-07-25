@@ -4,23 +4,26 @@ Like start_vote_view.py and restore_confirmation_view.py, this module has
 no dependency on bot.py: each view/modal here only knows how to render
 itself and forward a click or submission to a caller-supplied callback.
 All validation and vote-editing logic lives in bot.py's
-perform_change_vote_end_time()/perform_end_vote_now()/perform_cancel_vote_now(),
-reused unchanged regardless of which button is clicked -- this module
-adds presentation only.
+perform_reschedule_vote_round()/parse_discord_timestamp_vote_end_time()/
+perform_end_vote_now()/perform_cancel_vote_now(), reused unchanged
+regardless of which button is clicked -- this module adds presentation
+only.
 """
 
 from __future__ import annotations
 
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable
 
 import discord
 
 OnChangeEndTime = Callable[[discord.Interaction], Awaitable[None]]
-OnEndNow = Callable[[discord.Interaction], Awaitable[None]]
 OnCancelVote = Callable[[discord.Interaction], Awaitable[None]]
-OnEndTimeSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnEditVoteConfirmed = Callable[[discord.Interaction], Awaitable[None]]
 OnEditVoteAborted = Callable[[discord.Interaction], Awaitable[None]]
+OnQuickEndTimePick = Callable[[discord.Interaction, int], Awaitable[None]]
+OnEndNowQuickPick = Callable[[discord.Interaction], Awaitable[None]]
+OnChooseCustomEndTime = Callable[[discord.Interaction], Awaitable[None]]
+OnCustomEndTimeSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 
 # A short timeout is appropriate here, matching StartVoteChoiceView -- this
 # is a one-time management prompt for whoever ran /edit_vote, not a
@@ -47,21 +50,6 @@ class ChangeEndTimeButton(discord.ui.Button):
         await self._callback(interaction)
 
 
-class EndVoteNowButton(discord.ui.Button):
-    """Starts the "end vote now" confirmation flow."""
-
-    def __init__(self, on_click: OnEndNow) -> None:
-        super().__init__(
-            label="End Now",
-            style=discord.ButtonStyle.danger,
-            custom_id="wpm_edit_vote_end_now",
-        )
-        self._callback = on_click
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await self._callback(interaction)
-
-
 class CancelVoteButton(discord.ui.Button):
     """Starts the "cancel vote" confirmation flow."""
 
@@ -78,57 +66,132 @@ class CancelVoteButton(discord.ui.Button):
 
 
 class EditVoteManagementView(discord.ui.View):
-    """The /edit_vote management prompt: change end time, end now, or cancel."""
+    """The /edit_vote management prompt: change end time (which now
+    includes ending it immediately as one of its quick options -- see
+    VoteEndTimeQuickPickView), or cancel the vote outright.
+    """
 
     def __init__(
         self,
         on_change_end_time: OnChangeEndTime,
-        on_end_now: OnEndNow,
         on_cancel_vote: OnCancelVote,
     ) -> None:
         """Initialize the view.
 
         Args:
             on_change_end_time: Called when "Change End Time" is clicked.
-            on_end_now: Called when "End Now" is clicked.
             on_cancel_vote: Called when "Cancel Vote" is clicked.
         """
         super().__init__(timeout=EDIT_VOTE_VIEW_TIMEOUT_SECONDS)
         self.add_item(ChangeEndTimeButton(on_change_end_time))
-        self.add_item(EndVoteNowButton(on_end_now))
         self.add_item(CancelVoteButton(on_cancel_vote))
 
 
-class EditVoteEndTimeModal(discord.ui.Modal):
-    """Collects the voting round's new end date/time.
+class EndNowQuickPickButton(discord.ui.Button):
+    """Ends the vote immediately -- the first, most-final quick option."""
 
-    Parsing and validation (including "must be in the future") happen in
-    bot.py's parse_vote_end_time(), reused unchanged -- this modal only
-    collects the raw text.
+    def __init__(self, on_click: OnEndNowQuickPick) -> None:
+        super().__init__(
+            label="End Now", style=discord.ButtonStyle.danger, custom_id="wpm_edit_vote_quick_end_now"
+        )
+        self._callback = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._callback(interaction)
+
+
+class QuickEndTimeButton(discord.ui.Button):
+    """One "In N Minutes/Hour/Day" quick-pick option."""
+
+    def __init__(self, label: str, minutes: int, on_click: OnQuickEndTimePick, *, custom_id: str) -> None:
+        super().__init__(label=label, style=discord.ButtonStyle.primary, custom_id=custom_id)
+        self._minutes = minutes
+        self._callback = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._callback(interaction, self._minutes)
+
+
+class ChooseCustomEndTimeButton(discord.ui.Button):
+    """Opens the Custom Time modal."""
+
+    def __init__(self, on_click: OnChooseCustomEndTime) -> None:
+        super().__init__(
+            label="Custom Time...",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_edit_vote_choose_custom_end_time",
+        )
+        self._callback = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._callback(interaction)
+
+
+# (label, minutes-from-now) for each timed quick pick, in display order
+# (after End Now, before Custom Time...). Kept as minutes (rather than
+# pre-built timedeltas) so bot.py can compute "now" itself right at click
+# time, matching how every other "must be in the future" check works.
+VOTE_END_TIME_QUICK_PICKS: tuple[tuple[str, int], ...] = (
+    ("In 5 Minutes", 5),
+    ("In 1 Hour", 60),
+    ("In 1 Day", 24 * 60),
+)
+
+
+class VoteEndTimeQuickPickView(discord.ui.View):
+    """The guided "Change End Time" flow's menu: End Now, timed quick
+    options, or a hand-off to the Custom Time modal for anything else.
     """
 
-    def __init__(self, on_submit: OnEndTimeSubmit, *, current_value: Optional[str] = None) -> None:
-        """Initialize the modal.
+    def __init__(
+        self,
+        on_end_now: OnEndNowQuickPick,
+        on_quick_pick: OnQuickEndTimePick,
+        on_choose_custom: OnChooseCustomEndTime,
+    ) -> None:
+        """Initialize the view.
 
         Args:
-            on_submit: Called with (interaction, when_text) once submitted.
-            current_value: Pre-fills the field with the round's current
-                closing time, if known, so WASH Crew can see what they're
-                changing from.
+            on_end_now: Called when "End Now" is clicked.
+            on_quick_pick: Called with (interaction, minutes_from_now) when
+                one of the timed quick-pick buttons is clicked.
+            on_choose_custom: Called when "Custom Time..." is clicked.
         """
-        super().__init__(title="Change Vote End Time")
+        super().__init__(timeout=EDIT_VOTE_VIEW_TIMEOUT_SECONDS)
+        self.add_item(EndNowQuickPickButton(on_end_now))
+        for index, (label, minutes) in enumerate(VOTE_END_TIME_QUICK_PICKS):
+            self.add_item(
+                QuickEndTimeButton(
+                    label, minutes, on_quick_pick, custom_id=f"wpm_edit_vote_quick_end_time_{index}"
+                )
+            )
+        self.add_item(ChooseCustomEndTimeButton(on_choose_custom))
+
+
+class CustomVoteEndTimeModal(discord.ui.Modal):
+    """Collects a single Discord-native timestamp (e.g. "<t:1785639600:F>")
+    rather than typed date/time fields.
+
+    Parsing -- validating the syntax and rejecting a malformed or past
+    timestamp -- happens in bot.py's
+    parse_discord_timestamp_vote_end_time(), reused unchanged; this modal
+    only collects the raw text.
+    """
+
+    def __init__(self, on_submit: OnCustomEndTimeSubmit) -> None:
+        super().__init__(title="Custom Time")
         self._submit_callback = on_submit
 
-        self.when_input = discord.ui.TextInput(
-            label="New end date/time (e.g. 2026-08-01 20:00)",
+        self.timestamp_input = discord.ui.TextInput(
+            label="Discord Timestamp",
+            placeholder="<t:1785639600:F>",
             required=True,
-            default=current_value,
         )
-        self.add_item(self.when_input)
+        self.add_item(self.timestamp_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        """Forward the raw end-time text to the configured handler."""
-        await self._submit_callback(interaction, self.when_input.value)
+        """Forward the raw timestamp text to the configured handler."""
+        await self._submit_callback(interaction, self.timestamp_input.value)
 
 
 class ConfirmEditVoteActionButton(discord.ui.Button):

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
+from watch_party_manager.domain.suggestion_database_configuration import SuggestionDatabaseConfiguration
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 
@@ -307,12 +308,19 @@ class SuggestionService:
         return None
 
     def record_vote_win(self, suggestion_id: int, won_date) -> bool:
-        """Record a nomination and win for a winning suggestion, then persist."""
+        """Record a nomination and win for a winning suggestion, then persist.
+
+        Also marks the suggestion Vote Winner, unless a WASH Crew member
+        has already archived/retired it -- that manual decision takes
+        precedence over the automatic status set here.
+        """
         watch_item = self.get_suggestion(suggestion_id)
         if watch_item is None:
             return False
         watch_item.journey.record_vote_appearance(won_date)
         watch_item.journey.record_winning_vote(watch_item.title, won_date)
+        if watch_item.status is not WatchItemStatus.ARCHIVED:
+            watch_item.status = WatchItemStatus.VOTE_WINNER
         self._save()
         return True
 
@@ -473,7 +481,7 @@ class SuggestionService:
         )
 
     def reactivate_suggestion(self, suggestion_id: int) -> SuggestionResult:
-        """Return an archived or watched suggestion to the active pool.
+        """Return an archived or vote-winner suggestion to the active pool.
 
         Reuses the existing record's stable ID and full journey/history
         unchanged -- callers use this instead of suggest() whenever a
@@ -485,13 +493,37 @@ class SuggestionService:
         if watch_item is None:
             return SuggestionResult(success=False, message="That suggestion doesn't exist.")
 
-        if watch_item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.WATCHED):
+        if watch_item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.VOTE_WINNER):
             return SuggestionResult(success=False, message="That suggestion is already active.")
 
         watch_item.status = WatchItemStatus.SUGGESTED
         self._save()
         return SuggestionResult(
             success=True, message=f'"{watch_item.title}" has been reactivated.', watch_item=watch_item
+        )
+
+    def set_suggestion_status(self, suggestion_id: int, status: WatchItemStatus) -> SuggestionResult:
+        """Directly set a suggestion's status (/edit_suggestion's Change
+        Status action).
+
+        Unlike archive_suggestion()/reactivate_suggestion() (which react
+        to specific member-facing events -- a rejection threshold, a
+        re-suggestion -- and enforce their own preconditions), this is an
+        unconditional administrative override: WASH Crew may always move
+        a suggestion directly to any of the three persisted statuses.
+        Rotation Cooldown is never a valid value here -- it's a computed
+        display state, not something to assign (see
+        services/suggestion_display_status.py).
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return SuggestionResult(success=False, message="That suggestion doesn't exist.")
+
+        watch_item.status = status
+        self._save()
+        status_label = status.value.replace("_", " ").title()
+        return SuggestionResult(
+            success=True, message=f'"{watch_item.title}" status set to {status_label}.', watch_item=watch_item
         )
 
     def get_suggestions_for_database(
@@ -870,6 +902,27 @@ class SuggestionService:
         self._next_database_id += 1
         self._databases[database.database_id] = database
         self._save_databases()
+
+        if suggestion_database_configuration_repository is not None:
+            # The channel a collection is created with is immediately its
+            # configured Suggestion Destination too -- otherwise
+            # post_suggestion_confirmation() finds no configuration row at
+            # all and refuses to post, even though the collection's home
+            # channel is right there. Reuses (rather than overwrites) an
+            # existing configuration row on the rare chance one was
+            # somehow already saved for this not-yet-existing database_id.
+            existing_configuration = suggestion_database_configuration_repository.get(
+                guild_id, database.database_id
+            )
+            base_configuration = existing_configuration or SuggestionDatabaseConfiguration(
+                guild_id=guild_id, database_id=database.database_id, display_name=trimmed_name
+            )
+            suggestion_database_configuration_repository.save(
+                replace(
+                    base_configuration,
+                    channels=replace(base_configuration.channels, suggestion_channel_id=channel_id),
+                )
+            )
 
         if is_first_database:
             # Suggestions created before any database existed have no

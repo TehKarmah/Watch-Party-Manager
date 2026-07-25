@@ -1,5 +1,5 @@
 """Tests for /list's Release Polish Priority 2 rework: default-to-Available
-output, the Available/Watched/Retired filter set, terse title/year/
+output, the Available/Vote Winner/Retired filter set, terse title/year/
 original-suggestion-link entries (no reference number, no status, no
 IMDb link), embed suppression, and pagination.
 """
@@ -36,7 +36,7 @@ class FilterItemsByStatusTests(unittest.TestCase):
         items = [
             self._item(WatchItemStatus.SUGGESTED),
             self._item(WatchItemStatus.ARCHIVED),
-            self._item(WatchItemStatus.WATCHED),
+            self._item(WatchItemStatus.VOTE_WINNER),
         ]
         result = filter_items_by_status(items, SuggestionListStatusFilter.AVAILABLE)
         self.assertEqual(1, len(result))
@@ -49,19 +49,19 @@ class FilterItemsByStatusTests(unittest.TestCase):
         self.assertEqual(WatchItemStatus.ARCHIVED, result[0].status)
 
     def test_watched_only_shows_watched(self) -> None:
-        items = [self._item(WatchItemStatus.SUGGESTED), self._item(WatchItemStatus.WATCHED)]
-        result = filter_items_by_status(items, SuggestionListStatusFilter.WATCHED)
+        items = [self._item(WatchItemStatus.SUGGESTED), self._item(WatchItemStatus.VOTE_WINNER)]
+        result = filter_items_by_status(items, SuggestionListStatusFilter.VOTE_WINNER)
         self.assertEqual(1, len(result))
-        self.assertEqual(WatchItemStatus.WATCHED, result[0].status)
+        self.assertEqual(WatchItemStatus.VOTE_WINNER, result[0].status)
 
     def test_watched_and_retired_are_never_combined(self) -> None:
-        items = [self._item(WatchItemStatus.ARCHIVED), self._item(WatchItemStatus.WATCHED)]
-        self.assertEqual(1, len(filter_items_by_status(items, SuggestionListStatusFilter.WATCHED)))
+        items = [self._item(WatchItemStatus.ARCHIVED), self._item(WatchItemStatus.VOTE_WINNER)]
+        self.assertEqual(1, len(filter_items_by_status(items, SuggestionListStatusFilter.VOTE_WINNER)))
         self.assertEqual(1, len(filter_items_by_status(items, SuggestionListStatusFilter.RETIRED)))
 
     def test_only_three_modes_exist(self) -> None:
         self.assertEqual(
-            {"available", "watched", "retired"}, {member.value for member in SuggestionListStatusFilter}
+            {"available", "vote_winner", "retired"}, {member.value for member in SuggestionListStatusFilter}
         )
 
 
@@ -326,9 +326,9 @@ class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
         self.suggestion_service.archive_suggestion(retired.id)
         interaction = FakeInteraction()
 
-        await handle_list_suggestions(interaction, self.bot, "watched", False)
+        await handle_list_suggestions(interaction, self.bot, "vote_winner", False)
 
-        self.assertIn("no watched watch items", interaction.response.sent_message)
+        self.assertIn("no vote winner watch items", interaction.response.sent_message)
 
     async def test_retired_mode_shows_only_retired_items(self) -> None:
         database = self.suggestion_service.create_database(

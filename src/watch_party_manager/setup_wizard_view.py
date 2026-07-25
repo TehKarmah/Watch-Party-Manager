@@ -35,7 +35,6 @@ OnExistingDatabaseSelected = Callable[[discord.Interaction, int], Awaitable[None
 OnDatabaseNameSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnThreadNameSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnChannelSelected = Callable[[discord.Interaction, int], Awaitable[None]]
-OnDestinationNameChosen = Callable[[discord.Interaction, str], Awaitable[None]]
 OnSkip = Callable[[discord.Interaction], Awaitable[None]]
 OnCreateThreadClicked = Callable[[discord.Interaction], Awaitable[None]]
 OnVotingDefaultsSubmit = Callable[[discord.Interaction, str, str, str], Awaitable[None]]
@@ -55,8 +54,6 @@ _DESTINATION_CHANNEL_TYPES = [
     discord.ChannelType.public_thread,
     discord.ChannelType.private_thread,
 ]
-
-_THREAD_PARENT_CHANNEL_TYPES = [discord.ChannelType.text]
 
 # Reuses CANDIDATE_SELECTION_DISPLAY_LABELS (the same mapping /about,
 # /config, and every other candidate-selection display already draws
@@ -556,20 +553,15 @@ class DestinationChannelSelect(discord.ui.ChannelSelect):
         await self._on_select(interaction, self.values[0].id)
 
 
-# --- Suggestion Destination Creation --------------------------------------------------------
+# --- Home Channel Creation ------------------------------------------------------------------
 #
-# Every collection MUST have exactly one dedicated suggestion destination
-# (a text channel or public thread). Rather than only offering a single
-# unified "pick an existing channel or thread" select, this offers a
-# genuine choice: create a brand-new channel (with a suggested or custom
-# name), or pick from existing channels/threads separately -- never
-# forced into a default.
-
-_DESTINATION_NAME_SUGGESTIONS = ["Movie Suggestions", "TV Suggestions", "Halloween"]
-CUSTOM_DESTINATION_NAME_VALUE = "__custom_name__"
+# CreateNewChannelButton/UseExistingChannelButton/ExistingChannelSelectView
+# back the Home Channel step (create vs. use existing). Collections
+# themselves no longer choose a channel at all -- each one's suggestion
+# thread is created automatically under the home channel (see Requirement
+# 5: "Collections should default to threads").
 
 _EXISTING_CHANNEL_TYPES = [discord.ChannelType.text]
-_EXISTING_THREAD_TYPES = [discord.ChannelType.public_thread, discord.ChannelType.private_thread]
 
 
 class CreateNewChannelButton(discord.ui.Button):
@@ -596,40 +588,11 @@ class UseExistingChannelButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class UseExistingThreadButton(discord.ui.Button):
-    def __init__(self, on_click: OnDatabaseChoiceButton) -> None:
-        super().__init__(
-            label="Use Existing Thread", style=discord.ButtonStyle.secondary, custom_id="wpm_setup_destination_existing_thread"
-        )
-        self._on_click = on_click
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await self._on_click(interaction)
-
-
-class DestinationCreationChoiceView(SetupWizardStepView):
-    """Step 4, part 2b (2 of 2, new): choose how this collection's one
-    required suggestion destination is obtained.
-    """
-
-    def __init__(
-        self,
-        on_create_channel: OnDatabaseChoiceButton,
-        on_existing_channel: OnDatabaseChoiceButton,
-        on_existing_thread: OnDatabaseChoiceButton,
-        on_cancel: OnWizardCancel,
-        *,
-        requester_id: Optional[int] = None,
-    ) -> None:
-        super().__init__(requester_id=requester_id)
-        self.add_item(CreateNewChannelButton(on_create_channel))
-        self.add_item(UseExistingChannelButton(on_existing_channel))
-        self.add_item(UseExistingThreadButton(on_existing_thread))
-        self.add_item(SetupCancelButton(on_cancel))
-
-
 class ExistingChannelSelectView(SetupWizardStepView):
-    """Use Existing Channel: text channels only."""
+    """Use Existing Channel: text channels only. Reused by both the Home
+    Channel step and (via HomeChannelChoiceView's shared buttons) any
+    other "pick an existing channel" screen.
+    """
 
     def __init__(
         self, on_select: OnChannelSelected, on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None
@@ -643,53 +606,6 @@ class ExistingChannelSelectView(SetupWizardStepView):
                 channel_types=_EXISTING_CHANNEL_TYPES,
             )
         )
-        self.add_item(SetupCancelButton(on_cancel))
-
-
-class ExistingThreadSelectView(SetupWizardStepView):
-    """Use Existing Thread: public or private threads only."""
-
-    def __init__(
-        self, on_select: OnChannelSelected, on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None
-    ) -> None:
-        super().__init__(requester_id=requester_id)
-        self.add_item(
-            DestinationChannelSelect(
-                on_select,
-                custom_id="wpm_setup_destination_existing_thread_select",
-                placeholder="Choose an existing thread",
-                channel_types=_EXISTING_THREAD_TYPES,
-            )
-        )
-        self.add_item(SetupCancelButton(on_cancel))
-
-
-class DestinationNameSelect(discord.ui.Select):
-    def __init__(self, on_select: "OnDestinationNameChosen") -> None:
-        options = [discord.SelectOption(label=name, value=name) for name in _DESTINATION_NAME_SUGGESTIONS] + [
-            discord.SelectOption(label="Custom Name", value=CUSTOM_DESTINATION_NAME_VALUE)
-        ]
-        super().__init__(
-            placeholder="Choose a name for the new channel",
-            options=options,
-            custom_id="wpm_setup_destination_name_select",
-        )
-        self._on_select = on_select
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await self._on_select(interaction, self.values[0])
-
-
-class DestinationNameChoiceView(SetupWizardStepView):
-    """Suggested default names for the new channel, or Custom Name --
-    administrators are never forced into a default.
-    """
-
-    def __init__(
-        self, on_select: "OnDestinationNameChosen", on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None
-    ) -> None:
-        super().__init__(requester_id=requester_id)
-        self.add_item(DestinationNameSelect(on_select))
         self.add_item(SetupCancelButton(on_cancel))
 
 
@@ -737,6 +653,56 @@ class AdminChannelStepView(SetupWizardStepView):
         self.add_item(SetupCancelButton(on_cancel))
 
 
+# --- Home Channel -----------------------------------------------------------------------------
+#
+# WASH's "home": the parent channel every collection's suggestion thread
+# (and, by default, the watched-movie destination thread) is created
+# under, so collections read as siblings under one recognizable channel
+# rather than being scattered across the server as top-level channels.
+# No skip option -- every collection needs somewhere to create its
+# thread, so a home channel is always required.
+
+
+class HomeChannelChoiceView(SetupWizardStepView):
+    """Home Channel step: create a new channel (recommended), or use an
+    existing one. Reuses CreateNewChannelButton/UseExistingChannelButton
+    -- the same "create vs. use existing" choice the old suggestion-
+    destination sub-flow offered, now surfaced once, up front.
+    """
+
+    def __init__(
+        self,
+        on_create_new: OnDatabaseChoiceButton,
+        on_use_existing: OnDatabaseChoiceButton,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(CreateNewChannelButton(on_create_new))
+        self.add_item(UseExistingChannelButton(on_use_existing))
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
+        self.add_item(SetupCancelButton(on_cancel))
+
+
+class HomeChannelNameModal(discord.ui.Modal):
+    """Collects the new home channel's name, pre-filled with the
+    documented default ("Watch Party") so accepting it requires no typing.
+    """
+
+    def __init__(self, on_submit: OnDatabaseNameSubmit, *, default: str = "Watch Party") -> None:
+        super().__init__(title="Name the Home Channel")
+        self._submit_callback = on_submit
+        self.name_input = discord.ui.TextInput(label="Channel name", required=True, default=default)
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self._submit_callback(interaction, self.name_input.value)
+
+
 # --- Watched Movie Destination -------------------------------------------------------------
 
 
@@ -760,35 +726,18 @@ class CreateNewThreadButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class CreateThreadParentChannelSelectView(SetupWizardStepView):
-    """Watched Movie Destination step: pick the parent text channel a new
-    thread should be created under, before naming it.
-    """
-
-    def __init__(
-        self, on_select: OnChannelSelected, on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None
-    ) -> None:
-        super().__init__(requester_id=requester_id)
-        self.add_item(
-            DestinationChannelSelect(
-                on_select,
-                custom_id="wpm_setup_destination_thread_parent_select",
-                placeholder="Choose the parent channel for the new thread",
-                channel_types=_THREAD_PARENT_CHANNEL_TYPES,
-            )
-        )
-        self.add_item(SetupCancelButton(on_cancel))
-
-
 class CreateThreadNameModal(discord.ui.Modal):
-    """Watched Movie Destination step: name the new thread, once its
-    parent channel has been chosen.
+    """Watched Movie Destination step: name the new thread, created as a
+    sibling under WASH's home channel (never nested under another
+    thread -- Discord doesn't support that regardless).
     """
 
-    def __init__(self, on_submit: OnThreadNameSubmit) -> None:
+    def __init__(self, on_submit: OnThreadNameSubmit, *, default: Optional[str] = None) -> None:
         super().__init__(title="New Thread")
         self._submit_callback = on_submit
-        self.name_input = discord.ui.TextInput(label="Thread name", required=True, max_length=100)
+        self.name_input = discord.ui.TextInput(
+            label="Thread name", required=True, max_length=100, default=default
+        )
         self.add_item(self.name_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:

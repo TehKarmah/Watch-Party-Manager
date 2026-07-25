@@ -92,14 +92,14 @@ class DecideAddSuggestionOutcomeTests(unittest.TestCase):
         self.assertEqual(AddSuggestionOutcomeKind.NEEDS_CREW_REACTIVATION_CONFIRM, decision.kind)
 
     def test_watched_match_offers_crew_reactivation(self) -> None:
-        result = self._matches(status=WatchItemStatus.WATCHED)
+        result = self._matches(status=WatchItemStatus.VOTE_WINNER)
 
         decision = decide_add_suggestion_outcome(result, is_crew=True)
 
         self.assertEqual(AddSuggestionOutcomeKind.NEEDS_CREW_REACTIVATION_CONFIRM, decision.kind)
 
     def test_watched_match_blocks_regular_members(self) -> None:
-        result = self._matches(status=WatchItemStatus.WATCHED)
+        result = self._matches(status=WatchItemStatus.VOTE_WINNER)
 
         decision = decide_add_suggestion_outcome(result, is_crew=False)
 
@@ -311,7 +311,8 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
 
         await handle_add_suggestion(second_interaction, self.bot, "Alien", None, 1979)
 
-        self.assertIn("already on the list", second_interaction.response.sent_message)
+        self.assertIn("already in this collection", second_interaction.response.sent_message)
+        self.assertIn("Reference #", second_interaction.response.sent_message)
         # 2 (confirmation + low pool reminder from the first, successful
         # add), not 3: the second, blocked call never reaches
         # finish_add_or_reactivate at all.

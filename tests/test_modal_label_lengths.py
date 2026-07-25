@@ -15,7 +15,7 @@ a live Discord API call.
 
 import unittest
 
-from watch_party_manager.edit_vote_view import EditVoteEndTimeModal
+from watch_party_manager.edit_vote_view import CustomVoteEndTimeModal
 from watch_party_manager.setup_wizard_view import (
     BackupDefaultsModal,
     CreateDatabaseNameModal,
@@ -74,8 +74,8 @@ class ModalTextInputLabelLengthTests(unittest.TestCase):
     def test_customize_vote_modal_labels_are_within_limit(self) -> None:
         self._assert_all_labels_within_limit(CustomizeVoteModal(_noop))
 
-    def test_edit_vote_end_time_modal_label_is_within_limit(self) -> None:
-        self._assert_all_labels_within_limit(EditVoteEndTimeModal(_noop))
+    def test_custom_vote_end_time_modal_labels_are_within_limit(self) -> None:
+        self._assert_all_labels_within_limit(CustomVoteEndTimeModal(_noop))
 
     def test_create_thread_name_modal_label_is_within_limit(self) -> None:
         self._assert_all_labels_within_limit(CreateThreadNameModal(_noop))

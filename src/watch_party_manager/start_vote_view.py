@@ -23,6 +23,15 @@ OnCustomizeSubmit = Callable[
 START_VOTE_CHOICE_TIMEOUT_SECONDS = 180
 
 
+def _blank_default_placeholder(default_display: str) -> str:
+    """"Leave blank to use the configured default", naming the actual value
+    when the caller could resolve one, otherwise the plain phrasing.
+    """
+    if not default_display:
+        return "Leave blank to use the configured default"
+    return f"Leave blank to use the configured default ({default_display})"
+
+
 class UseDefaultsButton(discord.ui.Button):
     """Starts a voting round using the configured defaults."""
 
@@ -92,13 +101,31 @@ class CustomizeVoteModal(discord.ui.Modal):
     full capacity.
     """
 
-    def __init__(self, on_submit: OnCustomizeSubmit) -> None:
+    def __init__(
+        self,
+        on_submit: OnCustomizeSubmit,
+        *,
+        default_nominee_count_display: str = "",
+        default_duration_display: str = "",
+        default_visibility_display: str = "",
+        default_reminder_enabled_display: str = "",
+        default_reminder_hours_display: str = "",
+    ) -> None:
         """Initialize the modal.
 
         Args:
             on_submit: Called with (interaction, nominee_count_text,
                 duration_text, visibility_text, reminder_enabled_text,
                 reminder_hours_text) once submitted.
+            default_nominee_count_display: The guild's actual configured
+                candidate count (e.g. "5"), shown in the field's
+                placeholder so "leave blank" never leaves WASH Crew
+                guessing what that means. Each default_*_display param
+                below does the same for its own field; all default to ""
+                (falls back to the plain "leave blank" wording with no
+                value shown) so callers that can't resolve a guild's
+                configuration yet -- or existing callers/tests -- keep
+                working unchanged.
         """
         super().__init__(title="Customize This Vote")
         self._submit_callback = on_submit
@@ -106,27 +133,33 @@ class CustomizeVoteModal(discord.ui.Modal):
         self.nominee_count_input = discord.ui.TextInput(
             label="Candidate count (2-10)",
             required=False,
-            placeholder="Leave blank to use the configured default",
+            placeholder=_blank_default_placeholder(default_nominee_count_display),
         )
         self.duration_input = discord.ui.TextInput(
             label="Duration (1 hour - 30 days)",
             required=False,
-            placeholder="e.g. 1h, 4h, 12h, 24h, 3d, or 7d -- blank uses the default",
+            placeholder=(
+                "e.g. 1h, 4h, 12h, 24h, 3d, or 7d -- blank uses the default"
+                + (f" ({default_duration_display})" if default_duration_display else "")
+            ),
         )
         self.visibility_input = discord.ui.TextInput(
             label="Visibility: blind or visible",
             required=False,
-            placeholder="Leave blank to use the configured default",
+            placeholder=_blank_default_placeholder(default_visibility_display),
         )
         self.reminder_enabled_input = discord.ui.TextInput(
             label="Reminder before close? (yes/no)",
             required=False,
-            placeholder="Leave blank to use the configured default",
+            placeholder=_blank_default_placeholder(default_reminder_enabled_display),
         )
         self.reminder_hours_input = discord.ui.TextInput(
             label="Reminder hours before close (1-720)",
             required=False,
-            placeholder="e.g. 1, 4, 12, 24, or 48 -- blank uses the default",
+            placeholder=(
+                "e.g. 1, 4, 12, 24, or 48 -- blank uses the default"
+                + (f" ({default_reminder_hours_display})" if default_reminder_hours_display else "")
+            ),
         )
         self.add_item(self.nominee_count_input)
         self.add_item(self.duration_input)

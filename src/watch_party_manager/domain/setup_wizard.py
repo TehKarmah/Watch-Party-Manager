@@ -33,6 +33,7 @@ class SetupWizardStep(str, Enum):
     WASH_CREW_ROLE = "wash_crew_role"
     WATCH_PARTY_ROLE = "watch_party_role"
     ADMIN_CHANNEL = "admin_channel"
+    HOME_CHANNEL = "home_channel"
     SUGGESTION_DATABASE = "suggestion_database"
     WATCH_DESTINATION = "watch_destination"
     VOTING_DEFAULTS = "voting_defaults"
@@ -47,6 +48,7 @@ SETUP_WIZARD_STEP_ORDER: tuple[SetupWizardStep, ...] = (
     SetupWizardStep.WASH_CREW_ROLE,
     SetupWizardStep.WATCH_PARTY_ROLE,
     SetupWizardStep.ADMIN_CHANNEL,
+    SetupWizardStep.HOME_CHANNEL,
     SetupWizardStep.SUGGESTION_DATABASE,
     SetupWizardStep.WATCH_DESTINATION,
     SetupWizardStep.VOTING_DEFAULTS,
@@ -94,6 +96,8 @@ class SetupWizardDraft:
     admin_channel_id: Optional[int] = None
     admin_channel_skipped: bool = False
 
+    home_channel_id: Optional[int] = None
+
     watch_destination_channel_id: Optional[int] = None
     watch_destination_skipped: bool = False
 
@@ -113,6 +117,7 @@ class SetupWizardDraft:
         _validate_optional_snowflake(self.watch_party_role_id, "watch_party_role_id")
         _validate_optional_snowflake(self.suggestion_database_id, "suggestion_database_id")
         _validate_optional_snowflake(self.admin_channel_id, "admin_channel_id")
+        _validate_optional_snowflake(self.home_channel_id, "home_channel_id")
         _validate_optional_snowflake(self.watch_destination_channel_id, "watch_destination_channel_id")
 
 

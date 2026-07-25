@@ -23,7 +23,7 @@ manual completion always produce an identical presentation.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from watch_party_manager.services.vote_completion_announcer import (
     DiscordChannelMessenger,
@@ -31,10 +31,12 @@ from watch_party_manager.services.vote_completion_announcer import (
     SuggestionLookup,
     finalize_vote_completion,
 )
-from watch_party_manager.services.vote_completion_service import VoteCompletionService
+from watch_party_manager.services.vote_completion_service import VoteCompletionResult, VoteCompletionService
 
 from .job_handler import JobExecutionResult
 from .scheduled_job import JobResult, ScheduledJob
+
+OnVoteCompletionFinalized = Callable[[VoteCompletionResult], Awaitable[None]]
 
 
 class CloseVoteJobHandler:
@@ -54,6 +56,7 @@ class CloseVoteJobHandler:
         messenger: DiscordChannelMessenger,
         *,
         logger: Optional[logging.Logger] = None,
+        on_finalized: Optional[OnVoteCompletionFinalized] = None,
     ) -> None:
         """Initialize the handler.
 
@@ -70,12 +73,22 @@ class CloseVoteJobHandler:
             messenger: Used to resolve the round's channel and send/edit
                 messages. A real discord.Client/Bot satisfies this.
             logger: Optional logger override, mainly for tests.
+            on_finalized: Optional hook called with the completion result
+                after finalize_vote_completion() has run. Defaults to
+                None (no-op) so existing callers/tests keep working
+                unchanged. bot.py uses this to keep each winning
+                suggestion's own confirmation-post Status field
+                synchronized (Requirement 7) -- kept as an injected
+                callback rather than a direct call, since this scheduler
+                package must not import from bot.py (bot.py already
+                imports from here).
         """
         self._vote_completion_service = vote_completion_service
         self._vote_service = vote_service
         self._suggestion_service = suggestion_service
         self._messenger = messenger
         self._logger = logger or logging.getLogger(__name__)
+        self._on_finalized = on_finalized
 
     async def execute(self, job: ScheduledJob) -> JobExecutionResult:
         """Execute one claimed close_vote job.
@@ -118,5 +131,8 @@ class CloseVoteJobHandler:
         )
 
         await finalize_vote_completion(self._vote_service, self._suggestion_service, self._messenger, result)
+
+        if self._on_finalized is not None:
+            await self._on_finalized(result)
 
         return JobExecutionResult(result=JobResult.EXECUTED)

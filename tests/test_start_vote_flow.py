@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import (
+    build_customize_vote_modal_defaults,
     handle_customize_vote_submit,
     handle_start_vote_use_defaults,
     parse_optional_bool_field,
@@ -14,7 +15,15 @@ from watch_party_manager.bot import (
     parse_start_vote_overrides,
     parse_vote_reminder_hours_before_close,
 )
+from watch_party_manager.domain.guild_configuration import (
+    GuildConfiguration,
+    GuildVoteVisibility,
+    NotificationsConfig,
+    VoteNotificationsConfig,
+    VotingDefaultsConfig,
+)
 from watch_party_manager.domain.vote import VoteVisibility
+from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
@@ -548,6 +557,52 @@ class StartVoteChoiceViewTests(unittest.IsolatedAsyncioTestCase):
         # explicit choice.
 
 
+class BuildCustomizeVoteModalDefaultsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.repository = GuildConfigurationRepository(Path(self._temp_dir.name) / "guild_configurations.json")
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_falls_back_to_hardcoded_defaults_with_no_guild_configuration(self) -> None:
+        result = build_customize_vote_modal_defaults(
+            default_nominee_count=6, guild_id=100, guild_configuration_repository=self.repository
+        )
+        self.assertEqual(result["default_nominee_count_display"], "6")
+        self.assertEqual(result["default_visibility_display"], "Visible")
+        self.assertEqual(result["default_reminder_enabled_display"], "Yes")
+        self.assertEqual(result["default_reminder_hours_display"], "1 day")
+
+    def test_reflects_the_guilds_saved_configuration(self) -> None:
+        configuration = GuildConfiguration(
+            guild_id=100,
+            guild_name="Test Guild",
+            voting_defaults=VotingDefaultsConfig(
+                candidate_count=5, duration_hours=48, visibility=GuildVoteVisibility.BLIND
+            ),
+            notifications=NotificationsConfig(
+                vote=VoteNotificationsConfig(vote_ending_reminder=False, reminder_hours_before_close=6)
+            ),
+        )
+        self.repository.save(configuration)
+
+        result = build_customize_vote_modal_defaults(
+            default_nominee_count=6, guild_id=100, guild_configuration_repository=self.repository
+        )
+
+        self.assertEqual(result["default_duration_display"], "2 days")
+        self.assertEqual(result["default_visibility_display"], "Blind")
+        self.assertEqual(result["default_reminder_enabled_display"], "No")
+        self.assertEqual(result["default_reminder_hours_display"], "6 hours")
+
+    def test_handles_no_guild_id(self) -> None:
+        result = build_customize_vote_modal_defaults(
+            default_nominee_count=6, guild_id=None, guild_configuration_repository=self.repository
+        )
+        self.assertEqual(result["default_nominee_count_display"], "6")
+
+
 class CustomizeVoteModalTests(unittest.TestCase):
     async def _noop(
         self, interaction, nominee_count_text, duration_text, visibility_text,
@@ -567,6 +622,37 @@ class CustomizeVoteModalTests(unittest.TestCase):
         modal = CustomizeVoteModal(self._noop)
         self.assertIn(modal.reminder_enabled_input, modal.children)
         self.assertIn(modal.reminder_hours_input, modal.children)
+
+    def test_placeholders_show_plain_wording_when_no_default_is_supplied(self) -> None:
+        modal = CustomizeVoteModal(self._noop)
+        self.assertEqual(modal.nominee_count_input.placeholder, "Leave blank to use the configured default")
+        self.assertEqual(modal.visibility_input.placeholder, "Leave blank to use the configured default")
+        self.assertEqual(
+            modal.reminder_enabled_input.placeholder, "Leave blank to use the configured default"
+        )
+        self.assertNotIn("(", modal.duration_input.placeholder)
+        self.assertNotIn("(", modal.reminder_hours_input.placeholder)
+
+    def test_placeholders_name_the_actual_configured_value_when_supplied(self) -> None:
+        modal = CustomizeVoteModal(
+            self._noop,
+            default_nominee_count_display="5",
+            default_duration_display="12 hours",
+            default_visibility_display="Visible",
+            default_reminder_enabled_display="Yes",
+            default_reminder_hours_display="24 hours",
+        )
+        self.assertEqual(
+            modal.nominee_count_input.placeholder, "Leave blank to use the configured default (5)"
+        )
+        self.assertIn("(12 hours)", modal.duration_input.placeholder)
+        self.assertEqual(
+            modal.visibility_input.placeholder, "Leave blank to use the configured default (Visible)"
+        )
+        self.assertEqual(
+            modal.reminder_enabled_input.placeholder, "Leave blank to use the configured default (Yes)"
+        )
+        self.assertIn("(24 hours)", modal.reminder_hours_input.placeholder)
 
 
 class CustomizeVoteModalSubmitTests(unittest.IsolatedAsyncioTestCase):

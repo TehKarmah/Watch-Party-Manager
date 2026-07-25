@@ -18,8 +18,10 @@ from watch_party_manager.setup_wizard_view import (
     CandidateSelectionSelectComponent,
     CreateDatabaseNameModal,
     CreateThreadNameModal,
-    CreateThreadParentChannelSelectView,
+    ExistingChannelSelectView,
     ExistingDatabaseSelectView,
+    HomeChannelChoiceView,
+    HomeChannelNameModal,
     ModalStepIntroView,
     ReminderDefaultsModal,
     ReviewStepView,
@@ -291,26 +293,6 @@ class WatchDestinationStepViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, ["skip"])
 
 
-class CreateThreadParentChannelSelectViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_a_text_only_channel_select_and_a_cancel_button(self) -> None:
-        view = CreateThreadParentChannelSelectView(_noop, _noop)
-        self.assertEqual(len(view.children), 2)
-        self.assertEqual(view.children[0].custom_id, "wpm_setup_destination_thread_parent_select")
-        self.assertIsInstance(view.children[-1], SetupCancelButton)
-
-    async def test_selection_forwards_the_chosen_channel_id(self) -> None:
-        calls = []
-
-        async def on_select(interaction, channel_id) -> None:
-            calls.append(channel_id)
-
-        view = CreateThreadParentChannelSelectView(on_select, _noop)
-        select = view.children[0]
-        select._values = [type("FakeChannel", (), {"id": 777})()]
-        await select.callback(interaction=object())
-        self.assertEqual(calls, [777])
-
-
 class CreateThreadNameModalTests(unittest.IsolatedAsyncioTestCase):
     async def test_submission_forwards_the_entered_name(self) -> None:
         calls = []
@@ -322,6 +304,66 @@ class CreateThreadNameModalTests(unittest.IsolatedAsyncioTestCase):
         modal.name_input._value = "Watched Movies"
         await modal.on_submit(interaction=object())
         self.assertEqual(calls, ["Watched Movies"])
+
+    async def test_default_prefills_the_name_field(self) -> None:
+        modal = CreateThreadNameModal(_noop, default="Watched Movies")
+        self.assertEqual(modal.name_input.default, "Watched Movies")
+
+
+class HomeChannelChoiceViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_create_new_use_existing_back_save_and_cancel(self) -> None:
+        view = HomeChannelChoiceView(_noop, _noop, _noop, _noop, _noop)
+        self.assertEqual(
+            [child.label for child in view.children],
+            [
+                "Create New Channel (Recommended)",
+                "Use Existing Channel",
+                "Back",
+                "Save & Finish Later",
+                "Cancel Setup",
+            ],
+        )
+
+    async def test_create_new_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_create_new(interaction) -> None:
+            calls.append("create_new")
+
+        view = HomeChannelChoiceView(on_create_new, _noop, _noop, _noop, _noop)
+        await view.children[0].callback(interaction=object())
+        self.assertEqual(calls, ["create_new"])
+
+    async def test_use_existing_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_use_existing(interaction) -> None:
+            calls.append("use_existing")
+
+        view = HomeChannelChoiceView(_noop, on_use_existing, _noop, _noop, _noop)
+        await view.children[1].callback(interaction=object())
+        self.assertEqual(calls, ["use_existing"])
+
+
+class HomeChannelNameModalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_defaults_to_watch_party(self) -> None:
+        modal = HomeChannelNameModal(_noop)
+        self.assertEqual(modal.name_input.default, "Watch Party")
+
+    async def test_default_can_be_overridden(self) -> None:
+        modal = HomeChannelNameModal(_noop, default="Custom Name")
+        self.assertEqual(modal.name_input.default, "Custom Name")
+
+    async def test_submission_forwards_the_entered_name(self) -> None:
+        calls = []
+
+        async def on_submit(interaction, name) -> None:
+            calls.append(name)
+
+        modal = HomeChannelNameModal(on_submit)
+        modal.name_input._value = "Watch Party"
+        await modal.on_submit(interaction=object())
+        self.assertEqual(calls, ["Watch Party"])
 
 
 class SetupPreparationViewTests(unittest.IsolatedAsyncioTestCase):
@@ -660,6 +702,7 @@ class RequesterScopedInteractionCheckTests(unittest.IsolatedAsyncioTestCase):
             SetupPreparationView(_noop, _noop, requester_id=42),
             WatchPartyRoleStepView(_noop, _noop, _noop, _noop, requester_id=42),
             AdminChannelStepView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
+            HomeChannelChoiceView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
             SuggestionDatabaseChoiceView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
             WatchDestinationStepView(_noop, _noop, _noop, _noop, _noop, _noop, requester_id=42),
             ModalStepIntroView(_noop, _noop, _noop, _noop, button_label="Go", custom_id="wpm_x", requester_id=42),

@@ -77,6 +77,7 @@ from watch_party_manager.scheduler import (
     cancel_watch_party_reminder,
     reschedule_vote_jobs,
     reschedule_watch_party_reminder,
+    resolve_vote_reminder_settings,
     schedule_vote_jobs,
     schedule_watch_party_reminder,
 )
@@ -143,7 +144,6 @@ from watch_party_manager.services.duplicate_detection_service import (
     DuplicateMatchCategory,
     find_duplicates,
 )
-from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_service import (
     DEFAULT_REJECTION_THRESHOLD,
@@ -151,6 +151,10 @@ from watch_party_manager.services.suggestion_service import (
     SuggestionService,
 )
 from watch_party_manager.services.suggestion_repair_service import SuggestionRepairService
+from watch_party_manager.services.suggestion_display_status import (
+    display_status_label,
+    resolve_display_status,
+)
 from watch_party_manager.services.statistics_service import (
     DatabaseStatistics,
     MemberStatistics,
@@ -175,10 +179,15 @@ from watch_party_manager.services.vote_completion_service import (
 )
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
 from watch_party_manager.services.watch_party_service import WatchPartyService
+from watch_party_manager.edit_suggestion_view import (
+    ChangeStatusSelectView,
+    EditSuggestionActionView,
+)
 from watch_party_manager.edit_vote_view import (
+    CustomVoteEndTimeModal,
     EditVoteConfirmationView,
-    EditVoteEndTimeModal,
     EditVoteManagementView,
+    VoteEndTimeQuickPickView,
 )
 from watch_party_manager.config_view import (
     DATABASE_SETTING_SUGGESTION_DESTINATION,
@@ -213,13 +222,10 @@ from watch_party_manager.setup_wizard_view import (
     CollectionTypeChoiceView,
     CreateDatabaseNameModal,
     CreateThreadNameModal,
-    CreateThreadParentChannelSelectView,
-    DestinationCreationChoiceView,
-    DestinationNameChoiceView,
-    CUSTOM_DESTINATION_NAME_VALUE,
     ExistingChannelSelectView,
     ExistingDatabaseSelectView,
-    ExistingThreadSelectView,
+    HomeChannelChoiceView,
+    HomeChannelNameModal,
     ImportExistingDatabaseNoticeView,
     ModalStepIntroView,
     ReminderDefaultsModal,
@@ -305,7 +311,13 @@ class WatchPartyBot(commands.Bot):
         )
         self.scheduler_host.scheduler_service.register_handler(
             CLOSE_VOTE_JOB_TYPE,
-            CloseVoteJobHandler(self.vote_completion_service, self.vote_service, self.suggestion_service, self),
+            CloseVoteJobHandler(
+                self.vote_completion_service,
+                self.vote_service,
+                self.suggestion_service,
+                self,
+                on_finalized=lambda result: sync_vote_winner_status_embeds(self, result),
+            ),
         )
         self.scheduler_host.scheduler_service.register_handler(
             VOTE_REMINDER_JOB_TYPE, VoteReminderJobHandler(self.vote_service, self.suggestion_service, self)
@@ -423,7 +435,7 @@ class WatchPartyBot(commands.Bot):
         @discord.app_commands.choices(
             status=[
                 discord.app_commands.Choice(name="Available (eligible for future voting)", value="available"),
-                discord.app_commands.Choice(name="Watched", value="watched"),
+                discord.app_commands.Choice(name="Vote Winner", value="vote_winner"),
                 discord.app_commands.Choice(name="Retired (removed from consideration)", value="retired"),
             ]
         )
@@ -516,41 +528,12 @@ class WatchPartyBot(commands.Bot):
         async def remove_suggestion(interaction: discord.Interaction, query: str) -> None:
             await handle_remove_suggestion(interaction, self, query)
 
-        async def edit_suggestion_database_autocomplete(
-            interaction: discord.Interaction, current: str
-        ) -> List[discord.app_commands.Choice[int]]:
-            # Database IDs are an internal reference administrators should
-            # almost never type; this is the "practical alternative" that
-            # lets /edit_suggestion's database_id stay a picker instead.
-            if interaction.guild_id is None:
-                return []
-            matches = build_database_autocomplete_choices(
-                self.suggestion_service,
-                self.suggestion_database_configuration_repository,
-                interaction.guild_id,
-                interaction.guild,
-                current,
-            )
-            return [discord.app_commands.Choice(name=name, value=database_id) for name, database_id in matches]
-
         @self.tree.command(name="edit_suggestion")
         @discord.app_commands.describe(
             reference="The suggestion's reference number (e.g. #0007) or its current exact title.",
-            title="New title (leave blank to keep the current title).",
-            release_year="New release year (leave blank to keep the current value).",
-            imdb_url="New IMDb link (leave blank to keep the current value).",
-            database_id="Move to a different collection (leave blank to keep the current one).",
         )
-        @discord.app_commands.autocomplete(database_id=edit_suggestion_database_autocomplete)
-        async def edit_suggestion_command(
-            interaction: discord.Interaction,
-            reference: str,
-            title: Optional[str] = None,
-            release_year: Optional[int] = None,
-            imdb_url: Optional[str] = None,
-            database_id: Optional[int] = None,
-        ) -> None:
-            await handle_edit_suggestion(interaction, self, reference, title, release_year, imdb_url, database_id)
+        async def edit_suggestion_command(interaction: discord.Interaction, reference: str) -> None:
+            await handle_edit_suggestion(interaction, self, reference)
 
         @self.tree.command(name="start_vote")
         async def start_vote(interaction: discord.Interaction) -> None:
@@ -597,7 +580,14 @@ class WatchPartyBot(commands.Bot):
                         ),
                     )
 
-                await choice_interaction.response.send_modal(CustomizeVoteModal(on_modal_submit))
+                modal_defaults = build_customize_vote_modal_defaults(
+                    default_nominee_count=self.default_nominee_count,
+                    guild_id=choice_interaction.guild_id,
+                    guild_configuration_repository=self.guild_configuration_repository,
+                )
+                await choice_interaction.response.send_modal(
+                    CustomizeVoteModal(on_modal_submit, **modal_defaults)
+                )
 
             view = StartVoteChoiceView(on_use_defaults, on_customize)
             await interaction.response.send_message(
@@ -1071,6 +1061,47 @@ def parse_vote_duration_hours(duration_hours: Optional[int], default: int = DEFA
         )
 
     return duration_hours
+
+
+def build_customize_vote_modal_defaults(
+    *,
+    default_nominee_count: int,
+    guild_id: Optional[int],
+    guild_configuration_repository: Optional[GuildConfigurationRepository],
+) -> dict[str, str]:
+    """Resolve the actual configured defaults CustomizeVoteModal's "leave
+    blank" placeholders should name, mirroring perform_start_vote's own
+    resolution (default_visibility/default_duration_hours) and
+    resolve_vote_reminder_settings exactly, so what's displayed here can
+    never drift from what starting a vote would actually apply.
+
+    Returns a dict of the 5 default_*_display kwargs CustomizeVoteModal
+    accepts, ready to unpack straight into its constructor.
+    """
+    default_visibility = GuildVoteVisibility.VISIBLE
+    default_duration_hours = DEFAULT_VOTE_DURATION_HOURS
+    if guild_configuration_repository is not None and guild_id is not None:
+        configuration = guild_configuration_repository.get(guild_id)
+        if configuration is not None:
+            default_visibility = configuration.voting_defaults.visibility
+            default_duration_hours = configuration.voting_defaults.duration_hours
+
+    # guild_id is only ever used as a lookup key inside
+    # resolve_vote_reminder_settings; passing 0 when it's unknown is safe
+    # (guild_configuration_repository.get(0) simply finds nothing, same
+    # as guild_configuration_repository being None) and keeps this
+    # resolution identical to what starting the vote will actually use.
+    reminder_enabled, reminder_hours = resolve_vote_reminder_settings(
+        guild_configuration_repository, guild_id or 0
+    )
+
+    return {
+        "default_nominee_count_display": str(default_nominee_count),
+        "default_duration_display": format_duration_hours(default_duration_hours),
+        "default_visibility_display": default_visibility.value.title(),
+        "default_reminder_enabled_display": "Yes" if reminder_enabled else "No",
+        "default_reminder_hours_display": format_duration_hours(reminder_hours),
+    }
 
 
 _DURATION_TEXT_PATTERN = re.compile(
@@ -1607,6 +1638,7 @@ SETUP_WIZARD_STEP_TITLES: dict[SetupWizardStep, str] = {
     SetupWizardStep.WASH_CREW_ROLE: "WASH Crew Role",
     SetupWizardStep.WATCH_PARTY_ROLE: "Watch Party Role",
     SetupWizardStep.ADMIN_CHANNEL: "Admin Channel",
+    SetupWizardStep.HOME_CHANNEL: "Home Channel",
     SetupWizardStep.SUGGESTION_DATABASE: "Collection",
     SetupWizardStep.WATCH_DESTINATION: "Watched Movie Destination",
     SetupWizardStep.VOTING_DEFAULTS: "Voting Defaults",
@@ -1742,6 +1774,8 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
         )
     else:
         lines.append("Watch Party Role: Not set")
+    if draft.home_channel_id is not None:
+        lines.append(f"Home Channel: <#{draft.home_channel_id}>")
     lines.append(f'Collection: "{draft.suggestion_database_name}" (#{draft.suggestion_database_id})')
     if draft.watch_destination_skipped:
         lines.append("Watched Movie Destination: Skipped (configure later)")
@@ -1913,6 +1947,54 @@ async def send_setup_wizard_step(
             "posted for WASH Crew, or skip for now."
         )
 
+    elif step == SetupWizardStep.HOME_CHANNEL:
+
+        async def on_use_existing(existing_interaction: discord.Interaction) -> None:
+            async def on_channel_selected(select_interaction: discord.Interaction, channel_id: int) -> None:
+                updated = setup_wizard_service.set_home_channel(state, channel_id)
+                await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
+
+            await existing_interaction.response.edit_message(
+                content=body + "\n\nWhich channel should WASH use as its home?",
+                view=ExistingChannelSelectView(on_channel_selected, on_cancel, requester_id=requester_id),
+            )
+
+        async def on_create_new(create_interaction: discord.Interaction) -> None:
+            async def on_name_submit(modal_interaction: discord.Interaction, channel_name: str) -> None:
+                if modal_interaction.guild is None:
+                    await modal_interaction.response.edit_message(
+                        content=body + "\n\n⚠ That server is no longer available. Choose another option.",
+                        view=HomeChannelChoiceView(
+                            on_create_new, on_use_existing, on_back, on_save_for_later, on_cancel,
+                            requester_id=requester_id,
+                        ),
+                    )
+                    return
+                try:
+                    channel = await modal_interaction.guild.create_text_channel(name=channel_name)
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    await modal_interaction.response.edit_message(
+                        content=body + f"\n\n⚠ Could not create the channel: {exc}",
+                        view=HomeChannelChoiceView(
+                            on_create_new, on_use_existing, on_back, on_save_for_later, on_cancel,
+                            requester_id=requester_id,
+                        ),
+                    )
+                    return
+                updated = setup_wizard_service.set_home_channel(state, channel.id)
+                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
+
+            await create_interaction.response.send_modal(HomeChannelNameModal(on_name_submit))
+
+        view = HomeChannelChoiceView(
+            on_create_new, on_use_existing, on_back, on_save_for_later, on_cancel, requester_id=requester_id
+        )
+        body += (
+            "\n\nWhere should WASH create its home? Every collection's suggestion thread (and, by "
+            "default, the watched-movie destination thread) is created as a sibling thread under this "
+            "one channel."
+        )
+
     elif step == SetupWizardStep.SUGGESTION_DATABASE:
 
         async def on_select_existing(choice_interaction: discord.Interaction) -> None:
@@ -1957,101 +2039,63 @@ async def send_setup_wizard_step(
                 ),
             )
 
-        async def continue_with_channel_select(interaction_for_edit: discord.Interaction, name: str) -> None:
-            async def on_channel_chosen(channel_interaction: discord.Interaction, channel_id: int) -> None:
-                updated, message = setup_wizard_service.create_new_database(
-                    state, name, channel_id, guild_id=guild_id
-                )
-                if updated.current_step == SetupWizardStep.SUGGESTION_DATABASE:
-                    # create_new_database() didn't advance -- creation
-                    # failed (duplicate name, or Conflict Prevention:
-                    # this channel/thread already routes to another
-                    # database). Show why, rather than silently
-                    # re-rendering the step with no explanation.
-                    await send_setup_wizard_step(
-                        channel_interaction, bot, updated, edit=True, error_message=message, requester_id=requester_id
-                    )
-                    return
-                await send_setup_wizard_step(
-                    channel_interaction, bot, updated, edit=True, requester_id=requester_id
-                )
-
-            async def show_destination_creation_choice(choice_interaction: discord.Interaction) -> None:
-                await choice_interaction.response.edit_message(
-                    content=body + f'\n\nHow should "{name}" get its suggestion destination?',
-                    view=DestinationCreationChoiceView(
-                        on_create_channel, on_use_existing_channel, on_use_existing_thread, on_cancel,
+        async def create_collection_thread(interaction_for_edit: discord.Interaction, name: str) -> None:
+            """Create the collection's suggestion thread as a sibling
+            under WASH's home channel, then create the collection itself
+            on it (Requirement 5: "Collections should default to
+            threads"). No further destination choice is offered -- the
+            home channel already answers "where do things go."
+            """
+            home_channel = (
+                interaction_for_edit.guild.get_channel(state.draft.home_channel_id)
+                if interaction_for_edit.guild is not None and state.draft.home_channel_id is not None
+                else None
+            )
+            if home_channel is None:
+                await interaction_for_edit.response.edit_message(
+                    content=body + "\n\n⚠ WASH's home channel is no longer available. Go back and choose another one.",
+                    view=CollectionTypeChoiceView(
+                        on_movies, on_tv_shows, on_special_collection, on_custom, on_import_existing, on_cancel,
                         requester_id=requester_id,
                     ),
                 )
-
-            async def on_use_existing_channel(existing_interaction: discord.Interaction) -> None:
-                await existing_interaction.response.edit_message(
-                    content=body + f'\n\nWhich channel should "{name}" use?',
-                    view=ExistingChannelSelectView(on_channel_chosen, on_cancel, requester_id=requester_id),
+                return
+            try:
+                thread = await home_channel.create_thread(name=name, type=discord.ChannelType.public_thread)
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                await interaction_for_edit.response.edit_message(
+                    content=body + f"\n\n⚠ Could not create the thread: {exc}",
+                    view=CollectionTypeChoiceView(
+                        on_movies, on_tv_shows, on_special_collection, on_custom, on_import_existing, on_cancel,
+                        requester_id=requester_id,
+                    ),
                 )
+                return
 
-            async def on_use_existing_thread(existing_interaction: discord.Interaction) -> None:
-                await existing_interaction.response.edit_message(
-                    content=body + f'\n\nWhich thread should "{name}" use?',
-                    view=ExistingThreadSelectView(on_channel_chosen, on_cancel, requester_id=requester_id),
+            updated, message = setup_wizard_service.create_new_database(
+                state, name, thread.id, guild_id=guild_id
+            )
+            if updated.current_step == SetupWizardStep.SUGGESTION_DATABASE:
+                # create_new_database() didn't advance -- creation failed
+                # (duplicate name, or Conflict Prevention: this thread
+                # somehow already routes to another database). Show why,
+                # rather than silently re-rendering the step with no
+                # explanation.
+                await send_setup_wizard_step(
+                    interaction_for_edit, bot, updated, edit=True, error_message=message, requester_id=requester_id
                 )
-
-            async def on_create_channel(create_interaction: discord.Interaction) -> None:
-                async def create_channel_with_name(named_interaction: discord.Interaction, channel_name: str) -> None:
-                    if named_interaction.guild is None:
-                        await named_interaction.response.edit_message(
-                            content=body + "\n\n⚠ That server is no longer available. Choose another option.",
-                            view=DestinationCreationChoiceView(
-                                on_create_channel, on_use_existing_channel, on_use_existing_thread, on_cancel,
-                                requester_id=requester_id,
-                            ),
-                        )
-                        return
-                    try:
-                        channel = await named_interaction.guild.create_text_channel(name=channel_name)
-                    except (discord.Forbidden, discord.HTTPException) as exc:
-                        await named_interaction.response.edit_message(
-                            content=body + f"\n\n⚠ Could not create the channel: {exc}",
-                            view=DestinationCreationChoiceView(
-                                on_create_channel, on_use_existing_channel, on_use_existing_thread, on_cancel,
-                                requester_id=requester_id,
-                            ),
-                        )
-                        return
-                    await on_channel_chosen(named_interaction, channel.id)
-
-                async def on_name_chosen(name_interaction: discord.Interaction, chosen_name: str) -> None:
-                    if chosen_name == CUSTOM_DESTINATION_NAME_VALUE:
-                        async def on_custom_name_submit(modal_interaction: discord.Interaction, custom_name: str) -> None:
-                            await create_channel_with_name(modal_interaction, custom_name)
-
-                        await name_interaction.response.send_modal(
-                            CreateDatabaseNameModal(
-                                on_custom_name_submit,
-                                title="Name the New Channel",
-                                label="Channel name",
-                            )
-                        )
-                        return
-                    await create_channel_with_name(name_interaction, chosen_name)
-
-                await create_interaction.response.edit_message(
-                    content=body + f'\n\nWhat should the new channel for "{name}" be called?',
-                    view=DestinationNameChoiceView(on_name_chosen, on_cancel, requester_id=requester_id),
-                )
-
-            await show_destination_creation_choice(interaction_for_edit)
+                return
+            await send_setup_wizard_step(interaction_for_edit, bot, updated, edit=True, requester_id=requester_id)
 
         async def on_movies(movies_interaction: discord.Interaction) -> None:
-            await continue_with_channel_select(movies_interaction, "Movies")
+            await create_collection_thread(movies_interaction, "Movies")
 
         async def on_tv_shows(tv_shows_interaction: discord.Interaction) -> None:
-            await continue_with_channel_select(tv_shows_interaction, "TV Shows")
+            await create_collection_thread(tv_shows_interaction, "TV Shows")
 
         async def on_special_collection(special_interaction: discord.Interaction) -> None:
             async def on_name_submit(modal_interaction: discord.Interaction, name: str) -> None:
-                await continue_with_channel_select(modal_interaction, name)
+                await create_collection_thread(modal_interaction, name)
 
             await special_interaction.response.send_modal(
                 CreateDatabaseNameModal(
@@ -2064,7 +2108,7 @@ async def send_setup_wizard_step(
 
         async def on_custom(custom_interaction: discord.Interaction) -> None:
             async def on_name_submit(modal_interaction: discord.Interaction, name: str) -> None:
-                await continue_with_channel_select(modal_interaction, name)
+                await create_collection_thread(modal_interaction, name)
 
             await custom_interaction.response.send_modal(
                 CreateDatabaseNameModal(on_name_submit, title="Name Your Collection", label="Collection name")
@@ -2099,43 +2143,43 @@ async def send_setup_wizard_step(
             await send_setup_wizard_step(skip_interaction, bot, updated, edit=True, requester_id=requester_id)
 
         async def on_create_thread(create_interaction: discord.Interaction) -> None:
-            async def on_parent_selected(parent_interaction: discord.Interaction, parent_channel_id: int) -> None:
-                async def on_name_submit(modal_interaction: discord.Interaction, thread_name: str) -> None:
-                    parent_channel = (
-                        modal_interaction.guild.get_channel(parent_channel_id)
-                        if modal_interaction.guild is not None
-                        else None
+            async def on_name_submit(modal_interaction: discord.Interaction, thread_name: str) -> None:
+                # Created as a sibling thread under WASH's home channel --
+                # never nested under a collection's own suggestion thread
+                # (Requirement 5), matching every collection's own
+                # suggestion thread parentage.
+                home_channel = (
+                    modal_interaction.guild.get_channel(state.draft.home_channel_id)
+                    if modal_interaction.guild is not None and state.draft.home_channel_id is not None
+                    else None
+                )
+                if home_channel is None:
+                    await modal_interaction.response.edit_message(
+                        content=body + "\n\n⚠ WASH's home channel is no longer available. Choose another destination.",
+                        view=WatchDestinationStepView(
+                            on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
+                            requester_id=requester_id,
+                        ),
                     )
-                    if parent_channel is None:
-                        await modal_interaction.response.edit_message(
-                            content=body + "\n\n⚠ That channel no longer exists. Choose another destination.",
-                            view=WatchDestinationStepView(
-                                on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
-                                requester_id=requester_id,
-                            ),
-                        )
-                        return
-                    try:
-                        thread = await parent_channel.create_thread(
-                            name=thread_name, type=discord.ChannelType.public_thread
-                        )
-                    except (discord.Forbidden, discord.HTTPException) as exc:
-                        await modal_interaction.response.edit_message(
-                            content=body + f"\n\n⚠ Could not create the thread: {exc}",
-                            view=WatchDestinationStepView(
-                                on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
-                                requester_id=requester_id,
-                            ),
-                        )
-                        return
-                    updated = setup_wizard_service.set_watch_destination(state, thread.id)
-                    await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
+                    return
+                try:
+                    thread = await home_channel.create_thread(
+                        name=thread_name, type=discord.ChannelType.public_thread
+                    )
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    await modal_interaction.response.edit_message(
+                        content=body + f"\n\n⚠ Could not create the thread: {exc}",
+                        view=WatchDestinationStepView(
+                            on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
+                            requester_id=requester_id,
+                        ),
+                    )
+                    return
+                updated = setup_wizard_service.set_watch_destination(state, thread.id)
+                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
 
-                await parent_interaction.response.send_modal(CreateThreadNameModal(on_name_submit))
-
-            await create_interaction.response.edit_message(
-                content=body + "\n\nChoose the parent channel the new thread should be created under.",
-                view=CreateThreadParentChannelSelectView(on_parent_selected, on_cancel, requester_id=requester_id),
+            await create_interaction.response.send_modal(
+                CreateThreadNameModal(on_name_submit, default="Watched Movies")
             )
 
         view = WatchDestinationStepView(
@@ -2144,7 +2188,8 @@ async def send_setup_wizard_step(
         body += (
             "\n\nChoose where WASH should post watched-movie history and discussion -- a running "
             "record of what your community has watched, with a link back to each vote. Pick an "
-            "existing text channel or thread, create a new thread, or skip for now."
+            "existing text channel or thread, create a new thread (a sibling under WASH's home "
+            "channel), or skip for now."
         )
 
     elif step == SetupWizardStep.VOTING_DEFAULTS:
@@ -4236,8 +4281,8 @@ def build_current_voting_post_embed(
     """Recompute and build a round's voting post embed from its current state.
 
     Shared by refresh_voting_post (called after each vote) and
-    handle_change_vote_end_time_completion (called after WASH Crew edits
-    the deadline via /edit_vote), so recomputing standings/candidates for
+    handle_reschedule_vote_completion (called after WASH Crew edits the
+    deadline via /edit_vote), so recomputing standings/candidates for
     the post is never duplicated between the two.
 
     Args:
@@ -4474,48 +4519,73 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
         round_id = vote_round.id
 
         async def on_change_end_time(button_interaction: discord.Interaction) -> None:
-            async def on_modal_submit(modal_interaction: discord.Interaction, when_text: str) -> None:
-                await handle_change_vote_end_time_completion(
-                    modal_interaction,
+            async def on_end_now_quick_pick(pick_interaction: discord.Interaction) -> None:
+                async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+                    await handle_end_vote_now_completion(
+                        confirm_interaction,
+                        vote_completion_service=bot.vote_completion_service,
+                        vote_service=bot.vote_service,
+                        suggestion_service=bot.suggestion_service,
+                        wash_crew_role_id=bot.wash_crew_role_id,
+                        round_id=round_id,
+                        bot=bot,
+                        scheduler_service=bot.scheduler_host.scheduler_service,
+                    )
+
+                async def on_abort(abort_interaction: discord.Interaction) -> None:
+                    await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
+
+                confirmation_view = EditVoteConfirmationView(
+                    confirm_label="End Now", on_confirm=on_confirm, on_abort=on_abort
+                )
+                await pick_interaction.response.send_message(
+                    f"Are you sure you want to end voting round {round_id} now? This cannot be undone.",
+                    view=confirmation_view,
+                    ephemeral=True,
+                )
+
+            async def on_quick_pick(pick_interaction: discord.Interaction, minutes: int) -> None:
+                new_closes_at = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+                await handle_reschedule_vote_completion(
+                    pick_interaction,
                     vote_service=bot.vote_service,
                     suggestion_service=bot.suggestion_service,
                     wash_crew_role_id=bot.wash_crew_role_id,
                     round_id=round_id,
-                    when=when_text,
+                    new_closes_at=new_closes_at,
                     bot=bot,
                     scheduler_service=bot.scheduler_host.scheduler_service,
                     guild_configuration_repository=bot.guild_configuration_repository,
                 )
 
-            await button_interaction.response.send_modal(
-                EditVoteEndTimeModal(
-                    on_modal_submit,
-                    current_value=format_datetime_for_display(vote_round.closes_at),
-                )
-            )
+            async def on_choose_custom(custom_interaction: discord.Interaction) -> None:
+                async def on_custom_submit(modal_interaction: discord.Interaction, timestamp_text: str) -> None:
+                    try:
+                        new_closes_at = parse_discord_timestamp_vote_end_time(timestamp_text)
+                    except ValueError as exc:
+                        await modal_interaction.response.send_message(str(exc), ephemeral=True)
+                        return
+                    await handle_reschedule_vote_completion(
+                        modal_interaction,
+                        vote_service=bot.vote_service,
+                        suggestion_service=bot.suggestion_service,
+                        wash_crew_role_id=bot.wash_crew_role_id,
+                        round_id=round_id,
+                        new_closes_at=new_closes_at,
+                        bot=bot,
+                        scheduler_service=bot.scheduler_host.scheduler_service,
+                        guild_configuration_repository=bot.guild_configuration_repository,
+                    )
 
-        async def on_end_now(button_interaction: discord.Interaction) -> None:
-            async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-                await handle_end_vote_now_completion(
-                    confirm_interaction,
-                    vote_completion_service=bot.vote_completion_service,
-                    vote_service=bot.vote_service,
-                    suggestion_service=bot.suggestion_service,
-                    wash_crew_role_id=bot.wash_crew_role_id,
-                    round_id=round_id,
-                    bot=bot,
-                    scheduler_service=bot.scheduler_host.scheduler_service,
-                )
+                await custom_interaction.response.send_modal(CustomVoteEndTimeModal(on_custom_submit))
 
-            async def on_abort(abort_interaction: discord.Interaction) -> None:
-                await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
-
-            confirmation_view = EditVoteConfirmationView(
-                confirm_label="End Now", on_confirm=on_confirm, on_abort=on_abort
-            )
             await button_interaction.response.send_message(
-                f"Are you sure you want to end voting round {round_id} now? This cannot be undone.",
-                view=confirmation_view,
+                f"Voting round {round_id} currently ends: {format_datetime_for_display(vote_round.closes_at)}\n\n"
+                "Choose a new end time below.\n\n"
+                "**Custom Time:** Create a Discord timestamp by typing `@time` in any normal Discord message "
+                "box, selecting the desired date/time, then copying and pasting the generated timestamp "
+                "into WASH.",
+                view=VoteEndTimeQuickPickView(on_end_now_quick_pick, on_quick_pick, on_choose_custom),
                 ephemeral=True,
             )
 
@@ -4542,30 +4612,29 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
                 ephemeral=True,
             )
 
-        view = EditVoteManagementView(on_change_end_time, on_end_now, on_cancel_vote)
+        view = EditVoteManagementView(on_change_end_time, on_cancel_vote)
         await resolved_interaction.response.send_message(message, view=view, ephemeral=ephemeral)
 
     await resolve_database_then(interaction, bot, guild_id, interaction.channel_id, on_resolved)
 
 
-def perform_change_vote_end_time(
+def perform_reschedule_vote_round(
     vote_service: VoteService,
     user: object,
     wash_crew_role_id: Optional[int],
     round_id: int,
-    when: str,
-    *,
-    now: Optional[datetime] = None,
+    new_closes_at: datetime,
 ) -> tuple[str, bool, Optional[VoteRound]]:
-    """Core logic for /edit_vote's "Change End Time" action.
+    """Core logic shared by every "Change End Time" entry point (quick-pick
+    buttons and the Custom Date & Time modal alike) once a new UTC deadline
+    has already been determined.
 
     Args:
         vote_service: Used to reschedule the round.
         user: The member invoking the action.
         wash_crew_role_id: The configured WASH Crew role ID, or None if unconfigured.
         round_id: The round to reschedule.
-        when: The raw new end-time text from the modal.
-        now: Passed through to parse_vote_end_time for deterministic testing.
+        new_closes_at: The already-parsed, timezone-aware UTC deadline.
 
     Returns:
         A (message, ephemeral, vote_round) tuple. vote_round (the
@@ -4586,11 +4655,6 @@ def perform_change_vote_end_time(
     if not is_wash_crew_member(user, wash_crew_role_id):
         return "You need the WASH Crew role to manage voting rounds.", True, None
 
-    try:
-        new_closes_at = parse_vote_end_time(when, now=now)
-    except ValueError as exc:
-        return str(exc), True, None
-
     result = vote_service.reschedule_round(round_id, new_closes_at)
     if not result.success:
         return result.message, True, None
@@ -4603,25 +4667,32 @@ def perform_change_vote_end_time(
     )
 
 
-async def handle_change_vote_end_time_completion(
+async def handle_reschedule_vote_completion(
     interaction: discord.Interaction,
     vote_service: VoteService,
     suggestion_service: SuggestionService,
     wash_crew_role_id: Optional[int],
     round_id: int,
-    when: str,
+    new_closes_at: datetime,
     bot: object,
     scheduler_service: Optional[SchedulerService] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
 ) -> None:
-    """Change a round's deadline, replace its scheduler jobs, and notify the community.
+    """Change a round's deadline from an already-parsed UTC datetime, replace
+    its scheduler jobs, and notify the community.
+
+    Used by the Vote End Time guided flow's quick-pick buttons ("In 5
+    Minutes", etc.) and its Custom Date & Time modal alike, once each has
+    already determined new_closes_at -- both share this one completion
+    path so scheduler/notice/persistence behavior never diverges between
+    them, only how the new deadline is collected.
 
     scheduler_service/guild_configuration_repository default to None so
     callers/tests that don't pass them keep working unchanged; passing
     None simply skips scheduling (see reschedule_vote_jobs).
     """
-    message, ephemeral, vote_round = perform_change_vote_end_time(
-        vote_service, interaction.user, wash_crew_role_id, round_id, when
+    message, ephemeral, vote_round = perform_reschedule_vote_round(
+        vote_service, interaction.user, wash_crew_role_id, round_id, new_closes_at
     )
     await interaction.response.send_message(message, ephemeral=ephemeral)
     if vote_round is None:
@@ -4735,6 +4806,7 @@ async def handle_end_vote_now_completion(
     await cancel_vote_jobs(scheduler_service, round_id)
 
     await finalize_vote_completion(vote_service, suggestion_service, bot, result)
+    await sync_vote_winner_status_embeds(bot, result)
 
 
 def perform_cancel_vote_now(
@@ -4890,7 +4962,7 @@ class AddSuggestionDecision:
 def build_duplicate_match_line(match: DuplicateMatch) -> str:
     item = match.watch_item
     imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
-    parts = [item.reference, item.title]
+    parts = [f"Reference {item.reference}", item.title]
     if imdb_url:
         parts.append(imdb_url)
     parts.append(f"status: {item.status.value.replace('_', ' ').title()}")
@@ -4899,7 +4971,7 @@ def build_duplicate_match_line(match: DuplicateMatch) -> str:
 
 _ARCHIVE_CATEGORY_LABELS = {
     DuplicateMatchCategory.ARCHIVED_REJECTED: 'archived after being rejected ("I WILL NOT WATCH")',
-    DuplicateMatchCategory.WATCHED: "already been watched",
+    DuplicateMatchCategory.VOTE_WINNER: "already won a vote",
     DuplicateMatchCategory.ARCHIVED_OTHER: "already been archived",
 }
 
@@ -4922,7 +4994,7 @@ def decide_add_suggestion_outcome(duplicate_result: DuplicateCheckResult, *, is_
             match = active_matches[0]
             return AddSuggestionDecision(
                 AddSuggestionOutcomeKind.BLOCKED_ACTIVE,
-                "That title is already on the list:\n" + build_duplicate_match_line(match),
+                "🔴 That title is already in this collection.\n" + build_duplicate_match_line(match),
                 matched_item=match.watch_item,
             )
 
@@ -4980,6 +5052,7 @@ async def post_suggestion_confirmation(
         watch_item,
         database_name=database.name,
         suggested_by=getattr(interaction.user, "mention", str(interaction.user)),
+        rotation_service=bot.rotation_service,
     )
     view = build_suggestion_view(
         bot.suggestion_service,
@@ -5014,6 +5087,77 @@ async def post_suggestion_confirmation(
             "The suggestion was saved, but WASH could not post the public confirmation. "
             "Check the configured suggestion channel's permissions.",
         )
+
+
+async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchItem) -> None:
+    """Edit a suggestion's existing public post in place after its status
+    changes (Requirement 7), so its Status field never goes stale.
+
+    Deliberately never creates a new post -- "edit the original
+    suggestion embed... Do not recreate the message." A suggestion with
+    no existing post (message_id/channel_id unset, e.g. one never
+    publicly confirmed) or an unreachable one (deleted, permissions
+    revoked) is silently skipped: there's nothing to keep synchronized,
+    and the status itself is already correctly persisted regardless of
+    whether the embed could be refreshed. Called after every status
+    change this milestone introduces admin control over: archive,
+    reactivate, and /edit_suggestion's Change Status action. Vote wins
+    are synchronized separately, once per winning suggestion, by
+    sync_vote_winner_status_embeds() -- called after both completion
+    paths (a scheduled close_vote job and /edit_vote's "End Now").
+    """
+    if watch_item.channel_id is None or watch_item.message_id is None:
+        return
+
+    database = (
+        bot.suggestion_service.get_database(watch_item.database_id) if watch_item.database_id is not None else None
+    )
+    if database is None:
+        return
+
+    suggested_by = (
+        f"<@{watch_item.journey.original_suggester}>"
+        if watch_item.journey.original_suggester
+        else "Unknown"
+    )
+    embed = build_suggestion_confirmation_embed(
+        watch_item,
+        database_name=database.name,
+        suggested_by=suggested_by,
+        rotation_service=bot.rotation_service,
+    )
+    view = build_suggestion_view(
+        bot.suggestion_service,
+        bot.suggestion_database_configuration_repository,
+        watch_item,
+        database.guild_id,
+        permission_service=bot.permission_service,
+    )
+
+    try:
+        channel = bot.get_channel(watch_item.channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(watch_item.channel_id)
+        message = await channel.fetch_message(watch_item.message_id)
+        await message.edit(embed=embed, view=view)
+    except Exception:
+        logger.warning(
+            "Could not sync suggestion %s's status embed; leaving the existing post as-is",
+            watch_item.id,
+            exc_info=True,
+        )
+
+
+async def sync_vote_winner_status_embeds(bot: "WatchPartyBot", result: VoteCompletionResult) -> None:
+    """Sync every winning suggestion's own confirmation-post Status field
+    to Vote Winner once a round completes (Requirement 7), regardless of
+    whether completion happened via a scheduled close_vote job or /edit_vote's
+    "End Now" -- both call this after finalize_vote_completion().
+    """
+    for suggestion_id in result.winning_suggestion_ids:
+        watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
+        if watch_item is not None:
+            await sync_suggestion_status_embed(bot, watch_item)
 
 
 def admit_suggestion_to_rotation(bot: "WatchPartyBot", database: SuggestionDatabase, watch_item: WatchItem) -> None:
@@ -5957,8 +6101,15 @@ def build_suggestion_confirmation_embed(
     *,
     database_name: str,
     suggested_by: str,
+    rotation_service: Optional[RotationService] = None,
 ):
-    """Build the public /add confirmation as a compact record-style embed."""
+    """Build the public /add confirmation as a compact record-style embed.
+
+    rotation_service is optional (defaults to None, meaning Rotation
+    Cooldown is never shown) so existing callers/tests that construct
+    this without one keep working unchanged -- see
+    suggestion_display_status.resolve_display_status.
+    """
     imdb_url = watch_item.metadata_ids.get(MetadataProvider.IMDB)
     description_parts: list[str] = []
     if watch_item.description:
@@ -5988,6 +6139,8 @@ def build_suggestion_confirmation_embed(
     embed.add_field(name="Suggested By", value=suggested_by, inline=True)
     embed.add_field(name="Database", value=database_name, inline=True)
     embed.add_field(name="Reference", value=watch_item.reference, inline=True)
+    display_status = resolve_display_status(watch_item, rotation_service)
+    embed.add_field(name="Status", value=display_status_label(display_status), inline=True)
     if watch_item.poster_url:
         embed.set_thumbnail(url=watch_item.poster_url)
     return embed
@@ -6084,21 +6237,23 @@ class SuggestionListStatusFilter(str, Enum):
     """Which suggestions /list should include.
 
     AVAILABLE (the default) is the pool currently eligible for future
-    voting; WATCHED and RETIRED are separate, explicitly-selected views
-    -- never combined with each other or with AVAILABLE.
+    voting -- it also includes suggestions on Rotation Cooldown, since
+    that's a derived display state, not a separate filter bucket.
+    VOTE_WINNER and RETIRED are separate, explicitly-selected views --
+    never combined with each other or with AVAILABLE.
     """
 
     AVAILABLE = "available"
-    WATCHED = "watched"
+    VOTE_WINNER = "vote_winner"
     RETIRED = "retired"
 
 
 def filter_items_by_status(items: List[WatchItem], status_filter: SuggestionListStatusFilter) -> List[WatchItem]:
     if status_filter is SuggestionListStatusFilter.RETIRED:
         return [item for item in items if item.status is WatchItemStatus.ARCHIVED]
-    if status_filter is SuggestionListStatusFilter.WATCHED:
-        return [item for item in items if item.status is WatchItemStatus.WATCHED]
-    return [item for item in items if item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.WATCHED)]
+    if status_filter is SuggestionListStatusFilter.VOTE_WINNER:
+        return [item for item in items if item.status is WatchItemStatus.VOTE_WINNER]
+    return [item for item in items if item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.VOTE_WINNER)]
 
 
 def build_suggestion_entry_line(item: WatchItem) -> str:
@@ -6134,7 +6289,7 @@ async def send_suggestion_list(
 
     if not filtered:
         await interaction.response.send_message(
-            f'"{database.name}" has no {status_filter.value} watch items.',
+            f'"{database.name}" has no {status_filter.value.replace("_", " ")} watch items.',
             ephemeral=not public,
             suppress_embeds=True,
         )
@@ -6184,7 +6339,7 @@ async def handle_list_suggestions(
     try:
         status_filter = SuggestionListStatusFilter(status)
     except ValueError:
-        await interaction.response.send_message("Choose Available, Watched, or Retired.", ephemeral=True)
+        await interaction.response.send_message("Choose Available, Vote Winner, or Retired.", ephemeral=True)
         return
 
     async def on_resolved(target_interaction: discord.Interaction, database: SuggestionDatabase) -> None:
@@ -6452,26 +6607,6 @@ def _resolve_collection_name(
     return database.name
 
 
-def build_database_autocomplete_choices(
-    suggestion_service: SuggestionService,
-    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository],
-    guild_id: int,
-    guild: Optional[discord.Guild],
-    current: str,
-) -> List[Tuple[str, int]]:
-    """(display name, database_id) pairs for /edit_suggestion's database_id
-    autocomplete, filtered case-insensitively by what's typed so far --
-    kept Discord-Choice-free so it stays independently testable, mirroring
-    every other perform_*/build_* helper in this module.
-    """
-    matches = []
-    for database in suggestion_service.list_databases(guild_id):
-        name = _resolve_collection_name(suggestion_service, database, guild, suggestion_database_configuration_repository)
-        if current.lower() in name.lower():
-            matches.append((name, database.database_id))
-    return matches[:25]
-
-
 def build_database_list_text(
     suggestion_service: SuggestionService,
     databases: List[SuggestionDatabase],
@@ -6628,6 +6763,8 @@ async def send_removal_confirmation(interaction: discord.Interaction, bot: "Watc
     async def on_confirm(confirm_interaction: discord.Interaction) -> None:
         result = bot.suggestion_service.archive_suggestion(item.id)
         await confirm_interaction.response.send_message(result.message, ephemeral=True)
+        if result.success:
+            await sync_suggestion_status_embed(bot, result.watch_item)
 
     async def on_abort(abort_interaction: discord.Interaction) -> None:
         await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
@@ -6673,46 +6810,34 @@ async def handle_remove_suggestion(interaction: discord.Interaction, bot: "Watch
 # --- FR-033A: Crew-only suggestion editing --------------------------------------------
 
 
-def build_edit_diff_summary(
-    item: WatchItem,
-    *,
-    new_title: str,
-    new_release_year: Optional[int],
-    new_imdb_url: Optional[str],
-    new_database_id: Optional[int],
-    suggestion_service: SuggestionService,
+def build_edit_suggestion_summary(
+    item: WatchItem, suggestion_service: SuggestionService, rotation_service: Optional[RotationService] = None
 ) -> str:
-    """Show only the fields actually changing, old value -> new value.
-
-    Satisfies "display current values" without a separate round-trip:
-    the confirmation/result message itself names what's being replaced.
+    """Build the read-only IMDb-metadata summary shown alongside
+    /edit_suggestion's action picker (Requirement 8: OMDb-derived fields
+    are for reference only, never manually edited here).
     """
-    lines = []
-    if new_title.casefold() != item.title.casefold():
-        lines.append(f'Title: "{item.title}" -> "{new_title}"')
-    if new_release_year != item.release_year:
-        lines.append(f"Release year: {item.release_year or 'unset'} -> {new_release_year or 'unset'}")
-    old_imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
-    if new_imdb_url != old_imdb_url:
-        lines.append(f"IMDb link: {old_imdb_url or 'unset'} -> {new_imdb_url or 'unset'}")
-    if new_database_id != item.database_id:
-        old_database = suggestion_service.get_database(item.database_id) if item.database_id else None
-        new_database = suggestion_service.get_database(new_database_id) if new_database_id else None
-        old_name = old_database.name if old_database is not None else "unset"
-        new_name = new_database.name if new_database is not None else "unset"
-        lines.append(f"Database: {old_name} -> {new_name}")
+    database = suggestion_service.get_database(item.database_id) if item.database_id is not None else None
+    database_name = database.name if database is not None else "Unknown collection"
+    year_part = f" ({item.release_year})" if item.release_year else ""
+    imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
+    display_status = resolve_display_status(item, rotation_service)
+    lines = [
+        f"{item.reference} {item.title}{year_part}",
+        f"Collection: {database_name}",
+        f"Status: {display_status_label(display_status)}",
+    ]
+    if imdb_url:
+        lines.append(f"IMDb: {imdb_url}")
     return "\n".join(lines)
 
 
-async def handle_edit_suggestion(
-    interaction: discord.Interaction,
-    bot: "WatchPartyBot",
-    reference: str,
-    title: Optional[str],
-    release_year: Optional[int],
-    imdb_url: Optional[str],
-    database_id: Optional[int],
-) -> None:
+async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPartyBot", reference: str) -> None:
+    """Show /edit_suggestion's action picker: Change Status, Move to
+    Another Collection, or Cancel (Requirement 8). IMDb metadata (title,
+    release year, director, etc.) is read-only here -- shown for
+    reference in the summary, never manually editable.
+    """
     if bot.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
@@ -6735,96 +6860,128 @@ async def handle_edit_suggestion(
         return
     item = matches[0]
 
-    new_title = title.strip() if title else item.title
-    if not new_title:
-        await interaction.response.send_message("Title cannot be empty.", ephemeral=True)
-        return
-    new_release_year = release_year if release_year is not None else item.release_year
-    new_database_id = database_id if database_id is not None else item.database_id
-
-    if imdb_url is not None:
-        stripped_imdb_url = imdb_url.strip()
-        if not stripped_imdb_url:
-            new_imdb_url = None
-        else:
-            new_imdb_url = ImdbMetadataService.normalize_imdb_url(stripped_imdb_url)
-            if new_imdb_url is None:
-                await interaction.response.send_message(
-                    "That does not look like a valid IMDb title link.", ephemeral=True
-                )
-                return
-    else:
-        new_imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
-
-    if new_database_id != item.database_id:
-        destination = bot.suggestion_service.get_database(new_database_id)
-        if destination is None or not destination.active or destination.guild_id != item.guild_id:
-            await interaction.response.send_message(
-                "That destination collection is not available -- it may not exist, be inactive, "
-                "or belong to a different server.",
-                ephemeral=True,
-            )
+    async def on_change_status(button_interaction: discord.Interaction) -> None:
+        current_item = bot.suggestion_service.get_suggestion(item.id)
+        if current_item is None:
+            await button_interaction.response.send_message("That suggestion no longer exists.", ephemeral=True)
             return
 
-    diff_summary = build_edit_diff_summary(
-        item,
-        new_title=new_title,
-        new_release_year=new_release_year,
-        new_imdb_url=new_imdb_url,
-        new_database_id=new_database_id,
-        suggestion_service=bot.suggestion_service,
+        async def on_status_selected(select_interaction: discord.Interaction, new_status: WatchItemStatus) -> None:
+            result = bot.suggestion_service.set_suggestion_status(item.id, new_status)
+            await select_interaction.response.send_message(result.message, ephemeral=True)
+            if result.success:
+                await sync_suggestion_status_embed(bot, result.watch_item)
+
+        view = ChangeStatusSelectView(on_status_selected, current_status=current_item.status)
+        await button_interaction.response.edit_message(
+            content=build_edit_suggestion_summary(current_item, bot.suggestion_service, bot.rotation_service)
+            + "\n\nChoose the new status:",
+            view=view,
+        )
+
+    async def on_move_collection(button_interaction: discord.Interaction) -> None:
+        guild_id = button_interaction.guild_id or item.guild_id
+        databases = bot.suggestion_service.list_databases(guild_id) if guild_id is not None else []
+        if not databases:
+            await button_interaction.response.send_message("No collections are configured yet.", ephemeral=True)
+            return
+
+        async def on_database_selected(select_interaction: discord.Interaction, new_database_id: int) -> None:
+            current_item = bot.suggestion_service.get_suggestion(item.id)
+            if current_item is None:
+                await select_interaction.response.send_message(
+                    "That suggestion no longer exists.", ephemeral=True
+                )
+                return
+
+            destination = bot.suggestion_service.get_database(new_database_id)
+            if destination is None or not destination.active or destination.guild_id != current_item.guild_id:
+                await select_interaction.response.send_message(
+                    "That destination collection is not available -- it may not exist, be inactive, "
+                    "or belong to a different server.",
+                    ephemeral=True,
+                )
+                return
+
+            if new_database_id == current_item.database_id:
+                await select_interaction.response.send_message(
+                    "That suggestion is already in that collection.", ephemeral=True
+                )
+                return
+
+            current_imdb_url = current_item.metadata_ids.get(MetadataProvider.IMDB)
+
+            async def apply_move(target_interaction: discord.Interaction) -> None:
+                result = bot.suggestion_service.edit_suggestion(
+                    current_item.id,
+                    title=current_item.title,
+                    release_year=current_item.release_year,
+                    imdb_url=current_imdb_url,
+                    database_id=new_database_id,
+                )
+                await target_interaction.response.send_message(result.message, ephemeral=True)
+                if result.success:
+                    await sync_suggestion_status_embed(bot, result.watch_item)
+
+            existing_items = bot.suggestion_service.get_suggestions_for_database(
+                new_database_id, include_archived=True
+            )
+            duplicate_result = find_duplicates(
+                title=current_item.title,
+                release_year=current_item.release_year,
+                imdb_url=current_imdb_url,
+                existing_items=existing_items,
+                exclude_id=current_item.id,
+            )
+
+            if duplicate_result.has_definite_match:
+                match = duplicate_result.definite_matches[0]
+                await select_interaction.response.send_message(
+                    "This move would duplicate an existing suggestion:\n" + build_duplicate_match_line(match),
+                    ephemeral=True,
+                )
+                return
+
+            if duplicate_result.has_possible_only:
+                lines = "\n".join(build_duplicate_match_line(match) for match in duplicate_result.matches)
+                message = f"This move might duplicate existing item(s):\n{lines}"
+
+                async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+                    await apply_move(confirm_interaction)
+
+                async def on_abort(abort_interaction: discord.Interaction) -> None:
+                    await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
+
+                view = EditVoteConfirmationView(
+                    confirm_label="Move Anyway", on_confirm=on_confirm, on_abort=on_abort
+                )
+                await select_interaction.response.send_message(message, view=view, ephemeral=True)
+                return
+
+            await apply_move(select_interaction)
+
+        options = build_database_admin_options(
+            bot.suggestion_service, databases, button_interaction.guild, bot.suggestion_database_configuration_repository
+        )
+        view = DatabaseAdminSelectView(
+            options,
+            on_database_selected,
+            custom_id="wpm_edit_suggestion_move_collection_select",
+            placeholder="Choose a destination collection...",
+        )
+        await button_interaction.response.edit_message(
+            content=build_edit_suggestion_summary(item, bot.suggestion_service, bot.rotation_service)
+            + "\n\nMove to which collection?",
+            view=view,
+        )
+
+    async def on_cancel(button_interaction: discord.Interaction) -> None:
+        await button_interaction.response.edit_message(content="No changes were made.", view=None)
+
+    view = EditSuggestionActionView(on_change_status, on_move_collection, on_cancel)
+    await interaction.response.send_message(
+        build_edit_suggestion_summary(item, bot.suggestion_service, bot.rotation_service), view=view, ephemeral=True
     )
-    if not diff_summary:
-        await interaction.response.send_message(
-            "No changes were made -- every field already matches the current value.", ephemeral=True
-        )
-        return
-
-    async def apply_edit(target_interaction: discord.Interaction) -> None:
-        result = bot.suggestion_service.edit_suggestion(
-            item.id,
-            title=new_title,
-            release_year=new_release_year,
-            imdb_url=new_imdb_url,
-            database_id=new_database_id,
-        )
-        message = result.message
-        if result.success:
-            message += "\n" + diff_summary
-        await target_interaction.response.send_message(message, ephemeral=True)
-
-    existing_items = bot.suggestion_service.get_suggestions_for_database(new_database_id, include_archived=True)
-    duplicate_result = find_duplicates(
-        title=new_title,
-        release_year=new_release_year,
-        imdb_url=new_imdb_url,
-        existing_items=existing_items,
-        exclude_id=item.id,
-    )
-
-    if duplicate_result.has_definite_match:
-        match = duplicate_result.definite_matches[0]
-        await interaction.response.send_message(
-            "This edit would duplicate an existing suggestion:\n" + build_duplicate_match_line(match),
-            ephemeral=True,
-        )
-        return
-
-    if duplicate_result.has_possible_only:
-        lines = "\n".join(build_duplicate_match_line(match) for match in duplicate_result.matches)
-        message = f"{diff_summary}\n\nThis edit might duplicate existing item(s):\n{lines}"
-
-        async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-            await apply_edit(confirm_interaction)
-
-        async def on_abort(abort_interaction: discord.Interaction) -> None:
-            await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
-
-        view = EditVoteConfirmationView(confirm_label="Save Anyway", on_confirm=on_confirm, on_abort=on_abort)
-        await interaction.response.send_message(message, view=view, ephemeral=True)
-        return
-
-    await apply_edit(interaction)
 
 
 def perform_database_add(
@@ -7056,27 +7213,38 @@ def parse_watch_party_schedule_time(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def parse_vote_end_time(value: str, *, now: Optional[datetime] = None) -> datetime:
-    """Parse and validate a new closing date/time for /edit_vote.
+_DISCORD_TIMESTAMP_PATTERN = re.compile(r"^<t:(-?\d+)(?::[tTdDfFR])?>$")
 
-    Reuses parse_watch_party_schedule_time's exact ISO 8601 parsing and
-    UTC-assumption convention rather than duplicating it, then layers on
-    the one extra constraint specific to editing an *active* vote's
-    deadline: it must not already be in the past.
 
-    Args:
-        value: The raw end-time text from the modal.
-        now: The current time to validate against. Defaults to the real
-            current UTC time; tests supply a fixed value for determinism.
+def parse_discord_timestamp_vote_end_time(value: str, *, now: Optional[datetime] = None) -> datetime:
+    """Parse the Custom Time modal's Discord-native timestamp into a UTC-aware datetime.
 
-    Returns:
-        A timezone-aware datetime in UTC, strictly after `now`.
+    Accepts Discord's own `<t:unix>` and `<t:unix:STYLE>` markup (STYLE
+    one of t/T/d/D/f/F/R) -- the exact text produced when a member types
+    "@time" in a normal Discord message box, picks a date/time, and
+    copies the generated timestamp. The unix epoch it carries is already
+    an absolute, timezone-independent instant, so no separate timezone
+    configuration is needed to interpret it; it converts directly to a
+    UTC-aware datetime for storage/scheduling exactly like every other
+    path into VoteRound.closes_at.
 
     Raises:
-        ValueError: If value is blank, not a parseable date/time, or not
-            in the future.
+        ValueError: If the text isn't a well-formed Discord timestamp, or
+            the moment it encodes isn't in the future.
     """
-    parsed = parse_watch_party_schedule_time(value)
+    cleaned = (value or "").strip()
+    match = _DISCORD_TIMESTAMP_PATTERN.fullmatch(cleaned)
+    if not match:
+        raise ValueError(
+            "That doesn't look like a Discord timestamp. Type @time in any normal Discord message box, "
+            "select a date/time, then copy the generated timestamp here (e.g. <t:1785639600:F>)."
+        )
+
+    try:
+        parsed = datetime.fromtimestamp(int(match.group(1)), tz=timezone.utc)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError("That Discord timestamp isn't a valid date/time.") from exc
+
     current_time = now if now is not None else datetime.now(timezone.utc)
     if parsed <= current_time:
         raise ValueError("The new closing time must be in the future.")

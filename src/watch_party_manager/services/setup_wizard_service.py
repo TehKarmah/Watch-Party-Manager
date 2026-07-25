@@ -274,6 +274,16 @@ class SetupWizardService:
         draft = replace(state.draft, admin_channel_id=None, admin_channel_skipped=True)
         return self._advance(state, SetupWizardStep.ADMIN_CHANNEL, draft)
 
+    def set_home_channel(self, state: SetupWizardState, channel_id: int) -> SetupWizardState:
+        """Record WASH's "home" channel -- the parent every collection's
+        suggestion thread (and, by default, the watched-movie destination
+        thread) is created under. Unlike Admin Channel/Watch Destination,
+        this step has no skip option: every collection needs somewhere to
+        create its thread, so a home channel is always required.
+        """
+        draft = replace(state.draft, home_channel_id=channel_id)
+        return self._advance(state, SetupWizardStep.HOME_CHANNEL, draft)
+
     def set_watch_destination(self, state: SetupWizardState, channel_id: int) -> SetupWizardState:
         draft = replace(state.draft, watch_destination_channel_id=channel_id, watch_destination_skipped=False)
         return self._advance(state, SetupWizardStep.WATCH_DESTINATION, draft)
@@ -348,6 +358,11 @@ class SetupWizardService:
             lines.append(f"Admin Channel: Configured (<#{draft.admin_channel_id}>)")
         else:
             lines.append("Admin Channel: Incomplete")
+
+        if draft.home_channel_id is not None:
+            lines.append(f"Home Channel: Configured (<#{draft.home_channel_id}>)")
+        else:
+            lines.append("Home Channel: Incomplete")
 
         if draft.suggestion_database_id is not None:
             action = "created" if draft.suggestion_database_is_new else "selected"
@@ -432,6 +447,15 @@ class SetupWizardService:
         admin_channel_error = validate_channel_usable(draft.admin_channel_id, guild, resource_label="Admin channel")
         if admin_channel_error:
             issues.append(ValidationIssue(SetupWizardStep.ADMIN_CHANNEL, admin_channel_error))
+
+        if draft.home_channel_id is None:
+            issues.append(ValidationIssue(SetupWizardStep.HOME_CHANNEL, "No home channel was selected."))
+        else:
+            home_channel_error = validate_channel_usable(
+                draft.home_channel_id, guild, resource_label="Home channel"
+            )
+            if home_channel_error:
+                issues.append(ValidationIssue(SetupWizardStep.HOME_CHANNEL, home_channel_error))
 
         if draft.suggestion_database_id is None:
             issues.append(ValidationIssue(SetupWizardStep.SUGGESTION_DATABASE, "No collection was selected."))

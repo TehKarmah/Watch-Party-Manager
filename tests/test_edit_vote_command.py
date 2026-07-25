@@ -22,13 +22,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from watch_party_manager.bot import (
     build_edit_vote_management_text,
     handle_cancel_vote_now_completion,
-    handle_change_vote_end_time_completion,
     handle_end_vote_now_completion,
-    parse_vote_end_time,
+    handle_reschedule_vote_completion,
+    parse_discord_timestamp_vote_end_time,
     perform_cancel_vote_now,
-    perform_change_vote_end_time,
     perform_edit_vote_open,
     perform_end_vote_now,
+    perform_reschedule_vote_round,
 )
 from watch_party_manager.domain.vote import VoteRoundStatus, VoteVisibility
 from watch_party_manager.persistence.suggestion_database_repository import (
@@ -336,15 +336,19 @@ class BuildEditVoteManagementTextTests(EditVoteTestCase):
         self.assertIn("Votes cast: 1", text)
 
 
-# --- Change End Time --------------------------------------------------------
+# --- Change End Time (Requirement 1/2: guided quick-pick + Custom Date & Time) ----
 
 
-class PerformChangeVoteEndTimeTests(EditVoteTestCase):
+class PerformRescheduleVoteRoundTests(EditVoteTestCase):
     def test_unauthorized_user_is_rejected(self) -> None:
         vote_round = self._open_round()
 
-        message, ephemeral, updated = perform_change_vote_end_time(
-            self.vote_service, self._unauthorized_user(), WASH_CREW_ROLE_ID, vote_round.id, "2027-01-01 12:00"
+        message, ephemeral, updated = perform_reschedule_vote_round(
+            self.vote_service,
+            self._unauthorized_user(),
+            WASH_CREW_ROLE_ID,
+            vote_round.id,
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
         )
 
         self.assertTrue(ephemeral)
@@ -354,8 +358,12 @@ class PerformChangeVoteEndTimeTests(EditVoteTestCase):
     def test_preserves_the_rounds_identity(self) -> None:
         vote_round = self._open_round()
 
-        _, _, updated = perform_change_vote_end_time(
-            self.vote_service, self._authorized_user(), WASH_CREW_ROLE_ID, vote_round.id, "2027-01-01 12:00"
+        _, _, updated = perform_reschedule_vote_round(
+            self.vote_service,
+            self._authorized_user(),
+            WASH_CREW_ROLE_ID,
+            vote_round.id,
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
         )
 
         self.assertEqual(updated.id, vote_round.id)
@@ -364,8 +372,12 @@ class PerformChangeVoteEndTimeTests(EditVoteTestCase):
         vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=111, suggestion_id=self.matrix.id)
 
-        _, _, updated = perform_change_vote_end_time(
-            self.vote_service, self._authorized_user(), WASH_CREW_ROLE_ID, vote_round.id, "2027-01-01 12:00"
+        _, _, updated = perform_reschedule_vote_round(
+            self.vote_service,
+            self._authorized_user(),
+            WASH_CREW_ROLE_ID,
+            vote_round.id,
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
         )
 
         self.assertEqual(updated.votes[111].suggestion_id, self.matrix.id)
@@ -373,53 +385,75 @@ class PerformChangeVoteEndTimeTests(EditVoteTestCase):
     def test_updates_the_closing_time(self) -> None:
         vote_round = self._open_round()
 
-        _, _, updated = perform_change_vote_end_time(
-            self.vote_service, self._authorized_user(), WASH_CREW_ROLE_ID, vote_round.id, "2027-01-01 12:00"
-        )
-
-        self.assertEqual(updated.closes_at, datetime(2027, 1, 1, 12, tzinfo=timezone.utc))
-
-    def test_rejects_a_past_closing_time(self) -> None:
-        vote_round = self._open_round()
-
-        message, ephemeral, updated = perform_change_vote_end_time(
+        _, _, updated = perform_reschedule_vote_round(
             self.vote_service,
             self._authorized_user(),
             WASH_CREW_ROLE_ID,
             vote_round.id,
-            "2020-01-01 12:00",
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
         )
 
-        self.assertTrue(ephemeral)
-        self.assertIn("future", message.lower())
-        self.assertIsNone(updated)
-        self.assertEqual(self.vote_service.get_round(vote_round.id).closes_at, vote_round.closes_at)
+        self.assertEqual(updated.closes_at, datetime(2027, 1, 1, 12, tzinfo=timezone.utc))
 
-    def test_rejects_an_invalid_time_string(self) -> None:
+    def test_confirmation_shows_a_human_readable_date_and_a_relative_timestamp(self) -> None:
         vote_round = self._open_round()
 
-        message, ephemeral, updated = perform_change_vote_end_time(
-            self.vote_service, self._authorized_user(), WASH_CREW_ROLE_ID, vote_round.id, "not a date"
+        message, _, _ = perform_reschedule_vote_round(
+            self.vote_service,
+            self._authorized_user(),
+            WASH_CREW_ROLE_ID,
+            vote_round.id,
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
         )
 
-        self.assertTrue(ephemeral)
-        self.assertIsNone(updated)
-        self.assertEqual(self.vote_service.get_round(vote_round.id).closes_at, vote_round.closes_at)
+        # format_datetime_for_display renders both a full ("<t:...:F>") and
+        # a relative ("<t:...:R>") Discord native timestamp -- Discord
+        # itself displays <t:...:F> as an absolute, human-readable
+        # date/time in each viewer's own client.
+        self.assertIn(":F>", message)
+        self.assertIn(":R>", message)
 
 
-class ParseVoteEndTimeTests(unittest.TestCase):
+class ParseDiscordTimestampVoteEndTimeTests(unittest.TestCase):
     def test_rejects_a_time_in_the_past(self) -> None:
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        past = int(datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp())
         with self.assertRaises(ValueError):
-            parse_vote_end_time("2025-01-01 00:00", now=now)
+            parse_discord_timestamp_vote_end_time(f"<t:{past}:F>", now=now)
 
     def test_accepts_a_time_in_the_future(self) -> None:
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        parsed = parse_vote_end_time("2027-01-01 00:00", now=now)
+        future = int(datetime(2027, 1, 1, tzinfo=timezone.utc).timestamp())
+        parsed = parse_discord_timestamp_vote_end_time(f"<t:{future}:F>", now=now)
         self.assertEqual(parsed, datetime(2027, 1, 1, tzinfo=timezone.utc))
 
+    def test_accepts_a_bare_timestamp_with_no_style_suffix(self) -> None:
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        future = int(datetime(2027, 1, 1, tzinfo=timezone.utc).timestamp())
+        parsed = parse_discord_timestamp_vote_end_time(f"<t:{future}>", now=now)
+        self.assertEqual(parsed, datetime(2027, 1, 1, tzinfo=timezone.utc))
 
-class HandleChangeVoteEndTimeCompletionTests(EditVoteTestCase):
+    def test_accepts_every_standard_style_suffix(self) -> None:
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        future = int(datetime(2027, 1, 1, tzinfo=timezone.utc).timestamp())
+        for style in "tTdDfFR":
+            parsed = parse_discord_timestamp_vote_end_time(f"<t:{future}:{style}>", now=now)
+            self.assertEqual(parsed, datetime(2027, 1, 1, tzinfo=timezone.utc))
+
+    def test_rejects_malformed_syntax(self) -> None:
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        for bad in ["not a timestamp", "<t:abc:F>", "<t:123", "t:123:F", "<t:123:Z>", ""]:
+            with self.assertRaises(ValueError):
+                parse_discord_timestamp_vote_end_time(bad, now=now)
+
+    def test_error_message_explains_how_to_create_a_timestamp(self) -> None:
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        with self.assertRaises(ValueError) as cm:
+            parse_discord_timestamp_vote_end_time("not a timestamp", now=now)
+        self.assertIn("@time", str(cm.exception))
+
+
+class HandleRescheduleVoteCompletionTests(EditVoteTestCase):
     async def _schedule_initial_jobs(self, vote_round):
         return await schedule_vote_jobs(self.scheduler_service, vote_round, guild_id=100)
 
@@ -433,13 +467,13 @@ class HandleChangeVoteEndTimeCompletionTests(EditVoteTestCase):
         bot = FakeBot(channel)
         interaction = FakeInteraction(self._authorized_user())
 
-        await handle_change_vote_end_time_completion(
+        await handle_reschedule_vote_completion(
             interaction,
             self.vote_service,
             self.suggestion_service,
             WASH_CREW_ROLE_ID,
             vote_round.id,
-            "2027-01-01 12:00",
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
             bot,
             scheduler_service=self.scheduler_service,
         )
@@ -460,13 +494,13 @@ class HandleChangeVoteEndTimeCompletionTests(EditVoteTestCase):
         bot = FakeBot(FakeChannel(message))
         interaction = FakeInteraction(self._authorized_user())
 
-        await handle_change_vote_end_time_completion(
+        await handle_reschedule_vote_completion(
             interaction,
             self.vote_service,
             self.suggestion_service,
             WASH_CREW_ROLE_ID,
             vote_round.id,
-            "2027-01-01 12:00",
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
             bot,
             scheduler_service=self.scheduler_service,
         )
@@ -492,13 +526,13 @@ class HandleChangeVoteEndTimeCompletionTests(EditVoteTestCase):
         bot = FakeBot(channel)
         interaction = FakeInteraction(self._authorized_user())
 
-        await handle_change_vote_end_time_completion(
+        await handle_reschedule_vote_completion(
             interaction,
             self.vote_service,
             self.suggestion_service,
             WASH_CREW_ROLE_ID,
             vote_round.id,
-            "2027-01-01 12:00",
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
             bot,
         )
 
@@ -513,13 +547,13 @@ class HandleChangeVoteEndTimeCompletionTests(EditVoteTestCase):
         bot = FakeBot(FakeChannel(message))
         interaction = FakeInteraction(self._authorized_user())
 
-        await handle_change_vote_end_time_completion(
+        await handle_reschedule_vote_completion(
             interaction,
             self.vote_service,
             self.suggestion_service,
             WASH_CREW_ROLE_ID,
             vote_round.id,
-            "2027-01-01 12:00",
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
             bot,
         )
 
@@ -529,21 +563,21 @@ class HandleChangeVoteEndTimeCompletionTests(EditVoteTestCase):
         # end-now/cancel paths which clear it.
         self.assertEqual(message.edited_view, "not-edited")
 
-    async def test_a_failed_change_sends_no_public_notice(self) -> None:
+    async def test_an_unauthorized_change_sends_no_public_notice(self) -> None:
         vote_round = self._open_round()
 
         message = FakeMessage(message_id=999)
         channel = FakeChannel(message)
         bot = FakeBot(channel)
-        interaction = FakeInteraction(self._authorized_user())
+        interaction = FakeInteraction(self._unauthorized_user())
 
-        await handle_change_vote_end_time_completion(
+        await handle_reschedule_vote_completion(
             interaction,
             self.vote_service,
             self.suggestion_service,
             WASH_CREW_ROLE_ID,
             vote_round.id,
-            "not a date",
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
             bot,
         )
 
@@ -666,6 +700,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
         message = FakeMessage(message_id=999)
         channel = FakeChannel(message)
         bot = FakeBot(channel)
+        bot.suggestion_service = self.suggestion_service
         interaction = FakeInteraction(self._authorized_user())
 
         await handle_end_vote_now_completion(
@@ -708,6 +743,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
 
         message = FakeMessage(message_id=999)
         bot = FakeBot(FakeChannel(message))
+        bot.suggestion_service = self.suggestion_service
         interaction = FakeInteraction(self._authorized_user())
 
         await handle_end_vote_now_completion(

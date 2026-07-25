@@ -208,15 +208,15 @@ class StatisticsServiceTests(unittest.TestCase):
         service, _ = self.make_service(
             items=[
                 make_item(1, status=WatchItemStatus.SUGGESTED),
-                make_item(2, status=WatchItemStatus.WATCHED),
-                make_item(3, status=WatchItemStatus.REWATCH_ELIGIBLE),
+                make_item(2, status=WatchItemStatus.VOTE_WINNER),
+                make_item(3, status=WatchItemStatus.ARCHIVED),
             ]
         )
         self.assertEqual(2, service.total_suggestions())
         self.assertEqual(1, service.watched_count())
 
     def test_all_non_watched_states_count_as_suggestions(self):
-        statuses = [status for status in WatchItemStatus if status != WatchItemStatus.WATCHED]
+        statuses = [status for status in WatchItemStatus if status != WatchItemStatus.VOTE_WINNER]
         service, _ = self.make_service(
             items=[make_item(index + 1, status=status) for index, status in enumerate(statuses)]
         )
@@ -231,7 +231,7 @@ class StatisticsServiceTests(unittest.TestCase):
 
     def test_watched_item_in_active_database_is_not_an_active_suggestion(self):
         service, _ = self.make_service(
-            items=[make_item(1, status=WatchItemStatus.WATCHED)],
+            items=[make_item(1, status=WatchItemStatus.VOTE_WINNER)],
             databases=[make_database(1)],
         )
         self.assertEqual(0, service.active_suggestions_count())
@@ -338,7 +338,7 @@ class StatisticsServiceTests(unittest.TestCase):
     def test_snapshot_accepts_sequence_based_sources(self):
         class TupleSuggestionSource:
             def get_suggestions(self):
-                return (make_item(1), make_item(2, status=WatchItemStatus.WATCHED))
+                return (make_item(1), make_item(2, status=WatchItemStatus.VOTE_WINNER))
 
             def list_databases(self, guild_id=None):
                 return (make_database(1),)
@@ -358,7 +358,7 @@ class StatisticsServiceTests(unittest.TestCase):
         self.assertEqual(2, result.total_votes_cast)
 
     def test_snapshot_does_not_mutate_source_collections(self):
-        items = [make_item(1), make_item(2, status=WatchItemStatus.WATCHED)]
+        items = [make_item(1), make_item(2, status=WatchItemStatus.VOTE_WINNER)]
         databases = [make_database(1)]
         rounds = [make_round(1, voter_ids=(1,))]
         service, _ = self.make_service(items=items, databases=databases, rounds=rounds)
@@ -748,7 +748,7 @@ class MemberStatisticsTests(unittest.TestCase):
 
     def test_counts_watched_and_retired_suggestions_among_submitted(self):
         watched = make_item(
-            1, status=WatchItemStatus.WATCHED, journey=WatchItemJourney(original_suggester="555")
+            1, status=WatchItemStatus.VOTE_WINNER, journey=WatchItemJourney(original_suggester="555")
         )
         retired = make_item(
             2,
@@ -906,7 +906,7 @@ class DatabaseStatisticsTests(RotationStatisticsTestCase):
     def test_counts_suggestions_by_status(self):
         items = [
             make_item(1, database_id=1, status=WatchItemStatus.SUGGESTED),
-            make_item(2, database_id=1, status=WatchItemStatus.WATCHED),
+            make_item(2, database_id=1, status=WatchItemStatus.VOTE_WINNER),
             make_item(
                 3,
                 database_id=1,

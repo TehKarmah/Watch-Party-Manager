@@ -86,6 +86,26 @@ class RotationService:
                 return rotation
         return None
 
+    def is_in_rotation_cooldown(self, watch_item: WatchItem) -> bool:
+        """Return whether a suggestion is on Rotation Cooldown right now.
+
+        A pure, read-only display query -- never bootstraps a rotation
+        (unlike get_or_start_rotation/is_candidate_eligible), since it
+        exists only to label a suggestion, not to admit one. True when the
+        item has already been presented within the database's current
+        open rotation (see _classify's "presented" case); this
+        automatically reverts to False the moment a fresh rotation begins,
+        because begin_next_rotation/_begin_rotation hands out a new
+        rotation.id that the item's journey.rotation_history doesn't
+        contain yet -- no separate "clear cooldown" step is needed.
+        """
+        if watch_item.database_id is None:
+            return False
+        rotation = self.get_open_rotation(watch_item.database_id)
+        if rotation is None or watch_item.id not in rotation.assigned_suggestion_ids:
+            return False
+        return self._classify(watch_item, rotation.id) == "presented"
+
     def get_or_start_rotation(self, database_id: int) -> Rotation:
         """Return the open rotation for a database, starting a fresh one if none exists.
 
@@ -271,7 +291,7 @@ class RotationService:
         """
         if item is None:
             return "removed"
-        if item.status is WatchItemStatus.WATCHED:
+        if item.status is WatchItemStatus.VOTE_WINNER:
             return "watched"
         if item.status is WatchItemStatus.ARCHIVED:
             return "retired" if item.journey.retired_at is not None else "archived"
