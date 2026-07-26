@@ -6,9 +6,9 @@ This document is the authoritative summary of the current implementation status 
 
 ## Current Milestone
 
-**Documentation Audit & Installation Guide (FR-035)**
+**Release Candidate UX & Consistency Audit**
 
-Core functionality (suggestions, voting, rotation, statistics, membership, setup, backup/restore) is implemented and tested. The active work is a release-quality documentation pass: a first-time-user Installation Guide, and correcting documentation that had drifted from the implementation as features shipped.
+Core functionality is implemented and tested; WASH is in release-candidate hardening. Recent work: a four-status suggestion model (Available/Rotation Cooldown/Vote Winner/Retired) with synchronized public-post status fields, a redesigned resumable `/setup` wizard (Home Channel step, collections defaulting to sibling threads under it), a standardized duration syntax (`10m`/`1h`/`1d`/`1w`, an explicit unit always required) shared by vote duration, reminder-before-close (now minute-precise), and `/edit_vote`'s Shorten/Extend Vote, and a full terminology/navigation/consistency audit pass.
 
 ## Last Completed Milestone
 
@@ -29,14 +29,14 @@ Core suggestion, voting, rotation, statistics, membership, setup/configuration, 
 | Suggestion databases | Complete | Guild-scoped creation, listing, deactivation/reactivation, per-database configuration, and per-database backup/restore/reset. |
 | Suggestions | Complete | Add, list (with filters, pagination, and archive browsing), edit, remove (archive-preferring), duplicate detection, IMDb link normalization, re-suggestion rules, and public confirmation posts. |
 | Candidate selection & rotation | Complete | Rotation Pool (default), Soft Rotation, and Infinite Pool selection strategies; persistent rotation lifecycle tracking; configurable new-suggestion admission modes; Low Pool Reminder. |
-| Voting engine | Complete | Blind/visible rounds, ballots, changes, standings, winners, and ties are implemented. Visible is the default visibility (Blind remains fully selectable and unchanged for existing guilds/rounds); a vote started without an explicit override uses the guild's configured default. Voting duration is hour-based (1 hour through 30 days), defaulting to 24 hours; older day-based guild configurations load as the equivalent hour count automatically. |
+| Voting engine | Complete | Blind/visible rounds, ballots, changes, standings, winners, and ties are implemented. Visible is the default visibility (Blind remains fully selectable and unchanged for existing guilds/rounds); a vote started without an explicit override uses the guild's configured default. Voting duration is hour-based (1 hour through 30 days), defaulting to 1 day, entered using WASH's standardized duration syntax (`1h`, `1d`, `1w` -- an explicit unit is always required); older day-based guild configurations load as the equivalent hour count automatically. `/edit_vote`'s Change End Time offers End Now, Shorten Vote, Extend Vote (both relative to the round's current end time, via 1 Hour/1 Day/Custom...), and Set Exact End Time (a pasted Discord timestamp). |
 | Interactive voting | Complete | Discord controls and persistent restoration after restart are implemented. The active-vote post is WASH's standard yellow-accent embed showing visibility, end time, and candidate titles (no leading nominee number); `/vote_status` and standings resolve candidates to titles rather than internal suggestion numbers. |
 | Vote completion | Complete | Automatic expiration, closing, winner announcements, and Watch Item Journey updates are implemented. |
 | Statistics | Complete foundation | Server, member, suggestion, rotation, and database statistics are implemented. Likes, leaderboards, graphs, and exports are explicitly out of scope for the current architecture. |
 | Diagnostics and integrity | Complete foundation | WASH Crew health/configuration/runtime diagnostics are shown via `/about`'s expanded sections (no separate `/diagnostics` command); startup checks and logging are implemented. |
 | Membership | Complete | Self-service, manual, approval-required, and Discord-managed join modes; membership administration commands. |
 | Scheduled watch parties | Complete foundation | Single-occurrence scheduling, rescheduling, cancellation, and reminders. The richer recurring Event Series/Discord Event model remains future work. |
-| Setup and configuration | Complete | Guided, resumable `/setup` wizard (per-step Back navigation, Save & Finish Later, and resume-with-progress detection) and an always-available `/config` menu cover WASH Crew/Watch Party roles, suggestion databases, voting/reminder/backup defaults, and candidate-selection mode -- setup and `/config` read and write the exact same persisted values. |
+| Setup and configuration | Complete | Guided, resumable `/setup` wizard (per-step Back navigation, Save & Finish Later, and resume-with-progress detection) and an always-available `/config` menu cover WASH Crew/Watch Party roles, a Home Channel, suggestion databases, voting/reminder/backup defaults, and candidate-selection mode -- setup and `/config` read and write the exact same persisted values. Collections default to threads created as siblings under the Home Channel (a descriptive default name for Movies/TV Shows, fully custom for other types), immediately usable by `/add` with no further configuration. |
 | Backup, restore, import, reset | Complete | Full and per-database backup/restore, factory reset, and cross-instance import, each with pre-action safety backups. Automatic scheduled backup *execution* is not yet wired to the existing schedule/retention settings. |
 
 ## Implemented Discord Commands
@@ -117,13 +117,13 @@ Restricted commands fail closed when the relevant role is not configured by eith
 ## Known Technical Debt and Limitations
 
 - JSON is the current persistence layer; the specification still anticipates a future migration path to a more scalable database.
-- `WatchItemStatus.WATCHED` and `journey.record_watch_date()` are not yet produced by any code path -- watch-history and "watched" statistics are correctly implemented and tested but will show no results until a future watch-history milestone marks items watched.
+- A suggestion's four display statuses are Available, Rotation Cooldown, Vote Winner, and Retired -- `WatchItemStatus.VOTE_WINNER` is set automatically when a voting round completes, but WASH still doesn't know when a group actually *watches* its winner. `journey.record_watch_date()` is not yet produced by any code path -- watch-history statistics are correctly implemented and tested but will show no results until a future watch-history milestone marks items watched.
 - Configurable scheduled-backup *execution* is not yet wired to the existing interval/retention settings (manual `/backup`, `/database_backup`, and pre-destructive-action safety backups all work today).
 - The richer Event Series/recurring-schedule/Discord Event model remains future work; scheduled watch parties today are single-occurrence.
 - `SuggestionService`'s storage is keyed by `(database_id, normalized title)`, so two suggestions can never share an exactly-matching title within one database -- see [Administration](05-Administration.md)'s "Known limitation: identical titles within one database."
 - Member/suggestion statistics that depend on a recorded submitter or creation date only cover suggestions added since FR-034 shipped; earlier suggestions are excluded rather than guessed at.
 - Suggestions saved before public confirmation posts existed (or whose post failed at the time) have no original-post link for `/list` to show, and `/repair_suggestions` cannot recover it -- Discord provides no reliable way to relocate a message after the fact without inventing a URL or risking a duplicate public post.
-- `CHANGELOG.md`'s `[1.0.0]` entry is the release record; `[Unreleased]` is empty pending post-v1.0 work.
+- `CHANGELOG.md`'s `[1.0.0]` entry is the release record; `[Unreleased]` tracks the release-candidate hardening work (suggestion status model, setup wizard redesign, vote editing redesign, duration syntax standardization) done since.
 
 ## Next Recommended Milestone
 
@@ -132,7 +132,7 @@ With core functionality, configuration, and documentation in place, planned post
 ## Testing Status
 
 - Full automated suite passing
-- Current baseline: **2595 tests**
+- Current baseline: **2850 tests**
 - Test framework: `unittest`
 - Python version: 3.12
 

@@ -205,7 +205,7 @@ class SuggestionService:
         if suggestion_key in self._suggestions:
             return SuggestionResult(
                 success=False,
-                message="That title is already on the list. Nice try.",
+                message="That title is already on the list.",
             )
 
         # Build metadata_ids if IMDb URL is provided

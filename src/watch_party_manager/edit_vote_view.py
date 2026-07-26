@@ -146,8 +146,14 @@ class SetExactEndTimeButton(discord.ui.Button):
 
 
 class VoteEndTimeMenuView(discord.ui.View):
-    """The "Change End Time" flow's top-level menu: End Now, Shorten Vote,
-    Extend Vote, or Set Exact End Time.
+    """The "Change End Time" flow's top-level menu: Shorten Vote, Extend
+    Vote, Set Exact End Time, or End Now.
+
+    Button order follows WASH's house convention (primary actions, then
+    secondary, then the destructive action last) -- End Now is the
+    irreversible one, so it's ordered last despite being conceptually the
+    "simplest" option, matching every other menu in the app (e.g.
+    EditVoteManagementView's own Change End Time / Cancel Vote ordering).
     """
 
     def __init__(
@@ -166,10 +172,10 @@ class VoteEndTimeMenuView(discord.ui.View):
             on_set_exact: Called when "Set Exact End Time" is clicked.
         """
         super().__init__(timeout=EDIT_VOTE_VIEW_TIMEOUT_SECONDS)
-        self.add_item(EndNowQuickPickButton(on_end_now))
         self.add_item(ShortenVoteButton(on_shorten))
         self.add_item(ExtendVoteButton(on_extend))
         self.add_item(SetExactEndTimeButton(on_set_exact))
+        self.add_item(EndNowQuickPickButton(on_end_now))
 
 
 class DurationDeltaButton(discord.ui.Button):
@@ -199,6 +205,20 @@ class ChooseCustomDeltaButton(discord.ui.Button):
         await self._callback(interaction)
 
 
+class CancelDeltaButton(discord.ui.Button):
+    """Dismisses Shorten/Extend Vote's submenu without changing anything --
+    every multi-step control surface in WASH offers an explicit way out
+    rather than relying on the view silently timing out.
+    """
+
+    def __init__(self, on_click: OnEditVoteAborted, *, custom_id: str) -> None:
+        super().__init__(label="Cancel", style=discord.ButtonStyle.secondary, custom_id=custom_id)
+        self._callback = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._callback(interaction)
+
+
 # (label, minutes) for Shorten/Extend Vote's quick picks, in display order.
 DURATION_DELTA_QUICK_PICKS: tuple[tuple[str, int], ...] = (
     ("1 Hour", 60),
@@ -217,6 +237,7 @@ class DurationDeltaChoiceView(discord.ui.View):
         self,
         on_quick_pick: OnDurationDeltaPick,
         on_choose_custom: OnChooseCustomDelta,
+        on_cancel: OnEditVoteAborted,
         *,
         custom_id_prefix: str,
     ) -> None:
@@ -226,6 +247,7 @@ class DurationDeltaChoiceView(discord.ui.View):
             on_quick_pick: Called with (interaction, minutes) when "1 Hour"
                 or "1 Day" is clicked.
             on_choose_custom: Called when "Custom..." is clicked.
+            on_cancel: Called when "Cancel" is clicked.
             custom_id_prefix: Distinguishes this menu's button custom_ids
                 from the other one (Shorten vs. Extend), since both are
                 otherwise identical.
@@ -236,6 +258,7 @@ class DurationDeltaChoiceView(discord.ui.View):
                 DurationDeltaButton(label, minutes, on_quick_pick, custom_id=f"{custom_id_prefix}_{index}")
             )
         self.add_item(ChooseCustomDeltaButton(on_choose_custom, custom_id=f"{custom_id_prefix}_custom"))
+        self.add_item(CancelDeltaButton(on_cancel, custom_id=f"{custom_id_prefix}_cancel"))
 
 
 class CustomDurationModal(discord.ui.Modal):

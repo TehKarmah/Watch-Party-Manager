@@ -4634,11 +4634,14 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
                         CustomDurationModal(on_custom_submit, title="Shorten Vote")
                     )
 
+                async def on_cancel_delta(cancel_interaction: discord.Interaction) -> None:
+                    await cancel_interaction.response.send_message("No changes were made.", ephemeral=True)
+
                 await pick_interaction.response.send_message(
                     f"Voting round {round_id} currently ends: {format_datetime_for_display(vote_round.closes_at)}\n\n"
                     "Shorten it by how much?",
                     view=DurationDeltaChoiceView(
-                        on_quick_pick, on_choose_custom, custom_id_prefix="wpm_edit_vote_shorten_pick"
+                        on_quick_pick, on_choose_custom, on_cancel_delta, custom_id_prefix="wpm_edit_vote_shorten_pick"
                     ),
                     ephemeral=True,
                 )
@@ -4660,11 +4663,14 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
                         CustomDurationModal(on_custom_submit, title="Extend Vote")
                     )
 
+                async def on_cancel_delta(cancel_interaction: discord.Interaction) -> None:
+                    await cancel_interaction.response.send_message("No changes were made.", ephemeral=True)
+
                 await pick_interaction.response.send_message(
                     f"Voting round {round_id} currently ends: {format_datetime_for_display(vote_round.closes_at)}\n\n"
                     "Extend it by how much?",
                     view=DurationDeltaChoiceView(
-                        on_quick_pick, on_choose_custom, custom_id_prefix="wpm_edit_vote_extend_pick"
+                        on_quick_pick, on_choose_custom, on_cancel_delta, custom_id_prefix="wpm_edit_vote_extend_pick"
                     ),
                     ephemeral=True,
                 )
@@ -6229,6 +6235,13 @@ def build_suggestion_confirmation_embed(
     Cooldown is never shown) so existing callers/tests that construct
     this without one keep working unchanged -- see
     suggestion_display_status.resolve_display_status.
+
+    Deliberately built without EmbedFactory's default footer/timestamp
+    (unlike most other WASH embeds): this post is edited in place
+    repeatedly as the suggestion's status changes (see
+    sync_suggestion_status_embed), and a timestamp would read as "just
+    added" every time it's resynced, misrepresenting when the suggestion
+    actually entered the collection.
     """
     imdb_url = watch_item.metadata_ids.get(MetadataProvider.IMDB)
     description_parts: list[str] = []
@@ -6257,7 +6270,7 @@ def build_suggestion_confirmation_embed(
     if watch_item.imdb_rating:
         embed.add_field(name="IMDb Rating", value=f"{watch_item.imdb_rating}/10", inline=True)
     embed.add_field(name="Suggested By", value=suggested_by, inline=True)
-    embed.add_field(name="Database", value=database_name, inline=True)
+    embed.add_field(name="Collection", value=database_name, inline=True)
     embed.add_field(name="Reference", value=watch_item.reference, inline=True)
     display_status = resolve_display_status(watch_item, rotation_service)
     embed.add_field(name="Status", value=display_status_label(display_status), inline=True)

@@ -159,7 +159,7 @@ class EditVoteShortenExtendTestCase(unittest.IsolatedAsyncioTestCase):
         _, menu_view = await self._open_change_end_time_menu()
 
         labels = [child.label for child in menu_view.children]
-        self.assertEqual(labels, ["End Now", "Shorten Vote", "Extend Vote", "Set Exact End Time"])
+        self.assertEqual(labels, ["Shorten Vote", "Extend Vote", "Set Exact End Time", "End Now"])
 
     async def test_shorten_vote_one_hour_subtracts_from_the_current_end_time(self) -> None:
         vote_round, menu_view = await self._open_change_end_time_menu()
@@ -244,6 +244,27 @@ class EditVoteShortenExtendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(
             updated.closes_at.timestamp(), (original_closes_at + timedelta(weeks=1)).timestamp(), delta=2
         )
+
+    async def test_shorten_vote_submenu_cancel_makes_no_changes(self) -> None:
+        # Navigation audit: every multi-step control surface needs an
+        # explicit way out rather than relying on the ephemeral view
+        # silently timing out.
+        vote_round, menu_view = await self._open_change_end_time_menu()
+        original_closes_at = vote_round.closes_at
+        shorten_button = next(child for child in menu_view.children if child.label == "Shorten Vote")
+
+        shorten_interaction = FakeInteraction(user=self._crew_member())
+        await shorten_button.callback(interaction=shorten_interaction)
+        cancel_button = next(
+            child for child in shorten_interaction.response.sent_view.children if child.label == "Cancel"
+        )
+
+        cancel_interaction = FakeInteraction(user=self._crew_member())
+        await cancel_button.callback(interaction=cancel_interaction)
+
+        self.assertIn("No changes were made", cancel_interaction.response.sent_message)
+        updated = self.bot.vote_service.get_round(vote_round.id)
+        self.assertEqual(updated.closes_at, original_closes_at)
 
     async def test_shorten_vote_custom_rejects_malformed_duration(self) -> None:
         vote_round, menu_view = await self._open_change_end_time_menu()

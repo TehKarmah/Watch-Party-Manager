@@ -469,7 +469,11 @@ class ConfigService:
             ),
         )
         self._guild_configuration_repository.save(updated)
-        return ConfigUpdateResult(True, "Voting defaults updated.", updated)
+        message = (
+            f"Voting defaults updated: {candidate_count} candidates, "
+            f"{format_duration_hours(duration_hours)}, {visibility.value.title()}."
+        )
+        return ConfigUpdateResult(True, message, updated)
 
     # --- Reminder Defaults ------------------------------------------------------------
 

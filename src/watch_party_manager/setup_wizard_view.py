@@ -837,7 +837,7 @@ class VotingDefaultsModal(discord.ui.Modal):
         self.duration_input = discord.ui.TextInput(
             label="Default vote duration (1 hour - 30 days)",
             default=duration_default,
-            placeholder="e.g. 4h, 12h, 1 day, or 7 days",
+            placeholder="e.g. 4h, 12h, 1d, or 7d",
         )
         self.visibility_input = discord.ui.TextInput(
             label="Default visibility: blind or visible", default=visibility_default

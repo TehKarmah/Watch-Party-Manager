@@ -8,7 +8,7 @@ WASH manages suggestion databases and suggestions (with IMDb link normalization 
 ## Current Status
 
 - **Version:** 1.0.0
-- **Automated tests:** 2595 passing
+- **Automated tests:** 2850 passing
 - **Python:** 3.12 or later
 - **Discord library:** discord.py 2.4 or later
 - **Persistence:** JSON repositories
