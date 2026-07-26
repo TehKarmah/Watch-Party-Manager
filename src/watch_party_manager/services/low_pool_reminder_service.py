@@ -97,7 +97,22 @@ class LowPoolReminderService:
         if last_sent is not None and current_time - last_sent < timedelta(hours=interval_hours):
             return LowPoolReminderDecision(should_send=False)
 
-        progress = self._rotation_service.rotation_progress(database_id)
+        # Release-blocking bug fix: must never bootstrap a rotation as a
+        # side effect of this check (see RotationService.get_open_rotation
+        # vs. rotation_progress/get_or_start_rotation). This reminder fires
+        # after every successful /add, including a brand-new collection's
+        # very first suggestion -- bootstrapping here would freeze that
+        # rotation's membership to whatever exists at that instant, so
+        # every suggestion added afterward (admission mode NEXT_ROTATION,
+        # the default) would never join it and would be invisible to
+        # /start_vote's Rotation Pool candidate selection, even though
+        # /list correctly shows all of them as available.
+        current_rotation = self._rotation_service.get_open_rotation(database_id)
+        progress = (
+            self._rotation_service.progress_for_rotation(current_rotation)
+            if current_rotation is not None
+            else None
+        )
         message = self._build_message(remaining_count, progress)
         return LowPoolReminderDecision(
             should_send=True, message=message, destination_channel_id=destination_channel_id
@@ -136,10 +151,14 @@ class LowPoolReminderService:
         return enabled, threshold, interval_hours, destination_channel_id
 
     @staticmethod
-    def _build_message(remaining_count: int, progress: RotationProgress) -> str:
+    def _build_message(remaining_count: int, progress: Optional[RotationProgress]) -> str:
         suggestion_word = "suggestion" if remaining_count == 1 else "suggestions"
+        rotation_clause = (
+            f" ({progress.completion_percentage:.0f}% of the current rotation presented)"
+            if progress is not None
+            else ""
+        )
         return (
-            f"The suggestion pool is getting low: {remaining_count} eligible {suggestion_word} remaining "
-            f"({progress.completion_percentage:.0f}% of the current rotation presented). "
-            "Add another with `/add` followed by a movie title or IMDb link."
+            f"The suggestion pool is getting low: {remaining_count} eligible {suggestion_word} remaining"
+            f"{rotation_clause}. Add another with `/add` followed by a movie title or IMDb link."
         )

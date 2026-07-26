@@ -269,6 +269,38 @@ class NomineeSelectionServiceTests(unittest.TestCase):
         selected = self.selector.select_nominees(self.database_id, 2)
         self.assertEqual(len(selected), 2)
 
+    # --- eligible_candidate_count: the one authoritative eligibility source ---
+
+    def test_eligible_candidate_count_matches_the_number_of_suggestions(self) -> None:
+        for title in ("A", "B", "C"):
+            self._suggest(title)
+
+        self.assertEqual(self.selector.eligible_candidate_count(self.database_id), 3)
+
+    def test_eligible_candidate_count_is_zero_for_an_empty_database(self) -> None:
+        self.assertEqual(self.selector.eligible_candidate_count(self.database_id), 0)
+
+    def test_eligible_candidate_count_always_matches_what_select_nominees_actually_sees(self) -> None:
+        # Regression for the release-blocking /list vs /start_vote
+        # disagreement: eligible_candidate_count() must resolve the
+        # candidate pool exactly like select_nominees() does, so a caller
+        # reporting "N eligible suggestions" can never disagree with what
+        # starting a vote actually selects from.
+        for title in ("A", "B"):
+            self._suggest(title)
+
+        count = self.selector.eligible_candidate_count(self.database_id)
+        selected = self.selector.select_nominees(self.database_id, 5, rng=random.Random(1))
+
+        self.assertEqual(count, len(selected))
+
+    def test_eligible_candidate_count_respects_a_supplied_strategys_candidate_pool(self) -> None:
+        self._suggest("A")
+        self._suggest("B")
+        strategy = FakeCandidateSelectionStrategy(pool=[])
+
+        self.assertEqual(self.selector.eligible_candidate_count(self.database_id, strategy), 0)
+
 
 class FakeCandidateSelectionStrategy:
     """A minimal CandidateSelectionStrategy for testing NomineeSelectionService's integration."""

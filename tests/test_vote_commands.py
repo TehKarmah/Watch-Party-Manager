@@ -238,7 +238,7 @@ class VoteCommandTests(unittest.TestCase):
         message, ephemeral = self._start_vote()
 
         self.assertTrue(ephemeral)
-        self.assertIn("At least", message)
+        self.assertIn("requires at least 2 candidates", message)
         self.assertIsNone(self.vote_service.get_open_round())
 
     def test_open_round_already_exists_is_rejected(self) -> None:

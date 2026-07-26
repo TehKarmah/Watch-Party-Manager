@@ -135,11 +135,7 @@ class NomineeSelectionService:
         if count <= 0:
             raise ValueError("count must be positive")
 
-        candidates = (
-            strategy.candidate_pool(database_id)
-            if strategy is not None
-            else self._suggestion_service.get_suggestions_for_database(database_id)
-        )
+        candidates = self._resolve_candidate_pool(database_id, strategy)
         if len(candidates) < 2:
             return []
         if len(candidates) <= count:
@@ -196,6 +192,34 @@ class NomineeSelectionService:
         if strategy is not None:
             strategy.on_presented(database_id, [item.id for item in selected])
         return selected
+
+    def eligible_candidate_count(
+        self, database_id: int, strategy: Optional["CandidateSelectionStrategy"] = None
+    ) -> int:
+        """The one authoritative count of suggestions eligible for a new
+        voting round right now, for a database.
+
+        Resolves the candidate pool through the exact same
+        _resolve_candidate_pool() select_nominees() itself uses -- never a
+        separate, hand-rolled eligibility computation -- so this count can
+        never disagree with what starting a vote will actually see (the
+        release-blocking bug this guards against: /list and /start_vote
+        must always agree on what counts as eligible).
+        """
+        return len(self._resolve_candidate_pool(database_id, strategy))
+
+    def _resolve_candidate_pool(
+        self, database_id: int, strategy: Optional["CandidateSelectionStrategy"]
+    ) -> List[WatchItem]:
+        """Resolve database_id's current candidate pool -- a database's
+        suggestions directly, or strategy.candidate_pool() when a
+        CandidateSelectionStrategy is supplied (see select_nominees).
+        """
+        return (
+            strategy.candidate_pool(database_id)
+            if strategy is not None
+            else self._suggestion_service.get_suggestions_for_database(database_id)
+        )
 
     def _recent_rotation_context(self, database_id: int) -> Tuple[Set[int], Set[int]]:
         """Determine which suggestion IDs were recently nominated or won.

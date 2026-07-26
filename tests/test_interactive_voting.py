@@ -693,7 +693,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(ephemeral)
-        self.assertIn("At least 2", message)
+        self.assertIn("requires at least 2 candidates", message)
         self.assertIsNone(self.vote_service.get_open_round())
 
     def test_selected_nominees_persist_correctly(self) -> None:

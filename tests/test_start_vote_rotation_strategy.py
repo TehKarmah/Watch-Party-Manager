@@ -131,7 +131,7 @@ class RotationPoolModeTests(StartVoteRotationStrategyTestCase):
             # remains means MIN_CANDIDATES_FOR_A_ROUND (2) blocks starting
             # a new round -- itself confirming the presented items were
             # excluded from the pool.
-            self.assertIn("eligible suggestions are needed", message)
+            self.assertIn("requires at least 2 candidates", message)
 
 
 class InfinitePoolModeTests(StartVoteRotationStrategyTestCase):

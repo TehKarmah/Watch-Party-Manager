@@ -1368,6 +1368,33 @@ def build_vote_status_text(
     return "\n".join(lines)
 
 
+def build_insufficient_candidates_message(collection_display_name: Optional[str], eligible_count: int) -> str:
+    """Build /start_vote's "not enough eligible suggestions" message.
+
+    Names the collection, the actual eligible count, and the required
+    candidate count, rather than a generic "at least 2 eligible
+    suggestions are needed" -- a WASH Crew member seeing 7 available
+    watch items in /list needs to know why /start_vote disagrees (see the
+    release-blocking bug this diagnoses: a corrupted/stale rotation
+    snapshot could make /start_vote see far fewer eligible suggestions
+    than /list reports). collection_display_name is None for the
+    no-database-context fallback pool, which has no single collection to name.
+
+    Args:
+        collection_display_name: The collection's display name (already
+            emoji-formatted via format_collection_display), or None.
+        eligible_count: The actual number of eligible suggestions found,
+            from the same authoritative source /start_vote uses to select
+            nominees (see NomineeSelectionService.eligible_candidate_count).
+    """
+    subject = f'"{collection_display_name}"' if collection_display_name else "This server"
+    count_word = "suggestion" if eligible_count == 1 else "suggestions"
+    return (
+        f"{subject} contains {eligible_count if eligible_count else 'no'} eligible {count_word}.\n"
+        f"This vote requires at least {MIN_CANDIDATES_FOR_A_ROUND} candidates."
+    )
+
+
 def perform_start_vote(
     vote_service: VoteService,
     suggestion_service: SuggestionService,
@@ -1518,6 +1545,15 @@ def perform_start_vote(
                 else CandidateSelectionMode.ROTATION_POOL
             )
             strategy = build_candidate_selection_strategy(mode, rotation_service, suggestion_service)
+        eligible_count = nominee_selection_service.eligible_candidate_count(
+            resolution.database.database_id, strategy
+        )
+        if eligible_count < MIN_CANDIDATES_FOR_A_ROUND:
+            collection_display_name = format_collection_display(resolution.database.name)
+            return (
+                build_insufficient_candidates_message(collection_display_name, eligible_count),
+                True,
+            )
         candidates = nominee_selection_service.select_nominees(
             resolution.database.database_id, count, strategy=strategy
         )
@@ -1526,16 +1562,12 @@ def perform_start_vote(
         # back to a simple, non-database-scoped pool, same low-pool rule
         # applied below.
         available = suggestion_service.get_suggestions()
+        if len(available) < MIN_CANDIDATES_FOR_A_ROUND:
+            return build_insufficient_candidates_message(None, len(available)), True
         if len(available) >= count:
             candidates = available[:count]
         else:
             candidates = available
-
-    if len(candidates) < MIN_CANDIDATES_FOR_A_ROUND:
-        return (
-            f"At least {MIN_CANDIDATES_FOR_A_ROUND} eligible suggestions are needed to start this vote.",
-            True,
-        )
 
     closes_at = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     result = vote_service.create_round(

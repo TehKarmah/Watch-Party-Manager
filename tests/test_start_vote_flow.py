@@ -208,7 +208,7 @@ class UseDefaultsTests(StartVoteFlowTestCase):
         )
 
         self.assertTrue(interaction.response.sent_ephemeral)
-        self.assertIn("At least 2", interaction.response.sent_message)
+        self.assertIn("requires at least 2 candidates", interaction.response.sent_message)
         self.assertIsNone(empty_vote_service.get_open_round())
 
 

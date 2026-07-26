@@ -235,5 +235,61 @@ class ReminderIntervalTests(LowPoolReminderServiceTestCase):
         self.assertTrue(decision.should_send)
 
 
+class RotationBootstrapAvoidanceTests(LowPoolReminderServiceTestCase):
+    """Regression tests for a release-blocking bug: evaluate() must never
+    bootstrap (and persist) a rotation as a side effect -- see
+    RotationService.get_open_rotation vs. rotation_progress/
+    get_or_start_rotation. Evaluated after every successful /add, this
+    check would otherwise freeze a brand-new collection's rotation to
+    whatever suggestions existed at the moment its pool first fell to or
+    below the default threshold (as low as 1 suggestion) -- every
+    suggestion added afterward (the default NEXT_ROTATION admission mode)
+    would never join that rotation, making /start_vote's Rotation Pool
+    candidate selection see far fewer eligible suggestions than /list.
+    """
+
+    def test_evaluate_does_not_create_a_rotation_when_none_exists(self) -> None:
+        service = self._build_service()
+
+        service.evaluate(
+            guild_id=GUILD_ID, database_id=DATABASE_ID, remaining_count=1, default_suggestion_channel_id=777
+        )
+
+        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
+
+    def test_evaluate_still_sends_a_reminder_with_no_rotation_started_yet(self) -> None:
+        service = self._build_service()
+
+        decision = service.evaluate(
+            guild_id=GUILD_ID, database_id=DATABASE_ID, remaining_count=1, default_suggestion_channel_id=777
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertIn("1", decision.message)
+        self.assertNotIn("None", decision.message)
+
+    def test_suggestions_added_after_an_early_evaluate_call_are_not_excluded_from_the_eventual_rotation(
+        self,
+    ) -> None:
+        # Reproduces the exact bug sequence: evaluate() fires after the
+        # very first suggestion is added (a pool of 1 is always at or
+        # below the default threshold of 10), then six more suggestions
+        # are added. The rotation must not exist yet -- so when it's
+        # finally started (e.g. by /start_vote), every one of the 7
+        # suggestions is correctly captured, not just the first.
+        service = self._build_service()
+        first = self.suggestion_service.suggest("Movie 1", database_id=DATABASE_ID).watch_item
+        service.evaluate(
+            guild_id=GUILD_ID, database_id=DATABASE_ID, remaining_count=1, default_suggestion_channel_id=777
+        )
+        for index in range(2, 8):
+            self.suggestion_service.suggest(f"Movie {index}", database_id=DATABASE_ID)
+
+        rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)
+
+        self.assertEqual(len(rotation.assigned_suggestion_ids), 7)
+        self.assertIn(first.id, rotation.assigned_suggestion_ids)
+
+
 if __name__ == "__main__":
     unittest.main()
