@@ -165,23 +165,29 @@ class GuildConfigurationRepository:
         return {key: copy.deepcopy(value) for key, value in entry.items() if key not in known}
 
     @staticmethod
-    def _resolve_duration_hours(voting: dict[str, Any]) -> int:
-        """Hour-Based Voting Durations: backward-compatible loading.
+    def _resolve_duration_minutes(voting: dict[str, Any]) -> int:
+        """Release Candidate Polish (Vote Duration): backward-compatible
+        loading, mirroring _resolve_reminder_minutes_before_close's exact
+        pattern.
 
-        A file already written under the new schema has "duration_hours"
-        and is used directly. An older file has only "duration_days" (a
-        whole number of days) -- converted to the exact equivalent hour
-        count (days * 24), never requiring a manual migration. A file
-        with neither key (should not normally happen, but defensive)
-        falls back to the current 24-hour default. The next save rewrites
-        the record under "duration_hours" only, so the legacy key is
-        dropped naturally rather than through a destructive migration.
+        A file already written under the new schema has
+        "duration_minutes" and is used directly. An older file has only
+        "duration_hours" (a whole number of hours, from the prior
+        Hour-Based Voting Durations schema) -- converted to the exact
+        equivalent minute count (hours * 60), or the oldest schema's
+        "duration_days" (days * 24 * 60). A file with none of these keys
+        falls back to the current 24-hour (1440-minute) default. The next
+        save rewrites the record under "duration_minutes" only, so the
+        legacy keys are dropped naturally rather than through a
+        destructive migration.
         """
+        if "duration_minutes" in voting:
+            return voting["duration_minutes"]
         if "duration_hours" in voting:
-            return voting["duration_hours"]
+            return voting["duration_hours"] * 60
         if "duration_days" in voting:
-            return voting["duration_days"] * 24
-        return 24
+            return voting["duration_days"] * 24 * 60
+        return 24 * 60
 
     @staticmethod
     def _resolve_reminder_minutes_before_close(vote_notice: dict[str, Any]) -> int:
@@ -241,7 +247,7 @@ class GuildConfigurationRepository:
             }),
             "voting_defaults": cls._merge(c.voting_defaults.extra_fields, {
                 "candidate_count": c.voting_defaults.candidate_count,
-                "duration_hours": c.voting_defaults.duration_hours,
+                "duration_minutes": c.voting_defaults.duration_minutes,
                 "visibility": c.voting_defaults.visibility.value,
                 "max_vote_changes": c.voting_defaults.max_vote_changes,
                 "tie_behavior": c.voting_defaults.tie_behavior.value,
@@ -344,10 +350,10 @@ class GuildConfigurationRepository:
             ),
             voting_defaults=VotingDefaultsConfig(
                 candidate_count=voting.get("candidate_count", 3),
-                duration_hours=cls._resolve_duration_hours(voting),
+                duration_minutes=cls._resolve_duration_minutes(voting),
                 visibility=GuildVoteVisibility(voting.get("visibility", "visible")), max_vote_changes=voting.get("max_vote_changes", 1),
                 tie_behavior=TieBehavior(voting.get("tie_behavior", "all_winners")),
-                extra_fields=cls._split_known(voting, {"candidate_count", "duration_hours", "duration_days", "visibility", "max_vote_changes", "tie_behavior"}),
+                extra_fields=cls._split_known(voting, {"candidate_count", "duration_minutes", "duration_hours", "duration_days", "visibility", "max_vote_changes", "tie_behavior"}),
             ),
             notifications=NotificationsConfig(
                 vote=VoteNotificationsConfig(

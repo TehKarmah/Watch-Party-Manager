@@ -346,6 +346,24 @@ class SuggestionDatabaseConfigurationRepository:
         return {key: copy.deepcopy(value) for key, value in entry.items() if key not in known}
 
     @staticmethod
+    def _resolve_duration_minutes(voting: dict[str, Any]) -> Optional[int]:
+        """Release Candidate Polish (Vote Duration): backward-compatible
+        loading, mirroring GuildConfigurationRepository's own
+        _resolve_duration_minutes exactly, for this per-database override.
+
+        A file already written under the new schema has "duration_minutes"
+        and is used directly. An older file has only "duration_hours" (a
+        whole number of hours) -- converted to the exact equivalent
+        minute count (hours * 60). None (inherit the guild default) is
+        preserved when neither key is present.
+        """
+        if "duration_minutes" in voting:
+            return voting["duration_minutes"]
+        if "duration_hours" in voting and voting["duration_hours"] is not None:
+            return voting["duration_hours"] * 60
+        return voting.get("duration_hours")
+
+    @staticmethod
     def _merge(extra: dict[str, Any], known: dict[str, Any]) -> dict[str, Any]:
         """Combine a section's extra_fields with its known, modeled fields.
 
@@ -383,7 +401,7 @@ class SuggestionDatabaseConfigurationRepository:
                     c.voting_overrides.extra_fields,
                     {
                         "candidate_count": c.voting_overrides.candidate_count,
-                        "duration_hours": c.voting_overrides.duration_hours,
+                        "duration_minutes": c.voting_overrides.duration_minutes,
                         "visibility": (
                             c.voting_overrides.visibility.value
                             if c.voting_overrides.visibility is not None
@@ -505,7 +523,7 @@ class SuggestionDatabaseConfigurationRepository:
             ),
             voting_overrides=VotingOverridesConfig(
                 candidate_count=voting.get("candidate_count"),
-                duration_hours=voting.get("duration_hours"),
+                duration_minutes=cls._resolve_duration_minutes(voting),
                 visibility=(
                     GuildVoteVisibility(voting["visibility"])
                     if voting.get("visibility") is not None
@@ -517,7 +535,7 @@ class SuggestionDatabaseConfigurationRepository:
                 ),
                 extra_fields=cls._split_known(
                     voting,
-                    {"candidate_count", "duration_hours", "visibility", "max_vote_changes", "tie_behavior"},
+                    {"candidate_count", "duration_minutes", "duration_hours", "visibility", "max_vote_changes", "tie_behavior"},
                 ),
             ),
             suggestion_rules=SuggestionRulesConfig(

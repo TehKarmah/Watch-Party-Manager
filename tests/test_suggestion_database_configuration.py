@@ -177,7 +177,7 @@ class VotingOverridesConfigTests(unittest.TestCase):
         overrides = VotingOverridesConfig()
 
         self.assertIsNone(overrides.candidate_count)
-        self.assertIsNone(overrides.duration_hours)
+        self.assertIsNone(overrides.duration_minutes)
         self.assertIsNone(overrides.visibility)
         self.assertIsNone(overrides.max_vote_changes)
         self.assertIsNone(overrides.tie_behavior)
@@ -185,14 +185,14 @@ class VotingOverridesConfigTests(unittest.TestCase):
     def test_accepts_a_full_set_of_overrides(self) -> None:
         overrides = VotingOverridesConfig(
             candidate_count=5,
-            duration_hours=48,
+            duration_minutes=48 * 60,
             visibility=GuildVoteVisibility.BLIND,
             max_vote_changes=2,
             tie_behavior=TieBehavior.ALL_WINNERS,
         )
 
         self.assertEqual(overrides.candidate_count, 5)
-        self.assertEqual(overrides.duration_hours, 48)
+        self.assertEqual(overrides.duration_minutes, 48 * 60)
         self.assertEqual(overrides.visibility, GuildVoteVisibility.BLIND)
         self.assertEqual(overrides.max_vote_changes, 2)
         self.assertEqual(overrides.tie_behavior, TieBehavior.ALL_WINNERS)
@@ -205,8 +205,8 @@ class VotingOverridesConfigTests(unittest.TestCase):
         # Confirms the "24 hours" project default fits the field's own
         # accepted range, without hardcoding a default onto the field
         # itself (None still means "inherit Guild Configuration").
-        overrides = VotingOverridesConfig(duration_hours=24)
-        self.assertEqual(overrides.duration_hours, 24)
+        overrides = VotingOverridesConfig(duration_minutes=24 * 60)
+        self.assertEqual(overrides.duration_minutes, 24 * 60)
 
     def test_rejects_a_candidate_count_outside_two_to_ten(self) -> None:
         for value in (1, 11):
@@ -214,15 +214,15 @@ class VotingOverridesConfigTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     VotingOverridesConfig(candidate_count=value)
 
-    def test_rejects_a_duration_hours_outside_one_to_720(self) -> None:
-        for value in (0, 721):
+    def test_rejects_a_duration_minutes_outside_one_to_720_hours(self) -> None:
+        for value in (0, 720 * 60 + 1):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
-                    VotingOverridesConfig(duration_hours=value)
+                    VotingOverridesConfig(duration_minutes=value)
 
-    def test_accepts_duration_hours_boundaries(self) -> None:
-        self.assertEqual(VotingOverridesConfig(duration_hours=1).duration_hours, 1)
-        self.assertEqual(VotingOverridesConfig(duration_hours=720).duration_hours, 720)
+    def test_accepts_duration_minutes_boundaries(self) -> None:
+        self.assertEqual(VotingOverridesConfig(duration_minutes=1).duration_minutes, 1)
+        self.assertEqual(VotingOverridesConfig(duration_minutes=720 * 60).duration_minutes, 720 * 60)
 
     def test_rejects_an_unsupported_visibility_string(self) -> None:
         with self.assertRaises(ValueError):

@@ -33,6 +33,7 @@ from watch_party_manager.services.vote_announcement_formatter import (
     build_vote_completion_announcement,
     build_vote_link,
     build_vote_results_embeds,
+    resolve_vote_collection_name,
 )
 from watch_party_manager.services.vote_completion_service import VoteCompletionResult
 
@@ -87,29 +88,6 @@ def _resolve_watch_items(suggestion_service: SuggestionLookup, suggestion_ids: L
         if watch_item is not None:
             resolved.append(watch_item)
     return resolved
-
-
-def _resolve_collection_display_name(
-    suggestion_service: SuggestionLookup, database_id: Optional[int]
-) -> str:
-    """Resolve a round's collection to a display name for the completion
-    announcement.
-
-    Uses the collection's stored name (SuggestionDatabase.name) rather
-    than live-resolving its current Discord channel name: unlike bot.py's
-    _resolve_collection_name, this module deliberately has no discord.Guild
-    dependency (see the module docstring's circular-import constraint,
-    and DiscordChannelMessenger's own minimal, channel-only shape), so it
-    follows that same helper's documented fallback path -- the stored
-    name -- rather than adding a new Discord lookup solely for this one
-    line. Falls back to "Unknown" when the round predates collection
-    association (database_id is None) or the collection no longer exists.
-    """
-    if database_id is not None:
-        database = suggestion_service.get_database(database_id)
-        if database is not None:
-            return database.name
-    return "Unknown"
 
 
 async def _resolve_channel(messenger: DiscordChannelMessenger, channel_id: int):
@@ -197,9 +175,15 @@ async def finalize_vote_completion(
 
     candidates = _resolve_watch_items(suggestion_service, vote_round.candidate_suggestion_ids)
     winning_items = _resolve_watch_items(suggestion_service, result.winning_suggestion_ids)
+    collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
 
     closed_text = build_closed_voting_post_text(
-        vote_round, candidates, winning_items, result.standings, result.total_votes_cast
+        vote_round,
+        candidates,
+        winning_items,
+        result.standings,
+        result.total_votes_cast,
+        collection_name=collection_name,
     )
     await _update_original_voting_post(messenger, vote_round, closed_text)
 
@@ -213,7 +197,6 @@ async def finalize_vote_completion(
         return
 
     original_vote_link = build_vote_link(vote_round)
-    collection_name = _resolve_collection_display_name(suggestion_service, vote_round.database_id)
     announcement_text = build_vote_completion_announcement(
         vote_round,
         candidates,
@@ -243,5 +226,6 @@ async def finalize_vote_completion(
             result.standings,
             result.total_votes_cast,
             results_link,
+            collection_name=collection_name,
         )
         await _update_original_voting_post(messenger, vote_round, closed_text_with_link)

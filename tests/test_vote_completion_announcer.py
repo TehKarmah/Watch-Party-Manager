@@ -215,9 +215,9 @@ class FinalizeVoteCompletionTests(unittest.IsolatedAsyncioTestCase):
 
         await finalize_vote_completion(self.vote_service, self.suggestion_service, bot, result)
 
-        self.assertIn("Collection: Movie Suggestions", channel.sent_messages[0]["content"])
+        self.assertIn("🎬 Movie Suggestions", channel.sent_messages[0]["content"])
 
-    async def test_announcement_shows_unknown_collection_when_the_round_has_none_recorded(self) -> None:
+    async def test_announcement_falls_back_to_a_generic_title_when_the_round_has_no_collection_recorded(self) -> None:
         vote_round = self._open_round()
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=self.matrix.id)
         result = self._complete(vote_round.id)
@@ -227,7 +227,9 @@ class FinalizeVoteCompletionTests(unittest.IsolatedAsyncioTestCase):
 
         await finalize_vote_completion(self.vote_service, self.suggestion_service, bot, result)
 
-        self.assertIn("Collection: Unknown", channel.sent_messages[0]["content"])
+        content = channel.sent_messages[0]["content"]
+        self.assertIn("Voting — Results", content)
+        self.assertNotIn("Collection:", content)
 
     async def test_announcement_shows_who_suggested_the_winner(self) -> None:
         submitted = self.suggestion_service.suggest("Brazil", original_suggester="777").watch_item
@@ -273,7 +275,7 @@ class FinalizeVoteCompletionTests(unittest.IsolatedAsyncioTestCase):
 
         await finalize_vote_completion(self.vote_service, self.suggestion_service, bot, result)
 
-        self.assertIn("Collection: Movies", channel.sent_messages[0]["content"])
+        self.assertIn("🎬 Movies", channel.sent_messages[0]["content"])
         self.assertNotIn("TV Shows", channel.sent_messages[0]["content"])
         # The TV Shows round is completely unaffected -- still open, no
         # results announcement of its own was ever sent.
@@ -296,7 +298,7 @@ class FinalizeVoteCompletionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreaterEqual(len(message.edits), 1)
         first_content, first_view = message.edits[0]
-        self.assertIn("Voting Closed", first_content)
+        self.assertIn("Voting — Closed", first_content)
         self.assertIsNone(first_view)
 
     async def test_original_post_shows_the_winner_and_final_standings(self) -> None:

@@ -50,7 +50,7 @@ class SetupWizardRepositoryTests(unittest.TestCase):
             watch_destination_channel_id=400,
             watch_destination_skipped=False,
             voting_candidate_count=4,
-            voting_duration_hours=10,
+            voting_duration_minutes=10,
             voting_visibility=GuildVoteVisibility.VISIBLE,
             voting_candidate_selection=CandidateSelectionMode.ROTATION_POOL,
             reminder_enabled=True,
@@ -80,7 +80,7 @@ class SetupWizardRepositoryTests(unittest.TestCase):
         self.assertFalse(loaded.draft.admin_channel_skipped)
         self.assertEqual(loaded.draft.home_channel_id, 500)
         self.assertEqual(loaded.draft.voting_candidate_count, 4)
-        self.assertEqual(loaded.draft.voting_duration_hours, 10)
+        self.assertEqual(loaded.draft.voting_duration_minutes, 10)
         self.assertEqual(loaded.draft.voting_visibility, GuildVoteVisibility.VISIBLE)
         self.assertEqual(loaded.draft.voting_candidate_selection, CandidateSelectionMode.ROTATION_POOL)
         self.assertTrue(loaded.draft.reminder_enabled)
@@ -88,11 +88,12 @@ class SetupWizardRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.draft.backup_interval_days, 2)
         self.assertEqual(loaded.draft.backup_retention_count, 15)
 
-    def test_legacy_voting_duration_days_loads_as_the_equivalent_hours(self):
-        # Hour-Based Voting Durations: an older draft persisted before
-        # this feature only has "voting_duration_days" -- converted to
-        # the exact equivalent hour count on load, with no manual
-        # migration required.
+    def test_legacy_voting_duration_days_loads_as_the_equivalent_minutes(self):
+        # Release Candidate Polish (Vote Duration): an older draft
+        # persisted before this feature only has the oldest
+        # "voting_duration_days" key -- converted to the exact
+        # equivalent minute count on load, with no manual migration
+        # required.
         self.path.parent.mkdir(parents=True, exist_ok=True)
         legacy_document = {
             "guilds": {
@@ -114,18 +115,45 @@ class SetupWizardRepositoryTests(unittest.TestCase):
 
         loaded = self.repo.get(1)
 
-        self.assertEqual(loaded.draft.voting_duration_hours, 120)
+        self.assertEqual(loaded.draft.voting_duration_minutes, 5 * 24 * 60)
+
+    def test_legacy_voting_duration_hours_loads_as_the_equivalent_minutes(self):
+        # A draft persisted under the prior Hour-Based Voting Durations
+        # schema has only "voting_duration_hours" -- converted to the
+        # exact equivalent minute count too.
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_document = {
+            "guilds": {
+                "1": {
+                    "guild_id": 1,
+                    "status": "in_progress",
+                    "current_step": "voting_defaults",
+                    "completed_steps": [],
+                    "started_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "draft": {
+                        "voting_candidate_count": 3,
+                        "voting_duration_hours": 5,
+                    },
+                }
+            }
+        }
+        self.path.write_text(json.dumps(legacy_document), encoding="utf-8")
+
+        loaded = self.repo.get(1)
+
+        self.assertEqual(loaded.draft.voting_duration_minutes, 5 * 60)
 
     def test_missing_voting_duration_fields_leave_it_unset(self):
         # A draft that hasn't reached the Voting Defaults step yet has
-        # neither key -- must resolve to None (step not yet answered),
-        # never a fabricated default.
+        # none of the duration keys -- must resolve to None (step not yet
+        # answered), never a fabricated default.
         draft = SetupWizardDraft(admin_channel_skipped=True)
         self.repo.save(SetupWizardState(guild_id=1, draft=draft))
 
         loaded = self.repo.get(1)
 
-        self.assertIsNone(loaded.draft.voting_duration_hours)
+        self.assertIsNone(loaded.draft.voting_duration_minutes)
 
     def test_admin_channel_skipped_round_trips_independently_of_admin_channel_id(self):
         # Regression test: admin_channel_id/admin_channel_skipped were

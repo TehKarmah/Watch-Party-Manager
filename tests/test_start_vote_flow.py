@@ -144,7 +144,7 @@ class UseDefaultsTests(StartVoteFlowTestCase):
         )
 
         vote_round = self.vote_service.get_open_round()
-        expected = before + timedelta(hours=24)  # DEFAULT_VOTE_DURATION_HOURS
+        expected = before + timedelta(hours=24)  # DEFAULT_VOTE_DURATION_MINUTES
         self.assertAlmostEqual(vote_round.closes_at.timestamp(), expected.timestamp(), delta=5)
 
     async def test_use_defaults_sends_the_interactive_voting_post(self) -> None:
@@ -161,7 +161,7 @@ class UseDefaultsTests(StartVoteFlowTestCase):
 
         self.assertFalse(interaction.response.sent_ephemeral)
         self.assertIsNotNone(interaction.response.sent_embed)
-        self.assertIn("is Open", interaction.response.sent_embed.title)
+        self.assertIn("Is Open", interaction.response.sent_embed.title)
         self.assertIn("Voting ends:", interaction.response.sent_embed.description)
 
     async def test_use_defaults_still_enforces_wash_crew_permission(self) -> None:
@@ -585,7 +585,7 @@ class BuildCustomizeVoteModalDefaultsTests(unittest.TestCase):
             guild_id=100,
             guild_name="Test Guild",
             voting_defaults=VotingDefaultsConfig(
-                candidate_count=5, duration_hours=48, visibility=GuildVoteVisibility.BLIND
+                candidate_count=5, duration_minutes=48 * 60, visibility=GuildVoteVisibility.BLIND
             ),
             notifications=NotificationsConfig(
                 vote=VoteNotificationsConfig(vote_ending_reminder=False, reminder_minutes_before_close=360)
@@ -716,19 +716,27 @@ class ParseStartVoteOverridesTests(unittest.TestCase):
     def test_values_are_trimmed_and_parsed(self) -> None:
         self.assertEqual(
             parse_start_vote_overrides(" 5 ", " 3d ", " blind "),
-            (5, 72, "blind", None, None),
+            (5, 72 * 60, "blind", None, None),
+        )
+
+    def test_explicit_minute_unit_is_parsed(self) -> None:
+        # Release Candidate Polish (Vote Duration): minute-level
+        # precision is supported, not just whole-hour amounts.
+        self.assertEqual(
+            parse_start_vote_overrides(None, "10m", None),
+            (None, 10, None, None, None),
         )
 
     def test_explicit_hour_unit_is_parsed(self) -> None:
         self.assertEqual(
             parse_start_vote_overrides(None, "4h", None),
-            (None, 4, None, None, None),
+            (None, 4 * 60, None, None, None),
         )
 
     def test_explicit_day_unit_is_parsed(self) -> None:
         self.assertEqual(
             parse_start_vote_overrides(None, "3 days", None),
-            (None, 72, None, None, None),
+            (None, 72 * 60, None, None, None),
         )
 
     def test_explicit_week_unit_is_parsed(self) -> None:
@@ -736,7 +744,7 @@ class ParseStartVoteOverridesTests(unittest.TestCase):
         # syntax now, everywhere -- including vote duration.
         self.assertEqual(
             parse_start_vote_overrides(None, "1 week", None),
-            (None, 168, None, None, None),
+            (None, 168 * 60, None, None, None),
         )
 
     def test_numeric_parse_errors_are_preserved(self) -> None:
@@ -756,7 +764,7 @@ class ParseStartVoteOverridesTests(unittest.TestCase):
     # --- FR-027: reminder overrides -------------------------------------------
 
     def test_blank_reminder_fields_resolve_to_none(self) -> None:
-        nominee_count, duration_hours, visibility, reminder_enabled, reminder_minutes = parse_start_vote_overrides(
+        nominee_count, duration_minutes, visibility, reminder_enabled, reminder_minutes = parse_start_vote_overrides(
             None, None, None, "", "  "
         )
         self.assertIsNone(reminder_enabled)

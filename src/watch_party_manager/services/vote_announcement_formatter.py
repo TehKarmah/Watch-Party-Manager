@@ -12,12 +12,14 @@ contract.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Protocol
 
 import discord
 
+from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.vote import VoteRound, VoteVisibility
 from watch_party_manager.domain.watch_item import WatchItem
+from watch_party_manager.services.collection_display import format_collection_display
 from watch_party_manager.services.discord_message_link import build_discord_message_link
 from watch_party_manager.services.discord_timestamp_formatter import format_datetime_for_display
 from watch_party_manager.services.title_formatter import format_title_with_year
@@ -27,6 +29,56 @@ from watch_party_manager.services.vote_service import StandingsEntry
 # so a winning suggestion's embed reads as the same kind of "record card"
 # whether it's shown at suggestion time or at vote-completion time.
 WINNER_EMBED_COLOR = 0xF5C518
+
+
+class DatabaseLookup(Protocol):
+    """The subset of SuggestionService needed to resolve a voting round's
+    collection to a display name. Kept minimal and Protocol-based,
+    matching this project's existing dependency conventions.
+    """
+
+    def get_database(self, database_id: int) -> Optional[SuggestionDatabase]: ...
+
+
+def resolve_vote_collection_name(
+    suggestion_service: DatabaseLookup, database_id: Optional[int]
+) -> Optional[str]:
+    """Resolve a voting round's collection to a display name, shared by
+    every vote-lifecycle message builder (Requirement 1: voting is
+    centered on the collection, not the round number) so the name is
+    resolved identically everywhere a round is presented.
+
+    Returns None when the round predates collection association
+    (database_id is None) or the collection no longer exists -- callers
+    fall back to a round-centric title in that case (see
+    format_vote_title).
+    """
+    if database_id is None:
+        return None
+    database = suggestion_service.get_database(database_id)
+    return database.name if database is not None else None
+
+
+def format_vote_title(collection_name: Optional[str], suffix: str) -> str:
+    """Build the collection-centric headline for a vote-related message,
+    e.g. "🎬 Movie Suggestions Voting — Closed" (Requirement 1). `suffix`
+    is expected to already read naturally on its own (e.g. "Voting Is
+    Open", "Voting — Closed") -- that's exactly the fallback used when no
+    collection context is available (e.g. a legacy round that predates
+    collection association, or its collection was since removed). The
+    round number remains available separately as secondary information
+    (see build_vote_round_line) in every case.
+    """
+    if collection_name:
+        return f"{format_collection_display(collection_name)} {suffix}"
+    return suffix
+
+
+def build_vote_round_line(vote_round: VoteRound) -> str:
+    """Build the round-number line shown as secondary information
+    beneath every collection-centric vote title (Requirement 1).
+    """
+    return f"Round: {vote_round.id}"
 
 
 def format_standings_lines(
@@ -111,21 +163,25 @@ def build_suggestion_link(watch_item: WatchItem) -> Optional[str]:
     return build_discord_message_link(watch_item.guild_id, watch_item.channel_id, watch_item.message_id)
 
 
-def build_vote_deadline_change_notice(vote_round: VoteRound) -> str:
+def build_vote_deadline_change_notice(vote_round: VoteRound, collection_name: Optional[str] = None) -> str:
     """Build the public notice announcing a round's deadline changed.
 
-    Posted by /edit_vote's "Change End Time" action, after
-    VoteService.reschedule_round() has already updated and persisted the
-    round's new closes_at.
+    Posted by /edit_vote's "Change End Time" action (including Shorten
+    Vote/Extend Vote), after VoteService.reschedule_round() has already
+    updated and persisted the round's new closes_at.
 
     Args:
         vote_round: The round, already updated to its new closes_at.
+        collection_name: The round's collection, if known (Requirement
+            1) -- see resolve_vote_collection_name. None falls back to a
+            generic, round-centric title.
 
     Returns:
         The notice text, including a link to the original post when available.
     """
     lines = [
-        f"Voting round {vote_round.id}'s deadline has changed.",
+        f"**{format_vote_title(collection_name, 'Voting — Updated')}**",
+        build_vote_round_line(vote_round),
         f"Voting now ends: {format_datetime_for_display(vote_round.closes_at)}",
     ]
     link = build_vote_link(vote_round)
@@ -134,7 +190,7 @@ def build_vote_deadline_change_notice(vote_round: VoteRound) -> str:
     return "\n".join(lines)
 
 
-def build_vote_cancellation_notice(vote_round: VoteRound) -> str:
+def build_vote_cancellation_notice(vote_round: VoteRound, collection_name: Optional[str] = None) -> str:
     """Build the public notice announcing a round was cancelled.
 
     Posted by /edit_vote's "Cancel Vote" action, after
@@ -143,11 +199,18 @@ def build_vote_cancellation_notice(vote_round: VoteRound) -> str:
 
     Args:
         vote_round: The now-cancelled round.
+        collection_name: The round's collection, if known (Requirement
+            1) -- see resolve_vote_collection_name. None falls back to a
+            generic, round-centric title.
 
     Returns:
         The notice text, including a link to the original post when available.
     """
-    lines = [f"Voting round {vote_round.id} has been cancelled by WASH Crew."]
+    lines = [
+        f"**{format_vote_title(collection_name, 'Voting — Cancelled')}**",
+        build_vote_round_line(vote_round),
+        "Cancelled by WASH Crew.",
+    ]
     link = build_vote_link(vote_round)
     if link:
         lines.append(f"Original post: {link}")
@@ -338,17 +401,18 @@ def build_vote_completion_announcement(
         original_vote_link: A jump link to the original voting post, or
             None to omit it (e.g. missing message metadata).
         collection_name: The collection this round belongs to, already
-            resolved by the caller (see
-            vote_completion_announcer._resolve_collection_display_name),
-            or None to omit the line -- e.g. a legacy round created
-            before rounds recorded their collection.
+            resolved by the caller (see resolve_vote_collection_name),
+            or None for a legacy round created before rounds recorded
+            their collection -- falls back to a generic, round-centric
+            title (Requirement 1).
 
     Returns:
         The announcement text.
     """
-    lines = [f"Voting round {vote_round.id} has closed!"]
-    if collection_name:
-        lines.append(f"Collection: {collection_name}")
+    lines = [
+        f"**{format_vote_title(collection_name, 'Voting — Results')}**",
+        build_vote_round_line(vote_round),
+    ]
     lines.append(_build_winner_summary_line(winning_items, total_votes_cast))
     lines.append(f"Total votes cast: {total_votes_cast}")
     lines.extend(_build_final_standings_block(candidates, standings))
@@ -376,6 +440,7 @@ def build_closed_voting_post_text(
     standings: Optional[List[StandingsEntry]],
     total_votes_cast: int,
     results_link: Optional[str] = None,
+    collection_name: Optional[str] = None,
 ) -> str:
     """Build the original voting post's text once the round has completed.
 
@@ -397,12 +462,16 @@ def build_closed_voting_post_text(
             to omit it -- e.g. before the announcement has been sent
             yet (this text is built once immediately on close, then
             again with this link once the announcement exists).
+        collection_name: The round's collection, if known (Requirement
+            1) -- see resolve_vote_collection_name. None falls back to a
+            generic, round-centric title.
 
     Returns:
         The updated original-post text.
     """
     lines = [
-        f"Voting round {vote_round.id} — Voting Closed",
+        f"**{format_vote_title(collection_name, 'Voting — Closed')}**",
+        build_vote_round_line(vote_round),
         _build_winner_summary_line(winning_items, total_votes_cast),
         f"Total votes cast: {total_votes_cast}",
     ]

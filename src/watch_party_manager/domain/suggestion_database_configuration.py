@@ -128,13 +128,13 @@ class VotingOverridesConfig:
     responsibility; this configuration-only model just stores the
     override (or absence of one). Bounds mirror
     guild_configuration.VotingDefaultsConfig's validation exactly --
-    duration is hour-based in both models (Hour-Based Voting Durations
-    made Guild Configuration's own duration_hours match this field's
-    pre-existing unit and bounds exactly).
+    duration is minute-based in both models (Release Candidate Polish:
+    Vote Duration made Guild Configuration's own duration_minutes match
+    this field's unit and bounds exactly).
     """
 
     candidate_count: Optional[int] = None
-    duration_hours: Optional[int] = None
+    duration_minutes: Optional[int] = None
     visibility: Optional[GuildVoteVisibility] = None
     max_vote_changes: Optional[int] = None
     tie_behavior: Optional[TieBehavior] = None
@@ -143,8 +143,8 @@ class VotingOverridesConfig:
     def __post_init__(self) -> None:
         if self.candidate_count is not None:
             _validate_positive_int(self.candidate_count, "candidate_count", 2, 10)
-        if self.duration_hours is not None:
-            _validate_positive_int(self.duration_hours, "duration_hours", 1, 720)
+        if self.duration_minutes is not None:
+            _validate_positive_int(self.duration_minutes, "duration_minutes", 1, 720 * 60)
         if self.visibility is not None:
             self.visibility = _coerce_enum(self.visibility, GuildVoteVisibility, "visibility")  # type: ignore[assignment]
         if self.max_vote_changes is not None:

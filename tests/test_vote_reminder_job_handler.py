@@ -118,7 +118,7 @@ class VoteReminderJobHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         await self.handler.execute(make_job(vote_round.id))
 
-        self.assertIn(f"Voting round {vote_round.id}", self.channel.sent_messages[0])
+        self.assertIn(f"Round: {vote_round.id}", self.channel.sent_messages[0])
 
     async def test_reminder_includes_the_discord_native_close_timestamp(self) -> None:
         closes_at = datetime.now(timezone.utc) + timedelta(hours=3)

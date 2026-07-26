@@ -414,12 +414,10 @@ class HandleNomineeVoteMultiCollectionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(movies_message.edit_call_count, 1)
-        # The embed title carries the round ID -- confirms the refresh
-        # used the Movies round (the one this click's suggestion belongs
-        # to), never the TV Shows round that also happens to be open.
-        self.assertEqual(
-            movies_message.edited_embed.title, f"Voting Round {self.movies_round.id} is Open"
-        )
+        # The embed title carries the collection name -- confirms the
+        # refresh used the Movies round (the one this click's suggestion
+        # belongs to), never the TV Shows round that also happens to be open.
+        self.assertEqual(movies_message.edited_embed.title, "🎬 Movies Voting Is Open")
 
     async def test_closing_the_movies_round_does_not_block_voting_in_tv_shows(self) -> None:
         self.vote_service.close_round(self.movies_round.id)
@@ -484,7 +482,7 @@ class StartVoteCreatesAVotingPostTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
         )
         self.assertFalse(ephemeral)
 
@@ -500,7 +498,7 @@ class StartVoteCreatesAVotingPostTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({button.suggestion_id for button in view.children}, {1, 2, 3})
 
         post_embed = build_voting_post_embed(vote_round, candidates, standings=None, standings_error=None)
-        self.assertIn(f"Voting Round {vote_round.id} is Open", post_embed.title)
+        self.assertEqual("Voting Is Open", post_embed.title)
         self.assertIn("The Matrix", post_embed.description)
 
     async def test_message_ids_are_stored_after_the_post_is_sent(self) -> None:
@@ -511,7 +509,7 @@ class StartVoteCreatesAVotingPostTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
         )
         vote_round = self.vote_service.get_open_round()
 
@@ -571,7 +569,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             channel_id=200,
         )
@@ -602,7 +600,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             channel_id=200,
         )
@@ -615,7 +613,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             channel_id=201,
         )
@@ -638,7 +636,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             channel_id=200,
         )
@@ -650,7 +648,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             channel_id=200,
         )
@@ -669,7 +667,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
             nominee_count=5,
             guild_id=100,
             channel_id=200,
@@ -689,7 +687,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             channel_id=200,
         )
@@ -710,7 +708,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
             nominee_count=2,
             guild_id=100,
             channel_id=200,
@@ -734,7 +732,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             user=self._authorized_user(),
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
             nominee_count=2,
             guild_id=100,
             channel_id=200,

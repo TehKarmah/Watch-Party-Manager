@@ -67,7 +67,7 @@ class VoteCommandTests(unittest.TestCase):
         return FakeMember(roles=[FakeRole(1)])
 
     def _start_vote(
-        self, user=None, wash_crew_role_id=WASH_CREW_ROLE_ID, visibility="visible", duration_hours=None
+        self, user=None, wash_crew_role_id=WASH_CREW_ROLE_ID, visibility="visible", duration_minutes=None
     ):
         return perform_start_vote(
             vote_service=self.vote_service,
@@ -76,7 +76,7 @@ class VoteCommandTests(unittest.TestCase):
             user=user if user is not None else self._authorized_user(),
             wash_crew_role_id=wash_crew_role_id,
             visibility_str=visibility,
-            duration_hours=duration_hours,
+            duration_minutes=duration_minutes,
         )
 
     # --- /start_vote: permissions ----------------------------------------
@@ -119,7 +119,7 @@ class VoteCommandTests(unittest.TestCase):
 
         self.assertNotEqual(unconfigured_message, lacks_role_message)
 
-    # --- /start_vote: duration (Hour-Based Voting Durations) ---------------------
+    # --- /start_vote: duration (Release Candidate Polish: Vote Duration) ---------
 
     def test_default_duration_is_twenty_four_hours(self) -> None:
         # Section 2: the default changed from 7 days to 24 hours (still
@@ -128,16 +128,27 @@ class VoteCommandTests(unittest.TestCase):
         # for the guild-configured-default case).
         before = datetime.now(timezone.utc)
 
-        self._start_vote(duration_hours=None)
+        self._start_vote(duration_minutes=None)
 
         vote_round = self.vote_service.get_open_round()
         expected = before + timedelta(hours=24)
         self.assertAlmostEqual(vote_round.closes_at.timestamp(), expected.timestamp(), delta=5)
 
+    def test_ten_minute_duration_is_accepted(self) -> None:
+        # Release Candidate Polish (Vote Duration): minute-level precision
+        # is supported, not just whole-hour amounts.
+        before = datetime.now(timezone.utc)
+
+        self._start_vote(duration_minutes=10)
+
+        vote_round = self.vote_service.get_open_round()
+        expected = before + timedelta(minutes=10)
+        self.assertAlmostEqual(vote_round.closes_at.timestamp(), expected.timestamp(), delta=5)
+
     def test_one_hour_duration_is_accepted(self) -> None:
         before = datetime.now(timezone.utc)
 
-        self._start_vote(duration_hours=1)
+        self._start_vote(duration_minutes=60)
 
         vote_round = self.vote_service.get_open_round()
         expected = before + timedelta(hours=1)
@@ -146,7 +157,7 @@ class VoteCommandTests(unittest.TestCase):
     def test_four_hour_duration_is_accepted(self) -> None:
         before = datetime.now(timezone.utc)
 
-        self._start_vote(duration_hours=4)
+        self._start_vote(duration_minutes=4 * 60)
 
         vote_round = self.vote_service.get_open_round()
         expected = before + timedelta(hours=4)
@@ -155,7 +166,7 @@ class VoteCommandTests(unittest.TestCase):
     def test_twelve_hour_duration_is_accepted(self) -> None:
         before = datetime.now(timezone.utc)
 
-        self._start_vote(duration_hours=12)
+        self._start_vote(duration_minutes=12 * 60)
 
         vote_round = self.vote_service.get_open_round()
         expected = before + timedelta(hours=12)
@@ -164,7 +175,7 @@ class VoteCommandTests(unittest.TestCase):
     def test_custom_duration_is_accepted(self) -> None:
         before = datetime.now(timezone.utc)
 
-        self._start_vote(duration_hours=72)  # 3 days, expressed in hours
+        self._start_vote(duration_minutes=72 * 60)  # 3 days, expressed in minutes
 
         vote_round = self.vote_service.get_open_round()
         expected = before + timedelta(hours=72)
@@ -173,39 +184,39 @@ class VoteCommandTests(unittest.TestCase):
     def test_seven_day_equivalent_duration_is_accepted(self) -> None:
         before = datetime.now(timezone.utc)
 
-        self._start_vote(duration_hours=168)  # 7 days
+        self._start_vote(duration_minutes=168 * 60)  # 7 days
 
         vote_round = self.vote_service.get_open_round()
         expected = before + timedelta(hours=168)
         self.assertAlmostEqual(vote_round.closes_at.timestamp(), expected.timestamp(), delta=5)
 
-    def test_duration_of_one_hour_is_accepted(self) -> None:
-        message, ephemeral = self._start_vote(duration_hours=1)
+    def test_duration_of_one_minute_is_accepted(self) -> None:
+        message, ephemeral = self._start_vote(duration_minutes=1)
 
         self.assertFalse(ephemeral)
         self.assertIsNotNone(self.vote_service.get_open_round())
 
     def test_duration_of_thirty_days_maximum_is_accepted(self) -> None:
-        message, ephemeral = self._start_vote(duration_hours=720)
+        message, ephemeral = self._start_vote(duration_minutes=720 * 60)
 
         self.assertFalse(ephemeral)
         self.assertIsNotNone(self.vote_service.get_open_round())
 
     def test_duration_of_zero_is_rejected(self) -> None:
-        message, ephemeral = self._start_vote(duration_hours=0)
+        message, ephemeral = self._start_vote(duration_minutes=0)
 
         self.assertTrue(ephemeral)
         self.assertIn("between", message)
         self.assertIsNone(self.vote_service.get_open_round())
 
     def test_negative_duration_is_rejected(self) -> None:
-        message, ephemeral = self._start_vote(duration_hours=-1)
+        message, ephemeral = self._start_vote(duration_minutes=-1)
 
         self.assertTrue(ephemeral)
         self.assertIsNone(self.vote_service.get_open_round())
 
     def test_duration_above_thirty_days_is_rejected(self) -> None:
-        message, ephemeral = self._start_vote(duration_hours=721)
+        message, ephemeral = self._start_vote(duration_minutes=720 * 60 + 1)
 
         self.assertTrue(ephemeral)
         self.assertIsNone(self.vote_service.get_open_round())
@@ -250,7 +261,7 @@ class VoteCommandTests(unittest.TestCase):
         self.assertEqual(message, "A voting round is already open for this collection.")
 
     def test_confirmation_contains_the_expected_details(self) -> None:
-        message, ephemeral = self._start_vote(visibility="blind", duration_hours=240)
+        message, ephemeral = self._start_vote(visibility="blind", duration_minutes=240 * 60)
 
         self.assertFalse(ephemeral)
         self.assertIn("Voting round 1", message)
@@ -615,7 +626,7 @@ class DefaultVoteVisibilityTests(unittest.TestCase):
             self._authorized_user(),
             WASH_CREW_ROLE_ID,
             visibility_str=None,
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             guild_configuration_repository=self.guild_configuration_repository,
         )
@@ -633,7 +644,7 @@ class DefaultVoteVisibilityTests(unittest.TestCase):
             self._authorized_user(),
             WASH_CREW_ROLE_ID,
             visibility_str=None,
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             guild_configuration_repository=self.guild_configuration_repository,
         )
@@ -651,7 +662,7 @@ class DefaultVoteVisibilityTests(unittest.TestCase):
             self._authorized_user(),
             WASH_CREW_ROLE_ID,
             visibility_str=None,
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             guild_configuration_repository=self.guild_configuration_repository,
         )
@@ -669,7 +680,7 @@ class DefaultVoteVisibilityTests(unittest.TestCase):
             self._authorized_user(),
             WASH_CREW_ROLE_ID,
             visibility_str="visible",
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             guild_configuration_repository=self.guild_configuration_repository,
         )
@@ -687,7 +698,7 @@ class DefaultVoteVisibilityTests(unittest.TestCase):
             self._authorized_user(),
             WASH_CREW_ROLE_ID,
             visibility_str="   ",
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             guild_configuration_repository=self.guild_configuration_repository,
         )
@@ -697,11 +708,11 @@ class DefaultVoteVisibilityTests(unittest.TestCase):
 
 
 class DefaultVoteDurationTests(unittest.TestCase):
-    """Hour-Based Voting Durations, Section 2: starting a vote without an
-    explicit duration override uses the guild's configured duration --
-    previously always DEFAULT_VOTE_DURATION_HOURS regardless of what
-    /setup or /config had saved (the same class of bug Batch 2 fixed for
-    visibility)."""
+    """Release Candidate Polish (Vote Duration), Section 2: starting a
+    vote without an explicit duration override uses the guild's
+    configured duration -- previously always DEFAULT_VOTE_DURATION_MINUTES
+    regardless of what /setup or /config had saved (the same class of bug
+    Batch 2 fixed for visibility)."""
 
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
@@ -725,12 +736,12 @@ class DefaultVoteDurationTests(unittest.TestCase):
     def _authorized_user(self) -> FakeMember:
         return FakeMember(roles=[FakeRole(WASH_CREW_ROLE_ID)])
 
-    def _save_guild_default(self, duration_hours: int) -> None:
+    def _save_guild_default(self, duration_minutes: int) -> None:
         self.guild_configuration_repository.save(
             GuildConfiguration(
                 guild_id=100,
                 guild_name="Test Guild",
-                voting_defaults=VotingDefaultsConfig(duration_hours=duration_hours),
+                voting_defaults=VotingDefaultsConfig(duration_minutes=duration_minutes),
             )
         )
 
@@ -744,7 +755,7 @@ class DefaultVoteDurationTests(unittest.TestCase):
             self._authorized_user(),
             WASH_CREW_ROLE_ID,
             visibility_str=None,
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             guild_configuration_repository=self.guild_configuration_repository,
         )
@@ -756,7 +767,7 @@ class DefaultVoteDurationTests(unittest.TestCase):
         )
 
     def test_configured_short_duration_is_honored_without_an_explicit_override(self) -> None:
-        self._save_guild_default(4)
+        self._save_guild_default(4 * 60)
         before = datetime.now(timezone.utc)
 
         message, ephemeral = perform_start_vote(
@@ -766,7 +777,7 @@ class DefaultVoteDurationTests(unittest.TestCase):
             self._authorized_user(),
             WASH_CREW_ROLE_ID,
             visibility_str=None,
-            duration_hours=None,
+            duration_minutes=None,
             guild_id=100,
             guild_configuration_repository=self.guild_configuration_repository,
         )
@@ -778,7 +789,7 @@ class DefaultVoteDurationTests(unittest.TestCase):
         )
 
     def test_explicit_override_wins_over_a_configured_default(self) -> None:
-        self._save_guild_default(4)
+        self._save_guild_default(4 * 60)
         before = datetime.now(timezone.utc)
 
         message, ephemeral = perform_start_vote(
@@ -788,7 +799,7 @@ class DefaultVoteDurationTests(unittest.TestCase):
             self._authorized_user(),
             WASH_CREW_ROLE_ID,
             visibility_str=None,
-            duration_hours=12,
+            duration_minutes=12 * 60,
             guild_id=100,
             guild_configuration_repository=self.guild_configuration_repository,
         )

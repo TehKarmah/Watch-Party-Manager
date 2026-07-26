@@ -198,7 +198,7 @@ class HandleDatabaseResetTests(ResetImportCommandTestCase):
         self.assertIsNotNone(interaction.response.sent_view)
         select = interaction.response.sent_view.children[0]
         self.assertEqual(1, len(select.options))
-        self.assertEqual("Movie Night", select.options[0].label)
+        self.assertEqual("🎬 Movie Night", select.options[0].label)
 
     async def test_selecting_a_database_shows_a_summary_and_confirmation_view(self) -> None:
         self._seed_database(name="Movie Night")
@@ -444,7 +444,7 @@ class HandleDatabaseRemoveTests(ResetImportCommandTestCase):
         self.assertIsNotNone(interaction.response.sent_view)
         select = interaction.response.sent_view.children[0]
         self.assertEqual(1, len(select.options))
-        self.assertEqual("Movie Night", select.options[0].label)
+        self.assertEqual("🎬 Movie Night", select.options[0].label)
 
     async def test_selecting_a_database_deactivates_it(self) -> None:
         self._seed_database(name="Movie Night")

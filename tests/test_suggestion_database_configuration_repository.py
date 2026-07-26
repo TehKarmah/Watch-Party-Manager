@@ -90,7 +90,7 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
             channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=10, voting_channel_id=10),
             voting_overrides=VotingOverridesConfig(
                 candidate_count=5,
-                duration_hours=48,
+                duration_minutes=48 * 60,
                 visibility=GuildVoteVisibility.BLIND,
                 max_vote_changes=2,
                 tie_behavior=TieBehavior.ALL_WINNERS,
@@ -103,7 +103,7 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
 
         self.assertEqual(loaded.channels.suggestion_channel_id, 10)
         self.assertEqual(loaded.voting_overrides.candidate_count, 5)
-        self.assertEqual(loaded.voting_overrides.duration_hours, 48)
+        self.assertEqual(loaded.voting_overrides.duration_minutes, 48 * 60)
         self.assertEqual(loaded.voting_overrides.visibility, GuildVoteVisibility.BLIND)
         self.assertEqual(loaded.voting_overrides.tie_behavior, TieBehavior.ALL_WINNERS)
         self.assertEqual(loaded.permissions.moderator_role_ids, (5, 6))

@@ -50,7 +50,7 @@ from watch_party_manager.services.configuration_validation import (
     validate_channel_usable,
     validate_role_exists,
 )
-from watch_party_manager.services.duration_formatter import format_duration_hours, format_duration_minutes
+from watch_party_manager.services.duration_formatter import format_duration_minutes
 from watch_party_manager.services.suggestion_service import SuggestionService
 
 # Backup schedule/retention have no dedicated persisted "Application
@@ -296,14 +296,14 @@ class SetupWizardService:
         self,
         state: SetupWizardState,
         candidate_count: int,
-        duration_hours: int,
+        duration_minutes: int,
         visibility: GuildVoteVisibility,
         candidate_selection: CandidateSelectionMode,
     ) -> SetupWizardState:
         draft = replace(
             state.draft,
             voting_candidate_count=candidate_count,
-            voting_duration_hours=duration_hours,
+            voting_duration_minutes=duration_minutes,
             voting_visibility=visibility,
             voting_candidate_selection=candidate_selection,
         )
@@ -384,7 +384,7 @@ class SetupWizardService:
             candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[draft.voting_candidate_selection]
             lines.append(
                 "Voting Defaults: Configured "
-                f"({draft.voting_candidate_count} candidates, {format_duration_hours(draft.voting_duration_hours)}, "
+                f"({draft.voting_candidate_count} candidates, {format_duration_minutes(draft.voting_duration_minutes)}, "
                 f"{draft.voting_visibility.value}, {candidate_selection_label})"
             )
         else:
@@ -532,7 +532,7 @@ class SetupWizardService:
                 updated,
                 voting_defaults=VotingDefaultsConfig(
                     candidate_count=draft.voting_candidate_count,
-                    duration_hours=draft.voting_duration_hours,
+                    duration_minutes=draft.voting_duration_minutes,
                     visibility=draft.voting_visibility,
                     max_vote_changes=base.voting_defaults.max_vote_changes,
                     tie_behavior=base.voting_defaults.tie_behavior,

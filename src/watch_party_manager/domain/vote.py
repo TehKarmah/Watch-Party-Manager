@@ -13,15 +13,17 @@ MAX_VOTE_CHANGES = 1
 # A voting round needs at least this many suggestions to choose between.
 MIN_CANDIDATES_FOR_A_ROUND = 2
 
-# How many hours a voting round stays open by default when no explicit
-# duration is given. Hours is the internal unit of record throughout the
-# voting-duration model (Hour-Based Voting Durations) -- 24 hours
-# preserves the previous one-day default exactly.
-DEFAULT_VOTE_DURATION_HOURS = 24
+# How many minutes a voting round stays open by default when no explicit
+# duration is given. Minutes is the internal unit of record throughout the
+# voting-duration model (Release Candidate Polish: Vote Duration) --
+# matches VoteNotificationsConfig.reminder_minutes_before_close's own
+# minute-precision convention -- 1440 minutes preserves the previous
+# one-day default exactly.
+DEFAULT_VOTE_DURATION_MINUTES = 24 * 60
 
-# Bounds for a custom voting duration, inclusive: 1 hour through 30 days.
-MIN_VOTE_DURATION_HOURS = 1
-MAX_VOTE_DURATION_HOURS = 720
+# Bounds for a custom voting duration, inclusive: 1 minute through 30 days.
+MIN_VOTE_DURATION_MINUTES = 1
+MAX_VOTE_DURATION_MINUTES = 720 * 60
 
 # Nominee-count defaults and bounds for interactive voting.
 DEFAULT_VOTE_CANDIDATE_COUNT = 3
@@ -182,7 +184,7 @@ class VoteRound:
         # configured default". Practical range bounds (1-43200 minutes,
         # matching that same config's own bounds) are enforced at the
         # command layer (see bot.py's parse_vote_reminder_minutes_before_close),
-        # not here -- this mirrors how duration_hours/nominee_count
+        # not here -- this mirrors how duration_minutes/nominee_count
         # business-rule bounds are validated in bot.py rather than in this
         # domain model.
         if self.reminder_minutes_before_close is not None and self.reminder_minutes_before_close <= 0:

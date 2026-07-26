@@ -65,7 +65,7 @@ All four channels are optional. When no announcements channel is configured, WAS
 ```yaml
 voting_defaults:
   candidate_count: 3
-  duration_hours: 24
+  duration_minutes: 1440
   visibility: visible
   max_vote_changes: 1
   tie_behavior: all_winners
@@ -74,7 +74,7 @@ voting_defaults:
 Validation:
 
 - `candidate_count`: 2 through 10
-- `duration_hours`: 1 through 720 (Hour-Based Voting Durations; hours is the single internal unit, replacing the earlier day-based setting)
+- `duration_minutes`: 1 through 43200 (Release Candidate Polish: Vote Duration; minutes is the single internal unit, replacing the earlier hour- and day-based settings)
 - `visibility`: `blind` or `visible`
 - `max_vote_changes`: 0 through 10
 - `tie_behavior`: `all_winners` in v1
@@ -91,7 +91,7 @@ notifications:
     vote_started: true
     vote_results: true
     vote_ending_reminder: true
-    reminder_hours_before_close: 24
+    reminder_minutes_before_close: 1440
   watch:
     enabled: true
     reminder_hours_before_watch: 1

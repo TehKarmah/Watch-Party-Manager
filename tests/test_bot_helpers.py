@@ -10,9 +10,9 @@ from watch_party_manager.bot import (
     format_datetime_for_display,
     is_wash_crew_member,
     parse_default_nominee_count,
-    parse_duration_text_to_hours,
+    parse_duration_text_to_minutes,
     parse_guild_id,
-    parse_vote_duration_hours,
+    parse_vote_duration_minutes,
     parse_vote_nominee_count,
     parse_vote_visibility,
     parse_wash_crew_role_id,
@@ -20,11 +20,11 @@ from watch_party_manager.bot import (
 )
 from watch_party_manager.domain.vote import (
     DEFAULT_VOTE_CANDIDATE_COUNT,
-    DEFAULT_VOTE_DURATION_HOURS,
+    DEFAULT_VOTE_DURATION_MINUTES,
     MAX_VOTE_CANDIDATE_COUNT,
-    MAX_VOTE_DURATION_HOURS,
+    MAX_VOTE_DURATION_MINUTES,
     MIN_VOTE_CANDIDATE_COUNT,
-    MIN_VOTE_DURATION_HOURS,
+    MIN_VOTE_DURATION_MINUTES,
     VoteVisibility,
 )
 
@@ -234,37 +234,37 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("blind", str(ctx.exception).lower())
         self.assertIn("visible", str(ctx.exception).lower())
 
-    # --- Vote duration validation (Hour-Based Voting Durations) --------------------
+    # --- Vote duration validation (Release Candidate Polish: Vote Duration) --------
 
-    def test_parse_vote_duration_hours_returns_default_when_not_given(self) -> None:
-        self.assertEqual(parse_vote_duration_hours(None), DEFAULT_VOTE_DURATION_HOURS)
+    def test_parse_vote_duration_minutes_returns_default_when_not_given(self) -> None:
+        self.assertEqual(parse_vote_duration_minutes(None), DEFAULT_VOTE_DURATION_MINUTES)
 
-    def test_parse_vote_duration_hours_returns_a_supplied_default_when_not_given(self) -> None:
-        self.assertEqual(parse_vote_duration_hours(None, default=72), 72)
+    def test_parse_vote_duration_minutes_returns_a_supplied_default_when_not_given(self) -> None:
+        self.assertEqual(parse_vote_duration_minutes(None, default=72), 72)
 
-    def test_parse_vote_duration_hours_accepts_the_minimum_boundary(self) -> None:
-        self.assertEqual(parse_vote_duration_hours(MIN_VOTE_DURATION_HOURS), MIN_VOTE_DURATION_HOURS)
-        self.assertEqual(parse_vote_duration_hours(1), 1)
+    def test_parse_vote_duration_minutes_accepts_the_minimum_boundary(self) -> None:
+        self.assertEqual(parse_vote_duration_minutes(MIN_VOTE_DURATION_MINUTES), MIN_VOTE_DURATION_MINUTES)
+        self.assertEqual(parse_vote_duration_minutes(1), 1)
 
-    def test_parse_vote_duration_hours_accepts_the_maximum_boundary(self) -> None:
-        self.assertEqual(parse_vote_duration_hours(MAX_VOTE_DURATION_HOURS), MAX_VOTE_DURATION_HOURS)
-        self.assertEqual(parse_vote_duration_hours(720), 720)
+    def test_parse_vote_duration_minutes_accepts_the_maximum_boundary(self) -> None:
+        self.assertEqual(parse_vote_duration_minutes(MAX_VOTE_DURATION_MINUTES), MAX_VOTE_DURATION_MINUTES)
+        self.assertEqual(parse_vote_duration_minutes(720 * 60), 720 * 60)
 
-    def test_parse_vote_duration_hours_accepts_a_value_in_the_middle(self) -> None:
-        self.assertEqual(parse_vote_duration_hours(14), 14)
+    def test_parse_vote_duration_minutes_accepts_a_value_in_the_middle(self) -> None:
+        self.assertEqual(parse_vote_duration_minutes(14), 14)
 
-    def test_parse_vote_duration_hours_rejects_zero(self) -> None:
+    def test_parse_vote_duration_minutes_rejects_zero(self) -> None:
         with self.assertRaises(ValueError) as ctx:
-            parse_vote_duration_hours(0)
+            parse_vote_duration_minutes(0)
         self.assertIn("between", str(ctx.exception))
 
-    def test_parse_vote_duration_hours_rejects_negative_values(self) -> None:
+    def test_parse_vote_duration_minutes_rejects_negative_values(self) -> None:
         with self.assertRaises(ValueError):
-            parse_vote_duration_hours(-1)
+            parse_vote_duration_minutes(-1)
 
-    def test_parse_vote_duration_hours_rejects_values_above_the_maximum(self) -> None:
+    def test_parse_vote_duration_minutes_rejects_values_above_the_maximum(self) -> None:
         with self.assertRaises(ValueError):
-            parse_vote_duration_hours(721)
+            parse_vote_duration_minutes(720 * 60 + 1)
 
     # --- Free-text duration parsing (Requirement 3: Standardize Duration Syntax) ---
 
@@ -273,56 +273,60 @@ class BotHelperTests(unittest.TestCase):
         # everywhere -- the old "bare number means days" convenience is
         # deliberately no longer accepted.
         with self.assertRaises(ValueError):
-            parse_duration_text_to_hours("7")
+            parse_duration_text_to_minutes("7")
+
+    def test_parse_duration_text_accepts_minute_units(self) -> None:
+        for text in ("10m", "10 minute", "10 minutes", "10M"):
+            with self.subTest(text=text):
+                self.assertEqual(parse_duration_text_to_minutes(text), 10)
 
     def test_parse_duration_text_accepts_hour_units(self) -> None:
         for text in ("4h", "4 hour", "4 hours", "4H"):
             with self.subTest(text=text):
-                self.assertEqual(parse_duration_text_to_hours(text), 4)
+                self.assertEqual(parse_duration_text_to_minutes(text), 4 * 60)
 
     def test_parse_duration_text_accepts_day_units(self) -> None:
         for text in ("3d", "3 day", "3 days", "3D"):
             with self.subTest(text=text):
-                self.assertEqual(parse_duration_text_to_hours(text), 72)
+                self.assertEqual(parse_duration_text_to_minutes(text), 72 * 60)
 
     def test_parse_duration_text_accepts_week_units(self) -> None:
-        self.assertEqual(parse_duration_text_to_hours("1w"), 168)
-        self.assertEqual(parse_duration_text_to_hours("1 week"), 168)
-        self.assertEqual(parse_duration_text_to_hours("2 weeks"), 336)
+        self.assertEqual(parse_duration_text_to_minutes("1w"), 168 * 60)
+        self.assertEqual(parse_duration_text_to_minutes("1 week"), 168 * 60)
+        self.assertEqual(parse_duration_text_to_minutes("2 weeks"), 336 * 60)
 
     def test_parse_duration_text_accepts_one_hour(self) -> None:
-        self.assertEqual(parse_duration_text_to_hours("1h"), 1)
+        self.assertEqual(parse_duration_text_to_minutes("1h"), 60)
 
     def test_parse_duration_text_natural_language_output_round_trips(self) -> None:
-        # format_duration_hours' own output must always be valid input
+        # format_duration_minutes' own output must always be valid input
         # here too -- the Setup Wizard/`/config` modal prefills a field
         # with the formatted string, and resubmitting it unchanged must
         # not silently change the saved duration.
-        self.assertEqual(parse_duration_text_to_hours("1 day"), 24)
-        self.assertEqual(parse_duration_text_to_hours("3 days"), 72)
+        self.assertEqual(parse_duration_text_to_minutes("1 day"), 24 * 60)
+        self.assertEqual(parse_duration_text_to_minutes("3 days"), 72 * 60)
 
     def test_parse_duration_text_ignores_surrounding_whitespace(self) -> None:
-        self.assertEqual(parse_duration_text_to_hours("  4h  "), 4)
+        self.assertEqual(parse_duration_text_to_minutes("  4h  "), 4 * 60)
 
-    def test_parse_duration_text_rejects_minutes_that_dont_land_on_a_whole_hour(self) -> None:
-        # Reminder-before-close and Shorten/Extend Vote accept minute
-        # precision (see test_duration_parser.py); a vote's own duration
-        # is still stored as whole hours, so a non-hour-aligned minute
-        # value must be rejected rather than silently rounded.
-        with self.assertRaises(ValueError):
-            parse_duration_text_to_hours("90m")
+    def test_parse_duration_text_accepts_minutes_that_dont_land_on_a_whole_hour(self) -> None:
+        # Release Candidate Polish (Vote Duration): a vote's own duration
+        # now supports the same minute precision as reminder-before-close
+        # and Shorten/Extend Vote -- "90m" is a perfectly valid vote
+        # duration, not just whole-hour amounts.
+        self.assertEqual(parse_duration_text_to_minutes("90m"), 90)
 
     def test_parse_duration_text_rejects_a_fractional_value(self) -> None:
         with self.assertRaises(ValueError):
-            parse_duration_text_to_hours("1.5d")
+            parse_duration_text_to_minutes("1.5d")
 
     def test_parse_duration_text_rejects_a_negative_value(self) -> None:
         with self.assertRaises(ValueError):
-            parse_duration_text_to_hours("-4h")
+            parse_duration_text_to_minutes("-4h")
 
     def test_parse_duration_text_rejects_non_numeric_text(self) -> None:
         with self.assertRaises(ValueError):
-            parse_duration_text_to_hours("a few hours")
+            parse_duration_text_to_minutes("a few hours")
 
     # --- Discord timestamp formatting ---------------------------------------
 

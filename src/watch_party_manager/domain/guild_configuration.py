@@ -115,11 +115,14 @@ class GuildSuggestionDatabaseEntry:
 @dataclass(slots=True)
 class VotingDefaultsConfig:
     candidate_count: int = 3
-    # Hours is the single internal unit for voting duration (Hour-Based
-    # Voting Durations) -- 24 hours preserves the previous one-day
-    # default exactly. See GuildConfigurationRepository._deserialize for
-    # backward-compatible loading of older day-based persisted values.
-    duration_hours: int = 24
+    # Minutes is the single internal unit for voting duration (Release
+    # Candidate Polish: Vote Duration), matching
+    # VoteNotificationsConfig.reminder_minutes_before_close's own
+    # minute-precision convention -- 1440 minutes preserves the previous
+    # one-day default exactly. See
+    # GuildConfigurationRepository._resolve_duration_minutes for
+    # backward-compatible loading of older hour-based persisted values.
+    duration_minutes: int = 24 * 60
     visibility: GuildVoteVisibility = GuildVoteVisibility.VISIBLE
     max_vote_changes: int = 1
     tie_behavior: TieBehavior = TieBehavior.ALL_WINNERS
@@ -127,7 +130,7 @@ class VotingDefaultsConfig:
 
     def __post_init__(self) -> None:
         _validate_positive_int(self.candidate_count, "candidate_count", 2, 10)
-        _validate_positive_int(self.duration_hours, "duration_hours", 1, 720)
+        _validate_positive_int(self.duration_minutes, "duration_minutes", 1, 720 * 60)
         _validate_positive_int(self.max_vote_changes, "max_vote_changes", 0, 10)
         self.visibility = _coerce_enum(self.visibility, GuildVoteVisibility, "visibility")  # type: ignore[assignment]
         self.tie_behavior = _coerce_enum(self.tie_behavior, TieBehavior, "tie_behavior")  # type: ignore[assignment]

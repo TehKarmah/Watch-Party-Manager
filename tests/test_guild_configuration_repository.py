@@ -50,11 +50,11 @@ class GuildConfigurationRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.channels.admin_channel_id, 555)
         self.assertEqual(loaded.watch_party_role.denial_cooldown_days, 14)
 
-    def test_legacy_duration_days_loads_as_the_equivalent_hours(self):
-        # Hour-Based Voting Durations: an older guild configuration
-        # persisted before this feature only has "duration_days" -- it
-        # loads as the exact equivalent hour count, with no manual
-        # migration required.
+    def test_legacy_duration_days_loads_as_the_equivalent_minutes(self):
+        # Release Candidate Polish (Vote Duration): a guild configuration
+        # persisted before this feature only has the oldest "duration_days"
+        # key -- it loads as the exact equivalent minute count, with no
+        # manual migration required.
         self.path.parent.mkdir(parents=True, exist_ok=True)
         legacy_document = {
             "guilds": {
@@ -71,9 +71,31 @@ class GuildConfigurationRepositoryTests(unittest.TestCase):
 
         loaded = self.repo.get(1)
 
-        self.assertEqual(loaded.voting_defaults.duration_hours, 72)
+        self.assertEqual(loaded.voting_defaults.duration_minutes, 3 * 24 * 60)
 
-    def test_a_config_with_neither_duration_key_defaults_to_twenty_four_hours(self):
+    def test_legacy_duration_hours_loads_as_the_equivalent_minutes(self):
+        # An older guild configuration persisted under the prior
+        # Hour-Based Voting Durations schema has only "duration_hours" --
+        # it loads as the exact equivalent minute count too.
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_document = {
+            "guilds": {
+                "1": {
+                    "guild_id": 1,
+                    "guild_name": "Legacy Guild",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "voting_defaults": {"duration_hours": 4},
+                }
+            }
+        }
+        self.path.write_text(json.dumps(legacy_document), encoding="utf-8")
+
+        loaded = self.repo.get(1)
+
+        self.assertEqual(loaded.voting_defaults.duration_minutes, 4 * 60)
+
+    def test_a_config_with_no_duration_key_defaults_to_twenty_four_hours(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         legacy_document = {
             "guilds": {
@@ -90,9 +112,9 @@ class GuildConfigurationRepositoryTests(unittest.TestCase):
 
         loaded = self.repo.get(1)
 
-        self.assertEqual(loaded.voting_defaults.duration_hours, 24)
+        self.assertEqual(loaded.voting_defaults.duration_minutes, 24 * 60)
 
-    def test_an_explicit_duration_hours_value_is_used_directly_and_not_reconverted(self):
+    def test_an_explicit_duration_minutes_value_is_used_directly_and_not_reconverted(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         legacy_document = {
             "guilds": {
@@ -101,7 +123,7 @@ class GuildConfigurationRepositoryTests(unittest.TestCase):
                     "guild_name": "Guild",
                     "created_at": "2026-01-01T00:00:00+00:00",
                     "updated_at": "2026-01-01T00:00:00+00:00",
-                    "voting_defaults": {"duration_hours": 4},
+                    "voting_defaults": {"duration_minutes": 90},
                 }
             }
         }
@@ -109,9 +131,9 @@ class GuildConfigurationRepositoryTests(unittest.TestCase):
 
         loaded = self.repo.get(1)
 
-        self.assertEqual(loaded.voting_defaults.duration_hours, 4)
+        self.assertEqual(loaded.voting_defaults.duration_minutes, 90)
 
-    def test_saving_a_loaded_legacy_configuration_rewrites_it_under_duration_hours(self):
+    def test_saving_a_loaded_legacy_configuration_rewrites_it_under_duration_minutes(self):
         # The next save naturally drops the legacy key -- an additive,
         # non-destructive migration rather than a one-time rewrite pass.
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -133,8 +155,9 @@ class GuildConfigurationRepositoryTests(unittest.TestCase):
 
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         voting_defaults = raw["guilds"]["1"]["voting_defaults"]
-        self.assertEqual(voting_defaults["duration_hours"], 48)
+        self.assertEqual(voting_defaults["duration_minutes"], 2 * 24 * 60)
         self.assertNotIn("duration_days", voting_defaults)
+        self.assertNotIn("duration_hours", voting_defaults)
 
     def test_multiple_guilds_are_preserved(self):
         self.repo.save(GuildConfiguration(guild_id=1, guild_name="One"))

@@ -24,6 +24,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional, Protocol
 
+from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus
 from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.services.discord_timestamp_formatter import (
@@ -32,6 +33,8 @@ from watch_party_manager.services.discord_timestamp_formatter import (
 from watch_party_manager.services.vote_announcement_formatter import (
     build_vote_link,
     build_vote_reminder_standings_lines,
+    format_vote_title,
+    resolve_vote_collection_name,
 )
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
 
@@ -41,15 +44,18 @@ from .scheduled_job import JobResult, ScheduledJob
 
 class SuggestionLookup(Protocol):
     """The subset of SuggestionService needed to resolve a round's
-    candidates for the "Current standings" section.
+    candidates for the "Current standings" section, and its collection
+    to a display name (Requirement 1).
 
     Kept minimal and Protocol-based, matching the project's existing
     dependency pattern (see the same-named Protocol in
     vote_completion_announcer.py), so this handler depends only on the
-    one capability it actually uses.
+    capabilities it actually uses.
     """
 
     def get_suggestion(self, suggestion_id: int) -> Optional[WatchItem]: ...
+
+    def get_database(self, database_id: int) -> Optional[SuggestionDatabase]: ...
 
 
 def _resolve_candidates(suggestion_service: SuggestionLookup, vote_round: VoteRound) -> List[WatchItem]:
@@ -63,7 +69,10 @@ def _resolve_candidates(suggestion_service: SuggestionLookup, vote_round: VoteRo
 
 
 def build_vote_reminder_text(
-    vote_round: VoteRound, candidates: List[WatchItem], standings: Optional[List[StandingsEntry]]
+    vote_round: VoteRound,
+    candidates: List[WatchItem],
+    standings: Optional[List[StandingsEntry]],
+    collection_name: Optional[str] = None,
 ) -> str:
     """Build the reminder message posted to a voting round's channel.
 
@@ -73,6 +82,9 @@ def build_vote_reminder_text(
             to show titles in the "Current standings" section.
         standings: The current vote tally (VoteService.calculate_standings()),
             or None/empty if nobody has voted yet.
+        collection_name: The round's collection, if known (Requirement 1)
+            -- see resolve_vote_collection_name. None falls back to a
+            generic, round-centric title.
 
     Returns:
         The reminder text: time remaining and closing timestamp (both via
@@ -82,7 +94,8 @@ def build_vote_reminder_text(
         call to action, and a link to the original voting post when available.
     """
     lines = [
-        f"Reminder: Voting round {vote_round.id} is still open.",
+        f"**{format_vote_title(collection_name, 'Voting — Reminder')}**",
+        f"Round: {vote_round.id}",
         f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
     ]
     lines.extend(build_vote_reminder_standings_lines(vote_round, candidates, standings))
@@ -195,10 +208,12 @@ class VoteReminderJobHandler:
         standings_result = self._vote_service.calculate_standings(vote_id)
         standings = standings_result.standings if standings_result.success else None
 
+        collection_name = resolve_vote_collection_name(self._suggestion_service, vote_round.database_id)
+
         channel = self._messenger.get_channel(vote_round.channel_id)
         if channel is None:
             channel = await self._messenger.fetch_channel(vote_round.channel_id)
-        await channel.send(build_vote_reminder_text(vote_round, candidates, standings))
+        await channel.send(build_vote_reminder_text(vote_round, candidates, standings, collection_name))
 
         self._vote_service.mark_reminder_sent(vote_id, datetime.now(timezone.utc))
 

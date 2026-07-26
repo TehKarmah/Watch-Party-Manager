@@ -24,7 +24,7 @@ from watch_party_manager.bot import (
     parse_setup_reminder_enabled,
     parse_setup_reminder_minutes_before_close,
     parse_setup_voting_candidate_count,
-    parse_setup_voting_duration_hours,
+    parse_setup_voting_duration_minutes,
     parse_setup_voting_visibility,
     perform_setup_permission_check,
     perform_setup_redirect_check,
@@ -57,6 +57,9 @@ from watch_party_manager.services.setup_wizard_service import SetupWizardService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.setup_wizard_view import (
     AdminChannelStepView,
+    ExistingChannelSelectView,
+    HomeChannelChoiceView,
+    HomeChannelNameModal,
     ModalStepIntroView,
     ReviewStepView,
     SetupBackButton,
@@ -211,18 +214,21 @@ class ParseSetupFieldsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_setup_voting_candidate_count("abc")
 
-    def test_voting_duration_hours_valid_and_invalid(self):
+    def test_voting_duration_minutes_valid_and_invalid(self):
         # Requirement 3: one standardized duration syntax -- an explicit
         # unit is always required, no more bare-number-means-days.
-        self.assertEqual(parse_setup_voting_duration_hours("10d"), 240)
-        self.assertEqual(parse_setup_voting_duration_hours("4h"), 4)
-        self.assertEqual(parse_setup_voting_duration_hours("3 days"), 72)
+        # Release Candidate Polish (Vote Duration): minute-level
+        # precision is supported, not just whole-hour amounts.
+        self.assertEqual(parse_setup_voting_duration_minutes("10d"), 240 * 60)
+        self.assertEqual(parse_setup_voting_duration_minutes("4h"), 4 * 60)
+        self.assertEqual(parse_setup_voting_duration_minutes("3 days"), 72 * 60)
+        self.assertEqual(parse_setup_voting_duration_minutes("10m"), 10)
         with self.assertRaises(ValueError):
-            parse_setup_voting_duration_hours("10")
+            parse_setup_voting_duration_minutes("10")
         with self.assertRaises(ValueError):
-            parse_setup_voting_duration_hours("0h")
+            parse_setup_voting_duration_minutes("0h")
         with self.assertRaises(ValueError):
-            parse_setup_voting_duration_hours("31d")  # 31 days = 744 hours, above the 720-hour maximum
+            parse_setup_voting_duration_minutes("31d")  # 31 days = 744 hours, above the 30-day maximum
 
     def test_voting_visibility_valid_and_invalid(self):
         self.assertEqual(parse_setup_voting_visibility("Blind"), GuildVoteVisibility.BLIND)
@@ -585,7 +591,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
 
         modal: VotingDefaultsModal = configure_interaction.response.sent_modal
         self.assertEqual(modal.candidate_count_input.default, "5")
-        self.assertEqual(modal.duration_input.default, "14 hours")
+        self.assertEqual(modal.duration_input.default, "14 minutes")
         self.assertEqual(modal.visibility_input.default, "visible")
 
     async def test_back_from_review_returns_to_backup_defaults(self) -> None:
@@ -1308,6 +1314,124 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
 
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertTrue(persisted.draft.watch_destination_skipped)
+
+
+class HomeChannelStepIntegrationTests(SetupCommandTestCase):
+    """Release Candidate Polish, Requirement 7: the Home Channel step
+    itself -- both the "create a new channel" and "use an existing
+    channel" paths persist home_channel_id and advance, exactly as the
+    downstream Suggestion Destination/Watch Destination steps (which
+    already create their threads as siblings of whatever this step
+    persists -- see GuidedCollectionCreationIntegrationTests and
+    WatchDestinationStepIntegrationTests) assume it will.
+    """
+
+    class FakeHTTPResponse:
+        status = 403
+        reason = "Forbidden"
+
+    class FakeCreatedChannel:
+        def __init__(self, channel_id: int) -> None:
+            self.id = channel_id
+
+    class FakeGuildForHomeChannel:
+        def __init__(self, *, channel_id: int = 900, fail: bool = False) -> None:
+            self._channel_id = channel_id
+            self._fail = fail
+            self.created_with = None
+
+        async def create_text_channel(self, *, name):
+            self.created_with = name
+            if self._fail:
+                import discord
+
+                raise discord.HTTPException(
+                    response=HomeChannelStepIntegrationTests.FakeHTTPResponse(), message="boom"
+                )
+            return HomeChannelStepIntegrationTests.FakeCreatedChannel(self._channel_id)
+
+    async def _render_step(self):
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.HOME_CHANNEL)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        return interaction
+
+    async def test_creating_a_new_channel_persists_it_and_advances(self) -> None:
+        interaction = await self._render_step()
+        self.assertIsInstance(interaction.response.sent_view, HomeChannelChoiceView)
+        create_new_button = interaction.response.sent_view.children[0]
+
+        create_interaction = FakeInteraction(guild=self.FakeGuildForHomeChannel(channel_id=901))
+        await create_new_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        self.assertIsInstance(name_modal, HomeChannelNameModal)
+        self.assertEqual(name_modal.name_input.default, "Watch Party")
+        name_modal.name_input._value = "Watch Party"
+
+        guild = self.FakeGuildForHomeChannel(channel_id=901)
+        submit_interaction = FakeInteraction(guild=guild)
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        self.assertEqual(guild.created_with, "Watch Party")
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.home_channel_id, 901)
+        self.assertIn(SetupWizardStep.HOME_CHANNEL, persisted.completed_steps)
+
+    async def test_channel_creation_failure_shows_an_error_and_stays_on_the_step(self) -> None:
+        interaction = await self._render_step()
+        create_new_button = interaction.response.sent_view.children[0]
+
+        failing_guild = self.FakeGuildForHomeChannel(fail=True)
+        create_interaction = FakeInteraction(guild=failing_guild)
+        await create_new_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        name_modal.name_input._value = "Watch Party"
+
+        submit_interaction = FakeInteraction(guild=failing_guild)
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        self.assertIn("Could not create the channel", submit_interaction.response.edited_content)
+        self.assertIsInstance(submit_interaction.response.edited_view, HomeChannelChoiceView)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertIsNone(persisted.draft.home_channel_id)
+
+    async def test_using_an_existing_channel_persists_it_and_advances(self) -> None:
+        interaction = await self._render_step()
+        use_existing_button = interaction.response.sent_view.children[1]
+
+        choice_interaction = FakeInteraction()
+        await use_existing_button.callback(interaction=choice_interaction)
+        self.assertIsInstance(choice_interaction.response.edited_view, ExistingChannelSelectView)
+
+        channel_select = choice_interaction.response.edited_view.children[0]
+        channel_select._values = [type("FakeChannelValue", (), {"id": DESTINATION_CHANNEL_ID})()]
+
+        select_interaction = FakeInteraction()
+        await channel_select.callback(interaction=select_interaction)
+
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.home_channel_id, DESTINATION_CHANNEL_ID)
+        self.assertIn(SetupWizardStep.HOME_CHANNEL, persisted.completed_steps)
+
+    async def test_resuming_after_the_home_channel_step_keeps_the_chosen_channel(self) -> None:
+        # Regression coverage for Requirement 7: a WASH Crew member who
+        # sets the home channel, then saves and resumes later (a fresh
+        # SetupWizardService/repository round-trip, mirroring a bot
+        # restart), must not lose that choice.
+        interaction = await self._render_step()
+        use_existing_button = interaction.response.sent_view.children[1]
+        choice_interaction = FakeInteraction()
+        await use_existing_button.callback(interaction=choice_interaction)
+        channel_select = choice_interaction.response.edited_view.children[0]
+        channel_select._values = [type("FakeChannelValue", (), {"id": DESTINATION_CHANNEL_ID})()]
+        await channel_select.callback(interaction=FakeInteraction())
+
+        resumed_state, resumed = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+
+        self.assertTrue(resumed)
+        self.assertEqual(resumed_state.draft.home_channel_id, DESTINATION_CHANNEL_ID)
+        self.assertIn(SetupWizardStep.HOME_CHANNEL, resumed_state.completed_steps)
 
 
 class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):

@@ -149,7 +149,7 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         await self.handler.execute(make_job(vote_round.id))
 
         self.assertEqual(len(self.channel.sent_messages), 1)
-        self.assertIn(f"Voting round {vote_round.id} has closed!", self.channel.sent_messages[0])
+        self.assertIn("Voting — Results", self.channel.sent_messages[0])
 
     async def test_determines_a_single_winner(self) -> None:
         vote_round = self._open_round()
@@ -267,7 +267,7 @@ class CloseVoteJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         await self.handler.execute(make_job(vote_round.id))
 
         first_content, first_view = self.channel.message.edits[0]
-        self.assertIn("Voting Closed", first_content)
+        self.assertIn("Voting — Closed", first_content)
         self.assertIsNone(first_view)
 
     async def test_original_voting_post_is_later_linked_to_the_results_announcement(self) -> None:

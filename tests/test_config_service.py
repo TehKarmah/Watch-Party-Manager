@@ -560,7 +560,7 @@ class VotingDefaultsSectionTests(ConfigServiceTestCase):
         self.assertTrue(result.success)
         voting_defaults = self.guild_configuration_repository.get(GUILD_ID).voting_defaults
         self.assertEqual(voting_defaults.candidate_count, 5)
-        self.assertEqual(voting_defaults.duration_hours, 14)
+        self.assertEqual(voting_defaults.duration_minutes, 14)
         self.assertEqual(voting_defaults.visibility, GuildVoteVisibility.VISIBLE)
 
     def test_existing_max_vote_changes_and_tie_behavior_are_preserved(self) -> None:

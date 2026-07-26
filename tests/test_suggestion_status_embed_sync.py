@@ -80,6 +80,28 @@ class BuildSuggestionConfirmationEmbedStatusFieldTests(unittest.TestCase):
         self.assertEqual("🟡 Rotation Cooldown", self._status_value(embed))
 
 
+class BuildSuggestionConfirmationEmbedCollectionFieldTests(unittest.TestCase):
+    """Release Candidate Polish, Requirement 3: every user-facing display
+    of a collection (including this embed's Collection field) goes
+    through the one shared format_collection_display() helper.
+    """
+
+    def _collection_value(self, embed):
+        return next(field.value for field in embed.fields if field.name == "Collection")
+
+    def test_standard_collection_shows_its_emoji(self) -> None:
+        embed = build_suggestion_confirmation_embed(
+            make_item(status=WatchItemStatus.SUGGESTED), database_name="Movies", suggested_by="<@1>"
+        )
+        self.assertEqual("🎬 Movies", self._collection_value(embed))
+
+    def test_custom_collection_has_no_emoji(self) -> None:
+        embed = build_suggestion_confirmation_embed(
+            make_item(status=WatchItemStatus.SUGGESTED), database_name="Book Club Adaptations", suggested_by="<@1>"
+        )
+        self.assertEqual("Book Club Adaptations", self._collection_value(embed))
+
+
 class FakeMessage:
     def __init__(self, message_id: int) -> None:
         self.id = message_id

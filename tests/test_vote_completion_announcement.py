@@ -190,7 +190,7 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
         no_votes_text = build_vote_completion_announcement(make_round(), self._candidates(), [], [], 0)
         unresolvable_text = build_vote_completion_announcement(make_round(), self._candidates(), [], [], 3)
 
-        self.assertNotEqual(no_votes_text.splitlines()[1], unresolvable_text.splitlines()[1])
+        self.assertNotEqual(no_votes_text.splitlines()[2], unresolvable_text.splitlines()[2])
 
     # --- Single winner / multiple winners ------------------------------------------
 
@@ -299,7 +299,7 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
             make_round(), self._candidates(), [winner], [], 1, collection_name="Movie Suggestions"
         )
 
-        self.assertIn("Collection: Movie Suggestions", text)
+        self.assertIn("🎬 Movie Suggestions Voting — Results", text)
 
     def test_omits_the_collection_line_when_not_given(self) -> None:
         winner = make_watch_item("The Matrix", id=1)
@@ -314,8 +314,8 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
         )
 
         lines = text.splitlines()
-        self.assertEqual(lines[0], "Voting round 1 has closed!")
-        self.assertEqual(lines[1], "Collection: Movie Suggestions")
+        self.assertEqual(lines[0], "**🎬 Movie Suggestions Voting — Results**")
+        self.assertEqual(lines[1], "Round: 1")
 
     # --- Suggested by -------------------------------------------------------------------
 
@@ -369,7 +369,7 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
             "Movie Suggestions",
         )
 
-        collection_index = text.index("Collection:")
+        collection_index = text.index("Movie Suggestions")
         winner_index = text.index("Winner:")
         suggested_by_index = text.index("Suggested by:")
         original_post_index = text.index("Original voting post:")
@@ -391,7 +391,7 @@ class BuildClosedVotingPostTextTests(unittest.TestCase):
         winner = make_watch_item("The Matrix", id=1)
         text = build_closed_voting_post_text(make_round(), self._candidates(), [winner], [], 1)
 
-        self.assertIn("Voting Closed", text)
+        self.assertIn("Voting — Closed", text)
 
     def test_shows_the_winner(self) -> None:
         winner = make_watch_item("The Matrix", id=1)
@@ -593,7 +593,7 @@ class BuildVoteDeadlineChangeNoticeTests(unittest.TestCase):
         text = build_vote_deadline_change_notice(vote_round)
 
         self.assertIn("42", text)
-        self.assertIn("deadline has changed", text)
+        self.assertIn("Voting — Updated", text)
 
     def test_includes_the_link_when_available(self) -> None:
         vote_round = VoteRound(id=1, guild_id=100, channel_id=200, message_id=300)

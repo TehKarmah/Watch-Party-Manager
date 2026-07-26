@@ -28,18 +28,23 @@ logger = logging.getLogger(__name__)
 DEFAULT_SETUP_WIZARD_STATE_PATH = Path("data/setup_wizard_state.json")
 
 
-def _resolve_draft_duration_hours(draft_entry: dict[str, Any]) -> Optional[int]:
-    """Hour-Based Voting Durations: backward-compatible loading for a
-    resumable draft. A draft saved under the new schema has
-    "voting_duration_hours" (possibly still None -- the Voting Defaults
+def _resolve_draft_duration_minutes(draft_entry: dict[str, Any]) -> Optional[int]:
+    """Release Candidate Polish (Vote Duration): backward-compatible
+    loading for a resumable draft. A draft saved under the new schema has
+    "voting_duration_minutes" (possibly still None -- the Voting Defaults
     step hasn't been reached yet) and is used directly. An older draft
-    has only "voting_duration_days" -- converted to the exact equivalent
-    hour count. Absent from both means the step was never reached.
+    has only "voting_duration_hours" (from the prior Hour-Based Voting
+    Durations schema) or the oldest "voting_duration_days" -- both
+    converted to the exact equivalent minute count. Absent from all three
+    means the step was never reached.
     """
-    if "voting_duration_hours" in draft_entry:
-        return draft_entry["voting_duration_hours"]
+    if "voting_duration_minutes" in draft_entry:
+        return draft_entry["voting_duration_minutes"]
+    legacy_hours = draft_entry.get("voting_duration_hours")
+    if legacy_hours is not None:
+        return legacy_hours * 60
     legacy_days = draft_entry.get("voting_duration_days")
-    return legacy_days * 24 if legacy_days is not None else None
+    return legacy_days * 24 * 60 if legacy_days is not None else None
 
 
 class SetupWizardRepository:
@@ -120,7 +125,7 @@ class SetupWizardRepository:
                 "watch_destination_channel_id": draft.watch_destination_channel_id,
                 "watch_destination_skipped": draft.watch_destination_skipped,
                 "voting_candidate_count": draft.voting_candidate_count,
-                "voting_duration_hours": draft.voting_duration_hours,
+                "voting_duration_minutes": draft.voting_duration_minutes,
                 "voting_visibility": draft.voting_visibility.value if draft.voting_visibility else None,
                 "voting_candidate_selection": (
                     draft.voting_candidate_selection.value if draft.voting_candidate_selection else None
@@ -152,7 +157,7 @@ class SetupWizardRepository:
             watch_destination_channel_id=draft_entry.get("watch_destination_channel_id"),
             watch_destination_skipped=draft_entry.get("watch_destination_skipped", False),
             voting_candidate_count=draft_entry.get("voting_candidate_count"),
-            voting_duration_hours=_resolve_draft_duration_hours(draft_entry),
+            voting_duration_minutes=_resolve_draft_duration_minutes(draft_entry),
             voting_visibility=GuildVoteVisibility(visibility_raw) if visibility_raw else None,
             voting_candidate_selection=(
                 CandidateSelectionMode(candidate_selection_raw) if candidate_selection_raw else None

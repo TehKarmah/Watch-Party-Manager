@@ -50,7 +50,7 @@ from watch_party_manager.services.configuration_validation import (
     validate_channel_usable,
     validate_role_exists,
 )
-from watch_party_manager.services.duration_formatter import format_duration_hours, format_duration_minutes
+from watch_party_manager.services.duration_formatter import format_duration_minutes
 from watch_party_manager.services.setup_wizard_service import (
     BACKUP_INTERVAL_DAYS_EXTRA_FIELD,
     BACKUP_RETENTION_COUNT_EXTRA_FIELD,
@@ -197,7 +197,7 @@ class ConfigService:
         voting_defaults = configuration.voting_defaults
         lines.append(
             "Voting Defaults: Configured "
-            f"({voting_defaults.candidate_count} candidates, {format_duration_hours(voting_defaults.duration_hours)}, "
+            f"({voting_defaults.candidate_count} candidates, {format_duration_minutes(voting_defaults.duration_minutes)}, "
             f"{voting_defaults.visibility.value})"
         )
 
@@ -451,7 +451,7 @@ class ConfigService:
         self,
         guild_id: int,
         candidate_count: int,
-        duration_hours: int,
+        duration_minutes: int,
         visibility: GuildVoteVisibility,
     ) -> ConfigUpdateResult:
         configuration = self.get_configuration(guild_id)
@@ -462,7 +462,7 @@ class ConfigService:
             configuration,
             voting_defaults=VotingDefaultsConfig(
                 candidate_count=candidate_count,
-                duration_hours=duration_hours,
+                duration_minutes=duration_minutes,
                 visibility=visibility,
                 max_vote_changes=configuration.voting_defaults.max_vote_changes,
                 tie_behavior=configuration.voting_defaults.tie_behavior,
@@ -471,7 +471,7 @@ class ConfigService:
         self._guild_configuration_repository.save(updated)
         message = (
             f"Voting defaults updated: {candidate_count} candidates, "
-            f"{format_duration_hours(duration_hours)}, {visibility.value.title()}."
+            f"{format_duration_minutes(duration_minutes)}, {visibility.value.title()}."
         )
         return ConfigUpdateResult(True, message, updated)
 

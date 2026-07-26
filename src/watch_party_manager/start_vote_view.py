@@ -90,7 +90,7 @@ class CustomizeVoteModal(discord.ui.Modal):
 
     All fields are optional text inputs -- a blank field means "use the
     configured default for this setting", matching how nominee_count and
-    duration_hours already behave as optional /start_vote parameters.
+    duration_minutes already behave as optional /start_vote parameters.
     Values are handed to the on_submit callback as raw strings; parsing
     and validation happen in bot.py, reusing the exact same functions
     /start_vote's direct parameters already used, so nothing here
@@ -136,10 +136,10 @@ class CustomizeVoteModal(discord.ui.Modal):
             placeholder=_blank_default_placeholder(default_nominee_count_display),
         )
         self.duration_input = discord.ui.TextInput(
-            label="Duration (1 hour - 30 days)",
+            label="Duration (1 minute - 30 days)",
             required=False,
             placeholder=(
-                "e.g. 1h, 4h, 12h, 24h, 3d, or 7d -- blank uses the default"
+                "e.g. 10m, 30m, 1h, 12h, 1d, 1w -- blank uses the default"
                 + (f" ({default_duration_display})" if default_duration_display else "")
             ),
         )

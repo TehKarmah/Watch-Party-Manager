@@ -4,10 +4,10 @@ Every feature that accepts a relative duration from a WASH Crew member or
 Watch Party member -- vote duration, reminder-before-close, and
 /edit_vote's Shorten Vote/Extend Vote -- parses that text through
 parse_duration_to_minutes() so the accepted syntax can never drift
-between features. Returns whole minutes (the finest unit any caller
-needs, since Shorten/Extend Vote support "10m"); callers that work in
-hours (e.g. vote duration) convert from there and reject values that
-don't land on a whole hour, rather than silently rounding.
+between features. Returns whole minutes, the one unit every caller
+shares (Release Candidate Polish: Vote Duration removed vote duration's
+former whole-hour-only restriction, so it now supports the same minute
+precision as reminders and Shorten/Extend Vote).
 """
 
 from __future__ import annotations

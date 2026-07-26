@@ -285,6 +285,18 @@ class ListDatabaseSelectionTests(HandleListSuggestionsTestCase):
 
         self.assertIsNotNone(interaction.response.sent_message)
 
+    async def test_header_shows_the_collections_built_in_emoji(self) -> None:
+        # Release Candidate Polish, Requirement 3: every user-facing
+        # display of a collection uses the shared format_collection_display()
+        # helper -- including this command's own header.
+        self.suggestion_service.create_database("Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID)
+        self.suggestion_service.suggest("Alien", database_id=1)
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "available", False)
+
+        self.assertIn("🎬 Movie Night", interaction.response.sent_message)
+
 
 class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
     async def test_invalid_status_is_rejected(self) -> None:

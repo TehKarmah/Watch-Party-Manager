@@ -252,7 +252,7 @@ class HandleDatabaseBackupTests(RestoreCommandTestCase):
         self.assertIsNotNone(interaction.response.sent_view)
         select = interaction.response.sent_view.children[0]
         self.assertEqual(1, len(select.options))
-        self.assertEqual("Movie Night", select.options[0].label)
+        self.assertEqual("🎬 Movie Night", select.options[0].label)
 
     async def test_selecting_a_database_creates_and_attaches_a_scoped_backup(self) -> None:
         self._seed_database()

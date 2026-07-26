@@ -544,15 +544,15 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 5.2 Hour-based duration
+### 5.2 Minute- and hour-based duration
 
-- **Objective:** Confirm short, hour-based durations work end to end.
+- **Objective:** Confirm both minute- and hour-based durations work end to end.
 - **Preconditions:** No open round.
 - **Steps:**
   1. Run `/start_vote` -> **Customize This Vote**.
-  2. Enter a duration of `1h`, submit, and confirm the round's end time is ~1 hour out.
-  3. Repeat with `4h`, `12h`, and `3d` to confirm all forms are accepted. Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
-- **Expected Result:** All forms with an explicit unit are accepted; the resulting end time matches; a value outside 1 hour-30 days (e.g. `0h`, `31w`) is rejected with a clear, actionable error.
+  2. Enter a duration of `10m`, submit, and confirm the round's end time is ~10 minutes out.
+  3. Repeat with `30m`, `1h`, `4h`, `12h`, and `3d` to confirm all forms are accepted. Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
+- **Expected Result:** All forms with an explicit unit are accepted, including minute-level precision; the resulting end time matches; a value outside 1 minute-30 days (e.g. `0h`, `31w`) is rejected with a clear, actionable error.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

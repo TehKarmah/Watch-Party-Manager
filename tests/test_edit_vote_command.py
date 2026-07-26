@@ -537,7 +537,7 @@ class HandleRescheduleVoteCompletionTests(EditVoteTestCase):
         )
 
         self.assertEqual(len(channel.sent_messages), 1)
-        self.assertIn("deadline has changed", channel.sent_messages[0])
+        self.assertIn("Voting — Updated", channel.sent_messages[0])
         self.assertIn("https://discord.com/channels/100/200/999", channel.sent_messages[0])
 
     async def test_the_original_voting_message_is_updated(self) -> None:
@@ -558,7 +558,7 @@ class HandleRescheduleVoteCompletionTests(EditVoteTestCase):
         )
 
         self.assertIsNotNone(message.edited_embed)
-        self.assertIn(f"Voting Round {vote_round.id}", message.edited_embed.title)
+        self.assertEqual("Voting Is Open", message.edited_embed.title)
         # The view is left intact (voting is still possible), unlike the
         # end-now/cancel paths which clear it.
         self.assertEqual(message.edited_view, "not-edited")
@@ -715,7 +715,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
         )
 
         self.assertEqual(len(channel.sent_messages), 1)
-        self.assertIn("has closed!", channel.sent_messages[0])
+        self.assertIn("Voting — Results", channel.sent_messages[0])
         self.assertIn("Winner: The Matrix", channel.sent_messages[0])
 
     async def test_original_controls_are_disabled(self) -> None:
@@ -758,7 +758,7 @@ class HandleEndVoteNowCompletionTests(EditVoteTestCase):
             bot,
         )
 
-        self.assertIn("Voting Closed", message.edited_content)
+        self.assertIn("Voting — Closed", message.edited_content)
         self.assertIn("Winner: The Matrix", message.edited_content)
         self.assertIn("Final Standings:", message.edited_content)
 

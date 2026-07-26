@@ -524,7 +524,7 @@ class VotingDefaultsStepTests(SetupWizardServiceTestCase):
             state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
         self.assertEqual(updated.draft.voting_candidate_count, 5)
-        self.assertEqual(updated.draft.voting_duration_hours, 14)
+        self.assertEqual(updated.draft.voting_duration_minutes, 14)
         self.assertEqual(updated.draft.voting_visibility, GuildVoteVisibility.BLIND)
         self.assertEqual(updated.draft.voting_candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
         self.assertEqual(updated.current_step, SetupWizardStep.REMINDER_DEFAULTS)

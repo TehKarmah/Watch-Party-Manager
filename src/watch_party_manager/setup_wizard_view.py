@@ -835,9 +835,9 @@ class VotingDefaultsModal(discord.ui.Modal):
             label="Default candidate count (2-10)", default=candidate_count_default
         )
         self.duration_input = discord.ui.TextInput(
-            label="Default vote duration (1 hour - 30 days)",
+            label="Default vote duration (1 minute - 30 days)",
             default=duration_default,
-            placeholder="e.g. 4h, 12h, 1d, or 7d",
+            placeholder="e.g. 10m, 30m, 1h, 12h, 1d, 1w",
         )
         self.visibility_input = discord.ui.TextInput(
             label="Default visibility: blind or visible", default=visibility_default
