@@ -109,6 +109,7 @@ class SetupWizardDraft:
     reminder_enabled: Optional[bool] = None
     reminder_minutes_before_close: Optional[int] = None
 
+    backup_enabled: Optional[bool] = None
     backup_interval_days: Optional[int] = None
     backup_retention_count: Optional[int] = None
 

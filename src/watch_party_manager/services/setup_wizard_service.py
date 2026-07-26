@@ -71,6 +71,13 @@ MIN_BACKUP_RETENTION_COUNT = 1
 MAX_BACKUP_RETENTION_COUNT = 100
 
 
+def _format_day_count(days: int) -> str:
+    """Render a day count with correct singular/plural wording (e.g. "1
+    day", "3 days"), for the Automatic Backups summary line.
+    """
+    return f"{days} day" if days == 1 else f"{days} days"
+
+
 @dataclass(frozen=True, slots=True)
 class ValidationIssue:
     """One thing wrong with the draft, discovered only at final validation time."""
@@ -317,11 +324,25 @@ class SetupWizardService:
         )
         return self._advance(state, SetupWizardStep.REMINDER_DEFAULTS, draft)
 
-    def set_backup_defaults(
+    def enable_automatic_backups(
         self, state: SetupWizardState, interval_days: int, retention_count: int
     ) -> SetupWizardState:
         draft = replace(
-            state.draft, backup_interval_days=interval_days, backup_retention_count=retention_count
+            state.draft,
+            backup_enabled=True,
+            backup_interval_days=interval_days,
+            backup_retention_count=retention_count,
+        )
+        return self._advance(state, SetupWizardStep.BACKUP_DEFAULTS, draft)
+
+    def disable_automatic_backups(self, state: SetupWizardState) -> SetupWizardState:
+        """Disable automatic backups for this setup pass, skipping
+        interval/retention configuration entirely (Release Polish:
+        Optional Automatic Backups). Manual /backup remains available
+        regardless; existing backups are never deleted by this choice.
+        """
+        draft = replace(
+            state.draft, backup_enabled=False, backup_interval_days=None, backup_retention_count=None
         )
         return self._advance(state, SetupWizardStep.BACKUP_DEFAULTS, draft)
 
@@ -401,10 +422,13 @@ class SetupWizardService:
         else:
             lines.append("Reminder Defaults: Incomplete")
 
-        if draft.backup_interval_days is not None:
+        if draft.backup_enabled is False:
+            lines.append("Backup Defaults: Configured (Automatic Backups: Disabled)")
+        elif draft.backup_interval_days is not None:
             lines.append(
                 "Backup Defaults: Configured "
-                f"(every {draft.backup_interval_days} day(s), keep {draft.backup_retention_count})"
+                f"(Automatic Backups: Every {_format_day_count(draft.backup_interval_days)}, "
+                f"keep {draft.backup_retention_count})"
             )
         else:
             lines.append("Backup Defaults: Incomplete")
@@ -550,11 +574,19 @@ class SetupWizardService:
                 notifications=replace(base.notifications, vote=updated_vote_notifications),
             )
 
-        if draft.backup_interval_days is not None:
+        if draft.backup_enabled is not None:
             backup_extra_fields = dict(base.backup.extra_fields)
-            backup_extra_fields[BACKUP_INTERVAL_DAYS_EXTRA_FIELD] = draft.backup_interval_days
-            backup_extra_fields[BACKUP_RETENTION_COUNT_EXTRA_FIELD] = draft.backup_retention_count
-            updated = replace(updated, backup=replace(base.backup, extra_fields=backup_extra_fields))
+            if draft.backup_enabled:
+                backup_extra_fields[BACKUP_INTERVAL_DAYS_EXTRA_FIELD] = draft.backup_interval_days
+                backup_extra_fields[BACKUP_RETENTION_COUNT_EXTRA_FIELD] = draft.backup_retention_count
+            updated = replace(
+                updated,
+                backup=replace(
+                    base.backup,
+                    include_in_automatic_backups=draft.backup_enabled,
+                    extra_fields=backup_extra_fields,
+                ),
+            )
 
         return updated
 

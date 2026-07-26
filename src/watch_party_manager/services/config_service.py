@@ -210,12 +210,18 @@ class ConfigService:
         else:
             lines.append("Reminder Defaults: Configured (disabled)")
 
-        interval = configuration.backup.extra_fields.get(BACKUP_INTERVAL_DAYS_EXTRA_FIELD)
-        retention = configuration.backup.extra_fields.get(BACKUP_RETENTION_COUNT_EXTRA_FIELD)
-        if interval is None or retention is None:
-            lines.append("Backup Defaults: Not configured")
+        if not configuration.backup.include_in_automatic_backups:
+            lines.append("Backup Defaults: Configured (Automatic Backups: Disabled)")
         else:
-            lines.append(f"Backup Defaults: Configured (every {interval} day(s), keep {retention})")
+            interval = configuration.backup.extra_fields.get(BACKUP_INTERVAL_DAYS_EXTRA_FIELD)
+            retention = configuration.backup.extra_fields.get(BACKUP_RETENTION_COUNT_EXTRA_FIELD)
+            if interval is None or retention is None:
+                lines.append("Backup Defaults: Not configured")
+            else:
+                day_word = "day" if interval == 1 else "days"
+                lines.append(
+                    f"Backup Defaults: Configured (Automatic Backups: Every {interval} {day_word}, keep {retention})"
+                )
 
         return lines
 
@@ -505,7 +511,7 @@ class ConfigService:
 
     # --- Backup Defaults ------------------------------------------------------------
 
-    def set_backup_defaults(
+    def enable_automatic_backups(
         self, guild_id: int, interval_days: int, retention_count: int
     ) -> ConfigUpdateResult:
         configuration = self.get_configuration(guild_id)
@@ -515,8 +521,30 @@ class ConfigService:
         backup_extra_fields = dict(configuration.backup.extra_fields)
         backup_extra_fields[BACKUP_INTERVAL_DAYS_EXTRA_FIELD] = interval_days
         backup_extra_fields[BACKUP_RETENTION_COUNT_EXTRA_FIELD] = retention_count
-        updated = replace(configuration, backup=replace(configuration.backup, extra_fields=backup_extra_fields))
-        self._guild_configuration_repository.save(updated)
-        return ConfigUpdateResult(
-            True, f"Backup defaults updated: every {interval_days} day(s), keep {retention_count}.", updated
+        updated = replace(
+            configuration,
+            backup=replace(
+                configuration.backup, include_in_automatic_backups=True, extra_fields=backup_extra_fields
+            ),
         )
+        self._guild_configuration_repository.save(updated)
+        day_word = "day" if interval_days == 1 else "days"
+        return ConfigUpdateResult(
+            True,
+            f"Backup defaults updated: Automatic Backups: Every {interval_days} {day_word}, keep {retention_count}.",
+            updated,
+        )
+
+    def disable_automatic_backups(self, guild_id: int) -> ConfigUpdateResult:
+        """Disable automatic backups. Manual /backup remains available
+        regardless, and existing backups are never deleted by this.
+        """
+        configuration = self.get_configuration(guild_id)
+        if configuration is None:
+            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
+
+        updated = replace(
+            configuration, backup=replace(configuration.backup, include_in_automatic_backups=False)
+        )
+        self._guild_configuration_repository.save(updated)
+        return ConfigUpdateResult(True, "Backup defaults updated: Automatic Backups: Disabled.", updated)

@@ -31,6 +31,29 @@ def format_duration_hours(hours: int) -> str:
     return f"{hours} hour" if hours == 1 else f"{hours} hours"
 
 
+def format_duration_minutes_compact(minutes: int) -> str:
+    """Render a minute count in WASH's compact input syntax (e.g. "10m",
+    "1h", "1d", "1w") -- the same short form every duration field's own
+    helper text advertises, picking the largest whole unit it evenly
+    divides into exactly like format_duration_minutes(), but abbreviated
+    rather than spelled out.
+
+    Used to prefill an editable duration field (Voting Defaults' vote
+    duration, Reminder Defaults' minutes-before-close) with a value in
+    the exact syntax a WASH Crew member would type themselves, so
+    resubmitting it unchanged reads naturally rather than as a stray
+    "1 day" sitting in a field whose own placeholder only ever shows
+    compact examples.
+    """
+    if minutes % MINUTES_PER_WEEK == 0 and minutes >= MINUTES_PER_WEEK:
+        return f"{minutes // MINUTES_PER_WEEK}w"
+    if minutes % MINUTES_PER_DAY == 0 and minutes >= MINUTES_PER_DAY:
+        return f"{minutes // MINUTES_PER_DAY}d"
+    if minutes % MINUTES_PER_HOUR == 0 and minutes >= MINUTES_PER_HOUR:
+        return f"{minutes // MINUTES_PER_HOUR}h"
+    return f"{minutes}m"
+
+
 def format_duration_minutes(minutes: int) -> str:
     """Render a minute count as natural language, picking the largest
     whole unit it evenly divides into -- weeks, then days, then hours,

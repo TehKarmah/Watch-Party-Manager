@@ -76,6 +76,24 @@ class SchedulerService:
             return None
         return await self._repository.cancel(existing.job_id, self._clock())
 
+    async def cancel_active_by_guild_and_type(
+        self, guild_id: int, job_type: str
+    ) -> ScheduledJob | None:
+        """Cancel the active job of a type for a guild, if any.
+
+        Used by recurring jobs (e.g. automatic backups) reconciling their
+        schedule against current settings, where the specific occurrence
+        currently pending isn't known by its logical_key (each occurrence
+        has its own). A no-op (returns None) when nothing active exists.
+
+        Returns:
+            The cancelled job, or None if there was nothing to cancel.
+        """
+        existing = await self._repository.find_active_by_guild_and_type(guild_id, job_type)
+        if existing is None:
+            return None
+        return await self._repository.cancel(existing.job_id, self._clock())
+
     async def run_once(self, *, limit: int = 100) -> int:
         now = self._clock()
         due_jobs = await self._repository.get_due(now, limit=limit)

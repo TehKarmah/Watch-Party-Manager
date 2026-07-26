@@ -8,6 +8,8 @@ lives in services/setup_wizard_service.py and bot.py's wiring around it.
 
 import unittest
 
+import discord
+
 from watch_party_manager.domain.guild_configuration import JoinMode
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.setup_wizard_view import (
@@ -174,18 +176,31 @@ class WatchPartyRoleStepViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SuggestionDatabaseChoiceViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_select_existing_create_new_back_save_and_cancel_buttons(self) -> None:
+    async def test_has_create_new_select_existing_back_save_and_cancel_buttons(self) -> None:
+        # Release Polish (Batch): Create New is the recommended, default
+        # action -- it appears first, ahead of Select Existing.
         view = SuggestionDatabaseChoiceView(_noop, _noop, _noop, _noop, _noop)
         self.assertEqual(
             [(button.label, button.custom_id) for button in view.children],
             [
-                ("Select Existing", "wpm_setup_database_select_existing"),
                 ("Create New", "wpm_setup_database_create_new"),
+                ("Select Existing", "wpm_setup_database_select_existing"),
                 ("Back", "wpm_setup_back"),
                 ("Save & Finish Later", "wpm_setup_save_for_later"),
                 ("Cancel Setup", "wpm_setup_cancel"),
             ],
         )
+
+    async def test_create_new_uses_the_primary_style_and_select_existing_uses_secondary(self) -> None:
+        view = SuggestionDatabaseChoiceView(_noop, _noop, _noop, _noop, _noop)
+        styles = {button.custom_id: button.style for button in view.children}
+        self.assertEqual(styles["wpm_setup_database_create_new"], discord.ButtonStyle.primary)
+        self.assertEqual(styles["wpm_setup_database_select_existing"], discord.ButtonStyle.secondary)
+
+    async def test_cancel_setup_remains_the_danger_style(self) -> None:
+        view = SuggestionDatabaseChoiceView(_noop, _noop, _noop, _noop, _noop)
+        cancel_button = next(button for button in view.children if button.custom_id == "wpm_setup_cancel")
+        self.assertEqual(cancel_button.style, discord.ButtonStyle.danger)
 
 
 class ExistingDatabaseSelectViewTests(unittest.IsolatedAsyncioTestCase):
@@ -436,7 +451,7 @@ class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
         modal = VotingDefaultsModal(_noop)
         self.assertEqual(len(modal.children), 3)
         self.assertEqual(modal.candidate_count_input.default, "3")
-        self.assertEqual(modal.duration_input.default, "1 day")
+        self.assertEqual(modal.duration_input.default, "1d")
         self.assertEqual(modal.visibility_input.default, "visible")
 
     async def test_submission_forwards_all_three_values(self) -> None:
@@ -529,7 +544,7 @@ class ReminderDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
         modal = ReminderDefaultsModal(_noop)
         self.assertEqual(len(modal.children), 2)
         self.assertEqual(modal.enabled_input.default, "yes")
-        self.assertEqual(modal.minutes_input.default, "1 day")
+        self.assertEqual(modal.minutes_input.default, "1d")
 
     async def test_submission_forwards_both_values(self) -> None:
         calls = []

@@ -64,6 +64,8 @@ from watch_party_manager.persistence.suggestion_repository import JsonSuggestion
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.persistence.watch_party_repository import JsonWatchPartyRepository
 from watch_party_manager.scheduler import (
+    AUTOMATIC_BACKUP_JOB_TYPE,
+    AutomaticBackupJobHandler,
     CLOSE_VOTE_JOB_TYPE,
     CloseVoteJobHandler,
     JsonSchedulerRepository,
@@ -75,6 +77,7 @@ from watch_party_manager.scheduler import (
     WatchPartyReminderJobHandler,
     cancel_vote_jobs,
     cancel_watch_party_reminder,
+    reconcile_automatic_backup_schedule,
     reschedule_vote_jobs,
     reschedule_watch_party_reminder,
     resolve_vote_reminder_settings,
@@ -117,7 +120,10 @@ from watch_party_manager.services.collection_display import format_collection_di
 from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
 )
-from watch_party_manager.services.duration_formatter import format_duration_minutes
+from watch_party_manager.services.duration_formatter import (
+    format_duration_minutes,
+    format_duration_minutes_compact,
+)
 from watch_party_manager.services.duration_parser import parse_duration_to_minutes
 from watch_party_manager.services.embed_factory import EmbedFactory
 from watch_party_manager.services.help_service import HelpResponse, build_help_response
@@ -200,6 +206,7 @@ from watch_party_manager.config_view import (
     DATABASE_SETTING_WATCH_DESTINATION,
     BackToMenuOnlyView,
     ConfigAdminChannelSectionView,
+    ConfigBackupDefaultsChoiceView,
     ConfigDatabaseCandidateSelectionView,
     ConfigDatabaseSectionView,
     ConfigDatabaseSettingsMenuView,
@@ -224,6 +231,7 @@ from watch_party_manager.type_to_confirm_view import DestructiveConfirmationView
 from watch_party_manager.watch_party_selection_view import WatchPartySelectView
 from watch_party_manager.setup_wizard_view import (
     AdminChannelStepView,
+    BackupDefaultsChoiceView,
     BackupDefaultsModal,
     CollectionTypeChoiceView,
     CreateDatabaseNameModal,
@@ -337,6 +345,14 @@ class WatchPartyBot(commands.Bot):
             WatchPartyReminderJobHandler(self.watch_party_service, self.suggestion_service, self),
         )
         self.guild_configuration_repository = GuildConfigurationRepository()
+        self.scheduler_host.scheduler_service.register_handler(
+            AUTOMATIC_BACKUP_JOB_TYPE,
+            AutomaticBackupJobHandler(
+                self.backup_service,
+                self.guild_configuration_repository,
+                self.scheduler_host.scheduler_service,
+            ),
+        )
         self.setup_wizard_repository = SetupWizardRepository()
         self.setup_wizard_service = SetupWizardService(
             self.setup_wizard_repository,
@@ -818,6 +834,8 @@ class WatchPartyBot(commands.Bot):
             await self.scheduler_host.scheduler_service.run_once()
         except Exception:
             logger.exception("Error while checking for due scheduled jobs during startup")
+
+        await reconcile_all_automatic_backup_schedules(self)
 
         self.interactive_voting_restored = restore_persistent_voting_views(
             bot=self,
@@ -1862,10 +1880,14 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
         )
     else:
         lines.append("Reminder Defaults: disabled")
-    if draft.backup_interval_days is not None:
-        lines.append(
-            f"Backup Defaults: every {draft.backup_interval_days} day(s), keep {draft.backup_retention_count}"
-        )
+    if configuration.backup.include_in_automatic_backups:
+        interval_days = configuration.backup.extra_fields.get(BACKUP_INTERVAL_DAYS_EXTRA_FIELD)
+        retention_count = configuration.backup.extra_fields.get(BACKUP_RETENTION_COUNT_EXTRA_FIELD)
+        if interval_days is not None:
+            day_word = "day" if interval_days == 1 else "days"
+            lines.append(f"Automatic Backups: Every {interval_days} {day_word}, keep {retention_count}")
+    else:
+        lines.append("Automatic Backups: Disabled")
     return "\n".join(lines)
 
 
@@ -2265,9 +2287,9 @@ async def send_setup_wizard_step(
         voting_defaults_prefill = (
             str(state.draft.voting_candidate_count) if state.draft.voting_candidate_count is not None else "3",
             (
-                format_duration_minutes(state.draft.voting_duration_minutes)
+                format_duration_minutes_compact(state.draft.voting_duration_minutes)
                 if state.draft.voting_duration_minutes is not None
-                else format_duration_minutes(DEFAULT_VOTE_DURATION_MINUTES)
+                else format_duration_minutes_compact(DEFAULT_VOTE_DURATION_MINUTES)
             ),
             state.draft.voting_visibility.value if state.draft.voting_visibility is not None else "visible",
         )
@@ -2322,7 +2344,7 @@ async def send_setup_wizard_step(
             requester_id=requester_id,
         )
         body += (
-            "\n\nChoose the guild's default candidate selection mode below, then press "
+            "\n\nChoose the server's default candidate selection mode below, then press "
             "**Set Voting Defaults** to configure the default nominee count, vote duration, and "
             "visibility."
         )
@@ -2332,9 +2354,9 @@ async def send_setup_wizard_step(
         reminder_defaults_prefill = (
             "yes" if state.draft.reminder_enabled is None or state.draft.reminder_enabled else "no",
             (
-                format_duration_minutes(state.draft.reminder_minutes_before_close)
+                format_duration_minutes_compact(state.draft.reminder_minutes_before_close)
                 if state.draft.reminder_minutes_before_close is not None
-                else "1 day"
+                else "1d"
             ),
         )
 
@@ -2407,23 +2429,25 @@ async def send_setup_wizard_step(
                     )
                     return
 
-                updated = setup_wizard_service.set_backup_defaults(state, interval_days, retention_count)
+                updated = setup_wizard_service.enable_automatic_backups(state, interval_days, retention_count)
                 await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
 
             await configure_interaction.response.send_modal(
                 BackupDefaultsModal(on_submit, defaults=backup_defaults_prefill)
             )
 
-        view = ModalStepIntroView(
-            on_configure,
-            on_back,
-            on_save_for_later,
-            on_cancel,
-            button_label="Set Backup Defaults",
-            custom_id="wpm_setup_backup_defaults_configure",
-            requester_id=requester_id,
+        async def on_disable(disable_interaction: discord.Interaction) -> None:
+            updated = setup_wizard_service.disable_automatic_backups(state)
+            await send_setup_wizard_step(disable_interaction, bot, updated, edit=True, requester_id=requester_id)
+
+        view = BackupDefaultsChoiceView(
+            on_configure, on_disable, on_back, on_save_for_later, on_cancel, requester_id=requester_id
         )
-        body += "\n\nConfigure the automatic backup interval and how many backups to retain."
+        body += (
+            "\n\nAutomatic backups periodically save a snapshot of WASH's data on the schedule you "
+            "configure. Manual `/backup` always remains available either way, and existing backups are "
+            "never deleted by disabling this."
+        )
 
     else:  # SetupWizardStep.REVIEW
 
@@ -2448,6 +2472,16 @@ async def send_setup_wizard_step(
             bot.apply_role_configuration(
                 result.configuration.wash_crew_role_id, result.configuration.watch_party_role.role_id
             )
+            try:
+                await reconcile_automatic_backup_schedule(
+                    bot.scheduler_host.scheduler_service,
+                    guild_id,
+                    guild_configuration_repository=bot.guild_configuration_repository,
+                )
+            except Exception:
+                logger.exception(
+                    "Error reconciling automatic backup schedule for guild %s after setup", guild_id
+                )
             summary = build_setup_completion_summary(result.configuration, state.draft)
             await save_interaction.response.edit_message(content=summary, view=None)
 
@@ -2726,7 +2760,7 @@ async def send_config_database_settings_menu(
     body = (
         f'**WASH Configuration -- "{collection_name}" Settings**\n\n'
         f"Suggestion Destination: <#{suggestion_destination}>\n"
-        f"Watched Movie Destination: {f'<#{watch_destination}>' if watch_destination else 'Not configured (no per-collection override or guild default set)'}\n"
+        f"Watched Movie Destination: {f'<#{watch_destination}>' if watch_destination else 'Not configured (no per-collection override or server default set)'}\n"
         f"Candidate Selection: {candidate_selection_label}"
     )
 
@@ -2795,10 +2829,10 @@ async def send_config_database_watch_destination(
     effective = config_service.resolve_effective_watch_destination(guild_id, database_id)
     body = (
         f'**WASH Configuration -- "{collection_name}" Watched Movie Destination**\n\n'
-        f"This collection's own override -- {f'<#{current}>' if current else 'Not set (using the guild default)'}\n"
+        f"This collection's own override -- {f'<#{current}>' if current else 'Not set (using the server default)'}\n"
         f"Currently effective -- {f'<#{effective}>' if effective else 'None'}\n\n"
         "Choose where this collection's watched-movie history should be posted, overriding the "
-        "guild default, or clear it to go back to using the guild default."
+        "server default, or clear it to go back to using the server default."
     )
 
     async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
@@ -2901,7 +2935,7 @@ def _resolve_config_voting_defaults_modal_defaults(bot: "WatchPartyBot", guild_i
     configuration = bot.config_service.get_configuration(guild_id)
     return (
         str(configuration.voting_defaults.candidate_count),
-        format_duration_minutes(configuration.voting_defaults.duration_minutes),
+        format_duration_minutes_compact(configuration.voting_defaults.duration_minutes),
         configuration.voting_defaults.visibility.value,
     )
 
@@ -2976,9 +3010,29 @@ async def send_config_reminder_defaults_modal(
     vote_notifications = configuration.notifications.vote
     defaults = (
         "yes" if vote_notifications.vote_ending_reminder else "no",
-        format_duration_minutes(vote_notifications.reminder_minutes_before_close),
+        format_duration_minutes_compact(vote_notifications.reminder_minutes_before_close),
     )
     await interaction.response.send_modal(ReminderDefaultsModal(on_submit, defaults=defaults))
+
+
+async def _reconcile_automatic_backup_schedule_after_config_change(
+    bot: "WatchPartyBot", guild_id: int
+) -> None:
+    """Update or remove the guild's scheduled automatic-backup job right
+    after /config changes its backup settings, mirroring /setup's own
+    finalize()-time reconciliation. Never blocks reporting the config
+    change back to WASH Crew even if scheduling itself has a problem.
+    """
+    try:
+        await reconcile_automatic_backup_schedule(
+            bot.scheduler_host.scheduler_service,
+            guild_id,
+            guild_configuration_repository=bot.guild_configuration_repository,
+        )
+    except Exception:
+        logger.exception(
+            "Error reconciling automatic backup schedule for guild %s after /config change", guild_id
+        )
 
 
 async def send_config_backup_defaults_modal(
@@ -2989,27 +3043,46 @@ async def send_config_backup_defaults_modal(
     async def on_retry(retry_interaction: discord.Interaction) -> None:
         await send_config_backup_defaults_modal(retry_interaction, bot, guild_id, on_back)
 
-    async def on_submit(modal_interaction: discord.Interaction, interval_text: str, retention_text: str) -> None:
-        try:
-            interval_days = parse_setup_backup_interval_days(interval_text)
-            retention_count = parse_setup_backup_retention_count(retention_text)
-        except ValueError as exc:
-            view = ConfigModalRetryView(
-                on_retry, on_back, button_label="Try Again", custom_id="wpm_config_backup_defaults_retry"
-            )
-            await modal_interaction.response.edit_message(
-                content=f"**WASH Configuration -- Backup Defaults**\n\n⚠ {exc}", view=view
-            )
-            return
+    async def on_configure(configure_interaction: discord.Interaction) -> None:
+        async def on_submit(
+            modal_interaction: discord.Interaction, interval_text: str, retention_text: str
+        ) -> None:
+            try:
+                interval_days = parse_setup_backup_interval_days(interval_text)
+                retention_count = parse_setup_backup_retention_count(retention_text)
+            except ValueError as exc:
+                view = ConfigModalRetryView(
+                    on_retry, on_back, button_label="Try Again", custom_id="wpm_config_backup_defaults_retry"
+                )
+                await modal_interaction.response.edit_message(
+                    content=f"**WASH Configuration -- Backup Defaults**\n\n⚠ {exc}", view=view
+                )
+                return
 
-        result = config_service.set_backup_defaults(guild_id, interval_days, retention_count)
-        await send_config_result(modal_interaction, bot, guild_id, result)
+            result = config_service.enable_automatic_backups(guild_id, interval_days, retention_count)
+            if result.success:
+                await _reconcile_automatic_backup_schedule_after_config_change(bot, guild_id)
+            await send_config_result(modal_interaction, bot, guild_id, result)
 
-    configuration = bot.config_service.get_configuration(guild_id)
-    interval = configuration.backup.extra_fields.get(BACKUP_INTERVAL_DAYS_EXTRA_FIELD, 1)
-    retention = configuration.backup.extra_fields.get(BACKUP_RETENTION_COUNT_EXTRA_FIELD, 30)
-    defaults = (str(interval), str(retention))
-    await interaction.response.send_modal(BackupDefaultsModal(on_submit, defaults=defaults))
+        configuration = bot.config_service.get_configuration(guild_id)
+        interval = configuration.backup.extra_fields.get(BACKUP_INTERVAL_DAYS_EXTRA_FIELD, 1)
+        retention = configuration.backup.extra_fields.get(BACKUP_RETENTION_COUNT_EXTRA_FIELD, 30)
+        defaults = (str(interval), str(retention))
+        await configure_interaction.response.send_modal(BackupDefaultsModal(on_submit, defaults=defaults))
+
+    async def on_disable(disable_interaction: discord.Interaction) -> None:
+        result = config_service.disable_automatic_backups(guild_id)
+        if result.success:
+            await _reconcile_automatic_backup_schedule_after_config_change(bot, guild_id)
+        prefix = "" if result.success else "⚠ "
+        await disable_interaction.response.edit_message(
+            content=f"{prefix}{result.message}", view=BackToMenuOnlyView(on_back)
+        )
+
+    await interaction.response.edit_message(
+        content="**WASH Configuration -- Backup Defaults**\n\nEnable or disable automatic backups.",
+        view=ConfigBackupDefaultsChoiceView(on_configure, on_disable, on_back),
+    )
 
 
 # --- FR-030: /join_watch_party -----------------------------------------------------------
@@ -3938,6 +4011,33 @@ def build_voting_view(
         )
 
     return VotingView(candidates, on_vote=on_vote_click)
+
+
+async def reconcile_all_automatic_backup_schedules(bot: "WatchPartyBot") -> None:
+    """Reconcile every configured guild's automatic-backup schedule
+    against its current settings (Release Polish: Optional Automatic
+    Backups).
+
+    Called once at startup (setup_hook): guarantees a job is always
+    scheduled while enabled -- even if WASH was offline when it would
+    normally have rescheduled itself -- and never left scheduled after
+    being disabled while offline, without ever duplicating an
+    already-active job (reconcile_automatic_backup_schedule always
+    cancels the current one first, see backup_scheduling.py). One
+    guild's failure here must never block another's, or the rest of
+    startup.
+    """
+    for guild_configuration in bot.guild_configuration_repository.list_all():
+        try:
+            await reconcile_automatic_backup_schedule(
+                bot.scheduler_host.scheduler_service,
+                guild_configuration.guild_id,
+                guild_configuration_repository=bot.guild_configuration_repository,
+            )
+        except Exception:
+            logger.exception(
+                "Error reconciling automatic backup schedule for guild %s", guild_configuration.guild_id
+            )
 
 
 def restore_persistent_voting_views(
@@ -5659,7 +5759,7 @@ def build_restore_summary_text(summary: RestoreSummary) -> str:
     if summary.database_name:
         lines.append(f"Collection: {summary.database_name} (ID {summary.database_id})")
     if summary.guild_id is not None:
-        lines.append(f"Guild ID: {summary.guild_id}")
+        lines.append(f"Server ID: {summary.guild_id}")
     if summary.suggestion_database_count is not None:
         lines.append(f"Collections: {summary.suggestion_database_count}")
     if summary.suggestion_count is not None:
@@ -5669,7 +5769,7 @@ def build_restore_summary_text(summary: RestoreSummary) -> str:
     if summary.membership_request_count is not None:
         lines.append(f"Membership requests: {summary.membership_request_count}")
     if summary.configuration_present is not None:
-        lines.append(f"Guild configuration present: {'Yes' if summary.configuration_present else 'No'}")
+        lines.append(f"Server configuration present: {'Yes' if summary.configuration_present else 'No'}")
 
     if summary.warnings:
         lines.append("")
@@ -6108,7 +6208,7 @@ def build_factory_reset_summary_text(summary) -> str:
         "**Factory Reset**",
         "",
         "This will permanently remove ALL WASH-managed data for this server, including:",
-        f"- Guild configuration: {'present' if summary.configuration_present else 'not configured'}",
+        f"- Server configuration: {'present' if summary.configuration_present else 'not configured'}",
         f"- Collections: {summary.suggestion_database_count}",
         f"- Suggestions: {summary.suggestion_count}",
         f"- Vote rounds: {summary.vote_round_count}",
@@ -6244,7 +6344,7 @@ async def handle_import(
 
     text += (
         "\n\nChoose how to import this backup's collections, suggestions, and vote rounds. "
-        "Your Discord role/channel configuration and guild ID will never be changed by an import."
+        "Your Discord role/channel configuration and server ID will never be changed by an import."
     )
 
     async def _run_import(run_interaction: discord.Interaction, mode: ImportMode) -> None:

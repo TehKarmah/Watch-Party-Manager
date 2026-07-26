@@ -358,3 +358,49 @@ class ConfigModalRetryView(discord.ui.View):
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
         self.add_item(ConfigRetryModalButton(on_retry, label=button_label, custom_id=custom_id))
         self.add_item(BackToMenuButton(on_back))
+
+
+# --- Backup Defaults enable/disable choice -------------------------------------------------
+
+
+class ConfigEnableAutomaticBackupsButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigRetry) -> None:
+        super().__init__(
+            label="Enable Automatic Backups (Recommended)",
+            style=discord.ButtonStyle.primary,
+            custom_id="wpm_config_backup_enable",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigDisableAutomaticBackupsButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigRetry) -> None:
+        super().__init__(
+            label="Disable Automatic Backups",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_config_backup_disable",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigBackupDefaultsChoiceView(discord.ui.View):
+    """/config's Backup Defaults entry screen: choose whether automatic
+    backups are enabled at all before -- only if enabled -- configuring
+    their interval and retention, mirroring the Setup Wizard's own
+    BackupDefaultsChoiceView (Release Polish: Optional Automatic Backups).
+    Enable is the recommended, default action.
+    """
+
+    def __init__(
+        self, on_enable: OnConfigRetry, on_disable: OnConfigRetry, on_back: OnBackToMenu
+    ) -> None:
+        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
+        self.add_item(ConfigEnableAutomaticBackupsButton(on_enable))
+        self.add_item(ConfigDisableAutomaticBackupsButton(on_disable))
+        self.add_item(BackToMenuButton(on_back))

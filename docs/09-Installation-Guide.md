@@ -27,7 +27,7 @@
 9. Invite WASH to Your Server
 10. Start WASH
 11. Run the Setup Wizard
-12. Guild Configuration Overview
+12. Server Configuration Overview
 13. Installation Verification Checklist
 14. Troubleshooting
 15. Where to Go Next
@@ -187,7 +187,7 @@ Open `.env` in a text editor and fill in the values you need. **Never commit `.e
 | `OMDB_API_KEY` | Optional | Enables resolving pasted IMDb links into a title, runtime, genres, and poster. See Section 8. |
 
 > [!IMPORTANT]
-> `WASH_CREW_ROLE_ID` and `WATCH_PARTY_MEMBER_ROLE_ID` can both be set here directly, **or** configured later through the guided `/setup` wizard (Section 11) once WASH is already running in your server -- the wizard writes them into WASH's own persisted guild configuration rather than `.env`. Either path works; most users find it easier to leave these blank in `.env` and let `/setup` walk them through role selection interactively. Until at least one of these two roles is configured (by either method), every restricted command fails closed -- nobody, including server administrators, can use them. This is deliberate, not a bug.
+> `WASH_CREW_ROLE_ID` and `WATCH_PARTY_MEMBER_ROLE_ID` can both be set here directly, **or** configured later through the guided `/setup` wizard (Section 11) once WASH is already running in your server -- the wizard writes them into WASH's own persisted server configuration rather than `.env`. Either path works; most users find it easier to leave these blank in `.env` and let `/setup` walk them through role selection interactively. Until at least one of these two roles is configured (by either method), every restricted command fails closed -- nobody, including server administrators, can use them. This is deliberate, not a bug.
 
 You do not need a Discord role's numeric ID handy to use `/setup` -- the wizard lets you pick roles directly from your server. You only need the raw numeric ID if you're setting `WASH_CREW_ROLE_ID`/`WATCH_PARTY_MEMBER_ROLE_ID` in `.env` yourself; get it in Discord via **User Settings -> Advanced -> Developer Mode**, then right-click the role and choose **Copy Role ID**.
 
@@ -248,11 +248,11 @@ The wizard then walks through, in order:
    └── Watched Movies
    ```
 
-5. **Collection** -- select an existing one, or create your first collection through a guided prompt: **Movies** or **TV Shows** (creates a collection with a descriptive default thread name -- "Movie Suggestions" or "TV Suggestions" -- with no further naming needed), **Special Collection** or **Custom** (asks for a name first). Whichever you choose, WASH creates that collection's suggestion thread directly as a sibling under the home channel and saves it immediately as the collection's Suggestion Destination -- `/add` works in it right away, no further configuration needed. **Import Existing Database** points you at running `/import` separately, since Discord doesn't allow attaching a file from inside this wizard. A collection's suggestion destination can be changed later via `/config`, but never cleared -- every collection always has exactly one.
+5. **Collection** -- **Create New** (recommended, offered first) walks you through a guided prompt: **Movies** or **TV Shows** (creates a collection with a descriptive default thread name -- "Movie Suggestions" or "TV Suggestions" -- with no further naming needed), **Special Collection** or **Custom** (asks for a name first). WASH creates that collection's suggestion thread directly as a sibling under the home channel and saves it immediately as the collection's Suggestion Destination -- `/add` works in it right away, no further configuration needed. **Select Existing** picks one already configured in this server instead. **Import Existing Database** points you at running `/import` separately, since Discord doesn't allow attaching a file from inside this wizard. A collection's suggestion destination can be changed later via `/config`, but never cleared -- every collection always has exactly one.
 6. **Watch destination** -- where watched-movie history and discussion should be posted: an existing text channel or thread, a brand-new thread created as a sibling under the home channel (default name "Watched Movies", editable -- WASH creates it for you, never nested under a suggestion thread), or skip for now.
-7. **Voting defaults** -- candidate count and duration/visibility are entered in a modal (default 3 candidates; duration 1 minute through 30 days, default **1 day**, entered as `10m`, `1h`, `1d`, `1w`, etc. and shown in natural language like "10 minutes", "4 hours", or "3 days"; visibility **Visible** by default, **Blind** remains fully selectable). Candidate-selection mode is chosen from a dropdown, not typed: **Balanced Random** (recommended and the default -- avoids repeating a suggestion until a fresh rotation begins), **Soft Rotation** (keeps repeats eligible but weighted down), or **Pure Random** (no weighting or exclusion at all).
-8. **Reminder defaults** -- whether a vote-ending reminder is sent, and how long before close (default **1 day**; accepts minute precision too, e.g. `10m`, `30m`, `1h`, `12h`).
-9. **Backup defaults** -- automatic backup interval and how many backups to retain.
+7. **Voting defaults** -- candidate count and duration/visibility are entered in a modal (default 3 candidates; duration 1 minute through 30 days, default **1 day**, entered as `10m`, `1h`, `1d`, or `1w` and shown in natural language like "10 minutes", "4 hours", or "3 days"; visibility **Visible** by default, **Blind** remains fully selectable). Candidate-selection mode is chosen from a dropdown, not typed: **Balanced Random** (recommended and the default -- avoids repeating a suggestion until a fresh rotation begins), **Soft Rotation** (keeps repeats eligible but weighted down), or **Pure Random** (no weighting or exclusion at all).
+8. **Reminder defaults** -- whether a vote-ending reminder is sent, and how long before close (default **1 day**, entered as `10m`, `1h`, `1d`, or `1w`).
+9. **Backup defaults** -- **Enable Automatic Backups** (recommended, offered first) then sets the interval and how many backups to retain, or **Disable Automatic Backups** to skip scheduling entirely for now (manual `/backup` always remains available either way, and existing backups are never deleted by disabling this).
 10. **Summary** -- review every section (including the chosen candidate-selection mode), then Save, jump back to edit any section, or cancel without saving.
 
 Nothing is applied until you reach the summary and choose to save.
@@ -263,9 +263,9 @@ Nothing is applied until you reach the summary and choose to save.
 
 Every setting the wizard can set (including candidate-selection mode) can also be changed later through `/config`, one section at a time, without re-running the whole wizard -- see Section 12.
 
-## 12. Guild Configuration Overview
+## 12. Server Configuration Overview
 
-Everything the setup wizard collects is stored per-guild and can be changed afterward without re-running the whole wizard:
+Everything the setup wizard collects is stored per-server and can be changed afterward without re-running the whole wizard:
 
 - `/config` opens the same settings in a menu, section by section, for quick individual changes.
 - `/database_add`, `/database_list`, and `/database_remove` manage additional suggestion databases beyond the one created during setup.

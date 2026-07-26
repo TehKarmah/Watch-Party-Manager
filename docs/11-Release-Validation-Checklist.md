@@ -22,7 +22,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - Check exactly one of Pass/Fail per test. A test you could not run at all (missing prerequisite, environment issue) should be marked **Fail** with the reason in Notes -- do not leave it blank.
 - "WASH Crew" and "Watch Party member" below refer to whichever Discord roles your test server has configured for those purposes (see Section 2).
 - Where a step says "confirm the exact wording," minor phrasing drift is not itself a failure -- flag it in Notes as a documentation/consistency item rather than blocking the release on it, unless the message is actually misleading or wrong.
-- Run `python -m unittest discover -s tests -v` (baseline: 2595 tests, 0 failures) before starting manual validation, and again before final sign-off. This checklist verifies real-world behavior the automated suite cannot (Discord UI rendering, actual message delivery, a real bot process restarting) -- it does not replace the automated suite.
+- Run `python -m unittest discover -s tests -v` (baseline: 2972 tests, 0 failures) before starting manual validation, and again before final sign-off. This checklist verifies real-world behavior the automated suite cannot (Discord UI rendering, actual message delivery, a real bot process restarting) -- it does not replace the automated suite.
 
 ---
 
@@ -204,12 +204,13 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm a collection (internally an ordinary `SuggestionDatabase` record) is created with its own suggestion thread automatically created as a sibling under WASH's home channel, and that thread is immediately saved as that collection's Suggestion Destination -- no separate destination choice, and no additional configuration needed before `/add` works in it.
 - **Preconditions:** Test 2.4b passed, reached the Collection step.
 - **Steps:**
+  0. Before choosing anything, confirm the buttons appear in this order: **Create New** (primary/highlighted style), **Select Existing** (secondary style), **Back**, **Save & Finish Later**, then **Cancel Setup** (danger/red style, visually separated from the rest).
   1. Choose **Create New**; confirm a "What type of collection would you like to create?" screen appears with **Movies (Recommended)**, **TV Shows**, **Special Collection**, **Custom**, and **Import Existing Database**.
   2. Choose **Movies**; confirm no name prompt and no destination-choice screen appear -- a thread named "Movie Suggestions" (the descriptive default, not the bare type name "Movies") is created directly under the home channel and the wizard advances. Repeat with **TV Shows** and confirm its default thread name is "TV Suggestions".
   3. In the server, open the new "Movie Suggestions" thread and run `/add` with any title; confirm the public suggestion post is created immediately in that thread, with no "no suggestion channel is configured" error.
   4. Separately, repeat with **Special Collection** or **Custom**; confirm a name prompt appears first (still fully custom, unaffected by the Movies/TV Shows default naming), then the thread is created using that name.
   5. Separately, click **Import Existing Database**; confirm WASH explains that `/import` must be run as its own command (Discord does not allow attaching a file from inside this wizard) and offers a way back to the type-choice screen.
-- **Expected Result:** Movies/TV Shows create a collection using their descriptive default thread name ("Movie Suggestions"/"TV Suggestions") with no name prompt; Special Collection/Custom collect a name first; every creation path ends with the collection's suggestion thread created as a sibling under the home channel and immediately persisted as that collection's Suggestion Destination (and, internally, all remain ordinary `SuggestionDatabase` records). `/add` works in the new thread right away. Import Existing never fakes an in-wizard upload.
+- **Expected Result:** The Collection step's buttons appear in the order and styles described in step 0 -- **Create New** is the recommended/default (primary) action, **Select Existing** is secondary, and **Cancel Setup** is styled as danger. Movies/TV Shows create a collection using their descriptive default thread name ("Movie Suggestions"/"TV Suggestions") with no name prompt; Special Collection/Custom collect a name first; every creation path ends with the collection's suggestion thread created as a sibling under the home channel and immediately persisted as that collection's Suggestion Destination (and, internally, all remain ordinary `SuggestionDatabase` records). `/add` works in the new thread right away. Import Existing never fakes an in-wizard upload.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -234,17 +235,17 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 2.6b Guild-wide default Watched Movie Destination (`/config`)
+### 2.6b Server-wide default Watched Movie Destination (`/config`)
 
-- **Objective:** Confirm `/config`'s Watched Movie Destination (Default) section sets a guild-wide fallback, and that a collection's own override takes precedence when both are set.
+- **Objective:** Confirm `/config`'s Watched Movie Destination (Default) section sets a server-wide fallback, and that a collection's own override takes precedence when both are set.
 - **Preconditions:** Setup completed; at least one collection exists.
 - **Steps:**
   1. Run `/config` -> **Watched Movie Destination (Default)**; set it to a channel, or clear it.
   2. Run `/config` -> **Manage Collections** -> a collection -> its Watched Movie Destination; confirm the screen shows both "This collection's own override" and "Currently effective" values.
-  3. With no per-collection override set, confirm "Currently effective" matches the guild default from step 1.
-  4. Set a per-collection override to a different channel; confirm "Currently effective" now shows the override, not the guild default.
-  5. Clear the per-collection override; confirm "Currently effective" falls back to the guild default again.
-- **Expected Result:** The guild-wide default may be unset (None) or shared across any number of collections -- unlike a suggestion destination, watched destinations are never checked for conflicts. A collection's own override, when set, always wins over the guild default.
+  3. With no per-collection override set, confirm "Currently effective" matches the server default from step 1.
+  4. Set a per-collection override to a different channel; confirm "Currently effective" now shows the override, not the server default.
+  5. Clear the per-collection override; confirm "Currently effective" falls back to the server default again.
+- **Expected Result:** The server-wide default may be unset (None) or shared across any number of collections -- unlike a suggestion destination, watched destinations are never checked for conflicts. A collection's own override, when set, always wins over the server default.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -253,12 +254,12 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm the Voting Defaults modal accepts and validates all four fields.
 - **Preconditions:** Reached the Voting Defaults step.
 - **Steps:**
-  1. Open the modal (**Set Voting Defaults**).
+  1. Open the modal (**Set Voting Defaults**); confirm the duration field's helper text reads "e.g. 10m, 1h, 1d, or 1w" and the field is pre-filled `1d` (not "1 day") on a brand-new server.
   2. Enter a candidate count (try an in-range value, e.g. `4`).
   3. Enter a duration using WASH's shared duration syntax (try `4h`, then separately `3d`, then `3 days` -- confirm all are accepted and mean what you'd expect). Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
   4. Set visibility to `visible` or `blind`.
-  5. Submit.
-- **Expected Result:** Values in range are accepted; the modal defaults to **1 day** on a brand-new server. An out-of-range duration (e.g. `31d` / `0h`) is rejected with a clear, specific error naming the 1 hour-30 day range; a unitless value is rejected with a clear syntax error.
+  5. Submit, then reopen the modal and confirm the just-saved duration redisplays in the same compact form (e.g. `4h`, not "4 hours").
+- **Expected Result:** Values in range are accepted; the modal's duration field is pre-filled `1d` on a brand-new server and always redisplays previously saved durations in compact form. An out-of-range duration (e.g. `31d` / `0h`) is rejected with a clear, specific error naming the 1 hour-30 day range; a unitless value is rejected with a clear syntax error.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -284,14 +285,26 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 2.10 Reminder Defaults and Backup Defaults
+### 2.10 Reminder Defaults
 
-- **Objective:** Confirm the remaining two Voting-adjacent steps save correctly.
+- **Objective:** Confirm the Reminder Defaults step saves correctly and its duration examples are consistent with every other duration field.
 - **Preconditions:** Test 2.7 passed.
 - **Steps:**
-  1. Configure (or disable) the vote-ending reminder and its lead time, using WASH's shared duration syntax -- try minute precision (e.g. `10m`, `30m`) as well as hours/days (e.g. `1h`, `1d`).
-  2. Configure the automatic-backup interval and retention count.
-- **Expected Result:** Both steps accept valid values (the reminder field accepts minute precision, not just whole hours) and reject out-of-range ones with clear errors.
+  1. Reach the Reminder Defaults step; confirm the "Reminder before close" field's label reads "Reminder before close (e.g. 10m, 1h, 1d, 1w)" and the pre-filled value is compact (e.g. `1d`, not "1 day").
+  2. Configure (or disable) the vote-ending reminder and its lead time, using WASH's shared duration syntax -- try minute precision (e.g. `10m`, `30m`) as well as hours/days (e.g. `1h`, `1d`).
+- **Expected Result:** The step accepts valid values (minute precision, not just whole hours) and rejects out-of-range ones with a clear error; the field's label and pre-filled value are both in compact form.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 2.10b Backup Defaults: Enable/Disable Automatic Backups
+
+- **Objective:** Confirm the Backup step lets an administrator enable (with interval/retention configuration) or disable automatic backups, and that Disable skips interval/retention configuration for this pass.
+- **Preconditions:** Test 2.10 passed.
+- **Steps:**
+  1. Reach the Backup step; confirm it offers **Enable Automatic Backups (Recommended)** and **Disable Automatic Backups**.
+  2. Choose **Enable Automatic Backups**; confirm it opens the interval (days) and retention count fields, and that both accept valid values and reject out-of-range ones with a clear error.
+  3. Reach the Backup step again on a separate run (or click **Back** then re-choose), and this time choose **Disable Automatic Backups**; confirm the wizard skips interval/retention configuration entirely and advances straight to the next step.
+- **Expected Result:** Enable opens the existing interval/retention configuration flow; Disable skips it and continues; **Back**, **Save & Finish Later**, and **Cancel Setup** all remain available on this step either way.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -304,7 +317,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Compare every listed value against what was actually selected in Tests 2.2-2.10.
   3. Click **Back** once, confirm it returns to the immediately preceding step.
   4. Return to Review and click **Save**.
-- **Expected Result:** Every section (roles, join mode, admin channel, home channel, suggestion database, watched-movie destination, voting defaults including candidate selection, reminders, backup) is shown accurately, using natural-language duration (e.g. "4 hours" or "3 days", never "72 hours"). Save marks setup complete and shows a final completion summary matching the same values.
+- **Expected Result:** Every section (roles, join mode, admin channel, home channel, suggestion database, watched-movie destination, voting defaults including candidate selection, reminders, backup) is shown accurately, using natural-language duration (e.g. "4 hours" or "3 days", never "72 hours"). The Automatic Backups line reads "Automatic Backups: Disabled" if you chose Disable in Test 2.10b, or "Automatic Backups: Every N day(s), keep M" (matching the configured interval/retention) if you chose Enable. Save marks setup complete and shows a final completion summary matching the same values, including the same Automatic Backups line.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -355,6 +368,19 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 3.3b `/config` Backup Defaults: enable, disable, and re-enable
+
+- **Objective:** Confirm `/config`'s Backup Defaults section can enable, disable, and re-enable automatic backups, and that the summary and actual scheduling behavior both reflect the current setting.
+- **Preconditions:** Section 2 completed (automatic backups enabled or disabled, either way, from Test 2.10b).
+- **Steps:**
+  1. Run `/config` -> **Backup Defaults**; confirm the summary line reads either "Automatic Backups: Disabled" or "Automatic Backups: Every N day(s), keep M" matching the current setting.
+  2. Choose **Disable Automatic Backups** (if not already disabled); confirm the summary updates to "Automatic Backups: Disabled" and that any existing backup files in `data/backups/` are still present afterward.
+  3. Run `/backup` while automatic backups are disabled; confirm it still succeeds.
+  4. Choose **Enable Automatic Backups** again, setting an interval and retention count; confirm the summary updates to "Automatic Backups: Every N day(s), keep M" matching what you entered.
+- **Expected Result:** Disabling never deletes existing backups and never blocks manual `/backup`; enabling and disabling both take effect immediately and are reflected accurately in the summary line.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 3.4 Database management: create, list, remove
 
 - **Objective:** Confirm suggestion database administration works outside the wizard.
@@ -369,8 +395,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 3.5 Contextual resolution with multiple databases configured
 
-- **Objective:** Confirm behavior is well-defined when more than one suggestion database exists -- WASH resolves the database from context (channel/thread), never from a guild-wide "active" pointer.
-- **Preconditions:** At least two active suggestion databases in the same guild, each tied to a different channel.
+- **Objective:** Confirm behavior is well-defined when more than one suggestion database exists -- WASH resolves the database from context (channel/thread), never from a server-wide "active" pointer.
+- **Preconditions:** At least two active suggestion databases in the same server, each tied to a different channel.
 - **Steps:**
   1. Run `/add`, `/list`, `/start_vote`, or `/stats type:Rotation`/`type:Database` inside one database's configured channel or thread; confirm WASH uses that database automatically, with no prompt.
   2. Run the same command in a channel not tied to either database; confirm WASH asks "Which collection would you like to use?" with a picker listing both instead of guessing.
@@ -497,7 +523,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 ### 4.11 `/remove` and `/edit_suggestion`
 
 - **Objective:** Confirm WASH Crew administrative status-changing/moving/removal works, including the duplicate re-check on a collection move.
-- **Preconditions:** WASH Crew role; at least one suggestion; at least two collections in the guild.
+- **Preconditions:** WASH Crew role; at least one suggestion; at least two collections in the server.
 - **Steps:**
   1. Run `/edit_suggestion`; confirm it shows a read-only summary (title, year, collection, status, IMDb link) plus Change Status, Move to Another Collection, and Cancel -- no title/release year/IMDb link fields to type into.
   2. Choose Change Status; confirm the dropdown offers only Available, Vote Winner, and Retired (never Rotation Cooldown); pick one and confirm the suggestion's status updates and its public confirmation post's Status field updates in place.
@@ -536,7 +562,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 5.1 `/start_vote` -- Use Defaults
 
-- **Objective:** Confirm the default voting flow creates a round using the guild's configured defaults.
+- **Objective:** Confirm the default voting flow creates a round using the server's configured defaults.
 - **Preconditions:** At least 2 eligible suggestions; Voting Defaults configured (Section 2/3).
 - **Steps:**
   1. Run `/start_vote` -> **Use Defaults**.
@@ -549,7 +575,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm both minute- and hour-based durations work end to end.
 - **Preconditions:** No open round.
 - **Steps:**
-  1. Run `/start_vote` -> **Customize This Vote**.
+  1. Run `/start_vote` -> **Customize This Vote**; confirm both the duration field and the reminder-before-close field show a placeholder starting "e.g. 10m, 1h, 1d, or 1w".
   2. Enter a duration of `10m`, submit, and confirm the round's end time is ~10 minutes out.
   3. Repeat with `30m`, `1h`, `4h`, `12h`, and `3d` to confirm all forms are accepted. Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
 - **Expected Result:** All forms with an explicit unit are accepted, including minute-level precision; the resulting end time matches; a value outside 1 minute-30 days (e.g. `0h`, `31w`) is rejected with a clear, actionable error.
@@ -611,7 +637,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/edit_vote` -> **Change End Time**; confirm the menu offers **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
   2. Use **Shorten Vote** -> **1 Hour**; confirm the round's end time moves 1 hour *earlier than its current deadline* (not 1 hour from now), and that the public post and a public notice both reflect the new deadline with a Discord relative timestamp shown. Repeat with **Extend Vote** -> **1 Day** and confirm it moves 1 day *later* than the current deadline.
-  3. Use **Shorten Vote** -> **Custom...**; confirm the modal is titled "Shorten Vote" with a "Duration" field (placeholder `e.g. 10m, 1h, 1d, 1w`). Try `10m`, `2h`. Repeat with **Extend Vote** -> **Custom...** (modal titled "Extend Vote"). Confirm a malformed value (e.g. a bare number with no unit) is rejected with a clear error.
+  3. Use **Shorten Vote** -> **Custom...**; confirm the modal is titled "Shorten Vote" with a "Duration" field (placeholder `e.g. 10m, 1h, 1d, or 1w`). Try `10m`, `2h`. Repeat with **Extend Vote** -> **Custom...** (modal titled "Extend Vote"). Confirm a malformed value (e.g. a bare number with no unit) is rejected with a clear error.
   4. On a round closing soon, use **Shorten Vote** with an amount larger than the time remaining; confirm it's rejected with a clear "would move the end time into the past" message rather than silently succeeding.
   5. Use **Set Exact End Time**; confirm the modal presents a single "Discord Timestamp" field with placeholder `<t:1785639600:F>` and help text explaining how to generate one (type `@time` in any normal Discord message box, pick a date/time, then copy the generated timestamp here). Confirm a malformed value (e.g. plain text, or a timestamp missing the `<t:...>` wrapper), and a validly-formatted but past timestamp, are each rejected with a clear message; confirm a valid future timestamp (in any of the standard styles, e.g. `<t:1785639600:F>` or `<t:1785639600:R>`) reschedules correctly.
   6. Start a second round (after the first completes or is cancelled) and use `/edit_vote` -> **End Now**; confirm it closes immediately with correct results (a confirmation prompt appears first, since this can't be undone).
@@ -880,7 +906,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/factory_reset`, review the shown removal count, click **Factory Reset**, type `RESET` exactly.
   2. Run `/setup` afterward.
-- **Expected Result:** Every WASH-managed record for the server is removed (guild configuration, databases, suggestions, votes, membership requests, scheduled items); a safety backup is made first; `/setup` treats the server as brand new.
+- **Expected Result:** Every WASH-managed record for the server is removed (server configuration, databases, suggestions, votes, membership requests, scheduled items); a safety backup is made first; `/setup` treats the server as brand new.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -893,7 +919,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Review the validation summary.
   3. Choose **Merge**; confirm the reported imported/skipped/reassigned counts.
   4. Repeat with **Replace**, typing `REPLACE` exactly to confirm.
-- **Expected Result:** Only portable data (databases, their suggestions/configuration, vote rounds) is imported; this server's own guild configuration (roles, channels, guild ID) is never changed; ID collisions are reassigned automatically; results are reported once and not persisted.
+- **Expected Result:** Only portable data (databases, their suggestions/configuration, vote rounds) is imported; this server's own configuration (roles, channels, server ID) is never changed; ID collisions are reassigned automatically; results are reported once and not persisted.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -915,8 +941,58 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Attempt `/restore` with the corrupted file.
   2. Attempt `/database_restore` with a full (not single-database) backup, and vice versa.
-  3. Attempt `/database_restore` with a backup from a different guild.
+  3. Attempt `/database_restore` with a backup from a different server.
 - **Expected Result:** Each is rejected with a clear, specific message (see the troubleshooting table in [Administration](05-Administration.md) Section 9); live data is never modified by a failed or rejected attempt.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 9.10 Automatic backups actually run on schedule
+
+- **Objective:** Confirm the automatic-backup scheduler creates a real backup at the configured interval, not just a cosmetic setting.
+- **Preconditions:** Automatic backups enabled (Test 2.10b or 3.3b) with a short interval configured for testing purposes (e.g. edit the interval down, or use the shortest allowed value).
+- **Steps:**
+  1. Note the current contents of `data/backups/`.
+  2. Wait until the configured interval has elapsed.
+  3. Inspect `data/backups/` again.
+- **Expected Result:** A new backup archive appears with `kind: scheduled` in its manifest (distinct from a `kind: manual` backup created via `/backup`), with no WASH Crew action required.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 9.11 Automatic backup retention pruning
+
+- **Objective:** Confirm automatic backups beyond the configured retention count are pruned, while manual backups are unaffected.
+- **Preconditions:** Automatic backups enabled with a small retention count (e.g. 2 or 3) configured; enough elapsed intervals (Test 9.10) to exceed that count.
+- **Steps:**
+  1. Let enough scheduled backups accumulate to exceed the configured retention count.
+  2. Inspect `data/backups/`.
+  3. Create a manual `/backup` in the same window.
+- **Expected Result:** Only the newest N scheduled backups are kept (N = retention count); older scheduled backups are removed automatically. Manual backups are tracked in a separate pool and are never pruned by the automatic-backup retention setting.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 9.12 Disabling stops future automatic backups without deleting existing ones
+
+- **Objective:** Confirm disabling automatic backups (via `/config` -> Backup Defaults) stops future scheduled backups but leaves existing ones untouched, and that `/backup` keeps working.
+- **Preconditions:** Automatic backups enabled with at least one scheduled backup already created (Test 9.10).
+- **Steps:**
+  1. Note the existing scheduled backups in `data/backups/`.
+  2. Disable automatic backups via `/config` -> Backup Defaults.
+  3. Wait past what would have been the next scheduled run.
+  4. Run `/backup` manually.
+- **Expected Result:** No new scheduled backup is created after disabling; the previously existing scheduled backups are still present; manual `/backup` succeeds regardless of the automatic setting.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 9.13 Re-enabling resumes scheduling, and restart reconciles correctly
+
+- **Objective:** Confirm re-enabling automatic backups resumes scheduling using the saved settings, and that a bot restart neither loses nor duplicates the scheduled job.
+- **Preconditions:** Test 9.12 completed (automatic backups currently disabled).
+- **Steps:**
+  1. Re-enable automatic backups via `/config` -> Backup Defaults, keeping (or changing) the interval/retention count.
+  2. Confirm a new automatic backup is created at the next configured interval.
+  3. Restart the bot process.
+  4. Confirm exactly one automatic-backup job is active afterward (no duplicate), and that it still fires at the correct time.
+- **Expected Result:** Re-enabling resumes scheduling from the saved or newly configured interval/retention with no manual intervention beyond the `/config` change; a restart reconciles the schedule against the current configuration without creating a duplicate job or losing the schedule entirely.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

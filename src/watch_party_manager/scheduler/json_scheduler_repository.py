@@ -178,6 +178,22 @@ class JsonSchedulerRepository:
                 logical_key,
             )
 
+    async def find_active_by_guild_and_type(
+        self,
+        guild_id: int,
+        job_type: str,
+    ) -> ScheduledJob | None:
+        async with self._lock:
+            jobs = self._load_jobs()
+            return next(
+                (
+                    job
+                    for job in jobs
+                    if job.guild_id == guild_id and job.job_type == job_type and job.is_active
+                ),
+                None,
+            )
+
     async def get_by_id(self, job_id: str) -> ScheduledJob | None:
         async with self._lock:
             jobs = self._load_jobs()

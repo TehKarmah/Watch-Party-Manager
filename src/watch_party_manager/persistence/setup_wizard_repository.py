@@ -132,6 +132,7 @@ class SetupWizardRepository:
                 ),
                 "reminder_enabled": draft.reminder_enabled,
                 "reminder_minutes_before_close": draft.reminder_minutes_before_close,
+                "backup_enabled": draft.backup_enabled,
                 "backup_interval_days": draft.backup_interval_days,
                 "backup_retention_count": draft.backup_retention_count,
             },
@@ -164,6 +165,7 @@ class SetupWizardRepository:
             ),
             reminder_enabled=draft_entry.get("reminder_enabled"),
             reminder_minutes_before_close=draft_entry.get("reminder_minutes_before_close"),
+            backup_enabled=draft_entry.get("backup_enabled"),
             backup_interval_days=draft_entry.get("backup_interval_days"),
             backup_retention_count=draft_entry.get("backup_retention_count"),
         )

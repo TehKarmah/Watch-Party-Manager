@@ -105,6 +105,20 @@ class MemoryRepository:
             None,
         )
 
+    async def find_active_by_guild_and_type(
+        self,
+        guild_id: int,
+        job_type: str,
+    ) -> ScheduledJob | None:
+        return next(
+            (
+                job
+                for job in self.jobs.values()
+                if job.guild_id == guild_id and job.job_type == job_type and job.is_active
+            ),
+            None,
+        )
+
 
 class SuccessfulHandler:
     async def execute(self, job: ScheduledJob) -> JobExecutionResult:
@@ -170,6 +184,56 @@ class SchedulerServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotEqual(second.job_id, first.job_id)
         self.assertEqual(repository.jobs[second.job_id].status, JobStatus.PENDING)
+
+    async def test_cancel_active_by_guild_and_type_cancels_the_active_job(self) -> None:
+        repository = MemoryRepository()
+        service = SchedulerService(repository, clock=lambda: NOW)
+        job = await service.schedule(self.make_job(logical_key="automatic_backup:123:2026-07-19"))
+
+        cancelled = await service.cancel_active_by_guild_and_type(123, "close_vote")
+
+        self.assertIsNotNone(cancelled)
+        self.assertEqual(cancelled.job_id, job.job_id)
+        self.assertEqual(repository.jobs[job.job_id].status, JobStatus.CANCELLED)
+
+    async def test_cancel_active_by_guild_and_type_is_a_no_op_when_nothing_is_active(self) -> None:
+        repository = MemoryRepository()
+        service = SchedulerService(repository, clock=lambda: NOW)
+
+        cancelled = await service.cancel_active_by_guild_and_type(999, "close_vote")
+
+        self.assertIsNone(cancelled)
+
+    async def test_cancel_active_by_guild_and_type_ignores_a_different_guild_or_type(self) -> None:
+        repository = MemoryRepository()
+        service = SchedulerService(repository, clock=lambda: NOW)
+        await service.schedule(self.make_job(logical_key="close_vote:1"))
+
+        cancelled_wrong_guild = await service.cancel_active_by_guild_and_type(999, "close_vote")
+        cancelled_wrong_type = await service.cancel_active_by_guild_and_type(123, "automatic_backup")
+
+        self.assertIsNone(cancelled_wrong_guild)
+        self.assertIsNone(cancelled_wrong_type)
+
+    async def test_cancel_active_by_guild_and_type_finds_a_varying_logical_key(self) -> None:
+        # Regression for automatic backups: each occurrence has its own
+        # logical_key (derived from its own run_at), so lookup must go
+        # through guild_id/job_type, not a stable key.
+        repository = MemoryRepository()
+        service = SchedulerService(repository, clock=lambda: NOW)
+        first = await service.schedule(
+            ScheduledJob(
+                guild_id=123,
+                job_type="automatic_backup",
+                logical_key="automatic_backup:123:2026-07-19",
+                run_at=NOW,
+                created_at=NOW,
+            )
+        )
+
+        cancelled = await service.cancel_active_by_guild_and_type(123, "automatic_backup")
+
+        self.assertEqual(cancelled.job_id, first.job_id)
 
     async def test_run_once_executes_and_completes_due_job(self) -> None:
         repository = MemoryRepository()

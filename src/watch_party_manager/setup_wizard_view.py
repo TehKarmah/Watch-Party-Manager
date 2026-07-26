@@ -353,7 +353,7 @@ class WatchPartyRoleStepView(SetupWizardStepView):
 
 class SelectExistingDatabaseButton(discord.ui.Button):
     def __init__(self, on_click: OnDatabaseChoiceButton) -> None:
-        super().__init__(label="Select Existing", style=discord.ButtonStyle.primary, custom_id="wpm_setup_database_select_existing")
+        super().__init__(label="Select Existing", style=discord.ButtonStyle.secondary, custom_id="wpm_setup_database_select_existing")
         self._on_click = on_click
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -362,7 +362,7 @@ class SelectExistingDatabaseButton(discord.ui.Button):
 
 class CreateNewDatabaseButton(discord.ui.Button):
     def __init__(self, on_click: OnDatabaseChoiceButton) -> None:
-        super().__init__(label="Create New", style=discord.ButtonStyle.secondary, custom_id="wpm_setup_database_create_new")
+        super().__init__(label="Create New", style=discord.ButtonStyle.primary, custom_id="wpm_setup_database_create_new")
         self._on_click = on_click
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -463,8 +463,8 @@ class SuggestionDatabaseChoiceView(SetupWizardStepView):
         requester_id: Optional[int] = None,
     ) -> None:
         super().__init__(requester_id=requester_id)
-        self.add_item(SelectExistingDatabaseButton(on_select_existing))
         self.add_item(CreateNewDatabaseButton(on_create_new))
+        self.add_item(SelectExistingDatabaseButton(on_select_existing))
         self.add_item(SetupBackButton(on_back))
         self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
@@ -830,14 +830,14 @@ class VotingDefaultsModal(discord.ui.Modal):
     def __init__(self, on_submit: OnVotingDefaultsSubmit, *, defaults: Optional[Tuple[str, str, str]] = None) -> None:
         super().__init__(title="Voting Defaults")
         self._submit_callback = on_submit
-        candidate_count_default, duration_default, visibility_default = defaults or ("3", "1 day", "visible")
+        candidate_count_default, duration_default, visibility_default = defaults or ("3", "1d", "visible")
         self.candidate_count_input = discord.ui.TextInput(
             label="Default candidate count (2-10)", default=candidate_count_default
         )
         self.duration_input = discord.ui.TextInput(
             label="Default vote duration (1 minute - 30 days)",
             default=duration_default,
-            placeholder="e.g. 10m, 30m, 1h, 12h, 1d, 1w",
+            placeholder="e.g. 10m, 1h, 1d, or 1w",
         )
         self.visibility_input = discord.ui.TextInput(
             label="Default visibility: blind or visible", default=visibility_default
@@ -933,16 +933,69 @@ class ReminderDefaultsModal(discord.ui.Modal):
     def __init__(self, on_submit: OnReminderDefaultsSubmit, *, defaults: Optional[Tuple[str, str]] = None) -> None:
         super().__init__(title="Reminder Defaults")
         self._submit_callback = on_submit
-        enabled_default, minutes_default = defaults or ("yes", "1 day")
+        enabled_default, minutes_default = defaults or ("yes", "1d")
         self.enabled_input = discord.ui.TextInput(label="Reminder enabled? (yes/no)", default=enabled_default)
         self.minutes_input = discord.ui.TextInput(
-            label="Reminder before close (e.g. 10m, 1h, 1d)", default=minutes_default
+            label="Reminder before close (e.g. 10m, 1h, 1d, 1w)", default=minutes_default
         )
         self.add_item(self.enabled_input)
         self.add_item(self.minutes_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self._submit_callback(interaction, self.enabled_input.value, self.minutes_input.value)
+
+
+class EnableAutomaticBackupsButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigureClicked) -> None:
+        super().__init__(
+            label="Enable Automatic Backups (Recommended)",
+            style=discord.ButtonStyle.primary,
+            custom_id="wpm_setup_backup_enable",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class DisableAutomaticBackupsButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigureClicked) -> None:
+        super().__init__(
+            label="Disable Automatic Backups",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_setup_backup_disable",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class BackupDefaultsChoiceView(SetupWizardStepView):
+    """Step 8: choose whether automatic backups are enabled at all
+    (Release Polish: Optional Automatic Backups) before -- only if
+    enabled -- configuring their interval and retention. Enable is the
+    recommended, default action, matching HomeChannelChoiceView's and
+    SuggestionDatabaseChoiceView's own "recommended action first, primary
+    style" convention.
+    """
+
+    def __init__(
+        self,
+        on_enable: OnConfigureClicked,
+        on_disable: OnConfigureClicked,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(EnableAutomaticBackupsButton(on_enable))
+        self.add_item(DisableAutomaticBackupsButton(on_disable))
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
+        self.add_item(SetupCancelButton(on_cancel))
 
 
 class BackupDefaultsModal(discord.ui.Modal):

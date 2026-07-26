@@ -60,3 +60,16 @@ class SchedulerRepository(Protocol):
         logical_key: str,
     ) -> ScheduledJob | None:
         ...
+
+    async def find_active_by_guild_and_type(
+        self,
+        guild_id: int,
+        job_type: str,
+    ) -> ScheduledJob | None:
+        """Return the active (pending/running) job of a type for a guild.
+
+        Used by recurring jobs (e.g. automatic backups) whose logical_key
+        varies per occurrence, where cancellation/reconciliation needs to
+        find "whatever is currently scheduled" rather than one stable key.
+        """
+        ...

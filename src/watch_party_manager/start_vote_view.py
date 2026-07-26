@@ -139,7 +139,7 @@ class CustomizeVoteModal(discord.ui.Modal):
             label="Duration (1 minute - 30 days)",
             required=False,
             placeholder=(
-                "e.g. 10m, 30m, 1h, 12h, 1d, 1w -- blank uses the default"
+                "e.g. 10m, 1h, 1d, or 1w -- blank uses the default"
                 + (f" ({default_duration_display})" if default_duration_display else "")
             ),
         )
@@ -157,7 +157,7 @@ class CustomizeVoteModal(discord.ui.Modal):
             label="Reminder before close",
             required=False,
             placeholder=(
-                "e.g. 10m, 1h, 12h, 1d -- blank uses the default"
+                "e.g. 10m, 1h, 1d, or 1w -- blank uses the default"
                 + (f" ({default_reminder_minutes_display})" if default_reminder_minutes_display else "")
             ),
         )

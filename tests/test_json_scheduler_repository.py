@@ -52,6 +52,45 @@ class JsonSchedulerRepositoryTests(unittest.IsolatedAsyncioTestCase):
             await self.repository.find_active_by_logical_key("close_vote:1")
         )
 
+    async def test_find_active_by_guild_and_type_finds_a_pending_job(self) -> None:
+        job = await self.repository.add(self.make_job())
+
+        found = await self.repository.find_active_by_guild_and_type(job.guild_id, job.job_type)
+
+        self.assertEqual(found, job)
+
+    async def test_find_active_by_guild_and_type_ignores_a_different_guild_or_type(self) -> None:
+        await self.repository.add(self.make_job())
+
+        self.assertIsNone(await self.repository.find_active_by_guild_and_type(999, "close_vote"))
+        self.assertIsNone(await self.repository.find_active_by_guild_and_type(123, "automatic_backup"))
+
+    async def test_find_active_by_guild_and_type_ignores_a_completed_job(self) -> None:
+        job = await self.repository.add(self.make_job())
+        await self.repository.claim(job.job_id, NOW)
+        await self.repository.complete(job.job_id, NOW, JobResult.EXECUTED)
+
+        found = await self.repository.find_active_by_guild_and_type(job.guild_id, job.job_type)
+
+        self.assertIsNone(found)
+
+    async def test_find_active_by_guild_and_type_finds_varying_logical_keys(self) -> None:
+        # Regression for automatic backups: each occurrence has its own
+        # logical_key, so lookup must go through guild_id/job_type.
+        job = await self.repository.add(
+            ScheduledJob(
+                guild_id=123,
+                job_type="automatic_backup",
+                logical_key="automatic_backup:123:2026-07-19",
+                run_at=NOW,
+                created_at=NOW,
+            )
+        )
+
+        found = await self.repository.find_active_by_guild_and_type(123, "automatic_backup")
+
+        self.assertEqual(found, job)
+
     async def test_add_persists_and_round_trips_job(self) -> None:
         job = self.make_job()
 

@@ -277,7 +277,7 @@ class CustomDurationModal(discord.ui.Modal):
 
         self.duration_input = discord.ui.TextInput(
             label="Duration",
-            placeholder="e.g. 10m, 1h, 1d, 1w",
+            placeholder="e.g. 10m, 1h, 1d, or 1w",
             required=True,
         )
         self.add_item(self.duration_input)

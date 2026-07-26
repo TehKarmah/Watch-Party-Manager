@@ -52,11 +52,14 @@ from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
+from watch_party_manager.scheduler.scheduled_job import JobResult, JobStatus, ScheduledJob
+from watch_party_manager.scheduler.scheduler_service import SchedulerService
 from watch_party_manager.services.config_service import ConfigService
 from watch_party_manager.services.setup_wizard_service import SetupWizardService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.setup_wizard_view import (
     AdminChannelStepView,
+    BackupDefaultsChoiceView,
     ExistingChannelSelectView,
     HomeChannelChoiceView,
     HomeChannelNameModal,
@@ -76,6 +79,64 @@ GUILD_ID = 100
 WASH_CREW_ROLE_ID = 111
 WATCH_PARTY_ROLE_ID = 222
 DESTINATION_CHANNEL_ID = 400
+
+
+class MemorySchedulerRepository:
+    """In-memory SchedulerRepository fake, matching the project's other tests."""
+
+    def __init__(self) -> None:
+        self.jobs: dict[str, ScheduledJob] = {}
+
+    async def add(self, job: ScheduledJob) -> ScheduledJob:
+        self.jobs[job.job_id] = job
+        return job
+
+    async def get_due(self, now, *, limit: int = 100) -> list[ScheduledJob]:
+        return [
+            job for job in self.jobs.values() if job.status is JobStatus.PENDING and job.run_at <= now
+        ][:limit]
+
+    async def claim(self, job_id: str, started_at) -> ScheduledJob | None:
+        job = self.jobs[job_id]
+        if job.status is not JobStatus.PENDING:
+            return None
+        claimed = job.with_changes(status=JobStatus.RUNNING, started_at=started_at, attempt_count=job.attempt_count + 1)
+        self.jobs[job_id] = claimed
+        return claimed
+
+    async def complete(self, job_id: str, completed_at, result: JobResult) -> ScheduledJob:
+        updated = self.jobs[job_id].with_changes(status=JobStatus.COMPLETED, completed_at=completed_at, result=result, last_error=None)
+        self.jobs[job_id] = updated
+        return updated
+
+    async def retry(self, job_id: str, run_at, error: str) -> ScheduledJob:
+        updated = self.jobs[job_id].with_changes(status=JobStatus.PENDING, run_at=run_at, last_error=error)
+        self.jobs[job_id] = updated
+        return updated
+
+    async def fail(self, job_id: str, completed_at, error: str) -> ScheduledJob:
+        updated = self.jobs[job_id].with_changes(status=JobStatus.FAILED, completed_at=completed_at, last_error=error)
+        self.jobs[job_id] = updated
+        return updated
+
+    async def cancel(self, job_id: str, completed_at) -> ScheduledJob:
+        updated = self.jobs[job_id].with_changes(status=JobStatus.CANCELLED, completed_at=completed_at, result=JobResult.CANCELLED)
+        self.jobs[job_id] = updated
+        return updated
+
+    async def find_active_by_logical_key(self, logical_key: str) -> ScheduledJob | None:
+        return next((job for job in self.jobs.values() if job.logical_key == logical_key and job.is_active), None)
+
+    async def find_active_by_guild_and_type(self, guild_id: int, job_type: str) -> ScheduledJob | None:
+        return next(
+            (job for job in self.jobs.values() if job.guild_id == guild_id and job.job_type == job_type and job.is_active),
+            None,
+        )
+
+
+class FakeSchedulerHost:
+    def __init__(self, scheduler_service: SchedulerService) -> None:
+        self.scheduler_service = scheduler_service
 
 
 class FakeRole:
@@ -317,6 +378,9 @@ class SetupCommandTestCase(unittest.IsolatedAsyncioTestCase):
         self.guild_configuration_repository = GuildConfigurationRepository(
             temp_path / "guild_configurations.json"
         )
+        self.bot.guild_configuration_repository = self.guild_configuration_repository
+        self.scheduler_repository = MemorySchedulerRepository()
+        self.bot.scheduler_host = FakeSchedulerHost(SchedulerService(self.scheduler_repository))
         self.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository(
             temp_path / "suggestion_database_configurations.json"
         )
@@ -481,7 +545,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
             state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
         state = self.bot.setup_wizard_service.set_reminder_defaults(state, True, 24)
-        state = self.bot.setup_wizard_service.set_backup_defaults(state, 1, 30)
+        state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
 
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
@@ -507,6 +571,50 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         self.assertIn("WASH Setup Complete", save_interaction.response.edited_content)
         self.assertIsNone(save_interaction.response.edited_view)
         self.assertEqual(self.applied_roles, [(WASH_CREW_ROLE_ID, WATCH_PARTY_ROLE_ID)])
+
+    async def test_saving_schedules_the_automatic_backup_job(self) -> None:
+        # Release Polish (Optional Automatic Backups): completing setup
+        # with automatic backups enabled must schedule the job
+        # immediately, not just persist the setting.
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.bot.setup_wizard_service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.bot.setup_wizard_service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        state, _ = self.bot.setup_wizard_service.select_existing_database(
+            state, database_result.database.database_id, guild_id=GUILD_ID
+        )
+        state = self.bot.setup_wizard_service.skip_watch_destination(state)
+        state = self.bot.setup_wizard_service.set_voting_defaults(
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+        )
+        state = self.bot.setup_wizard_service.set_reminder_defaults(state, True, 24)
+        state = self.bot.setup_wizard_service.enable_automatic_backups(state, 3, 15)
+
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: ReviewStepView = interaction.response.sent_view
+        save_button = view.children[0]
+
+        class FakeGuild:
+            name = "Test Guild"
+
+            def get_role(self, role_id):
+                return FakeRole(role_id)
+
+            def get_channel_or_thread(self, channel_id):
+                if channel_id == DESTINATION_CHANNEL_ID:
+                    return FakeUsableChannel()
+                return None
+
+            me = object()
+
+        save_interaction = FakeInteraction(guild=FakeGuild())
+        await save_button.callback(interaction=save_interaction)
+
+        active_jobs = [job for job in self.scheduler_repository.jobs.values() if job.is_active]
+        self.assertEqual(len(active_jobs), 1)
+        self.assertEqual(active_jobs[0].guild_id, GUILD_ID)
 
 
 class BackNavigationIntegrationTests(SetupCommandTestCase):
@@ -591,7 +699,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
 
         modal: VotingDefaultsModal = configure_interaction.response.sent_modal
         self.assertEqual(modal.candidate_count_input.default, "5")
-        self.assertEqual(modal.duration_input.default, "14 minutes")
+        self.assertEqual(modal.duration_input.default, "14m")
         self.assertEqual(modal.visibility_input.default, "visible")
 
     async def test_back_from_review_returns_to_backup_defaults(self) -> None:
@@ -605,7 +713,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         back_interaction = FakeInteraction()
         await back_button.callback(interaction=back_interaction)
 
-        self.assertIsInstance(back_interaction.response.edited_view, ModalStepIntroView)
+        self.assertIsInstance(back_interaction.response.edited_view, BackupDefaultsChoiceView)
 
     async def test_admin_channel_step_shows_a_back_button_to_watch_party_role(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
@@ -971,7 +1079,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
             state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
         state = self.bot.setup_wizard_service.set_reminder_defaults(state, True, 24)
-        state = self.bot.setup_wizard_service.set_backup_defaults(state, 1, 30)
+        state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
 
         interaction = FakeInteraction()
@@ -1034,7 +1142,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
             state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
         state = self.bot.setup_wizard_service.set_reminder_defaults(state, True, 24)
-        state = self.bot.setup_wizard_service.set_backup_defaults(state, 1, 30)
+        state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
 
         class FakeGuild:
             name = "Test Guild"
@@ -1083,7 +1191,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
             state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.ROTATION_POOL
         )
         state = self.bot.setup_wizard_service.set_reminder_defaults(state, True, 24)
-        state = self.bot.setup_wizard_service.set_backup_defaults(state, 1, 30)
+        state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
 
         class FakeGuild:
             name = "Test Guild"
@@ -1488,7 +1596,7 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
         self.assertIsInstance(interaction.response.sent_view, SuggestionDatabaseChoiceView)
-        create_new_button = interaction.response.sent_view.children[1]
+        create_new_button = interaction.response.sent_view.children[0]
 
         type_interaction = FakeInteraction()
         await create_new_button.callback(interaction=type_interaction)

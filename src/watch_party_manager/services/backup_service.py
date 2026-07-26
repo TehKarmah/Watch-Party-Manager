@@ -270,10 +270,17 @@ class BackupService:
         ]
         return tuple(sorted(archives, key=lambda path: path.stat().st_mtime_ns, reverse=True))
 
-    def prune_backups(self, kind: BackupKind) -> tuple[Path, ...]:
-        """Delete older archives beyond the configured retention limit."""
+    def prune_backups(self, kind: BackupKind, retention_limit: int | None = None) -> tuple[Path, ...]:
+        """Delete older archives beyond the configured retention limit.
+
+        retention_limit overrides this service's own configured limit
+        for this call only -- used by the automatic-backup scheduler job,
+        which prunes according to each guild's own configured retention
+        count rather than this (single, shared-across-guilds) service
+        instance's default settings.
+        """
         archives = self.list_backups(kind)
-        retention_limit = self.retention_limit_for(kind)
+        retention_limit = retention_limit if retention_limit is not None else self.retention_limit_for(kind)
         removed: list[Path] = []
         for archive_path in archives[retention_limit:]:
             archive_path.unlink(missing_ok=True)

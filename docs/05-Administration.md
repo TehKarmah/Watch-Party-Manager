@@ -49,13 +49,13 @@ Use `/database_add` and provide a name. Database names must be valid under the s
 
 ### List databases
 
-Use `/database_list` to review databases available to the current guild.
+Use `/database_list` to review databases available to the current server.
 
 ### Remove a database
 
 Run `/database_remove`, then choose the database from the picker that appears -- each option shows the database's name, whether it's Active or Inactive, and its current watch-item count, so there's no need to look up an internal ID first. The command applies the repository's safety and ownership validation.
 
-Database operations are guild-scoped. A guild must not access or change another guild's databases.
+Database operations are server-scoped. A server must not access or change another server's databases.
 
 ### Adding suggestions
 
@@ -99,7 +99,7 @@ Every suggestion shows one of four statuses, both in `/list` and on its own publ
 
 WASH Crew may always override a suggestion's status directly through `/edit_suggestion`'s Change Status action (Available, Vote Winner, or Retired -- Rotation Cooldown is never a directly settable option, since it's computed). Whenever a suggestion's status changes, its existing public confirmation post is edited in place to reflect the new status -- it is never recreated.
 
-Database selection follows the same automatic-then-selector pattern used elsewhere: the current channel's configured database is used automatically; if none matches and the guild has exactly one active database, that one is used; if several exist, WASH shows a picker. Each entry is a terse, at-a-glance line -- title and release year exactly once (`50 First Dates (2004)`, never `50 First Dates (2004) (2004)`), followed by `| [Original Suggestion](link)` when the original public post is known, or nothing after the title when it isn't. The reference number, status label, and IMDb link intentionally do not appear on this default view. Long lists page with Previous/Next buttons rather than being cut off or capped; both the initial response and every page suppress Discord's automatic link-preview embeds.
+Database selection follows the same automatic-then-selector pattern used elsewhere: the current channel's configured database is used automatically; if none matches and the server has exactly one active database, that one is used; if several exist, WASH shows a picker. Each entry is a terse, at-a-glance line -- title and release year exactly once (`50 First Dates (2004)`, never `50 First Dates (2004) (2004)`), followed by `| [Original Suggestion](link)` when the original public post is known, or nothing after the title when it isn't. The reference number, status label, and IMDb link intentionally do not appear on this default view. Long lists page with Previous/Next buttons rather than being cut off or capped; both the initial response and every page suppress Discord's automatic link-preview embeds.
 
 Older suggestions saved before public confirmation posts existed (or whose post failed at the time) have no original-post link to show and never will -- WASH has no reliable way to locate a Discord message after the fact without inventing a URL or risking a duplicate public post, so `/repair_suggestions` (WASH Crew-only; repairs legacy IMDb-link titles and a few known malformed records) does not attempt to recover it.
 
@@ -112,7 +112,7 @@ Older suggestions saved before public confirmation posts existed (or whose post 
 `/edit_suggestion reference:<text>` is WASH Crew only. `reference` is matched the same way `/remove` matches (reference number or exact title). It shows a read-only summary (title, release year, collection, status, IMDb link if any) alongside three actions:
 
 - **Change Status** -- a dropdown of the three settable statuses (Available, Vote Winner, Retired; see "Suggestion status model" above). The suggestion's public confirmation post is updated in place once changed.
-- **Move to Another Collection** -- a dropdown of this server's collections, so it's never necessary to type a raw ID. The destination must exist, be active, and belong to the same guild. The same duplicate check `/add` uses runs again against the destination collection (excluding the suggestion's own record) -- a definite duplicate blocks the move, a possible one requires confirmation ("Move Anyway"). Moving preserves the suggestion's status, stable ID, journey, and history unchanged; only its collection (and an internal "last updated" timestamp) changes.
+- **Move to Another Collection** -- a dropdown of this server's collections, so it's never necessary to type a raw ID. The destination must exist, be active, and belong to the same server. The same duplicate check `/add` uses runs again against the destination collection (excluding the suggestion's own record) -- a definite duplicate blocks the move, a possible one requires confirmation ("Move Anyway"). Moving preserves the suggestion's status, stable ID, journey, and history unchanged; only its collection (and an internal "last updated" timestamp) changes.
 - **Cancel** -- makes no changes.
 
 IMDb-derived fields (title, release year, IMDb link, director, etc.) are read-only here and no longer manually editable -- they always come from `/add`'s original OMDb lookup.
@@ -136,16 +136,16 @@ Use `/start_vote` to begin an interactive setup flow.
 
 WASH offers:
 
-- **Use Defaults**, which applies the configured candidate count, configured duration, and the guild's configured default visibility.
-- **Customize This Vote**, which accepts a candidate count and blind or visible voting (leaving either blank also uses the guild's configured default, not a hardcoded value), plus a duration field using WASH's one shared duration syntax (see "Duration syntax" below) -- anywhere from 1 minute through 30 days, with an explicit unit always required (e.g. `10m`, `4h`, `3d` -- a bare `3` is no longer accepted). Practical shortcuts: **10m**, **30m**, **1h**, **12h**, **1d**, **1w**, or any custom value in that range. Every field's "leave blank to use the configured default" placeholder also names the actual value that will be used (e.g. "Leave blank to use the configured default (Visible)"), so nothing has to be guessed or looked up separately. A reminder-before-close override is also available here, using the same duration syntax with minute precision (e.g. `10m`, `1h`).
+- **Use Defaults**, which applies the configured candidate count, configured duration, and the server's configured default visibility.
+- **Customize This Vote**, which accepts a candidate count and blind or visible voting (leaving either blank also uses the server's configured default, not a hardcoded value), plus a duration field using WASH's one shared duration syntax (see "Duration syntax" below) -- anywhere from 1 minute through 30 days, with an explicit unit always required (e.g. `10m`, `4h`, `3d` -- a bare `3` is no longer accepted). Practical shortcuts: **10m**, **30m**, **1h**, **12h**, **1d**, **1w**, or any custom value in that range. Every field's "leave blank to use the configured default" placeholder also names the actual value that will be used (e.g. "Leave blank to use the configured default (Visible)"), so nothing has to be guessed or looked up separately. A reminder-before-close override is also available here, using the same duration syntax with minute precision (e.g. `10m`, `1h`).
 
 The target database is resolved the same contextual, automatic-then-picker way `/add` and `/list` resolve theirs (see Section 3) -- WASH never guesses when the channel is ambiguous. WASH then selects nominees from that database and creates an interactive voting post -- WASH's standard embed style with the yellow accent color, showing the round's visibility, duration, end time, and candidate titles (no leading nominee number; vote buttons below the embed carry the same clean titles). Candidate availability is validated before the round is created.
 
 **Collection-centric titles.** Every voting message -- the post itself, the pre-close reminder, the closed record, the results announcement, a cancellation notice, and a deadline-change notice -- leads with the collection's name rather than the round number, e.g. "🎬 Movie Suggestions Voting Is Open" instead of "Voting Round 3 is Open". The round number is still shown as secondary information (a `Round` field on the voting post itself, and a `Round: 3` line on every other message). Movies, TV Shows, Anime, Holiday, Documentaries, and Horror collections automatically get a built-in emoji prefix (🎬, 📺, 🎌, 🎄, 🎞️, 🎃 respectively) based on their name; any other, custom-named collection displays with no emoji. A round created before a database was associated with it (or whose collection has since been removed) falls back to a generic, round-centric title with no collection name.
 
-**Default voting visibility.** New guilds default to **Visible**; **Blind** remains fully supported and selectable at any time via the Setup Wizard's Voting Defaults step or `/config`. An existing guild's explicitly saved visibility (including one set to Blind) is never changed by this default; only a guild configuration saved before this setting existed resolves to Visible.
+**Default voting visibility.** New servers default to **Visible**; **Blind** remains fully supported and selectable at any time via the Setup Wizard's Voting Defaults step or `/config`. An existing server's explicitly saved visibility (including one set to Blind) is never changed by this default; only a server configuration saved before this setting existed resolves to Visible.
 
-**Default voting duration.** New guilds default to **1 day**, configurable (1 minute through 30 days) via the Setup Wizard's Voting Defaults step or `/config`, both of which display it in natural language (e.g. "10 minutes", "4 hours", or "3 days" -- the largest whole unit it evenly divides into). An older guild configuration that only ever saved a whole number of hours or days loads as the exact equivalent number of minutes, with no action required.
+**Default voting duration.** New servers default to **1 day**, configurable (1 minute through 30 days) via the Setup Wizard's Voting Defaults step or `/config`, both of which display it in natural language (e.g. "10 minutes", "4 hours", or "3 days" -- the largest whole unit it evenly divides into). An older server configuration that only ever saved a whole number of hours or days loads as the exact equivalent number of minutes, with no action required.
 
 **Duration syntax.** Every relative duration WASH accepts -- vote duration, reminder-before-close, and `/edit_vote`'s Shorten Vote/Extend Vote -- uses the same one syntax: a whole number immediately followed by a unit. Short forms `m`/`h`/`d`/`w` and the words `minute(s)`/`hour(s)`/`day(s)`/`week(s)` are both accepted (e.g. `10m`, `1h`, `3 days`, `1w`); a bare number with no unit is rejected. Vote duration supports the same minute precision as reminders and Shorten/Extend Vote -- `10m` and `30m` are perfectly valid vote durations, not just whole-hour amounts.
 
@@ -159,7 +159,7 @@ Each database's `suggestion_rules.candidate_selection` setting chooses how `/sta
 - **Soft Rotation** (`soft_rotation`) -- unpresented suggestions are strongly preferred, but a previously presented suggestion remains technically eligible at a much lower selection weight rather than being excluded outright.
 - **Pure Random** (`infinite_pool`) -- every eligible suggestion is always available; no rotation state is created or tracked for a database using this mode.
 
-A guild that never explicitly sets this (including one configured before this setting existed) keeps behaving exactly as Balanced Random/`rotation_pool` -- SuggestionRulesConfig's own documented default.
+A server that never explicitly sets this (including one configured before this setting existed) keeps behaving exactly as Balanced Random/`rotation_pool` -- SuggestionRulesConfig's own documented default.
 
 Within whichever pool a mode produces, WASH still applies its existing genre/media-type diversity pass and its existing deprioritization of recently nominated or recently won suggestions -- candidate-selection mode and diversity are independent, layered concerns.
 
@@ -232,7 +232,7 @@ Before manual maintenance, stop the bot and make a copy of the data files.
 7. Run `/about` as a WASH Crew member to confirm Health, Configuration, and Runtime all look correct.
 8. Smoke-test any commands changed in the release.
 
-Configurable scheduled backup execution is planned but not implemented (see Section 9) -- backups still require an explicit `/backup` today. Import from another WASH instance is implemented via `/import`; that other instance's own `/backup` output is the "export" side of the exchange, so there is no separate export command.
+Automatic backups run on the schedule configured via the Setup Wizard or `/config` (see Section 9); manual `/backup` remains available at any time regardless of that setting. Import from another WASH instance is implemented via `/import`; that other instance's own `/backup` output is the "export" side of the exchange, so there is no separate export command.
 
 ## 9. Backup & Recovery
 
@@ -257,9 +257,15 @@ Backups created before this manifest existed are still accepted: any field it do
 
 Creates an immediate manual backup of WASH's entire data directory, attaches it to the response as `Watch_Party_Manager_Backup_YYYY-MM-DD_HH-MM-SS.zip`, and reports its filename, creation time, and type. Responses are ephemeral. WASH Crew only.
 
+### Automatic backups
+
+Automatic backups are **enabled by default and recommended**. They're configured through the Setup Wizard's Backup step or, afterward, `/config`'s Backup Defaults, either of which lets WASH Crew choose Enable (setting an interval in days and a retention count) or Disable. An existing configuration saved before this setting existed is treated as enabled, using the same defaults a new server gets.
+
+While enabled, WASH creates a backup on the configured interval and prunes older automatic backups down to the configured retention count -- a separate count from any manual backups kept, since automatic and manual backups are tracked as distinct pools (the manifest's `kind` field records which pool each archive belongs to). Disabling stops future automatic backups from being created; it never deletes backups that already exist, and `/backup` remains fully available regardless of the setting. Re-enabling resumes scheduling from the saved (or newly configured) interval and retention count. Changing these settings through `/setup` or `/config` takes effect immediately, and the schedule is also reconciled against the saved configuration whenever WASH starts up.
+
 ### `/restore`
 
-Restores WASH's entire dataset. The flow always is: select an existing local backup by filename **or** upload a `.zip` -> WASH validates it and shows a summary (application version, creation time, backup type, guild ID, and whichever record counts it can determine -- suggestion databases, suggestions, vote rounds, membership requests, and whether a guild configuration is present) -> WASH Crew explicitly clicks **Restore** or **Cancel**. Nothing is ever restored without that explicit confirmation, and validation never modifies live data.
+Restores WASH's entire dataset. The flow always is: select an existing local backup by filename **or** upload a `.zip` -> WASH validates it and shows a summary (application version, creation time, backup type, server ID, and whichever record counts it can determine -- suggestion databases, suggestions, vote rounds, membership requests, and whether a server configuration is present) -> WASH Crew explicitly clicks **Restore** or **Cancel**. Nothing is ever restored without that explicit confirmation, and validation never modifies live data.
 
 Immediately before restoring, WASH creates a full safety backup of the current data using the same backup process. If that safety backup fails, the restore is aborted and live data is left untouched. If the restore step itself fails afterward, the safety backup is preserved and the failure message says so explicitly.
 
@@ -272,9 +278,9 @@ Back up or restore a single suggestion database instead of everything. Run `/dat
 `/database_restore` requires choosing **Merge** or **Replace** explicitly -- WASH never infers which one you meant:
 
 - **Merge** imports suggestions from the backup into the *existing* database with a matching ID. A suggestion whose title already exists for that database is skipped and reported as a conflict rather than overwritten. The destination database must already exist; Merge never creates one.
-- **Replace** overwrites the selected database's own record and all of its suggestions with the backup's version (creating it fresh if it no longer exists), while leaving every other database and all other guild data untouched. A full safety backup is made first, exactly as with `/restore`.
+- **Replace** overwrites the selected database's own record and all of its suggestions with the backup's version (creating it fresh if it no longer exists), while leaving every other database and all other server data untouched. A full safety backup is made first, exactly as with `/restore`.
 
-A single-database backup can only be restored back into the guild it came from; WASH rejects a mismatch rather than silently importing another server's data.
+A single-database backup can only be restored back into the server it came from; WASH rejects a mismatch rather than silently importing another server's data.
 
 ### `/database_reset`
 
@@ -284,9 +290,9 @@ Flow: run `/database_reset` -> choose the database from the picker that appears 
 
 ### `/factory_reset`
 
-Removes every WASH-managed record belonging to the current server: guild configuration, suggestion databases and their configuration, suggestions (including embedded watch history), vote rounds, membership requests, scheduled watch parties, and scheduled reminder jobs. Backup archives, `.env` files, the bot token, application code, the virtual environment, and logs are never touched -- this command only ever writes through WASH's own JSON repositories.
+Removes every WASH-managed record belonging to the current server: server configuration, suggestion databases and their configuration, suggestions (including embedded watch history), vote rounds, membership requests, scheduled watch parties, and scheduled reminder jobs. Backup archives, `.env` files, the bot token, application code, the virtual environment, and logs are never touched -- this command only ever writes through WASH's own JSON repositories.
 
-Flow: `/factory_reset` -> WASH shows a count of everything that would be removed -> click **Factory Reset** -> type `RESET` exactly -> a full safety backup is made, then the reset runs. Afterward, `/setup` is required again (removing the guild's configuration is what makes WASH treat the server as never having been set up -- the same check `/setup` already used before this milestone).
+Flow: `/factory_reset` -> WASH shows a count of everything that would be removed -> click **Factory Reset** -> type `RESET` exactly -> a full safety backup is made, then the reset runs. Afterward, `/setup` is required again (removing the server's configuration is what makes WASH treat the server as never having been set up -- the same check `/setup` already used before this milestone).
 
 ### `/import`
 
@@ -294,14 +300,14 @@ Imports a backup produced by *another* WASH instance's own `/backup`. Unlike `/r
 
 Flow: upload the backup -> WASH validates it and shows the same kind of summary `/restore` shows -> choose **Merge**, **Replace**, or **Cancel** -> (Replace only) type `REPLACE` exactly -> a full safety backup is made, then the import runs.
 
-Only "portable" data is ever imported: suggestion databases, their configuration, their suggestions, and vote rounds. This server's guild configuration -- its configured roles, channels, and guild ID -- is **never** changed by an import, in either mode. Membership requests, scheduled reminders, and scheduled watch parties are also never imported, since they reference the *source* server's Discord channels/messages/approval history and would be meaningless (or actively misleading) here.
+Only "portable" data is ever imported: suggestion databases, their configuration, their suggestions, and vote rounds. This server's configuration -- its configured roles, channels, and server ID -- is **never** changed by an import, in either mode. Membership requests, scheduled reminders, and scheduled watch parties are also never imported, since they reference the *source* server's Discord channels/messages/approval history and would be meaningless (or actively misleading) here.
 
 #### Merge versus Replace
 
 Never inferred -- you always choose explicitly:
 
 - **Merge**: a database whose name already exists locally (case-insensitive match) has its suggestions merged in; a suggestion whose title already exists for that database is skipped and reported as a conflict, never overwritten. Every other incoming database is imported as new. Numeric IDs from the other instance are meaningless here (each WASH instance assigns them independently), so they're reassigned automatically whenever they'd otherwise collide with something already local.
-- **Replace**: every portable record currently belonging to this guild is removed first, then the backup's portable data is imported fresh in its place. Other guilds' data (in a hypothetical multi-guild deployment) is untouched, and so is this guild's own Discord role/channel configuration.
+- **Replace**: every portable record currently belonging to this server is removed first, then the backup's portable data is imported fresh in its place. Other servers' data (in a hypothetical multi-server deployment) is untouched, and so is this server's own Discord role/channel configuration.
 
 #### Import results
 
@@ -324,7 +330,7 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 | --- | --- | --- |
 | "This backup failed validation and cannot be restored" / "Import validation failed" | Corrupt ZIP, missing/unreadable manifest, unsafe path, or a checksum mismatch (tampered or truncated file). | Unchanged -- validation never writes anything. |
 | "Unsupported backup type" | A full backup was offered to `/database_restore`, a single-database backup was offered to `/restore` or `/import`, or an incompatible format version was found. | Unchanged. |
-| "That backup was created in a different Discord server" | A `/database_backup` archive's recorded guild ID doesn't match the server `/database_restore` was run in. | Unchanged. |
+| "That backup was created in a different Discord server" | A `/database_backup` archive's recorded server ID doesn't match the server `/database_restore` was run in. | Unchanged. |
 | "No existing suggestion database with that ID was found to merge into" | Merge was chosen but the destination database doesn't exist yet. | Unchanged -- use Replace instead if that's intended. |
 | "N suggestion(s) were skipped as duplicates" (restore, reset, or import) | Merge detected a title already present in the destination database. | Only the non-conflicting suggestions were imported; nothing existing was overwritten. |
 | "Confirmation text did not match ... exactly" | The typed `RESET`/`REPLACE` phrase didn't match, or didn't match case. | Unchanged -- nothing runs until the exact phrase is submitted. |
@@ -363,7 +369,6 @@ Guided setup (`/setup`, rerunnable), rotation administration, and statistics/rep
 - Event-series administration (the richer recurring-schedule/Discord Event model `docs/04-Data-Model.md` describes; scheduled watch parties today are a simpler, single-occurrence foundation -- see `domain/watch_party.py`)
 - Scheduling and Discord Event publishing
 - Historical corrections and retroactive watch-history entry
-- Configurable scheduled backup execution (the retention/interval settings already exist in `/config`; the scheduler does not yet act on them)
 - Health and maintenance reporting
 
 Until those features are implemented, `project_state.md` is authoritative about what administrators can use safely.

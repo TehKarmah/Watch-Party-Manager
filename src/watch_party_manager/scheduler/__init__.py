@@ -1,5 +1,13 @@
 """Persistent scheduling infrastructure for WASH."""
 
+from .automatic_backup_job_handler import AutomaticBackupJobHandler
+from .backup_scheduling import (
+    AUTOMATIC_BACKUP_JOB_TYPE,
+    automatic_backup_logical_key,
+    build_automatic_backup_job,
+    reconcile_automatic_backup_schedule,
+    resolve_automatic_backup_settings,
+)
 from .job_handler import DiscordChannelMessenger, JobExecutionResult, JobHandler, RetryableJobError
 from .close_vote_job_handler import CloseVoteJobHandler
 from .json_scheduler_repository import (
@@ -39,6 +47,12 @@ from .watch_party_scheduling import (
 )
 
 __all__ = [
+    "AutomaticBackupJobHandler",
+    "AUTOMATIC_BACKUP_JOB_TYPE",
+    "automatic_backup_logical_key",
+    "build_automatic_backup_job",
+    "reconcile_automatic_backup_schedule",
+    "resolve_automatic_backup_settings",
     "CloseVoteJobHandler",
     "DiscordChannelMessenger",
     "DuplicateActiveJobError",

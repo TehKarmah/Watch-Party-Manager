@@ -36,8 +36,68 @@ from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
+from watch_party_manager.scheduler.scheduled_job import JobResult, JobStatus, ScheduledJob
+from watch_party_manager.scheduler.scheduler_service import SchedulerService
 from watch_party_manager.services.config_service import ConfigSection, ConfigService
 from watch_party_manager.services.permission_service import PermissionService
+
+
+class MemorySchedulerRepository:
+    """In-memory SchedulerRepository fake, matching the project's other tests."""
+
+    def __init__(self) -> None:
+        self.jobs: dict[str, ScheduledJob] = {}
+
+    async def add(self, job: ScheduledJob) -> ScheduledJob:
+        self.jobs[job.job_id] = job
+        return job
+
+    async def get_due(self, now, *, limit: int = 100) -> list[ScheduledJob]:
+        return [
+            job for job in self.jobs.values() if job.status is JobStatus.PENDING and job.run_at <= now
+        ][:limit]
+
+    async def claim(self, job_id: str, started_at) -> ScheduledJob | None:
+        job = self.jobs[job_id]
+        if job.status is not JobStatus.PENDING:
+            return None
+        claimed = job.with_changes(status=JobStatus.RUNNING, started_at=started_at, attempt_count=job.attempt_count + 1)
+        self.jobs[job_id] = claimed
+        return claimed
+
+    async def complete(self, job_id: str, completed_at, result: JobResult) -> ScheduledJob:
+        updated = self.jobs[job_id].with_changes(status=JobStatus.COMPLETED, completed_at=completed_at, result=result, last_error=None)
+        self.jobs[job_id] = updated
+        return updated
+
+    async def retry(self, job_id: str, run_at, error: str) -> ScheduledJob:
+        updated = self.jobs[job_id].with_changes(status=JobStatus.PENDING, run_at=run_at, last_error=error)
+        self.jobs[job_id] = updated
+        return updated
+
+    async def fail(self, job_id: str, completed_at, error: str) -> ScheduledJob:
+        updated = self.jobs[job_id].with_changes(status=JobStatus.FAILED, completed_at=completed_at, last_error=error)
+        self.jobs[job_id] = updated
+        return updated
+
+    async def cancel(self, job_id: str, completed_at) -> ScheduledJob:
+        updated = self.jobs[job_id].with_changes(status=JobStatus.CANCELLED, completed_at=completed_at, result=JobResult.CANCELLED)
+        self.jobs[job_id] = updated
+        return updated
+
+    async def find_active_by_logical_key(self, logical_key: str) -> ScheduledJob | None:
+        return next((job for job in self.jobs.values() if job.logical_key == logical_key and job.is_active), None)
+
+    async def find_active_by_guild_and_type(self, guild_id: int, job_type: str) -> ScheduledJob | None:
+        return next(
+            (job for job in self.jobs.values() if job.guild_id == guild_id and job.job_type == job_type and job.is_active),
+            None,
+        )
+
+
+class FakeSchedulerHost:
+    def __init__(self, scheduler_service: SchedulerService) -> None:
+        self.scheduler_service = scheduler_service
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.config_view import (
     BackToMenuOnlyView,
@@ -159,6 +219,9 @@ class ConfigCommandTestCase(unittest.IsolatedAsyncioTestCase):
         self.bot = FakeBot()
         self.bot.suggestion_service = self.suggestion_service
         self.bot.suggestion_database_configuration_repository = self.suggestion_database_configuration_repository
+        self.bot.guild_configuration_repository = self.guild_configuration_repository
+        self.scheduler_repository = MemorySchedulerRepository()
+        self.bot.scheduler_host = FakeSchedulerHost(SchedulerService(self.scheduler_repository))
         self.bot.config_service = ConfigService(
             self.guild_configuration_repository, self.suggestion_service, self.suggestion_database_configuration_repository
         )
@@ -683,7 +746,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
 
         modal = interaction.response.sent_modal
         self.assertEqual(modal.candidate_count_input.default, "3")
-        self.assertEqual(modal.duration_input.default, "1 day")
+        self.assertEqual(modal.duration_input.default, "1d")
         self.assertEqual(modal.visibility_input.default, "visible")
 
     async def test_voting_defaults_submission_saves_and_shows_result(self) -> None:
@@ -736,7 +799,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         await send_config_reminder_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
         modal = interaction.response.sent_modal
         self.assertEqual(modal.enabled_input.default, "yes")
-        self.assertEqual(modal.minutes_input.default, "1 day")
+        self.assertEqual(modal.minutes_input.default, "1d")
 
     async def test_reminder_defaults_submission_saves(self) -> None:
         self._seed_completed_setup()
@@ -755,27 +818,36 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
 
         self.assertFalse(self.guild_configuration_repository.get(GUILD_ID).notifications.vote.vote_ending_reminder)
 
+    async def _open_backup_defaults_modal(self, on_back):
+        """Backup Defaults now shows an Enable/Disable choice first
+        (Release Polish: Optional Automatic Backups) -- Enable opens the
+        same interval/retention modal as before.
+        """
+        interaction = FakeInteraction()
+        await send_config_backup_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+        choice_view = interaction.response.edited_view
+        enable_button = next(c for c in choice_view.children if c.custom_id == "wpm_config_backup_enable")
+        configure_interaction = FakeInteraction()
+        await enable_button.callback(interaction=configure_interaction)
+        return configure_interaction.response.sent_modal
+
     async def test_backup_defaults_modal_is_prefilled_with_current_values(self) -> None:
         self._seed_completed_setup()
-        interaction = FakeInteraction()
 
         async def on_back(back_interaction) -> None:
             pass
 
-        await send_config_backup_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        modal = interaction.response.sent_modal
+        modal = await self._open_backup_defaults_modal(on_back)
         self.assertEqual(modal.interval_input.default, "1")
         self.assertEqual(modal.retention_input.default, "30")
 
     async def test_backup_defaults_submission_saves(self) -> None:
         self._seed_completed_setup()
-        interaction = FakeInteraction()
 
         async def on_back(back_interaction) -> None:
             pass
 
-        await send_config_backup_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        modal = interaction.response.sent_modal
+        modal = await self._open_backup_defaults_modal(on_back)
         modal.interval_input._value = "5"
         modal.retention_input._value = "60"
 
@@ -783,18 +855,17 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         await modal.on_submit(interaction=submit_interaction)
 
         backup = self.guild_configuration_repository.get(GUILD_ID).backup
+        self.assertTrue(backup.include_in_automatic_backups)
         self.assertEqual(backup.extra_fields["automatic_backup_interval_days"], 5)
         self.assertEqual(backup.extra_fields["backup_retention_count"], 60)
 
     async def test_backup_defaults_submission_with_invalid_value_shows_retry(self) -> None:
         self._seed_completed_setup()
-        interaction = FakeInteraction()
 
         async def on_back(back_interaction) -> None:
             pass
 
-        await send_config_backup_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        modal = interaction.response.sent_modal
+        modal = await self._open_backup_defaults_modal(on_back)
         modal.interval_input._value = "0"
         modal.retention_input._value = "60"
 
@@ -802,6 +873,63 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         await modal.on_submit(interaction=submit_interaction)
 
         self.assertIn("must be between", submit_interaction.response.edited_content)
+
+    async def test_disabling_automatic_backups_saves_and_reports_disabled(self) -> None:
+        self._seed_completed_setup()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        interaction = FakeInteraction()
+        await send_config_backup_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+        choice_view = interaction.response.edited_view
+        disable_button = next(c for c in choice_view.children if c.custom_id == "wpm_config_backup_disable")
+
+        disable_interaction = FakeInteraction()
+        await disable_button.callback(interaction=disable_interaction)
+
+        self.assertIn("Automatic Backups: Disabled", disable_interaction.response.edited_content)
+        backup = self.guild_configuration_repository.get(GUILD_ID).backup
+        self.assertFalse(backup.include_in_automatic_backups)
+
+    async def test_enabling_automatic_backups_schedules_the_job_immediately(self) -> None:
+        self._seed_completed_setup()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        modal = await self._open_backup_defaults_modal(on_back)
+        modal.interval_input._value = "5"
+        modal.retention_input._value = "60"
+
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        active_jobs = [job for job in self.scheduler_repository.jobs.values() if job.is_active]
+        self.assertEqual(len(active_jobs), 1)
+        self.assertEqual(active_jobs[0].guild_id, GUILD_ID)
+
+    async def test_disabling_automatic_backups_cancels_the_scheduled_job(self) -> None:
+        self._seed_completed_setup()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        # Enable first (scheduling a job), then disable.
+        modal = await self._open_backup_defaults_modal(on_back)
+        modal.interval_input._value = "1"
+        modal.retention_input._value = "30"
+        await modal.on_submit(interaction=FakeInteraction())
+        self.assertEqual(len([j for j in self.scheduler_repository.jobs.values() if j.is_active]), 1)
+
+        interaction = FakeInteraction()
+        await send_config_backup_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+        choice_view = interaction.response.edited_view
+        disable_button = next(c for c in choice_view.children if c.custom_id == "wpm_config_backup_disable")
+        await disable_button.callback(interaction=FakeInteraction())
+
+        active_jobs = [job for job in self.scheduler_repository.jobs.values() if job.is_active]
+        self.assertEqual(active_jobs, [])
 
 
 class SendConfigResultTests(ConfigCommandTestCase):

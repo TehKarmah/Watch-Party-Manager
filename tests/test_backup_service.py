@@ -255,6 +255,39 @@ class BackupServiceTests(unittest.TestCase):
         self.assertTrue(daily.exists())
         self.assertEqual((first,), third_result.removed_archives)
 
+    def test_prune_backups_retention_limit_override_replaces_the_configured_limit(self):
+        # Release Polish (Optional Automatic Backups): the automatic-backup
+        # scheduler job prunes according to each guild's own configured
+        # retention count, not this shared service instance's own
+        # scheduled_retention_limit=2 (from setUp).
+        self.write_json("suggestions.json", {"suggestions": []})
+        for hour in range(4):
+            self.service.create_backup(
+                BackupKind.SCHEDULED,
+                created_at=datetime(2026, 7, 17, hour, tzinfo=timezone.utc),
+                enforce_retention=False,
+            )
+
+        removed = self.service.prune_backups(BackupKind.SCHEDULED, retention_limit=1)
+
+        self.assertEqual(len(removed), 3)
+        self.assertEqual(len(self.service.list_backups(BackupKind.SCHEDULED)), 1)
+
+    def test_prune_backups_without_an_override_uses_the_configured_limit(self):
+        self.write_json("suggestions.json", {"suggestions": []})
+        for hour in range(4):
+            self.service.create_backup(
+                BackupKind.SCHEDULED,
+                created_at=datetime(2026, 7, 17, hour, tzinfo=timezone.utc),
+                enforce_retention=False,
+            )
+
+        removed = self.service.prune_backups(BackupKind.SCHEDULED)
+
+        # scheduled_retention_limit=2 from setUp.
+        self.assertEqual(len(removed), 2)
+        self.assertEqual(len(self.service.list_backups(BackupKind.SCHEDULED)), 2)
+
     def test_list_backups_returns_newest_first(self):
         self.write_json("suggestions.json", {"suggestions": []})
         older = self.service.create_backup(

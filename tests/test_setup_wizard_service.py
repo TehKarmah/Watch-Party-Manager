@@ -158,7 +158,7 @@ class WizardFlowTests(SetupWizardServiceTestCase):
             state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.ROTATION_POOL
         )
         state = self.service.set_reminder_defaults(state, True, 48)
-        state = self.service.set_backup_defaults(state, 2, 15)
+        state = self.service.enable_automatic_backups(state, 2, 15)
         self.assertEqual(state.current_step, SetupWizardStep.REVIEW)
 
         guild = self._full_guild()
@@ -420,7 +420,7 @@ class AdminChannelStepTests(SetupWizardServiceTestCase):
             state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
         state = self.service.set_reminder_defaults(state, True, 24)
-        state = self.service.set_backup_defaults(state, 1, 30)
+        state = self.service.enable_automatic_backups(state, 1, 30)
 
         guild = self._full_guild()
         result = self.service.finalize(state, GUILD_ID, "Test Guild", guild)
@@ -555,14 +555,23 @@ class ReminderDefaultsStepTests(SetupWizardServiceTestCase):
 class BackupDefaultsStepTests(SetupWizardServiceTestCase):
     def test_interval_is_saved(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
-        updated = self.service.set_backup_defaults(state, 3, 20)
+        updated = self.service.enable_automatic_backups(state, 3, 20)
+        self.assertEqual(updated.draft.backup_enabled, True)
         self.assertEqual(updated.draft.backup_interval_days, 3)
         self.assertEqual(updated.current_step, SetupWizardStep.REVIEW)
 
     def test_retention_is_saved(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
-        updated = self.service.set_backup_defaults(state, 3, 20)
+        updated = self.service.enable_automatic_backups(state, 3, 20)
         self.assertEqual(updated.draft.backup_retention_count, 20)
+
+    def test_disabling_skips_interval_and_retention(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        updated = self.service.disable_automatic_backups(state)
+        self.assertEqual(updated.draft.backup_enabled, False)
+        self.assertIsNone(updated.draft.backup_interval_days)
+        self.assertIsNone(updated.draft.backup_retention_count)
+        self.assertEqual(updated.current_step, SetupWizardStep.REVIEW)
 
 
 class ValidationTests(SetupWizardServiceTestCase):
@@ -610,7 +619,7 @@ class CompletionTests(SetupWizardServiceTestCase):
             state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.ROTATION_POOL
         )
         state = self.service.set_reminder_defaults(state, True, 24)
-        state = self.service.set_backup_defaults(state, 1, 30)
+        state = self.service.enable_automatic_backups(state, 1, 30)
         return state
 
     def test_configuration_is_saved_on_success(self):

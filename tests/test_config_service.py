@@ -610,11 +610,29 @@ class ReminderDefaultsSectionTests(ConfigServiceTestCase):
 class BackupDefaultsSectionTests(ConfigServiceTestCase):
     def test_interval_and_retention_are_updated(self) -> None:
         self._seed_completed_setup()
-        result = self.service.set_backup_defaults(GUILD_ID, 3, 45)
+        result = self.service.enable_automatic_backups(GUILD_ID, 3, 45)
         self.assertTrue(result.success)
         backup = self.guild_configuration_repository.get(GUILD_ID).backup
+        self.assertTrue(backup.include_in_automatic_backups)
         self.assertEqual(backup.extra_fields["automatic_backup_interval_days"], 3)
         self.assertEqual(backup.extra_fields["backup_retention_count"], 45)
+
+    def test_disabling_automatic_backups(self) -> None:
+        self._seed_completed_setup()
+        result = self.service.disable_automatic_backups(GUILD_ID)
+        self.assertTrue(result.success)
+        backup = self.guild_configuration_repository.get(GUILD_ID).backup
+        self.assertFalse(backup.include_in_automatic_backups)
+
+    def test_re_enabling_automatic_backups_after_disabling(self) -> None:
+        self._seed_completed_setup()
+        self.service.disable_automatic_backups(GUILD_ID)
+        result = self.service.enable_automatic_backups(GUILD_ID, 7, 10)
+        self.assertTrue(result.success)
+        backup = self.guild_configuration_repository.get(GUILD_ID).backup
+        self.assertTrue(backup.include_in_automatic_backups)
+        self.assertEqual(backup.extra_fields["automatic_backup_interval_days"], 7)
+        self.assertEqual(backup.extra_fields["backup_retention_count"], 10)
 
 
 if __name__ == "__main__":
