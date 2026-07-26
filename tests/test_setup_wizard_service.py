@@ -167,6 +167,10 @@ class WizardFlowTests(SetupWizardServiceTestCase):
         self.assertTrue(result.success)
         self.assertTrue(result.configuration.setup_completed)
         self.assertIsNone(self.wizard_repository.get(GUILD_ID))
+        # Command Structure Cleanup: the chosen home channel must survive
+        # finalize() -- /database add and /database move need it after
+        # the wizard's own draft state is gone.
+        self.assertEqual(result.configuration.channels.home_channel_id, DESTINATION_CHANNEL_ID)
 
 
 class BackNavigationServiceTests(SetupWizardServiceTestCase):

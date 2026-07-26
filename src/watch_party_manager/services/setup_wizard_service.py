@@ -551,6 +551,11 @@ class SetupWizardService:
                 updated, channels=replace(base.channels, admin_channel_id=draft.admin_channel_id)
             )
 
+        if draft.home_channel_id is not None:
+            updated = replace(
+                updated, channels=replace(updated.channels, home_channel_id=draft.home_channel_id)
+            )
+
         if draft.voting_candidate_count is not None:
             updated = replace(
                 updated,

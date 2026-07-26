@@ -244,6 +244,7 @@ class GuildConfigurationRepository:
                 "log_channel_id": c.channels.log_channel_id,
                 "admin_channel_id": c.channels.admin_channel_id,
                 "watch_history_channel_id": c.channels.watch_history_channel_id,
+                "home_channel_id": c.channels.home_channel_id,
             }),
             "voting_defaults": cls._merge(c.voting_defaults.extra_fields, {
                 "candidate_count": c.voting_defaults.candidate_count,
@@ -343,9 +344,13 @@ class GuildConfigurationRepository:
                 announcements_channel_id=channels.get("announcements_channel_id"), log_channel_id=channels.get("log_channel_id"),
                 admin_channel_id=channels.get("admin_channel_id"),
                 watch_history_channel_id=channels.get("watch_history_channel_id"),
+                home_channel_id=channels.get("home_channel_id"),
                 extra_fields=cls._split_known(
                     channels,
-                    {"announcements_channel_id", "log_channel_id", "admin_channel_id", "watch_history_channel_id"},
+                    {
+                        "announcements_channel_id", "log_channel_id", "admin_channel_id",
+                        "watch_history_channel_id", "home_channel_id",
+                    },
                 ),
             ),
             voting_defaults=VotingDefaultsConfig(

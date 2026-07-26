@@ -22,7 +22,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - Check exactly one of Pass/Fail per test. A test you could not run at all (missing prerequisite, environment issue) should be marked **Fail** with the reason in Notes -- do not leave it blank.
 - "WASH Crew" and "Watch Party member" below refer to whichever Discord roles your test server has configured for those purposes (see Section 2).
 - Where a step says "confirm the exact wording," minor phrasing drift is not itself a failure -- flag it in Notes as a documentation/consistency item rather than blocking the release on it, unless the message is actually misleading or wrong.
-- Run `python -m unittest discover -s tests -v` (baseline: 2998 tests, 0 failures) before starting manual validation, and again before final sign-off. This checklist verifies real-world behavior the automated suite cannot (Discord UI rendering, actual message delivery, a real bot process restarting) -- it does not replace the automated suite.
+- Run `python -m unittest discover -s tests -v` (baseline: 3075 tests, 0 failures) before starting manual validation, and again before final sign-off. This checklist verifies real-world behavior the automated suite cannot (Discord UI rendering, actual message delivery, a real bot process restarting) -- it does not replace the automated suite.
 
 ---
 
@@ -137,6 +137,20 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 1.11 Command tree matches the documented structure (Command Structure Cleanup)
+
+- **Objective:** Confirm Discord's own slash-command autocomplete shows exactly the documented command tree -- grouped commands registered correctly, obsolete underscore commands gone, no duplicate command roots, and no Discord naming-rule violations.
+- **Preconditions:** Section 1.9 passed (bot online, commands synced).
+- **Steps:**
+  1. Type `/database` in Discord's command box; confirm autocomplete offers exactly `add`, `manage`, `list`, `move`, `backup`, `restore`, `remove`, `reset` as subcommands, and that typing `/database_add`, `/database_backup`, `/database_restore`, `/database_reset`, `/database_list`, or `/database_remove` (the old top-level names) finds nothing.
+  2. Type `/voting`; confirm autocomplete offers exactly `start`, `status`, `edit`, and that `/start_vote`, `/vote_status`, `/edit_vote` no longer exist.
+  3. Type `/watch-party`; confirm autocomplete offers exactly `schedule`, `status`, `reschedule`, `cancel`, and that `/schedule_watch_party`, `/reschedule_watch_party`, `/cancel_watch_party`, `/watch_party_status` no longer exist.
+  4. Type `/watch_party` (underscore); confirm it still exists, separately from `/watch-party` (hyphen), and still offers `members`, `pending`, `approved`, `denied`, `add`, `remove`, `search` -- membership administration is unaffected by this cleanup.
+  5. Confirm every other command named in [Command Reference](10-Command-Reference.md) (e.g. `/about`, `/add`, `/backup`, `/config`, `/help`, `/list`, `/restore`, `/setup`, `/stats`, `/remove`, `/edit_suggestion`, `/reject`, `/unreject`, `/repair_suggestions`, `/factory_reset`, `/import`, `/join_watch_party`) still appears as a plain top-level command, unchanged.
+- **Expected Result:** The live Discord command tree matches [Command Reference](10-Command-Reference.md) exactly -- no obsolete command remains reachable under its old name, no command was accidentally duplicated under both an old and new name, and `/watch_party`/`/watch-party` coexist as the two distinct, valid command names documented there.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ---
 
 ## 2. First-Time Setup
@@ -219,7 +233,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm a channel or thread already used by one database cannot be assigned to a second one.
 - **Preconditions:** At least one suggestion database already exists, tied to a known channel.
 - **Steps:**
-  1. Create a second database (via the Setup Wizard's Create New flow, or `/database_add`) and attempt to select the same channel already used by the first database.
+  1. Create a second database (via the Setup Wizard's Create New flow, or `/database add`) and attempt to select the same channel already used by the first database.
 - **Expected Result:** WASH shows a clear error naming the conflict and does not create the second database (or does not save the destination change); routing never becomes ambiguous.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -363,8 +377,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Note the candidate count, duration, visibility, and candidate-selection mode shown in `/config`'s Voting Defaults section.
   2. Change the duration in `/config` (e.g. to `12h`).
-  3. Run `/start_vote` -> **Use Defaults** and confirm the new duration is what's actually used (see Test 5.2).
-- **Expected Result:** The value changed in `/config` is the value `/start_vote` actually applies -- no separate/stale value anywhere.
+  3. Run `/voting start` -> **Use Defaults** and confirm the new duration is what's actually used (see Test 5.2).
+- **Expected Result:** The value changed in `/config` is the value `/voting start` actually applies -- no separate/stale value anywhere.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -383,13 +397,55 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 3.4 Database management: create, list, remove
 
-- **Objective:** Confirm suggestion database administration works outside the wizard.
-- **Preconditions:** WASH Crew role configured.
+- **Objective:** Confirm suggestion database administration works outside the wizard, using `/database add`'s modernized type-then-destination flow.
+- **Preconditions:** WASH Crew role configured; at least one collection (e.g. "Movie Suggestions") already exists.
 - **Steps:**
-  1. Run `/database_add` with a new name.
-  2. Run `/database_list` and confirm the new database appears.
-  3. Run `/database_remove`, choose the new database from the picker, and confirm.
-- **Expected Result:** Creation succeeds (rejects a duplicate name); the list shows name, Active/Inactive status, and item count; removal applies the documented safety/ownership checks and the database no longer appears afterward.
+  1. Run `/database add`; confirm the type screen offers every standard type (Movies, TV Shows, Anime, Holiday, Documentaries, Horror) this server doesn't already have a matching collection for, plus **Special Collection** and **Custom** (always present), and does **not** re-offer a type already matching an existing collection (e.g. Movies, from the precondition).
+  2. Choose **Custom**; type a new, unused name in the modal.
+  3. Confirm the destination screen appears with **Create New Thread (Recommended)**, **Use Current Thread/Channel**, **Use Existing Thread**, and **Use Existing Channel**, in that order; choose **Create New Thread**, confirm the suggested name is editable, and submit.
+  4. Run `/database add` again from inside a thread; confirm **Use Current Thread/Channel** is enabled and, when chosen, the collection is created on that same thread with no further prompts.
+  5. Run `/database add` again from a plain text channel; confirm **Use Current Thread/Channel** is enabled and, when chosen, the collection is created on that channel.
+  6. Run `/database add` again from a location where the current channel/thread isn't a usable destination (e.g. a voice channel's text chat, if reachable); confirm **Use Current Thread/Channel** appears disabled/greyed out rather than causing an error.
+  7. Run `/database list` and confirm the new database(s) appear.
+  8. Run `/database remove`, choose a new database from the picker, and confirm.
+- **Expected Result:** The type screen correctly excludes already-used standard types while always offering Special Collection/Custom; the new thread is created as a sibling under WASH's configured home channel and the collection is created on it immediately (rejects a duplicate name); **Use Current Thread/Channel** correctly targets the invoking thread or channel and is disabled rather than broken when the invocation location isn't usable; the list shows name, Active/Inactive status, and item count; removal applies the documented safety/ownership checks and the database no longer appears afterward.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 3.4b `/database move`
+
+- **Objective:** Confirm a collection's suggestion destination can be moved to a different channel or thread without affecting anything else about it.
+- **Preconditions:** At least one collection with existing suggestions and at least one completed vote round.
+- **Steps:**
+  1. Run `/database move`, choose the collection from the picker.
+  2. Confirm the destination screen shows **Create New Thread (Recommended)**, **Use Current Thread/Channel**, **Use Existing Thread**, and **Use Existing Channel**, in that order (same order as `/database add`).
+  3. Choose **Use Existing Channel** (or **Use Existing Thread**) and select a destination not already used by another collection.
+  4. Confirm the move succeeds; run `/add` in the new destination and confirm the suggestion is created there.
+  5. Confirm the collection's earlier suggestion posts (from before the move) are still visible in their original channel/thread, untouched.
+  6. Attempt a second move to a destination already used by another collection; confirm it's rejected with a clear "already routed" message and nothing changes.
+  7. Repeat step 1-4 choosing **Create New Thread** instead; confirm the new thread is created under WASH's configured home channel and the suggested default name can be renamed before creation (renaming here must not change the collection's own name -- only `/database add`'s Create New Thread renames the collection).
+  8. Run `/database move` again from inside a thread or a plain text channel; confirm **Use Current Thread/Channel** is enabled and, when chosen, moves the collection's destination to that same thread/channel with no further prompts.
+  9. Run `/database move` again from a location where the current channel/thread isn't a usable destination; confirm **Use Current Thread/Channel** appears disabled/greyed out rather than causing an error.
+- **Expected Result:** Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, rotation history, and statistics are all unchanged (spot-check via `/stats type:Collection` or `/config` -> Manage Collections before and after); existing Discord suggestion posts are never moved; only suggestions added after the move appear in the new destination; a duplicate destination is rejected cleanly; **Use Current Thread/Channel** behaves identically to `/database add`'s version (same enable/disable rule) but never renames the collection.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 3.4c `/database manage`
+
+- **Objective:** Confirm the guided management workflow correctly reuses the existing move, edit, backup, restore, reset, and remove logic without duplicating it.
+- **Preconditions:** At least one collection already exists.
+- **Steps:**
+  1. Run `/database manage`; confirm the same collection picker used elsewhere in `/database` appears.
+  2. Choose a collection; confirm a management menu appears offering exactly: **Move Collection**, **Edit Collection**, **Backup Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, **Cancel**.
+  3. Choose **Move Collection**; confirm it launches the identical destination-choice screen used by `/database move` (same four options, same order) and completes the move.
+  4. Return to `/database manage` and choose **Edit Collection**; confirm it shows the same settings menu `/config` -> Manage Collections shows for that database, and that its **Back** button returns to the `/database manage` management menu (not to `/config`'s picker).
+  5. Choose **Backup Collection**; confirm a backup file is produced, matching `/database backup`'s output.
+  6. Choose **Restore Collection**; confirm it points the user at running `/database restore` directly (a modal/component interaction cannot carry a file upload, so this cannot be button-driven) rather than silently failing.
+  7. Choose **Reset Collection**; confirm the same confirmation and behavior as `/database reset`.
+  8. Choose **Remove Collection**; confirm the same behavior as `/database remove` (the collection is deactivated).
+  9. Choose **Cancel** at the management menu; confirm the message states no changes were made and nothing is altered.
+  10. Confirm `/database move`, `/database backup`, `/database restore`, `/database reset`, and `/database remove` still work directly and unchanged, independent of `/database manage`.
+- **Expected Result:** `/database manage` is a thin guided wrapper around the same underlying move/edit/backup/restore/reset/remove logic used by the direct subcommands -- no behavior is duplicated or diverges between the guided and direct paths; the direct subcommands remain fully functional as shortcuts.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -398,7 +454,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm behavior is well-defined when more than one suggestion database exists -- WASH resolves the database from context (channel/thread), never from a server-wide "active" pointer.
 - **Preconditions:** At least two active suggestion databases in the same server, each tied to a different channel.
 - **Steps:**
-  1. Run `/add`, `/list`, `/start_vote`, or `/stats type:Rotation`/`type:Database` inside one database's configured channel or thread; confirm WASH uses that database automatically, with no prompt.
+  1. Run `/add`, `/list`, `/voting start`, or `/stats type:Rotation`/`type:Database` inside one database's configured channel or thread; confirm WASH uses that database automatically, with no prompt.
   2. Run the same command in a channel not tied to either database; confirm WASH asks "Which collection would you like to use?" with a picker listing both instead of guessing.
   3. Run `/config` -> **Manage Collections**; confirm both collections are listed and each is directly, independently editable (destinations and candidate selection) -- neither is reported as "Invalid" for being simultaneously active.
 - **Expected Result:** WASH never silently guesses between multiple databases; a matching channel resolves automatically, and an unmatched channel always shows a picker.
@@ -560,12 +616,12 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ## 5. Voting
 
-### 5.1 `/start_vote` -- Use Defaults
+### 5.1 `/voting start` -- Use Defaults
 
 - **Objective:** Confirm the default voting flow creates a round using the server's configured defaults.
 - **Preconditions:** At least 2 eligible suggestions; Voting Defaults configured (Section 2/3).
 - **Steps:**
-  1. Run `/start_vote` -> **Use Defaults**.
+  1. Run `/voting start` -> **Use Defaults**.
 - **Expected Result:** A round opens using the configured candidate count, duration, and visibility -- not hardcoded values. The public voting post is WASH's standard embed (yellow accent, no branding) showing visibility, duration/end time, and clean candidate titles (no leading number).
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -575,7 +631,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm both minute- and hour-based durations work end to end.
 - **Preconditions:** No open round.
 - **Steps:**
-  1. Run `/start_vote` -> **Customize This Vote**; confirm both the duration field and the reminder-before-close field show a placeholder starting "e.g. 10m, 1h, 1d, or 1w".
+  1. Run `/voting start` -> **Customize This Vote**; confirm both the duration field and the reminder-before-close field show a placeholder starting "e.g. 10m, 1h, 1d, or 1w".
   2. Enter a duration of `10m`, submit, and confirm the round's end time is ~10 minutes out.
   3. Repeat with `30m`, `1h`, `4h`, `12h`, and `3d` to confirm all forms are accepted. Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
 - **Expected Result:** All forms with an explicit unit are accepted, including minute-level precision; the resulting end time matches; a value outside 1 minute-30 days (e.g. `0h`, `31w`) is rejected with a clear, actionable error.
@@ -589,8 +645,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Cast votes as two or more members.
   2. Observe the public voting post update after each vote.
-  3. Run `/vote_status` as WASH Crew.
-- **Expected Result:** The post's standings (progress bar, count, percentage) update after every vote; `/vote_status` shows candidate titles (never an internal suggestion number) with totals and percentages.
+  3. Run `/voting status` as WASH Crew.
+- **Expected Result:** The post's standings (progress bar, count, percentage) update after every vote; `/voting status` shows candidate titles (never an internal suggestion number) with totals and percentages.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -601,8 +657,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Cast a vote and read your own ephemeral confirmation.
   2. Have a second member cast a vote; confirm the first member cannot see it anywhere.
-  3. Run `/vote_status` while the round is still open.
-- **Expected Result:** No standings, counts, or other members' choices are ever revealed while a blind round is open; your own vote confirmation never mentions anyone else's choice; `/vote_status` shows only that the round is open and blind, with total votes cast but no per-candidate breakdown.
+  3. Run `/voting status` while the round is still open.
+- **Expected Result:** No standings, counts, or other members' choices are ever revealed while a blind round is open; your own vote confirmation never mentions anyone else's choice; `/voting status` shows only that the round is open and blind, with total votes cast but no per-candidate breakdown.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -623,11 +679,11 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm a Balanced Random (Rotation Pool) collection with plenty of "Available" suggestions -- most of them just on Rotation Cooldown from a recent round -- automatically rolls over to a fresh rotation and starts the vote, instead of reporting an insufficient-candidates error.
 - **Preconditions:** A Balanced Random collection with exactly 3 suggestions.
 - **Steps:**
-  1. Run `/start_vote` with a candidate count of 2; confirm it succeeds and note which 2 suggestions were nominated.
-  2. Let the round complete (or use `/edit_vote` -> **End Now**).
+  1. Run `/voting start` with a candidate count of 2; confirm it succeeds and note which 2 suggestions were nominated.
+  2. Let the round complete (or use `/voting edit` -> **End Now**).
   3. Confirm `/list` still shows all 3 suggestions as available, but only 1 is unpresented in the current rotation.
-  4. Run `/start_vote` again with a candidate count of 2.
-- **Expected Result:** The second `/start_vote` succeeds (does not report "not enough eligible suggestions"), automatically starting a fresh rotation and returning the 2 previously-cooled-down suggestions to eligibility. Any suggestion whose confirmation post was showing 🟡 Rotation Cooldown and is not re-nominated this round updates in place to 🟢 Available; Vote Winner and Retired suggestions are never made eligible by this rollover. Repeating the same request a third time in a row (with nothing else changed) behaves the same way -- no duplicate or orphaned rotation is created.
+  4. Run `/voting start` again with a candidate count of 2.
+- **Expected Result:** The second `/voting start` succeeds (does not report "not enough eligible suggestions"), automatically starting a fresh rotation and returning the 2 previously-cooled-down suggestions to eligibility. Any suggestion whose confirmation post was showing 🟡 Rotation Cooldown and is not re-nominated this round updates in place to 🟢 Available; Vote Winner and Retired suggestions are never made eligible by this rollover. Repeating the same request a third time in a row (with nothing else changed) behaves the same way -- no duplicate or orphaned rotation is created.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -643,18 +699,18 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 5.7 `/edit_vote` -- change end time, end now, cancel
+### 5.7 `/voting edit` -- change end time, end now, cancel
 
 - **Objective:** Confirm WASH Crew's administrative controls over an in-progress round.
 - **Preconditions:** An open round; WASH Crew role.
 - **Steps:**
-  1. Run `/edit_vote` -> **Change End Time**; confirm the menu offers **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
+  1. Run `/voting edit` -> **Change End Time**; confirm the menu offers **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
   2. Use **Shorten Vote** -> **1 Hour**; confirm the round's end time moves 1 hour *earlier than its current deadline* (not 1 hour from now), and that the public post and a public notice both reflect the new deadline with a Discord relative timestamp shown. Repeat with **Extend Vote** -> **1 Day** and confirm it moves 1 day *later* than the current deadline.
   3. Use **Shorten Vote** -> **Custom...**; confirm the modal is titled "Shorten Vote" with a "Duration" field (placeholder `e.g. 10m, 1h, 1d, or 1w`). Try `10m`, `2h`. Repeat with **Extend Vote** -> **Custom...** (modal titled "Extend Vote"). Confirm a malformed value (e.g. a bare number with no unit) is rejected with a clear error.
   4. On a round closing soon, use **Shorten Vote** with an amount larger than the time remaining; confirm it's rejected with a clear "would move the end time into the past" message rather than silently succeeding.
   5. Use **Set Exact End Time**; confirm the modal presents a single "Discord Timestamp" field with placeholder `<t:1785639600:F>` and help text explaining how to generate one (type `@time` in any normal Discord message box, pick a date/time, then copy the generated timestamp here). Confirm a malformed value (e.g. plain text, or a timestamp missing the `<t:...>` wrapper), and a validly-formatted but past timestamp, are each rejected with a clear message; confirm a valid future timestamp (in any of the standard styles, e.g. `<t:1785639600:F>` or `<t:1785639600:R>`) reschedules correctly.
-  6. Start a second round (after the first completes or is cancelled) and use `/edit_vote` -> **End Now**; confirm it closes immediately with correct results (a confirmation prompt appears first, since this can't be undone).
-  7. Start a third round and use `/edit_vote` -> **Cancel Vote**; confirm it's cancelled with no winner announced and the original post's buttons are disabled.
+  6. Start a second round (after the first completes or is cancelled) and use `/voting edit` -> **End Now**; confirm it closes immediately with correct results (a confirmation prompt appears first, since this can't be undone).
+  7. Start a third round and use `/voting edit` -> **Cancel Vote**; confirm it's cancelled with no winner announced and the original post's buttons are disabled.
 - **Expected Result:** All actions behave exactly as described, and each updates the original voting post appropriately (new deadline / closed with results / cancelled notice). Every new deadline is still stored and scheduled internally as UTC.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -662,7 +718,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 ### 5.8 Vote completion and winner announcement
 
 - **Objective:** Confirm a round closes automatically at its deadline and announces a winner correctly.
-- **Preconditions:** A round started with a short duration (e.g. `1h`, or manually adjusted via `/edit_vote` to close within a few minutes for testing).
+- **Preconditions:** A round started with a short duration (e.g. `1h`, or manually adjusted via `/voting edit` to close within a few minutes for testing).
 - **Steps:**
   1. Wait for the round to reach its deadline (or use **End Now**).
   2. Observe the results announcement.
@@ -689,8 +745,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm a watch party can be scheduled from a winning or existing suggestion.
 - **Preconditions:** WASH Crew role; a known suggestion ID. `watch_item_id` takes a plain integer, not a `#0007`-style reference -- strip the `#` and leading zeros from a suggestion's Reference field (shown on its confirmation post, or in `/remove`'s picker) to get the integer.
 - **Steps:**
-  1. Run `/schedule_watch_party watch_item_id:<id> when:"YYYY-MM-DD HH:MM"` with a near-future time.
-- **Expected Result:** A confirmation is shown with the scheduled title and time; `/watch_party_status` (Test 6.4) reflects it.
+  1. Run `/watch-party schedule watch_item_id:<id> when:"YYYY-MM-DD HH:MM"` with a near-future time.
+- **Expected Result:** A confirmation is shown with the scheduled title and time; `/watch-party status` (Test 6.4) reflects it.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** Flag in Notes if this ID lookup proves confusing in practice -- `/list`'s default view no longer shows reference numbers, so this is the only path today.
 
@@ -699,7 +755,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm a scheduled watch party's time can be changed via the watch-party picker.
 - **Preconditions:** Test 6.1 passed.
 - **Steps:**
-  1. Run `/reschedule_watch_party when:"YYYY-MM-DD HH:MM"` with a different time.
+  1. Run `/watch-party reschedule when:"YYYY-MM-DD HH:MM"` with a different time.
   2. Choose the watch party from the picker WASH shows (title and scheduled date/time).
 - **Expected Result:** The scheduled time updates; the reminder job (Test 6.5) is rescheduled to match, not duplicated.
 - **Result:** [ ] Pass [ ] Fail
@@ -710,21 +766,21 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm a scheduled watch party can be cancelled cleanly via the watch-party picker.
 - **Preconditions:** Test 6.1 (or 6.2) passed.
 - **Steps:**
-  1. Run `/cancel_watch_party`.
+  1. Run `/watch-party cancel`.
   2. Choose the watch party from the picker WASH shows.
-- **Expected Result:** The watch party is cancelled; its reminder job no longer fires; `/watch_party_status` no longer reports it as the soonest scheduled item.
+- **Expected Result:** The watch party is cancelled; its reminder job no longer fires; `/watch-party status` no longer reports it as the soonest scheduled item.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
 ### 6.4 Watch-party picker and empty state
 
-- **Objective:** Confirm `/reschedule_watch_party` and `/cancel_watch_party` show a picker of currently scheduled watch parties rather than taking a watch party ID directly, and fail clearly when none are scheduled.
+- **Objective:** Confirm `/watch-party reschedule` and `/watch-party cancel` show a picker of currently scheduled watch parties rather than taking a watch party ID directly, and fail clearly when none are scheduled.
 - **Preconditions:** No watch party scheduled initially.
 - **Steps:**
-  1. Run `/reschedule_watch_party` with no watch party scheduled; confirm a clear "no watch parties are currently scheduled" message and no picker appears.
-  2. Schedule two or more watch parties (Test 6.1), then run `/reschedule_watch_party` again; confirm a picker lists each by title and scheduled date/time, and selecting one affects only that watch party.
-  3. Run `/watch_party_status`.
-- **Expected Result:** With nothing scheduled, both commands fail clearly rather than erroring unhelpfully. With one or more scheduled, a picker is always shown to choose the target -- even with only one. `/watch_party_status` reports the soonest-scheduled watch party's title and time, which may not be the one just rescheduled or cancelled if others remain.
+  1. Run `/watch-party reschedule` with no watch party scheduled; confirm a clear "no watch parties are currently scheduled" message and no picker appears.
+  2. Schedule two or more watch parties (Test 6.1), then run `/watch-party reschedule` again; confirm a picker lists each by title and scheduled date/time, and selecting one affects only that watch party.
+  3. Run `/watch-party status`.
+- **Expected Result:** With nothing scheduled, both commands fail clearly rather than erroring unhelpfully. With one or more scheduled, a picker is always shown to choose the target -- even with only one. `/watch-party status` reports the soonest-scheduled watch party's title and time, which may not be the one just rescheduled or cancelled if others remain.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -887,25 +943,25 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 9.4 `/database_backup` and `/database_restore`
+### 9.4 `/database backup` and `/database restore`
 
 - **Objective:** Confirm single-database backup/restore, including both Merge and Replace modes.
 - **Preconditions:** At least one suggestion database with several suggestions.
 - **Steps:**
-  1. Run `/database_backup`, choose the database from the picker.
+  1. Run `/database backup`, choose the database from the picker.
   2. Add a new suggestion to the same database (so Merge has something new to reconcile against).
-  3. Run `/database_restore mode:Merge` with the backup; confirm existing suggestions are untouched and only non-conflicting ones are added.
+  3. Run `/database restore mode:Merge` with the backup; confirm existing suggestions are untouched and only non-conflicting ones are added.
   4. Repeat with `mode:Replace`; confirm the database is fully overwritten to match the backup.
 - **Expected Result:** Matches [Administration](05-Administration.md) Section 9's Merge/Replace description exactly; a safety backup is made before Replace.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 9.5 `/database_reset`
+### 9.5 `/database reset`
 
 - **Objective:** Confirm the typed-confirmation-gated reset works and only affects the chosen database.
 - **Preconditions:** A disposable test database with a few suggestions.
 - **Steps:**
-  1. Run `/database_reset`, choose the database, confirm the shown "would remove" count.
+  1. Run `/database reset`, choose the database, confirm the shown "would remove" count.
   2. Click **Reset**, then submit anything other than `RESET` in the modal -- confirm nothing changes.
   3. Repeat and type `RESET` exactly.
 - **Expected Result:** Only an exact `RESET` proceeds; the database's own record/name/configuration and every other database are untouched; a safety backup is made first.
@@ -953,8 +1009,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** A deliberately corrupted `.zip` (e.g. truncate a valid backup file, or edit its manifest).
 - **Steps:**
   1. Attempt `/restore` with the corrupted file.
-  2. Attempt `/database_restore` with a full (not single-database) backup, and vice versa.
-  3. Attempt `/database_restore` with a backup from a different server.
+  2. Attempt `/database restore` with a full (not single-database) backup, and vice versa.
+  3. Attempt `/database restore` with a backup from a different server.
 - **Expected Result:** Each is rejected with a clear, specific message (see the troubleshooting table in [Administration](05-Administration.md) Section 9); live data is never modified by a failed or rejected attempt.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -1029,7 +1085,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm WASH Crew-only commands are usable by WASH Crew and inherit member-level access too.
 - **Preconditions:** A member with the WASH Crew role.
 - **Steps:**
-  1. Run a representative sample: `/start_vote`, `/vote_status`, `/database_add`, `/config`, `/backup`.
+  1. Run a representative sample: `/voting start`, `/voting status`, `/database add`, `/config`, `/backup`.
   2. Confirm the same member can also run `/add`/`/list`/`/stats` (inherited member access).
 - **Expected Result:** All succeed; `/help` shows the full WASH Crew command list.
 - **Result:** [ ] Pass [ ] Fail
@@ -1040,7 +1096,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm a member with neither role is correctly restricted.
 - **Preconditions:** A member with no configured role.
 - **Steps:**
-  1. Run `/add` and a WASH Crew-only command (e.g. `/start_vote`).
+  1. Run `/add` and a WASH Crew-only command (e.g. `/voting start`).
 - **Expected Result:** `/add` is rejected (member role required); the WASH Crew command is rejected with a message distinguishable from "role not configured" (Test 10.4). `/help`, `/about`, and `/join_watch_party` remain available to everyone.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________

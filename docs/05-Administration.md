@@ -45,15 +45,23 @@ Suggestion databases organize Watch Items within a Discord server and channel co
 
 ### Create a database
 
-Use `/database_add` and provide a name. Database names must be valid under the service's normalization and duplicate-name rules.
+Run `/database add`. It first asks what type of collection to create: every standard type (Movies, TV Shows, Anime, Holiday, Documentaries, Horror) this server doesn't already have a matching collection for, plus Special Collection and Custom, which are always offered. Special Collection and Custom collect a name through a short modal; the standard types use their own descriptive default name (e.g. Movies -> "Movie Suggestions") with no typing required. It then asks where suggestions should post -- **Create New Thread (Recommended)** (created as a sibling under WASH's configured home channel, with the suggested name editable before creation), **Use Current Thread/Channel** (whatever channel or thread `/database add` was actually run in -- greyed out if that location isn't a usable text channel or thread), **Use Existing Thread**, or **Use Existing Channel** -- and creates the collection there immediately. Database names must still be valid under the service's normalization and duplicate-name rules, and the chosen destination must not already be routed to another collection.
 
 ### List databases
 
-Use `/database_list` to review databases available to the current server.
+Use `/database list` to review databases available to the current server.
+
+### Move a database's suggestion destination
+
+Run `/database move`, choose the collection from the picker that appears, then choose its new destination using the exact same Create New Thread/Use Current Thread/Channel/Use Existing Thread/Use Existing Channel choice `/database add` offers. Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, rotation history, statistics, and every other setting are untouched. Existing Discord suggestion posts are never moved or edited; only suggestions added after the move post to the new destination. The chosen destination must not already be routed to another collection, and a failure after a new thread is created (e.g. a duplicate destination) automatically deletes that thread rather than leaving it orphaned.
+
+### Guided collection management
+
+Run `/database manage` for a single guided entry point instead of remembering which direct subcommand to use: choose a collection from the same picker `/database move`/`backup`/`reset`/`remove` use, then choose an action from a menu -- **Move Collection**, **Edit Collection**, **Backup Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, or **Cancel**. Move/Backup/Reset/Remove run the exact same logic as their direct subcommand (nothing about their behavior differs based on which path reached them). Edit Collection opens the same per-collection settings menu `/config`'s Manage Collections section already uses -- Suggestion Destination, Watched Movie Destination, Candidate Selection -- with its Back button returning to this menu instead of `/config`'s own collection list. Restore Collection can't be driven from a button click at all (Discord doesn't allow attaching a file upload in response to one), so it points at running `/database restore` directly, the same way the Setup Wizard's "Import Existing Database" option points at `/import`. The direct subcommands (`/database move`, `/database backup`, `/database restore`, `/database reset`, `/database remove`) remain available as shortcuts and are unchanged by `/database manage`'s existence.
 
 ### Remove a database
 
-Run `/database_remove`, then choose the database from the picker that appears -- each option shows the database's name, whether it's Active or Inactive, and its current watch-item count, so there's no need to look up an internal ID first. The command applies the repository's safety and ownership validation.
+Run `/database remove`, then choose the database from the picker that appears -- each option shows the database's name, whether it's Active or Inactive, and its current watch-item count, so there's no need to look up an internal ID first. The command applies the repository's safety and ownership validation.
 
 Database operations are server-scoped. A server must not access or change another server's databases.
 
@@ -132,7 +140,7 @@ A "possible duplicate" warning is only ever raised because a candidate's title a
 
 ## 4. Starting a Vote
 
-Use `/start_vote` to begin an interactive setup flow.
+Use `/voting start` to begin an interactive setup flow.
 
 WASH offers:
 
@@ -147,13 +155,13 @@ The target database is resolved the same contextual, automatic-then-picker way `
 
 **Default voting duration.** New servers default to **1 day**, configurable (1 minute through 30 days) via the Setup Wizard's Voting Defaults step or `/config`, both of which display it in natural language (e.g. "10 minutes", "4 hours", or "3 days" -- the largest whole unit it evenly divides into). An older server configuration that only ever saved a whole number of hours or days loads as the exact equivalent number of minutes, with no action required.
 
-**Duration syntax.** Every relative duration WASH accepts -- vote duration, reminder-before-close, and `/edit_vote`'s Shorten Vote/Extend Vote -- uses the same one syntax: a whole number immediately followed by a unit. Short forms `m`/`h`/`d`/`w` and the words `minute(s)`/`hour(s)`/`day(s)`/`week(s)` are both accepted (e.g. `10m`, `1h`, `3 days`, `1w`); a bare number with no unit is rejected. Vote duration supports the same minute precision as reminders and Shorten/Extend Vote -- `10m` and `30m` are perfectly valid vote durations, not just whole-hour amounts.
+**Duration syntax.** Every relative duration WASH accepts -- vote duration, reminder-before-close, and `/voting edit`'s Shorten Vote/Extend Vote -- uses the same one syntax: a whole number immediately followed by a unit. Short forms `m`/`h`/`d`/`w` and the words `minute(s)`/`hour(s)`/`day(s)`/`week(s)` are both accepted (e.g. `10m`, `1h`, `3 days`, `1w`); a bare number with no unit is rejected. Vote duration supports the same minute precision as reminders and Shorten/Extend Vote -- `10m` and `30m` are perfectly valid vote durations, not just whole-hour amounts.
 
 Only one open round is supported by the current voting service behavior.
 
 ### Candidate selection and rotation management
 
-Each database's `suggestion_rules.candidate_selection` setting chooses how `/start_vote` picks nominees from that database's eligible suggestions. It's configured through the Setup Wizard's Voting Defaults step (where, during first-time setup, exactly one collection exists so far) or, afterward, through `/config`'s Manage Collections section -- select the collection, then its Candidate Selection setting; both show and save the exact same value, chosen from a Discord dropdown rather than typed. The Setup Wizard and `/config` present these three modes under friendlier names; the underlying value in parentheses is what's actually persisted:
+Each database's `suggestion_rules.candidate_selection` setting chooses how `/voting start` picks nominees from that database's eligible suggestions. It's configured through the Setup Wizard's Voting Defaults step (where, during first-time setup, exactly one collection exists so far) or, afterward, through `/config`'s Manage Collections section -- select the collection, then its Candidate Selection setting; both show and save the exact same value, chosen from a Discord dropdown rather than typed. The Setup Wizard and `/config` present these three modes under friendlier names; the underlying value in parentheses is what's actually persisted:
 
 - **Balanced Random** (`rotation_pool`, the recommended and default choice) -- every eligible suggestion belongs to a rotation. Once presented in a vote, a suggestion is excluded from selection until the rotation is exhausted and a fresh one begins automatically.
 - **Soft Rotation** (`soft_rotation`) -- unpresented suggestions are strongly preferred, but a previously presented suggestion remains technically eligible at a much lower selection weight rather than being excluded outright.
@@ -165,7 +173,7 @@ Within whichever pool a mode produces, WASH still applies its existing genre/med
 
 **Rotation lifecycle.** A rotation tracks an identifier, its start and completion time, which suggestions were assigned to it, and which of those have been presented. A rotation completes once every assigned suggestion has reached one of: presented, Vote Winner, retired, or administratively archived/removed. Retired suggestions (see below) count toward completing a rotation but are never counted as presented. Rotation state is stored in its own JSON file under `data/` and is therefore covered automatically by `/backup`, `/restore`, and bot restarts, the same as every other repository.
 
-A rotation also completes early -- before every assigned suggestion has reached one of those states -- whenever `/start_vote` needs more candidates than the current rotation has left to present. A collection with plenty of "Available" suggestions can still have most of them on Rotation Cooldown from a recent round; rather than blocking the next vote until the rotation is fully exhausted, WASH starts a fresh rotation immediately, returning every non-Vote-Winner, non-Retired suggestion (including the ones just on cooldown) to eligibility. This only happens when doing so would actually help -- a rotation is never restarted while it can already supply the requested number of candidates, and a genuinely small collection is reported as having too few eligible suggestions rather than restarting pointlessly.
+A rotation also completes early -- before every assigned suggestion has reached one of those states -- whenever `/voting start` needs more candidates than the current rotation has left to present. A collection with plenty of "Available" suggestions can still have most of them on Rotation Cooldown from a recent round; rather than blocking the next vote until the rotation is fully exhausted, WASH starts a fresh rotation immediately, returning every non-Vote-Winner, non-Retired suggestion (including the ones just on cooldown) to eligibility. This only happens when doing so would actually help -- a rotation is never restarted while it can already supply the requested number of candidates, and a genuinely small collection is reported as having too few eligible suggestions rather than restarting pointlessly.
 
 **Retired suggestions.** A suggestion reaching the "I WILL NOT WATCH" rejection threshold is *retired*, a distinct lifecycle from a WASH Crew-initiated `/remove` archive: WASH records a retirement date, reason, and (when known) the rotation it retired from. Retired suggestions leave the active rotation and are excluded from further selection, but remain visible through `/list status:Retired` and may later be reactivated through `/add`, exactly like any other archived suggestion.
 
@@ -179,7 +187,7 @@ A rotation also completes early -- before every assigned suggestion has reached 
 
 ## 5. Voting Operations
 
-Community members vote by clicking a candidate's button on the interactive voting post -- there is no separate `/vote` slash command; casting a vote and changing it both go through the same buttons. `/vote_status` (WASH Crew) reports the current round, with standings shown as candidate titles (e.g. `Happy Gilmore (1996) — 1 vote`), never the internal suggestion number; if a candidate's record is somehow missing, that entry falls back to its suggestion number rather than failing the command.
+Community members vote by clicking a candidate's button on the interactive voting post -- there is no separate `/vote` slash command; casting a vote and changing it both go through the same buttons. `/voting status` (WASH Crew) reports the current round, with standings shown as candidate titles (e.g. `Happy Gilmore (1996) — 1 vote`), never the internal suggestion number; if a candidate's record is somehow missing, that entry falls back to its suggestion number rather than failing the command.
 
 Current voting capabilities include:
 
@@ -193,7 +201,7 @@ Current voting capabilities include:
 
 Automatic expiration, closing, and winner announcements are fully implemented, driven by the persistent scheduler rather than requiring a WASH Crew member to close a round manually.
 
-**Changing a vote's end time.** `/edit_vote`'s Change End Time action offers four options: **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
+**Changing a vote's end time.** `/voting edit`'s Change End Time action offers four options: **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
 
 - **End Now** closes the round immediately (with a confirmation prompt first, since this can't be undone).
 - **Shorten Vote** and **Extend Vote** each open a submenu -- **1 Hour**, **1 Day**, or **Custom...** -- that adjusts the round's *current* end time by that amount (never relative to "now"): Shorten subtracts it, Extend adds it. **Custom...** opens a modal accepting any duration in WASH's shared syntax (e.g. `10m`, `1h`, `1d`, `1w`). Shortening past the current time is rejected with a clear message ("would move the end time into the past") rather than silently producing an already-closed-looking round.
@@ -273,22 +281,22 @@ Immediately before restoring, WASH creates a full safety backup of the current d
 
 **A bot restart is recommended after any restore.** Several in-memory caches (suggestions, votes, membership requests) are only loaded once at startup; restored data on disk won't be reflected in a running bot's behavior until it restarts. `GuildConfiguration` reads are not cached and take effect immediately.
 
-### `/database_backup` and `/database_restore`
+### `/database backup` and `/database restore`
 
-Back up or restore a single suggestion database instead of everything. Run `/database_backup`, then choose the database from the picker that appears (name, Active/Inactive status, and watch-item count are all shown) -- WASH produces a scoped backup containing only that database's record, its suggestions, and its configuration (not its vote history), attached as `Watch_Party_Manager_Database_Backup_<safe-database-name>_YYYY-MM-DD_HH-MM-SS.zip`.
+Back up or restore a single suggestion database instead of everything. Run `/database backup`, then choose the database from the picker that appears (name, Active/Inactive status, and watch-item count are all shown) -- WASH produces a scoped backup containing only that database's record, its suggestions, and its configuration (not its vote history), attached as `Watch_Party_Manager_Database_Backup_<safe-database-name>_YYYY-MM-DD_HH-MM-SS.zip`.
 
-`/database_restore` requires choosing **Merge** or **Replace** explicitly -- WASH never infers which one you meant:
+`/database restore` requires choosing **Merge** or **Replace** explicitly -- WASH never infers which one you meant:
 
 - **Merge** imports suggestions from the backup into the *existing* database with a matching ID. A suggestion whose title already exists for that database is skipped and reported as a conflict rather than overwritten. The destination database must already exist; Merge never creates one.
 - **Replace** overwrites the selected database's own record and all of its suggestions with the backup's version (creating it fresh if it no longer exists), while leaving every other database and all other server data untouched. A full safety backup is made first, exactly as with `/restore`.
 
 A single-database backup can only be restored back into the server it came from; WASH rejects a mismatch rather than silently importing another server's data.
 
-### `/database_reset`
+### `/database reset`
 
 Clears every suggestion (active and archived alike -- there is no separate archive store; both are just `WatchItem` records in the same file) from one suggestion database. The database record itself, its ID, its name, and its configuration are never touched, and no other database is affected.
 
-Flow: run `/database_reset` -> choose the database from the picker that appears (name, Active/Inactive status, and watch-item count are all shown) -> WASH shows how many suggestions would be removed -> click **Reset** -> a modal asks you to type `RESET` exactly (case-sensitive) -> WASH creates a full safety backup, then performs the reset. Clicking **Cancel**, or submitting anything other than `RESET`, leaves all data unchanged.
+Flow: run `/database reset` -> choose the database from the picker that appears (name, Active/Inactive status, and watch-item count are all shown) -> WASH shows how many suggestions would be removed -> click **Reset** -> a modal asks you to type `RESET` exactly (case-sensitive) -> WASH creates a full safety backup, then performs the reset. Clicking **Cancel**, or submitting anything other than `RESET`, leaves all data unchanged.
 
 ### `/factory_reset`
 
@@ -317,12 +325,12 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 
 ### Restart requirement
 
-**A bot restart is recommended after `/restore`, `/database_restore`, `/database_reset`, `/factory_reset`, or `/import`.** Several services (suggestions, votes, membership requests) load their data once at startup and cache it in memory; changes written to disk by any of these commands won't be reflected in a running bot's behavior until it restarts. `GuildConfiguration` reads are not cached, so configuration changes (including a factory reset requiring `/setup` again) take effect immediately even without a restart.
+**A bot restart is recommended after `/restore`, `/database restore`, `/database reset`, `/factory_reset`, or `/import`.** Several services (suggestions, votes, membership requests) load their data once at startup and cache it in memory; changes written to disk by any of these commands won't be reflected in a running bot's behavior until it restarts. `GuildConfiguration` reads are not cached, so configuration changes (including a factory reset requiring `/setup` again) take effect immediately even without a restart.
 
 ### Recommended backup strategy
 
 - Run `/backup` before any release, dependency upgrade, or manual data edit.
-- Run `/database_backup` before experimenting with a specific database's suggestion rules or content.
+- Run `/database backup` before experimenting with a specific database's suggestion rules or content.
 - Keep at least one backup downloaded outside of WASH's own `data/backups/` directory (e.g. before a factory reset, since a factory reset's automatic safety backup still only lives in the same `data/` tree it's resetting).
 - After using `/import`, review the reported conflicts and restart the bot before relying on the imported data.
 
@@ -331,8 +339,8 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 | Symptom | Cause | What happened to live data |
 | --- | --- | --- |
 | "This backup failed validation and cannot be restored" / "Import validation failed" | Corrupt ZIP, missing/unreadable manifest, unsafe path, or a checksum mismatch (tampered or truncated file). | Unchanged -- validation never writes anything. |
-| "Unsupported backup type" | A full backup was offered to `/database_restore`, a single-database backup was offered to `/restore` or `/import`, or an incompatible format version was found. | Unchanged. |
-| "That backup was created in a different Discord server" | A `/database_backup` archive's recorded server ID doesn't match the server `/database_restore` was run in. | Unchanged. |
+| "Unsupported backup type" | A full backup was offered to `/database restore`, a single-database backup was offered to `/restore` or `/import`, or an incompatible format version was found. | Unchanged. |
+| "That backup was created in a different Discord server" | A `/database backup` archive's recorded server ID doesn't match the server `/database restore` was run in. | Unchanged. |
 | "No existing suggestion database with that ID was found to merge into" | Merge was chosen but the destination database doesn't exist yet. | Unchanged -- use Replace instead if that's intended. |
 | "N suggestion(s) were skipped as duplicates" (restore, reset, or import) | Merge detected a title already present in the destination database. | Only the non-conflicting suggestions were imported; nothing existing was overwritten. |
 | "Confirmation text did not match ... exactly" | The typed `RESET`/`REPLACE` phrase didn't match, or didn't match case. | Unchanged -- nothing runs until the exact phrase is submitted. |

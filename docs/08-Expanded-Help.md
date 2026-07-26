@@ -30,20 +30,22 @@ The current command list and short descriptions remain available through `/help`
 
 ### Voting
 
-- `/start_vote`
-- `/vote_status`
-- `/edit_vote`
+- `/voting start`
+- `/voting status`
+- `/voting edit`
 
 Casting a vote itself happens through the interactive buttons on the voting post, not a slash command.
 
 ### WASH Crew
 
-- `/database_add`
-- `/database_list`
-- `/database_remove`
-- `/database_backup`
-- `/database_restore`
-- `/database_reset`
+- `/database add`
+- `/database manage`
+- `/database list`
+- `/database move`
+- `/database remove`
+- `/database backup`
+- `/database restore`
+- `/database reset`
 - `/repair_suggestions`
 - `/backup`
 - `/restore`

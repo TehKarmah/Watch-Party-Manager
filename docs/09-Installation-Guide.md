@@ -153,7 +153,7 @@ WASH is invited using the OAuth2 URL Generator described in Section 9. When you 
 - View Channels
 - Send Messages
 - Embed Links
-- Attach Files (used by `/backup`, `/database_backup`, and `/import` to send/receive `.zip` files)
+- Attach Files (used by `/backup`, `/database backup`, and `/import` to send/receive `.zip` files)
 - Read Message History (used to edit WASH's own suggestion, vote, and confirmation posts)
 - Use External Emojis (optional, cosmetic only)
 
@@ -183,7 +183,7 @@ Open `.env` in a text editor and fill in the values you need. **Never commit `.e
 | `DISCORD_GUILD_ID` | Optional | Syncs slash commands to one server instantly instead of waiting up to an hour for global sync. Strongly recommended while you're setting up and testing. |
 | `WASH_CREW_ROLE_ID` | Optional, but see note | The Discord role ID authorized to run administrative commands. |
 | `WATCH_PARTY_MEMBER_ROLE_ID` | Optional, but see note | The Discord role ID authorized to use participant commands (`/add`, `/list`, `/stats`, etc.). WASH Crew members automatically have these permissions too. |
-| `DEFAULT_VOTE_NOMINEE_COUNT` | Optional | Default number of nominees `/start_vote` selects (2-10). Defaults to 3. |
+| `DEFAULT_VOTE_NOMINEE_COUNT` | Optional | Default number of nominees `/voting start` selects (2-10). Defaults to 3. |
 | `OMDB_API_KEY` | Optional | Enables resolving pasted IMDb links into a title, runtime, genres, and poster. See Section 8. |
 
 > [!IMPORTANT]
@@ -268,7 +268,7 @@ Every setting the wizard can set (including candidate-selection mode) can also b
 Everything the setup wizard collects is stored per-server and can be changed afterward without re-running the whole wizard:
 
 - `/config` opens the same settings in a menu, section by section, for quick individual changes.
-- `/database_add`, `/database_list`, and `/database_remove` manage additional suggestion databases beyond the one created during setup.
+- `/database add`, `/database list`, `/database move`, and `/database remove` manage additional suggestion databases beyond the one created during setup -- or run `/database manage` for a single guided menu that walks through the same actions (plus Edit/Backup/Restore/Reset) for a chosen collection.
 - `/watch_party` (WASH Crew only) manages membership directly: list, approve/deny pending requests, manually add or remove members, and search a member's history.
 
 For the complete, current administrative command reference -- including suggestion management, voting operations, backup/restore, and diagnostics -- see [Administration](05-Administration.md). For the full technical shape of what gets persisted (every field the wizard and `/config` can set), see [`guild_configuration_spec.md`](guild_configuration_spec.md).
@@ -284,7 +284,7 @@ Work through this list after your first startup and `/setup` run. Everything sho
 - [ ] `/config` opens and shows the settings you just configured.
 - [ ] A Watch Party member (or WASH Crew, which always qualifies) can run `/add` with a plain title and see it confirmed.
 - [ ] `/list` shows the suggestion you just added.
-- [ ] WASH Crew can run `/start_vote` and see an interactive voting post with buttons.
+- [ ] WASH Crew can run `/voting start` and see an interactive voting post with buttons.
 - [ ] `/stats` responds ephemerally (visible only to you).
 - [ ] As WASH Crew, `/about` also shows Health, Configuration, and Runtime sections with no reported errors.
 
@@ -302,7 +302,7 @@ If a step fails, check Section 14 before assuming something is broken.
 | Pasting an IMDb link into `/add` says lookup isn't configured | `OMDB_API_KEY` is unset. | Follow Section 8, or continue using plain titles -- this is optional. |
 | `/stats server`'s member count looks too low | The Server Members Intent isn't enabled (see Section 6's note). | Enable it in the Developer Portal if you want that one figure to be accurate; otherwise it's safe to ignore. |
 | WASH can't post in a channel | Missing View Channel/Send Messages/Embed Links permission in that specific channel (server-wide invite permissions don't override channel-level overwrites). | Check that channel's permission overwrites for WASH's role. |
-| Changes made via `/restore`, `/database_restore`, `/database_reset`, `/factory_reset`, or `/import` don't seem to take effect | Several repositories cache their data in memory at startup. | Restart WASH after any of these commands -- see [Administration](05-Administration.md)'s "Backup & Recovery" section for the full explanation. |
+| Changes made via `/restore`, `/database restore`, `/database reset`, `/factory_reset`, or `/import` don't seem to take effect | Several repositories cache their data in memory at startup. | Restart WASH after any of these commands -- see [Administration](05-Administration.md)'s "Backup & Recovery" section for the full explanation. |
 | `python -m pip install -e .` fails | Python version below 3.12, or the virtual environment isn't active. | Confirm `python --version` reports 3.12+ and your prompt shows `(.venv)`. |
 
 ## 15. Where to Go Next

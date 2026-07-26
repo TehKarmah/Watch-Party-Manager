@@ -50,6 +50,22 @@ class GuildConfigurationRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.channels.admin_channel_id, 555)
         self.assertEqual(loaded.watch_party_role.denial_cooldown_days, 14)
 
+    def test_home_channel_id_round_trips(self):
+        from watch_party_manager.domain.guild_configuration import GuildChannelsConfig
+
+        self.repo.save(
+            GuildConfiguration(
+                guild_id=1, guild_name="Guild", channels=GuildChannelsConfig(home_channel_id=777)
+            )
+        )
+        loaded = self.repo.get(1)
+        self.assertEqual(loaded.channels.home_channel_id, 777)
+
+    def test_home_channel_id_defaults_to_none_for_configuration_saved_before_it_existed(self):
+        self.repo.save(GuildConfiguration(guild_id=1, guild_name="Guild"))
+        loaded = self.repo.get(1)
+        self.assertIsNone(loaded.channels.home_channel_id)
+
     def test_legacy_duration_days_loads_as_the_equivalent_minutes(self):
         # Release Candidate Polish (Vote Duration): a guild configuration
         # persisted before this feature only has the oldest "duration_days"

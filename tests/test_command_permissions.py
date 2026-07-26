@@ -1,6 +1,6 @@
 """Tests for FR-029's corrected command-access model.
 
-/vote_status and /watch_party_status are WASH Crew-only; each command's
+/voting status and /watch-party status are WASH Crew-only; each command's
 bot.py callback gates on PermissionService.require_wash_crew before
 doing anything else -- the same fail-closed, already-tested gate every
 other WASH-only command uses (see test_permission_service.py for its
@@ -10,8 +10,8 @@ every Watch Party member by FR-033A and is no longer covered by this
 file -- see test_list_suggestion_command.py for its own permission
 coverage.
 
-/vote_status and /watch_party_status gate inline in their
-@self.tree.command closures (matching this project's established
+/voting status and /watch-party status gate inline in their
+Group subcommand methods (matching this project's established
 "inline permission check, then call a permission-agnostic perform_*
 content function" pattern) -- there's no separate perform_* wrapper to
 call in isolation, so this file instead confirms the shared gate they

@@ -49,9 +49,9 @@ Required Role reflects WASH's three-tier permission model:
 
 | Command | Required Role | Description |
 | --- | --- | --- |
-| `/start_vote` | WASH Crew | Start a new voting round. |
-| `/vote_status` | WASH Crew | View the current voting round. |
-| `/edit_vote` | WASH Crew | Change, end, or cancel the active vote. |
+| `/voting start` | WASH Crew | Start a new voting round. |
+| `/voting status` | WASH Crew | View the current voting round. |
+| `/voting edit` | WASH Crew | Change, end, or cancel the active vote. |
 
 Casting a vote itself happens through the interactive buttons on the voting post, not a slash command.
 
@@ -60,6 +60,8 @@ Casting a vote itself happens through the interactive buttons on the voting post
 | Command | Required Role | Description |
 | --- | --- | --- |
 | `/watch_party` | WASH Crew | Manage Watch Party membership. |
+
+`/watch_party` (underscore) manages *membership* -- who holds the Watch Party role. It's a distinct command from `/watch-party` (hyphen, below), which manages the *scheduled watch party itself*. Discord treats the two as entirely separate, valid command names.
 
 ## WASH Crew: Configuration
 
@@ -74,25 +76,29 @@ Casting a vote itself happens through the interactive buttons on the voting post
 
 | Command | Required Role | Description |
 | --- | --- | --- |
-| `/database_add` | WASH Crew | Create a collection. |
-| `/database_list` | WASH Crew | List this server's collections. |
-| `/database_remove` | WASH Crew | Deactivate a collection. |
-| `/database_backup` | WASH Crew | Back up a single collection. |
-| `/database_restore` | WASH Crew | Restore a collection backup. |
-| `/database_reset` | WASH Crew | Clear one collection's suggestions. |
+| `/database add` | WASH Crew | Create a collection. |
+| `/database manage` | WASH Crew | Guided workflow: pick a collection, then choose what to do with it. |
+| `/database list` | WASH Crew | List this server's collections. |
+| `/database move` | WASH Crew | Move a collection's suggestion destination to a different channel or thread. |
+| `/database backup` | WASH Crew | Back up a single collection. |
+| `/database restore` | WASH Crew | Restore a collection backup. |
+| `/database remove` | WASH Crew | Deactivate a collection. |
+| `/database reset` | WASH Crew | Clear one collection's suggestions. |
 
-`/database_backup`, `/database_reset`, and `/database_remove` take no ID parameter -- running the command shows a picker of this server's collections (name, Active/Inactive status, and watch-item count) to choose from instead.
+None of these take a raw ID parameter. `/database add` walks through a type choice (every standard collection type -- Movies, TV Shows, Anime, Holiday, Documentaries, Horror -- that this server doesn't already have a matching collection for, plus Special Collection and Custom, which are always available) and then a destination choice -- **Create New Thread** (Recommended), **Use Current Thread/Channel** (whatever channel or thread the command was actually run in; disabled if that location isn't a usable text channel or thread), **Use Existing Thread**, or **Use Existing Channel** -- the same destination choice `/database move` offers. `/database move`, `/database backup`, `/database reset`, and `/database remove` all show a picker of this server's collections (name, Active/Inactive status, and watch-item count) to choose from instead of typing an ID. `/database move` changes only the chosen collection's suggestion destination -- its database ID, suggestions, statuses, vote history, rotation history, statistics, and every other setting are untouched, and its existing Discord suggestion posts stay exactly where they are; only suggestions added after the move post to the new destination.
+
+`/database manage` is a guided alternative to the direct subcommands above: pick a collection, then choose **Move Collection**, **Edit Collection**, **Backup Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, or **Cancel** from a menu. Move/Backup/Reset/Remove each launch the exact same flow as their direct subcommand; Edit Collection opens the same per-collection settings menu `/config`'s Manage Collections section already uses (Suggestion Destination, Watched Movie Destination, Candidate Selection); Restore Collection points at running `/database restore` directly, since Discord doesn't allow attaching a file upload from inside a menu. The direct subcommands remain available as shortcuts for experienced administrators -- `/database manage` doesn't replace them.
 
 ## WASH Crew: Watch Parties
 
 | Command | Required Role | Description |
 | --- | --- | --- |
-| `/watch_party_status` | WASH Crew | View the scheduled watch party. |
-| `/schedule_watch_party` | WASH Crew | Schedule a watch party. |
-| `/reschedule_watch_party` | WASH Crew | Change a watch party's start. |
-| `/cancel_watch_party` | WASH Crew | Cancel a scheduled watch party. |
+| `/watch-party status` | WASH Crew | View the scheduled watch party. |
+| `/watch-party schedule` | WASH Crew | Schedule a watch party. |
+| `/watch-party reschedule` | WASH Crew | Change a watch party's start. |
+| `/watch-party cancel` | WASH Crew | Cancel a scheduled watch party. |
 
-`/reschedule_watch_party` takes a `when` option; `/cancel_watch_party` takes none. Neither takes a watch party ID -- both show a picker of currently scheduled watch parties (title and scheduled date/time) to choose from instead.
+`/watch-party reschedule` takes a `when` option; `/watch-party cancel` takes none. Neither takes a watch party ID -- both show a picker of currently scheduled watch parties (title and scheduled date/time) to choose from instead.
 
 ## WASH Crew: Maintenance
 

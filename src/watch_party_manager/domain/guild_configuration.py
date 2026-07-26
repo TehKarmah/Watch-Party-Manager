@@ -85,6 +85,13 @@ class GuildChannelsConfig:
     # Unlike a suggestion destination, this may be None (no watch
     # history posted) and may be shared across every collection.
     watch_history_channel_id: Optional[int] = None
+    # Command Structure Cleanup: the channel /setup's Home Channel step
+    # created or selected, persisted here so it remains resolvable after
+    # setup completes (the wizard's own draft is deleted on finalize) --
+    # /database add and /database move's "Create New Thread" both need
+    # it to create a collection's suggestion thread as a sibling under
+    # it, the same way the wizard itself already does.
+    home_channel_id: Optional[int] = None
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
@@ -92,6 +99,7 @@ class GuildChannelsConfig:
         _validate_optional_snowflake(self.log_channel_id, "log_channel_id")
         _validate_optional_snowflake(self.admin_channel_id, "admin_channel_id")
         _validate_optional_snowflake(self.watch_history_channel_id, "watch_history_channel_id")
+        _validate_optional_snowflake(self.home_channel_id, "home_channel_id")
         _validate_extra_fields(self.extra_fields)
 
 

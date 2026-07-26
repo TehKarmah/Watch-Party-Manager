@@ -6,8 +6,10 @@ surface must use).
 import unittest
 
 from watch_party_manager.services.collection_display import (
+    STANDARD_COLLECTION_TYPES,
     collection_emoji,
     format_collection_display,
+    used_standard_collection_type_keys,
 )
 
 
@@ -58,6 +60,25 @@ class FormatCollectionDisplayTests(unittest.TestCase):
 
     def test_custom_collection_has_no_prefix(self) -> None:
         self.assertEqual(format_collection_display("Book Club Adaptations"), "Book Club Adaptations")
+
+
+class UsedStandardCollectionTypeKeysTests(unittest.TestCase):
+    def test_no_collections_means_nothing_is_used(self) -> None:
+        self.assertEqual(used_standard_collection_type_keys([]), set())
+
+    def test_a_matching_collection_marks_its_type_used(self) -> None:
+        self.assertEqual(used_standard_collection_type_keys(["Movie Suggestions"]), {"movies"})
+
+    def test_multiple_collections_mark_multiple_types_used(self) -> None:
+        used = used_standard_collection_type_keys(["Movie Suggestions", "TV Suggestions", "Book Club"])
+        self.assertEqual(used, {"movies", "tv_shows"})
+
+    def test_a_custom_named_collection_marks_nothing_used(self) -> None:
+        self.assertEqual(used_standard_collection_type_keys(["Book Club Adaptations"]), set())
+
+    def test_every_standard_type_has_a_stable_unique_key(self) -> None:
+        keys = [standard_type.key for standard_type in STANDARD_COLLECTION_TYPES]
+        self.assertEqual(len(keys), len(set(keys)))
 
 
 if __name__ == "__main__":

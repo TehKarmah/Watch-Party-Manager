@@ -29,7 +29,7 @@ class HelpRegistryTests(unittest.TestCase):
         self.assertIn("/about", commands)
         self.assertNotIn("/add", commands)
         self.assertNotIn("/list", commands)
-        self.assertNotIn("/database_add", commands)
+        self.assertNotIn("/database add", commands)
         self.assertNotIn("/setup", commands)
         self.assertNotIn("/config", commands)
 
@@ -69,19 +69,29 @@ class HelpRegistryTests(unittest.TestCase):
         self.assertIn("/stats", commands)
         self.assertNotIn("/remove", commands)
         self.assertNotIn("/edit_suggestion", commands)
-        self.assertNotIn("/vote_status", commands)
-        self.assertNotIn("/watch_party_status", commands)
-        self.assertNotIn("/database_add", commands)
+        self.assertNotIn("/voting status", commands)
+        self.assertNotIn("/watch-party status", commands)
+        self.assertNotIn("/database add", commands)
         self.assertNotIn("/setup", commands)
         self.assertNotIn("/config", commands)
 
     def test_crew_sections_include_administrative_entries(self) -> None:
         sections = command_sections(show_wash_crew=True)
         commands = [entry.name for _, entries in sections for entry in entries]
-        self.assertIn("/database_add", commands)
+        self.assertIn("/database add", commands)
+        self.assertIn("/database move", commands)
+        self.assertIn("/database manage", commands)
         self.assertIn("/repair_suggestions", commands)
         self.assertIn("/setup", commands)
         self.assertIn("/config", commands)
+
+    def test_database_move_is_wash_crew_only(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        self.assertIs(entries["/database move"].audience, HelpAudience.WASH_CREW)
+
+    def test_database_manage_is_wash_crew_only(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        self.assertIs(entries["/database manage"].audience, HelpAudience.WASH_CREW)
 
     def test_crew_sections_also_include_member_entries(self) -> None:
         # show_wash_crew implies show_watch_party_member -- WASH Crew
@@ -90,7 +100,7 @@ class HelpRegistryTests(unittest.TestCase):
         commands = [entry.name for _, entries in sections for entry in entries]
         self.assertIn("/add", commands)
         self.assertIn("/list", commands)
-        self.assertIn("/vote_status", commands)
+        self.assertIn("/voting status", commands)
 
     def test_sections_preserve_declared_order(self) -> None:
         sections = command_sections(show_wash_crew=True)
@@ -127,7 +137,7 @@ class HelpRegistryTests(unittest.TestCase):
         self.assertIn("/add", text)
 
     def test_all_crew_commands_use_crew_audience(self) -> None:
-        crew_commands = [entry for entry in COMMAND_HELP if entry.name.startswith("/database_")]
+        crew_commands = [entry for entry in COMMAND_HELP if entry.name.startswith("/database ")]
         self.assertTrue(crew_commands)
         self.assertTrue(
             all(entry.audience is HelpAudience.WASH_CREW for entry in crew_commands)
@@ -171,11 +181,11 @@ class HelpRegistryTests(unittest.TestCase):
 
     def test_edit_vote_is_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        self.assertIs(entries["/edit_vote"].audience, HelpAudience.WASH_CREW)
+        self.assertIs(entries["/voting edit"].audience, HelpAudience.WASH_CREW)
 
     def test_start_vote_is_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        self.assertIs(entries["/start_vote"].audience, HelpAudience.WASH_CREW)
+        self.assertIs(entries["/voting start"].audience, HelpAudience.WASH_CREW)
 
     def test_add_list_and_stats_are_the_only_watch_party_member_commands(self) -> None:
         member_commands = [entry.name for entry in COMMAND_HELP if entry.audience is HelpAudience.WATCH_PARTY_MEMBER]
@@ -183,7 +193,7 @@ class HelpRegistryTests(unittest.TestCase):
 
     def test_remove_vote_status_and_watch_party_status_are_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        for name in ("/remove", "/vote_status", "/watch_party_status"):
+        for name in ("/remove", "/voting status", "/watch-party status"):
             self.assertIs(entries[name].audience, HelpAudience.WASH_CREW)
 
     def test_diagnostics_no_longer_exists_in_the_registry(self) -> None:
@@ -216,38 +226,38 @@ class HelpRegistryTests(unittest.TestCase):
         text = build_command_help_text(show_wash_crew=False)
         self.assertNotIn("/watch_party", text)
 
-    # --- FR-032B: /database_backup and /database_restore are WASH Crew only -----
+    # --- FR-032B: /database backup and /database restore are WASH Crew only -----
 
     def test_database_backup_and_restore_are_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        self.assertIs(entries["/database_backup"].audience, HelpAudience.WASH_CREW)
-        self.assertIs(entries["/database_restore"].audience, HelpAudience.WASH_CREW)
+        self.assertIs(entries["/database backup"].audience, HelpAudience.WASH_CREW)
+        self.assertIs(entries["/database restore"].audience, HelpAudience.WASH_CREW)
 
     def test_database_backup_and_restore_hidden_from_everyone_and_watch_party_member(self) -> None:
         for show_watch_party_member in (False, True):
             sections = command_sections(show_wash_crew=False, show_watch_party_member=show_watch_party_member)
             commands = [entry.name for _, entries in sections for entry in entries]
-            self.assertNotIn("/database_backup", commands)
-            self.assertNotIn("/database_restore", commands)
+            self.assertNotIn("/database backup", commands)
+            self.assertNotIn("/database restore", commands)
 
-    # --- FR-032C: /database_reset, /factory_reset, /import are WASH Crew only ---
+    # --- FR-032C: /database reset, /factory_reset, /import are WASH Crew only ---
 
     def test_reset_and_import_commands_are_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        for name in ("/database_reset", "/factory_reset", "/import"):
+        for name in ("/database reset", "/factory_reset", "/import"):
             self.assertIs(entries[name].audience, HelpAudience.WASH_CREW)
 
     def test_reset_and_import_commands_hidden_from_everyone_and_watch_party_member(self) -> None:
         for show_watch_party_member in (False, True):
             sections = command_sections(show_wash_crew=False, show_watch_party_member=show_watch_party_member)
             commands = [entry.name for _, entries in sections for entry in entries]
-            for name in ("/database_reset", "/factory_reset", "/import"):
+            for name in ("/database reset", "/factory_reset", "/import"):
                 self.assertNotIn(name, commands)
 
     def test_reset_and_import_commands_visible_to_wash_crew(self) -> None:
         sections = command_sections(show_wash_crew=True)
         commands = [entry.name for _, entries in sections for entry in entries]
-        for name in ("/database_reset", "/factory_reset", "/import"):
+        for name in ("/database reset", "/factory_reset", "/import"):
             self.assertIn(name, commands)
 
     def test_existing_help_tier_visibility_is_unchanged(self) -> None:

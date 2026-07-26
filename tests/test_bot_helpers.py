@@ -58,11 +58,11 @@ class BotHelperTests(unittest.TestCase):
             "/add",
             "/list",
             "/remove",
-            "/start_vote",
-            "/vote_status",
-            "/database_add",
-            "/database_list",
-            "/database_remove",
+            "/voting start",
+            "/voting status",
+            "/database add",
+            "/database list",
+            "/database remove",
         )
         for command in expected_commands:
             self.assertIn(command, help_text)
@@ -97,9 +97,9 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("/add", help_text)
         self.assertNotIn("/list", help_text)
         self.assertNotIn("/remove", help_text)
-        self.assertNotIn("/database_add", help_text)
-        self.assertNotIn("/database_list", help_text)
-        self.assertNotIn("/database_remove", help_text)
+        self.assertNotIn("/database add", help_text)
+        self.assertNotIn("/database list", help_text)
+        self.assertNotIn("/database remove", help_text)
         self.assertNotIn("/setup", help_text)
         self.assertNotIn("/config", help_text)
         self.assertNotIn("/stats", help_text)
@@ -108,8 +108,8 @@ class BotHelperTests(unittest.TestCase):
         # FR-033A extends the Watch Party Member tier: /add and /list
         # (view-only, never public) are visible over "everyone". FR-034
         # additionally gives them /stats (privacy-scoped -- see
-        # StatsType/handle_stats). /remove, /vote_status, and
-        # /watch_party_status remain WASH Crew only.
+        # StatsType/handle_stats). /remove, /voting status, and
+        # /watch-party status remain WASH Crew only.
         help_text = build_help_text(show_admin=False, show_member=True)
 
         self.assertIn("**General**", help_text)
@@ -118,13 +118,13 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("/list", help_text)
         self.assertIn("/stats", help_text)
         self.assertNotIn("/remove", help_text)
-        self.assertNotIn("/vote_status", help_text)
-        self.assertNotIn("/watch_party_status", help_text)
+        self.assertNotIn("/voting status", help_text)
+        self.assertNotIn("/watch-party status", help_text)
         self.assertNotIn("**WASH Crew: Collections**", help_text)
         self.assertNotIn("**WASH Crew: Configuration**", help_text)
-        self.assertNotIn("/database_add", help_text)
-        self.assertNotIn("/database_list", help_text)
-        self.assertNotIn("/database_remove", help_text)
+        self.assertNotIn("/database add", help_text)
+        self.assertNotIn("/database list", help_text)
+        self.assertNotIn("/database remove", help_text)
         self.assertNotIn("/setup", help_text)
         self.assertNotIn("/config", help_text)
 

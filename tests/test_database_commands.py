@@ -7,7 +7,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import (
     build_database_admin_options,
-    perform_database_add,
     perform_database_list,
     perform_database_remove,
 )
@@ -53,98 +52,6 @@ class DatabaseCommandTests(unittest.TestCase):
 
     def _regular_member(self) -> FakeMember:
         return FakeMember(roles=[FakeRole(1)])
-
-    # --- /database_add --------------------------------------------------------
-
-    def test_database_add_successful_creation(self) -> None:
-        message, ephemeral = perform_database_add(
-            self.suggestion_service,
-            self._wash_crew_member(),
-            WASH_CREW_ROLE_ID,
-            GUILD_ID,
-            CHANNEL_ID,
-            "Sunday Watch Party",
-        )
-
-        self.assertTrue(ephemeral)
-        self.assertIn("Sunday Watch Party", message)
-        self.assertIn("Database ID: 1", message)
-        self.assertIn(f"<#{CHANNEL_ID}>", message)
-        self.assertEqual(len(self.suggestion_service.list_databases()), 1)
-
-    def test_database_add_rejects_a_duplicate_name(self) -> None:
-        perform_database_add(
-            self.suggestion_service,
-            self._wash_crew_member(),
-            WASH_CREW_ROLE_ID,
-            GUILD_ID,
-            CHANNEL_ID,
-            "Sunday Watch Party",
-        )
-
-        message, ephemeral = perform_database_add(
-            self.suggestion_service,
-            self._wash_crew_member(),
-            WASH_CREW_ROLE_ID,
-            GUILD_ID,
-            OTHER_CHANNEL_ID,
-            "sunday watch party",
-        )
-
-        self.assertTrue(ephemeral)
-        self.assertIn("already exists", message)
-        self.assertEqual(len(self.suggestion_service.list_databases()), 1)
-
-    def test_database_add_rejects_a_duplicate_channel(self) -> None:
-        perform_database_add(
-            self.suggestion_service,
-            self._wash_crew_member(),
-            WASH_CREW_ROLE_ID,
-            GUILD_ID,
-            CHANNEL_ID,
-            "Sunday Watch Party",
-        )
-
-        message, ephemeral = perform_database_add(
-            self.suggestion_service,
-            self._wash_crew_member(),
-            WASH_CREW_ROLE_ID,
-            GUILD_ID,
-            CHANNEL_ID,
-            "Kung Fu Movies",
-        )
-
-        self.assertTrue(ephemeral)
-        self.assertIn("already has a collection", message)
-        self.assertEqual(len(self.suggestion_service.list_databases()), 1)
-
-    def test_database_add_rejects_a_non_wash_crew_member(self) -> None:
-        message, ephemeral = perform_database_add(
-            self.suggestion_service,
-            self._regular_member(),
-            WASH_CREW_ROLE_ID,
-            GUILD_ID,
-            CHANNEL_ID,
-            "Sunday Watch Party",
-        )
-
-        self.assertTrue(ephemeral)
-        self.assertIn("WASH Crew", message)
-        self.assertEqual(self.suggestion_service.list_databases(), [])
-
-    def test_database_add_fails_closed_when_role_is_unconfigured(self) -> None:
-        message, ephemeral = perform_database_add(
-            self.suggestion_service,
-            self._wash_crew_member(),
-            None,
-            GUILD_ID,
-            CHANNEL_ID,
-            "Sunday Watch Party",
-        )
-
-        self.assertTrue(ephemeral)
-        self.assertIn("not been configured", message)
-        self.assertEqual(self.suggestion_service.list_databases(), [])
 
     # --- /database_list --------------------------------------------------------
 
@@ -370,34 +277,6 @@ class DatabaseCommandTests(unittest.TestCase):
         self.assertTrue(ephemeral)
         self.assertIn("doesn't exist", message)
         self.assertTrue(self.suggestion_service.get_database(created.database.database_id).active)
-
-    def test_database_add_rejects_use_outside_a_guild(self) -> None:
-        message, ephemeral = perform_database_add(
-            self.suggestion_service,
-            self._wash_crew_member(),
-            WASH_CREW_ROLE_ID,
-            None,
-            CHANNEL_ID,
-            "Sunday Watch Party",
-        )
-
-        self.assertTrue(ephemeral)
-        self.assertIn("Discord server", message)
-        self.assertEqual(self.suggestion_service.list_databases(), [])
-
-    def test_database_add_rejects_missing_channel_context(self) -> None:
-        message, ephemeral = perform_database_add(
-            self.suggestion_service,
-            self._wash_crew_member(),
-            WASH_CREW_ROLE_ID,
-            GUILD_ID,
-            None,
-            "Sunday Watch Party",
-        )
-
-        self.assertTrue(ephemeral)
-        self.assertIn("channel or thread", message)
-        self.assertEqual(self.suggestion_service.list_databases(), [])
 
     def test_database_list_rejects_use_outside_a_guild(self) -> None:
         message, ephemeral = perform_database_list(

@@ -116,7 +116,17 @@ from watch_party_manager.services.config_service import (
     ConfigService,
     ConfigUpdateResult,
 )
-from watch_party_manager.services.collection_display import format_collection_display
+from watch_party_manager.services.collection_display import (
+    STANDARD_COLLECTION_TYPES,
+    format_collection_display,
+    used_standard_collection_type_keys,
+)
+from watch_party_manager.database_admin_view import (
+    CollectionManagementMenuView,
+    CollectionTypeSelectionView,
+    DestinationChoiceView,
+    ExistingThreadSelectView,
+)
 from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
 )
@@ -507,35 +517,6 @@ class WatchPartyBot(commands.Bot):
         ) -> None:
             await handle_restore(interaction, self, backup_filename, backup_file)
 
-        @self.tree.command(name="database_backup")
-        async def database_backup(interaction: discord.Interaction) -> None:
-            await handle_database_backup(interaction, self)
-
-        @self.tree.command(name="database_restore")
-        @discord.app_commands.describe(
-            mode="Merge adds compatible suggestions without touching existing ones. "
-            "Replace overwrites the whole database.",
-            backup_filename="An existing local database backup's filename.",
-            backup_file="Upload a database backup .zip to restore from instead of selecting a local one.",
-        )
-        @discord.app_commands.choices(
-            mode=[
-                discord.app_commands.Choice(name="Merge", value="merge"),
-                discord.app_commands.Choice(name="Replace", value="replace"),
-            ]
-        )
-        async def database_restore(
-            interaction: discord.Interaction,
-            mode: str,
-            backup_filename: Optional[str] = None,
-            backup_file: Optional[discord.Attachment] = None,
-        ) -> None:
-            await handle_database_restore(interaction, self, mode, backup_filename, backup_file)
-
-        @self.tree.command(name="database_reset")
-        async def database_reset(interaction: discord.Interaction) -> None:
-            await handle_database_reset(interaction, self)
-
         @self.tree.command(name="factory_reset")
         async def factory_reset_command(interaction: discord.Interaction) -> None:
             await handle_factory_reset(interaction, self)
@@ -560,75 +541,6 @@ class WatchPartyBot(commands.Bot):
         )
         async def edit_suggestion_command(interaction: discord.Interaction, reference: str) -> None:
             await handle_edit_suggestion(interaction, self, reference)
-
-        @self.tree.command(name="start_vote")
-        async def start_vote(interaction: discord.Interaction) -> None:
-            async def on_use_defaults(choice_interaction: discord.Interaction) -> None:
-                await handle_start_vote_use_defaults(
-                    choice_interaction,
-                    vote_service=self.vote_service,
-                    suggestion_service=self.suggestion_service,
-                    nominee_selection_service=self.nominee_selection_service,
-                    wash_crew_role_id=self.wash_crew_role_id,
-                    default_nominee_count=self.default_nominee_count,
-                    scheduler_service=self.scheduler_host.scheduler_service,
-                    guild_configuration_repository=self.guild_configuration_repository,
-                    rotation_service=self.rotation_service,
-                    suggestion_database_configuration_repository=self.suggestion_database_configuration_repository,
-                    bot=self,
-                )
-
-            async def on_customize(choice_interaction: discord.Interaction) -> None:
-                async def on_modal_submit(
-                    modal_interaction: discord.Interaction,
-                    nominee_count_text: Optional[str],
-                    duration_text: Optional[str],
-                    visibility_text: Optional[str],
-                    reminder_enabled_text: Optional[str],
-                    reminder_minutes_text: Optional[str],
-                ) -> None:
-                    await handle_customize_vote_submit(
-                        modal_interaction,
-                        vote_service=self.vote_service,
-                        suggestion_service=self.suggestion_service,
-                        nominee_selection_service=self.nominee_selection_service,
-                        wash_crew_role_id=self.wash_crew_role_id,
-                        default_nominee_count=self.default_nominee_count,
-                        nominee_count_text=nominee_count_text,
-                        duration_text=duration_text,
-                        visibility_text=visibility_text,
-                        reminder_enabled_text=reminder_enabled_text,
-                        reminder_minutes_text=reminder_minutes_text,
-                        scheduler_service=self.scheduler_host.scheduler_service,
-                        guild_configuration_repository=self.guild_configuration_repository,
-                        rotation_service=self.rotation_service,
-                        suggestion_database_configuration_repository=(
-                            self.suggestion_database_configuration_repository
-                        ),
-                        bot=self,
-                    )
-
-                modal_defaults = build_customize_vote_modal_defaults(
-                    default_nominee_count=self.default_nominee_count,
-                    guild_id=choice_interaction.guild_id,
-                    guild_configuration_repository=self.guild_configuration_repository,
-                )
-                await choice_interaction.response.send_modal(
-                    CustomizeVoteModal(on_modal_submit, **modal_defaults)
-                )
-
-            view = StartVoteChoiceView(on_use_defaults, on_customize)
-            await interaction.response.send_message(
-                "How would you like to start this voting round?", view=view, ephemeral=True
-            )
-
-        @self.tree.command(name="vote_status")
-        async def vote_status(interaction: discord.Interaction) -> None:
-            await handle_vote_status(interaction, self)
-
-        @self.tree.command(name="edit_vote")
-        async def edit_vote(interaction: discord.Interaction) -> None:
-            await handle_edit_vote(interaction, self)
 
         @self.tree.command(name="reject")
         async def reject(interaction: discord.Interaction, suggestion_id: int) -> None:
@@ -666,82 +578,6 @@ class WatchPartyBot(commands.Bot):
                 suggestion_id=suggestion_id,
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
-
-        @self.tree.command(name="database_add")
-        async def database_add(interaction: discord.Interaction, name: str) -> None:
-            message, ephemeral = perform_database_add(
-                suggestion_service=self.suggestion_service,
-                user=interaction.user,
-                wash_crew_role_id=self.wash_crew_role_id,
-                guild_id=interaction.guild_id,
-                channel_id=interaction.channel_id,
-                name=name,
-                suggestion_database_configuration_repository=self.suggestion_database_configuration_repository,
-            )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
-
-        @self.tree.command(name="database_list")
-        async def database_list(interaction: discord.Interaction) -> None:
-            message, ephemeral = perform_database_list(
-                suggestion_service=self.suggestion_service,
-                user=interaction.user,
-                wash_crew_role_id=self.wash_crew_role_id,
-                guild_id=interaction.guild_id,
-            )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
-
-        @self.tree.command(name="database_remove")
-        async def database_remove(interaction: discord.Interaction) -> None:
-            await handle_database_remove(interaction, self)
-
-        @self.tree.command(name="schedule_watch_party")
-        async def schedule_watch_party(
-            interaction: discord.Interaction, watch_item_id: int, when: str
-        ) -> None:
-            await handle_schedule_watch_party_completion(
-                interaction,
-                watch_party_service=self.watch_party_service,
-                suggestion_service=self.suggestion_service,
-                wash_crew_role_id=self.wash_crew_role_id,
-                watch_item_id=watch_item_id,
-                when=when,
-                scheduler_service=self.scheduler_host.scheduler_service,
-                guild_configuration_repository=self.guild_configuration_repository,
-            )
-
-        @self.tree.command(name="reschedule_watch_party")
-        async def reschedule_watch_party(interaction: discord.Interaction, when: str) -> None:
-            await handle_reschedule_watch_party_completion(
-                interaction,
-                watch_party_service=self.watch_party_service,
-                wash_crew_role_id=self.wash_crew_role_id,
-                when=when,
-                scheduler_service=self.scheduler_host.scheduler_service,
-                guild_configuration_repository=self.guild_configuration_repository,
-                suggestion_service=self.suggestion_service,
-            )
-
-        @self.tree.command(name="cancel_watch_party")
-        async def cancel_watch_party(interaction: discord.Interaction) -> None:
-            await handle_cancel_watch_party_completion(
-                interaction,
-                watch_party_service=self.watch_party_service,
-                wash_crew_role_id=self.wash_crew_role_id,
-                scheduler_service=self.scheduler_host.scheduler_service,
-                suggestion_service=self.suggestion_service,
-            )
-
-        @self.tree.command(name="watch_party_status")
-        async def watch_party_status(interaction: discord.Interaction) -> None:
-            permission = self.permission_service.require_wash_crew(interaction.user)
-            if not permission.allowed:
-                await interaction.response.send_message(permission.message, ephemeral=True)
-                return
-            message = perform_watch_party_status(
-                watch_party_service=self.watch_party_service,
-                suggestion_service=self.suggestion_service,
-            )
-            await interaction.response.send_message(message)
 
         @self.tree.command(name="setup")
         async def setup(interaction: discord.Interaction) -> None:
@@ -811,6 +647,9 @@ class WatchPartyBot(commands.Bot):
             await send_config_main_menu(interaction, self, guild_id, edit=False)
 
         self.tree.add_command(WatchPartyAdminGroup(self))
+        self.tree.add_command(DatabaseGroup(self))
+        self.tree.add_command(VotingGroup(self))
+        self.tree.add_command(WatchPartyEventGroup(self))
 
         # Environment variables remain the primary way to configure the
         # WASH Crew / Watch Party roles (unchanged, backward compatible),
@@ -2740,7 +2579,7 @@ async def send_config_manage_databases(
     header = "**WASH Configuration -- Manage Collections**"
 
     if not databases:
-        body = header + "\n\nNo collections exist in this server yet. Create one with `/database_add`."
+        body = header + "\n\nNo collections exist in this server yet. Create one with `/database add`."
         view = BackToMenuOnlyView(on_back_to_menu)
         if edit:
             await interaction.response.edit_message(content=body, view=view)
@@ -2749,7 +2588,10 @@ async def send_config_manage_databases(
         return
 
     async def on_database_selected(select_interaction: discord.Interaction, database_id: int) -> None:
-        await send_config_database_settings_menu(select_interaction, bot, guild_id, database_id, on_back_to_menu)
+        async def on_back_to_picker(back_interaction: discord.Interaction) -> None:
+            await send_config_manage_databases(back_interaction, bot, guild_id, on_back_to_menu)
+
+        await send_config_database_settings_menu(select_interaction, bot, guild_id, database_id, on_back_to_picker)
 
     options = [
         (
@@ -2775,16 +2617,24 @@ async def send_config_database_settings_menu(
     bot: "WatchPartyBot",
     guild_id: int,
     database_id: int,
-    on_back_to_menu: OnBackToMenu,
+    on_back: OnBackToMenu,
 ) -> None:
-    """One database's settings menu -- pick which of its own settings to edit."""
+    """One database's settings menu -- pick which of its own settings to edit.
+
+    on_back is called directly (not wrapped further) when Back is
+    clicked here or from any of the three setting sub-screens -- the
+    caller decides what "back" means. /config's own call site
+    (send_config_manage_databases) wraps a callback that re-shows its
+    collection picker; /database manage's Edit Collection action (see
+    show_database_management_menu) passes one that returns to its own
+    per-collection action menu instead -- this menu and its three
+    sub-screens are otherwise identical either way, and are never
+    duplicated between the two entry points.
+    """
     database = bot.suggestion_service.get_database(database_id)
     if database is None or database.guild_id != guild_id:
-        await send_config_manage_databases(interaction, bot, guild_id, on_back_to_menu)
+        await on_back(interaction)
         return
-
-    async def on_back(back_interaction: discord.Interaction) -> None:
-        await send_config_manage_databases(back_interaction, bot, guild_id, on_back_to_menu)
 
     collection_name = format_collection_display(
         _resolve_collection_name(
@@ -3332,6 +3182,257 @@ class WatchPartyAdminGroup(discord.app_commands.Group):
     @discord.app_commands.command(name="search", description="Look up a member's Watch Party membership history.")
     async def search(self, interaction: discord.Interaction, member: discord.Member) -> None:
         await handle_watch_party_search(interaction, self.bot, member)
+
+
+class DatabaseGroup(discord.app_commands.Group):
+    """WASH Crew-only /database command group (Command Structure Cleanup, pre-v1,
+    refined to add /database manage and a shared "Use Current
+    Thread/Channel" destination option).
+
+    Replaces the former top-level /database_add, /database_list,
+    /database_backup, /database_restore, /database_reset, and
+    /database_remove commands -- removed outright, with no compatibility
+    alias, since WASH has not yet been publicly released. /database move
+    and /database manage are both new capabilities; /database move,
+    /database backup, /database restore, /database reset, and /database
+    remove remain available as direct shortcuts for experienced
+    administrators alongside /database manage's guided picker-then-menu
+    workflow -- see handle_database_manage. Each subcommand only collects
+    Discord-native parameters and delegates to a module-level
+    handle_*/perform_*()/start_*() function, exactly like every other
+    command in this file, so behavior stays unit-testable without a live
+    Discord connection. No group-level interaction_check: every
+    subcommand already performs its own WASH Crew check internally (some,
+    like /voting edit, deliberately check only after resolving context)
+    -- unchanged from before this move so that ordering is preserved
+    exactly.
+    """
+
+    def __init__(self, bot: "WatchPartyBot") -> None:
+        super().__init__(name="database", description="Manage suggestion collections (WASH Crew only).")
+        self.bot = bot
+
+    @discord.app_commands.command(name="add", description="Create a new suggestion collection.")
+    async def add(self, interaction: discord.Interaction) -> None:
+        await handle_database_add(interaction, self.bot)
+
+    @discord.app_commands.command(
+        name="manage", description="Guided workflow: pick a collection, then choose what to do with it."
+    )
+    async def manage(self, interaction: discord.Interaction) -> None:
+        await handle_database_manage(interaction, self.bot)
+
+    @discord.app_commands.command(name="list", description="List this server's collections.")
+    async def list(self, interaction: discord.Interaction) -> None:
+        message, ephemeral = perform_database_list(
+            suggestion_service=self.bot.suggestion_service,
+            user=interaction.user,
+            wash_crew_role_id=self.bot.wash_crew_role_id,
+            guild_id=interaction.guild_id,
+        )
+        await interaction.response.send_message(message, ephemeral=ephemeral)
+
+    @discord.app_commands.command(
+        name="move", description="Move a collection's suggestion destination to a different channel or thread."
+    )
+    async def move(self, interaction: discord.Interaction) -> None:
+        await handle_database_move(interaction, self.bot)
+
+    @discord.app_commands.command(name="backup", description="Back up a single collection.")
+    async def backup(self, interaction: discord.Interaction) -> None:
+        await handle_database_backup(interaction, self.bot)
+
+    @discord.app_commands.command(name="restore", description="Restore a collection backup.")
+    @discord.app_commands.describe(
+        mode="Merge adds compatible suggestions without touching existing ones. "
+        "Replace overwrites the whole database.",
+        backup_filename="An existing local database backup's filename.",
+        backup_file="Upload a database backup .zip to restore from instead of selecting a local one.",
+    )
+    @discord.app_commands.choices(
+        mode=[
+            discord.app_commands.Choice(name="Merge", value="merge"),
+            discord.app_commands.Choice(name="Replace", value="replace"),
+        ]
+    )
+    async def restore(
+        self,
+        interaction: discord.Interaction,
+        mode: str,
+        backup_filename: Optional[str] = None,
+        backup_file: Optional[discord.Attachment] = None,
+    ) -> None:
+        await handle_database_restore(interaction, self.bot, mode, backup_filename, backup_file)
+
+    @discord.app_commands.command(name="remove", description="Deactivate a collection.")
+    async def remove(self, interaction: discord.Interaction) -> None:
+        await handle_database_remove(interaction, self.bot)
+
+    @discord.app_commands.command(name="reset", description="Clear one collection's suggestions.")
+    async def reset(self, interaction: discord.Interaction) -> None:
+        await handle_database_reset(interaction, self.bot)
+
+
+class VotingGroup(discord.app_commands.Group):
+    """WASH Crew-only /voting command group (Command Structure Cleanup, pre-v1).
+
+    Replaces the former top-level /start_vote, /vote_status, and
+    /edit_vote commands -- removed outright, with no compatibility alias.
+    /vote itself (member vote casting) is unaffected -- voting still
+    happens entirely through the interactive buttons on a voting post,
+    never a slash command, so there is nothing under this group for
+    members to cast a vote with; /voting is WASH Crew administration only.
+    Subcommand bodies are unchanged from their former top-level commands,
+    including each one's own permission check ordering (e.g. /voting
+    edit's WASH Crew check deliberately happens after collection
+    resolution, exactly as /edit_vote's did).
+    """
+
+    def __init__(self, bot: "WatchPartyBot") -> None:
+        super().__init__(name="voting", description="Manage voting rounds (WASH Crew only).")
+        self.bot = bot
+
+    @discord.app_commands.command(name="start", description="Start a new voting round.")
+    async def start(self, interaction: discord.Interaction) -> None:
+        bot = self.bot
+
+        async def on_use_defaults(choice_interaction: discord.Interaction) -> None:
+            await handle_start_vote_use_defaults(
+                choice_interaction,
+                vote_service=bot.vote_service,
+                suggestion_service=bot.suggestion_service,
+                nominee_selection_service=bot.nominee_selection_service,
+                wash_crew_role_id=bot.wash_crew_role_id,
+                default_nominee_count=bot.default_nominee_count,
+                scheduler_service=bot.scheduler_host.scheduler_service,
+                guild_configuration_repository=bot.guild_configuration_repository,
+                rotation_service=bot.rotation_service,
+                suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
+                bot=bot,
+            )
+
+        async def on_customize(choice_interaction: discord.Interaction) -> None:
+            async def on_modal_submit(
+                modal_interaction: discord.Interaction,
+                nominee_count_text: Optional[str],
+                duration_text: Optional[str],
+                visibility_text: Optional[str],
+                reminder_enabled_text: Optional[str],
+                reminder_minutes_text: Optional[str],
+            ) -> None:
+                await handle_customize_vote_submit(
+                    modal_interaction,
+                    vote_service=bot.vote_service,
+                    suggestion_service=bot.suggestion_service,
+                    nominee_selection_service=bot.nominee_selection_service,
+                    wash_crew_role_id=bot.wash_crew_role_id,
+                    default_nominee_count=bot.default_nominee_count,
+                    nominee_count_text=nominee_count_text,
+                    duration_text=duration_text,
+                    visibility_text=visibility_text,
+                    reminder_enabled_text=reminder_enabled_text,
+                    reminder_minutes_text=reminder_minutes_text,
+                    scheduler_service=bot.scheduler_host.scheduler_service,
+                    guild_configuration_repository=bot.guild_configuration_repository,
+                    rotation_service=bot.rotation_service,
+                    suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
+                    bot=bot,
+                )
+
+            modal_defaults = build_customize_vote_modal_defaults(
+                default_nominee_count=bot.default_nominee_count,
+                guild_id=choice_interaction.guild_id,
+                guild_configuration_repository=bot.guild_configuration_repository,
+            )
+            await choice_interaction.response.send_modal(CustomizeVoteModal(on_modal_submit, **modal_defaults))
+
+        view = StartVoteChoiceView(on_use_defaults, on_customize)
+        await interaction.response.send_message(
+            "How would you like to start this voting round?", view=view, ephemeral=True
+        )
+
+    @discord.app_commands.command(name="status", description="View the current voting round.")
+    async def status(self, interaction: discord.Interaction) -> None:
+        await handle_vote_status(interaction, self.bot)
+
+    @discord.app_commands.command(name="edit", description="Change, end, or cancel the active vote.")
+    async def edit(self, interaction: discord.Interaction) -> None:
+        await handle_edit_vote(interaction, self.bot)
+
+
+class WatchPartyEventGroup(discord.app_commands.Group):
+    """WASH Crew-only /watch-party command group (Command Structure Cleanup, pre-v1).
+
+    Replaces the former top-level /schedule_watch_party,
+    /reschedule_watch_party, /cancel_watch_party, and /watch_party_status
+    commands -- removed outright, with no compatibility alias.
+
+    Named with a hyphen ("watch-party") rather than an underscore
+    deliberately: the pre-existing /watch_party group (WatchPartyAdminGroup,
+    above) already owns that exact underscore name for Watch Party
+    *membership* administration (members/pending/approved/denied/add/
+    remove/search) and is unrelated to *scheduling* a watch party --
+    merging the two into one group would conflate two distinct concerns
+    under one command, and Discord command names are case- and character-
+    sensitive, so "watch-party" and "watch_party" are two entirely
+    distinct, valid command names that can coexist. This is the
+    documented resolution the task's own naming-conflict contingency
+    asked for.
+    """
+
+    def __init__(self, bot: "WatchPartyBot") -> None:
+        super().__init__(name="watch-party", description="Manage the scheduled watch party (WASH Crew only).")
+        self.bot = bot
+
+    @discord.app_commands.command(name="schedule", description="Schedule a watch party.")
+    async def schedule(self, interaction: discord.Interaction, watch_item_id: int, when: str) -> None:
+        bot = self.bot
+        await handle_schedule_watch_party_completion(
+            interaction,
+            watch_party_service=bot.watch_party_service,
+            suggestion_service=bot.suggestion_service,
+            wash_crew_role_id=bot.wash_crew_role_id,
+            watch_item_id=watch_item_id,
+            when=when,
+            scheduler_service=bot.scheduler_host.scheduler_service,
+            guild_configuration_repository=bot.guild_configuration_repository,
+        )
+
+    @discord.app_commands.command(name="status", description="View the scheduled watch party.")
+    async def status(self, interaction: discord.Interaction) -> None:
+        bot = self.bot
+        permission = bot.permission_service.require_wash_crew(interaction.user)
+        if not permission.allowed:
+            await interaction.response.send_message(permission.message, ephemeral=True)
+            return
+        message = perform_watch_party_status(
+            watch_party_service=bot.watch_party_service, suggestion_service=bot.suggestion_service
+        )
+        await interaction.response.send_message(message)
+
+    @discord.app_commands.command(name="reschedule", description="Change a watch party's start.")
+    async def reschedule(self, interaction: discord.Interaction, when: str) -> None:
+        bot = self.bot
+        await handle_reschedule_watch_party_completion(
+            interaction,
+            watch_party_service=bot.watch_party_service,
+            wash_crew_role_id=bot.wash_crew_role_id,
+            when=when,
+            scheduler_service=bot.scheduler_host.scheduler_service,
+            guild_configuration_repository=bot.guild_configuration_repository,
+            suggestion_service=bot.suggestion_service,
+        )
+
+    @discord.app_commands.command(name="cancel", description="Cancel a scheduled watch party.")
+    async def cancel(self, interaction: discord.Interaction) -> None:
+        bot = self.bot
+        await handle_cancel_watch_party_completion(
+            interaction,
+            watch_party_service=bot.watch_party_service,
+            wash_crew_role_id=bot.wash_crew_role_id,
+            scheduler_service=bot.scheduler_host.scheduler_service,
+            suggestion_service=bot.suggestion_service,
+        )
 
 
 def build_watch_party_members_text(role_name: str, members: List[Any]) -> str:
@@ -6055,6 +6156,29 @@ async def handle_restore(
     await interaction.followup.send(message, view=view, ephemeral=True)
 
 
+async def start_database_backup(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, database_id: int
+) -> None:
+    """Back up one already-known database. Shared by /database backup
+    (after its own picker) and /database manage's Backup Collection
+    action -- neither duplicates this logic.
+    """
+    result = create_database_backup(
+        bot.backup_service,
+        bot.suggestion_database_repository,
+        bot.suggestion_repository,
+        bot.suggestion_database_configuration_repository,
+        guild_id,
+        database_id,
+    )
+    if not result.success or result.creation is None or result.display_filename is None:
+        await interaction.response.send_message(result.message, ephemeral=True)
+        return
+
+    file = discord.File(result.creation.archive_path, filename=result.display_filename)
+    await interaction.response.send_message(result.message, file=file, ephemeral=True)
+
+
 async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
     """Show a "which database?" picker, then back up the chosen one.
 
@@ -6086,20 +6210,7 @@ async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPa
         return
 
     async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
-        result = create_database_backup(
-            bot.backup_service,
-            bot.suggestion_database_repository,
-            bot.suggestion_repository,
-            bot.suggestion_database_configuration_repository,
-            guild_id,
-            database_id,
-        )
-        if not result.success or result.creation is None or result.display_filename is None:
-            await select_interaction.response.send_message(result.message, ephemeral=True)
-            return
-
-        file = discord.File(result.creation.archive_path, filename=result.display_filename)
-        await select_interaction.response.send_message(result.message, file=file, ephemeral=True)
+        await start_database_backup(select_interaction, bot, guild_id, database_id)
 
     options = build_database_admin_options(bot.suggestion_service, databases, interaction.guild, bot.suggestion_database_configuration_repository)
     view = DatabaseAdminSelectView(
@@ -6222,6 +6333,57 @@ def build_database_reset_summary_text(summary) -> str:
     )
 
 
+async def start_database_reset(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, database_id: int
+) -> None:
+    """Show the existing RESET confirmation flow for one already-known
+    database. Shared by /database reset (after its own picker) and
+    /database manage's Reset Collection action -- neither duplicates
+    this logic.
+    """
+    summary = build_database_reset_summary(
+        bot.suggestion_database_repository, bot.suggestion_repository, guild_id, database_id
+    )
+    if summary is None:
+        await interaction.response.send_message(
+            "No collection with that ID exists in this server.", ephemeral=True
+        )
+        return
+
+    async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+        if bot.wash_crew_role_id is None or not is_wash_crew_member(
+            confirm_interaction.user, bot.wash_crew_role_id
+        ):
+            await confirm_interaction.response.send_message(
+                "You need the WASH Crew role to reset a collection.", ephemeral=True
+            )
+            return
+        result = reset_suggestion_database(
+            bot.backup_service,
+            bot.suggestion_database_repository,
+            bot.suggestion_repository,
+            bot.suggestion_service,
+            guild_id,
+            database_id,
+        )
+        await confirm_interaction.response.send_message(result.message, ephemeral=True)
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        await cancel_interaction.response.send_message("Reset cancelled. No data was changed.", ephemeral=True)
+
+    confirmation_view = DestructiveConfirmationView(
+        button_label="Reset",
+        required_text="RESET",
+        modal_title="Reset Collection",
+        custom_id_prefix="database_reset",
+        on_confirm=on_confirm,
+        on_cancel=on_cancel,
+    )
+    await interaction.response.send_message(
+        build_database_reset_summary_text(summary), view=confirmation_view, ephemeral=True
+    )
+
+
 async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
     """Show a "which database?" picker, then the existing RESET
     confirmation flow for the chosen one.
@@ -6254,47 +6416,7 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
         return
 
     async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
-        summary = build_database_reset_summary(
-            bot.suggestion_database_repository, bot.suggestion_repository, guild_id, database_id
-        )
-        if summary is None:
-            await select_interaction.response.send_message(
-                "No collection with that ID exists in this server.", ephemeral=True
-            )
-            return
-
-        async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-            if bot.wash_crew_role_id is None or not is_wash_crew_member(
-                confirm_interaction.user, bot.wash_crew_role_id
-            ):
-                await confirm_interaction.response.send_message(
-                    "You need the WASH Crew role to reset a collection.", ephemeral=True
-                )
-                return
-            result = reset_suggestion_database(
-                bot.backup_service,
-                bot.suggestion_database_repository,
-                bot.suggestion_repository,
-                bot.suggestion_service,
-                guild_id,
-                database_id,
-            )
-            await confirm_interaction.response.send_message(result.message, ephemeral=True)
-
-        async def on_cancel(cancel_interaction: discord.Interaction) -> None:
-            await cancel_interaction.response.send_message("Reset cancelled. No data was changed.", ephemeral=True)
-
-        confirmation_view = DestructiveConfirmationView(
-            button_label="Reset",
-            required_text="RESET",
-            modal_title="Reset Collection",
-            custom_id_prefix="database_reset",
-            on_confirm=on_confirm,
-            on_cancel=on_cancel,
-        )
-        await select_interaction.response.send_message(
-            build_database_reset_summary_text(summary), view=confirmation_view, ephemeral=True
-        )
+        await start_database_reset(select_interaction, bot, guild_id, database_id)
 
     options = build_database_admin_options(bot.suggestion_service, databases, interaction.guild, bot.suggestion_database_configuration_repository)
     view = DatabaseAdminSelectView(
@@ -7472,67 +7594,281 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
     )
 
 
-def perform_database_add(
-    suggestion_service: SuggestionService,
-    user: object,
-    wash_crew_role_id: Optional[int],
-    guild_id: Optional[int],
-    channel_id: Optional[int],
-    name: str,
-    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
-) -> tuple[str, bool]:
-    """Core logic for /database_add, kept free of Discord objects except `user`.
+_USABLE_CURRENT_LOCATION_TYPES = (
+    discord.ChannelType.text,
+    discord.ChannelType.public_thread,
+    discord.ChannelType.private_thread,
+)
 
-    All the actual creation rules (duplicate name, duplicate channel,
-    duplicate configured suggestion destination) are enforced by
-    SuggestionService.create_database(); this function only handles the
-    WASH Crew permission check and presentation.
+
+def _is_usable_current_location(channel: Optional[Any]) -> bool:
+    """Whether "Use Current Thread/Channel" is offerable for `channel`.
+
+    True only for a text channel or thread -- the same set of channel
+    types every other destination path (Create New Thread, Use Existing
+    Thread/Channel) already accepts. Used to disable (never omit) the
+    button so it appears consistently across every invocation.
+    """
+    return channel is not None and getattr(channel, "type", None) in _USABLE_CURRENT_LOCATION_TYPES
+
+
+async def send_destination_choice(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    *,
+    guild_id: int,
+    current_channel: Optional[Any],
+    prompt: str,
+    thread_name_default: str,
+    on_destination_resolved: Callable[[discord.Interaction, int, Optional[str]], Awaitable[bool]],
+    on_cancel: Callable[[discord.Interaction], Awaitable[None]],
+) -> None:
+    """The one shared "where should this collection's suggestions post?"
+    flow for /database add and /database move (Command Structure Cleanup
+    Refinement): Create New Thread (Recommended), Use Current
+    Thread/Channel, Use Existing Thread, or Use Existing Channel.
+
+    Neither destination validation, thread creation, channel selection,
+    nor rollback is duplicated between /database add and /database move
+    (or /database manage's Move Collection action) -- all three call this
+    one function.
 
     Args:
-        suggestion_service: The suggestion service to create the database in.
-        user: The member invoking the command.
-        wash_crew_role_id: The configured WASH Crew role ID, or None if
-            unconfigured.
-        guild_id: The Discord guild the command was run in.
-        channel_id: The Discord channel or thread the command was run in.
-        name: The desired database name.
-        suggestion_database_configuration_repository: Contextual Database
-            Resolution: passed through to create_database() so the new
-            database's channel can't collide with another database's
-            configured suggestion post destination, not just another
-            database's home channel. Optional so existing callers/tests
-            that don't pass it keep working unchanged.
-
-    Returns:
-        A (message, ephemeral) tuple. Every /database_add response is
-        ephemeral -- this is an admin configuration command.
+        interaction: The interaction to render the destination choice on
+            (always edited, never sent fresh -- callers only reach this
+            after their own preceding step, e.g. a type choice or a
+            collection picker, already produced a response to edit).
+        bot: Used to resolve the guild's configured home channel for
+            Create New Thread.
+        guild_id: The guild the destination is being chosen in.
+        current_channel: The channel or thread the originating command
+            was actually run in (typically `interaction.channel` at the
+            top of the caller), or None. Determines whether Use Current
+            Thread/Channel is enabled, and which channel_id it resolves
+            to.
+        prompt: The message content to show alongside the choice.
+        thread_name_default: The suggested (editable) name for Create New
+            Thread's rename modal.
+        on_destination_resolved: Called once a destination channel_id is
+            determined, as `(interaction, channel_id, created_thread_name)`.
+            created_thread_name is the (possibly renamed) name typed into
+            Create New Thread's modal, or None for every other path --
+            /database add uses it as the new collection's name (it has no
+            established name yet); /database move ignores it (a
+            collection's name is never changed by a move). Must send its
+            own response (edit_message) reporting success or failure, and
+            return whether it succeeded, so a just-created thread can be
+            rolled back on failure.
+        on_cancel: Called if Cancel is clicked at any point in the flow.
     """
-    if wash_crew_role_id is None:
-        return (
-            "WASH Crew permissions have not been configured. "
-            "Set WASH_CREW_ROLE_ID before using this command.",
-            True,
+    current_location_available = _is_usable_current_location(current_channel)
+
+    async def finalize(
+        final_interaction: discord.Interaction,
+        channel_id: int,
+        *,
+        created_thread: Optional[discord.Thread] = None,
+        created_thread_name: Optional[str] = None,
+    ) -> None:
+        success = await on_destination_resolved(final_interaction, channel_id, created_thread_name)
+        if not success and created_thread is not None:
+            try:
+                await created_thread.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                logger.warning(
+                    "Could not roll back newly created thread %s after a failed destination change",
+                    created_thread.id,
+                    exc_info=True,
+                )
+
+    def destination_view() -> DestinationChoiceView:
+        return DestinationChoiceView(
+            on_create_new_thread,
+            on_use_current,
+            on_use_existing_thread,
+            on_use_existing_channel,
+            on_cancel,
+            current_location_available=current_location_available,
         )
 
-    if not is_wash_crew_member(user, wash_crew_role_id):
-        return "You need the WASH Crew role to create a collection.", True
+    async def on_create_new_thread(destination_interaction: discord.Interaction) -> None:
+        guild_configuration = bot.guild_configuration_repository.get(guild_id)
+        home_channel_id = guild_configuration.channels.home_channel_id if guild_configuration is not None else None
+        home_channel = (
+            destination_interaction.guild.get_channel(home_channel_id)
+            if destination_interaction.guild is not None and home_channel_id is not None
+            else None
+        )
+        if home_channel is None:
+            await destination_interaction.response.edit_message(
+                content=(
+                    "⚠ WASH's home channel isn't configured or is no longer available. "
+                    "Choose a different destination option instead."
+                ),
+                view=destination_view(),
+            )
+            return
 
+        async def on_thread_name_submit(modal_interaction: discord.Interaction, thread_name: str) -> None:
+            try:
+                thread = await home_channel.create_thread(name=thread_name, type=discord.ChannelType.public_thread)
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                await modal_interaction.response.edit_message(
+                    content=f"⚠ Could not create the thread: {exc}", view=destination_view()
+                )
+                return
+            await finalize(modal_interaction, thread.id, created_thread=thread, created_thread_name=thread_name)
+
+        await destination_interaction.response.send_modal(
+            CreateThreadNameModal(on_thread_name_submit, default=thread_name_default)
+        )
+
+    async def on_use_current(destination_interaction: discord.Interaction) -> None:
+        if not current_location_available:
+            # Defense in depth -- the button is already disabled for this
+            # case, but a stale/cached component could still be clicked.
+            await destination_interaction.response.edit_message(
+                content="⚠ This option isn't available here. Choose a different destination.",
+                view=destination_view(),
+            )
+            return
+        await finalize(destination_interaction, current_channel.id)
+
+    async def on_use_existing_thread(destination_interaction: discord.Interaction) -> None:
+        async def on_thread_selected(select_interaction: discord.Interaction, channel_id: int) -> None:
+            await finalize(select_interaction, channel_id)
+
+        await destination_interaction.response.edit_message(
+            content="Choose an existing thread:",
+            view=ExistingThreadSelectView(on_thread_selected, on_cancel),
+        )
+
+    async def on_use_existing_channel(destination_interaction: discord.Interaction) -> None:
+        async def on_channel_selected(select_interaction: discord.Interaction, channel_id: int) -> None:
+            await finalize(select_interaction, channel_id)
+
+        await destination_interaction.response.edit_message(
+            content="Choose an existing channel:",
+            view=ExistingChannelSelectView(on_channel_selected, on_cancel),
+        )
+
+    await interaction.response.edit_message(content=prompt, view=destination_view())
+
+
+async def handle_database_add(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """Modernized /database add (Command Structure Cleanup, pre-v1).
+
+    Mirrors the Setup Wizard's own collection-creation flow: choose a
+    type -- every standard collection type (Movies, TV Shows, Anime,
+    Holiday, Documentaries, Horror) this server doesn't already have a
+    matching collection for, plus Special Collection and Custom (always
+    available) -- then choose where its suggestions should post, the
+    same Create New Thread (Recommended)/Use Existing Thread/Use
+    Existing Channel choice /database move offers. name is no longer a
+    typed command parameter for the standard types; Special Collection
+    and Custom still collect it via modal, exactly as the wizard does.
+
+    Every /database add response is ephemeral -- this is an admin
+    configuration command. All creation rules (duplicate name, duplicate
+    channel, duplicate configured suggestion destination) are still
+    enforced by SuggestionService.create_database() -- this only adds
+    presentation and Discord-side thread creation around it.
+    """
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message(
+            "You need the WASH Crew role to create a collection.", ephemeral=True
+        )
+        return
+
+    guild_id = interaction.guild_id
     if guild_id is None:
-        return "This command can only be used in a Discord server.", True
+        await interaction.response.send_message("This command can only be used in a Discord server.", ephemeral=True)
+        return
 
-    if channel_id is None:
-        return "This command must be used in a server channel or thread.", True
-
-    result = suggestion_service.create_database(
-        name,
-        guild_id=guild_id,
-        channel_id=channel_id,
-        suggestion_database_configuration_repository=suggestion_database_configuration_repository,
+    used_type_keys = used_standard_collection_type_keys(
+        database.name for database in bot.suggestion_service.list_databases(guild_id)
     )
-    if not result.success:
-        return result.message, True
+    current_channel = interaction.channel
 
-    return build_database_add_confirmation(result.database), True
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        await cancel_interaction.response.edit_message(
+            content="Collection creation cancelled. No changes were made.", view=None
+        )
+
+    async def show_destination_choice(source_interaction: discord.Interaction, name: str) -> None:
+        async def create_collection(
+            response_interaction: discord.Interaction, channel_id: int, created_thread_name: Optional[str]
+        ) -> bool:
+            # The collection doesn't have an established name yet (unlike
+            # /database move) -- whatever was finally typed into Create
+            # New Thread's rename modal becomes the collection's name
+            # too, so the thread title and collection name never
+            # diverge; every other destination path keeps the name
+            # already chosen at the type-selection step.
+            final_name = created_thread_name if created_thread_name is not None else name
+            result = bot.suggestion_service.create_database(
+                final_name,
+                guild_id=guild_id,
+                channel_id=channel_id,
+                suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
+            )
+            if not result.success:
+                await response_interaction.response.edit_message(content=result.message, view=None)
+                return False
+            await response_interaction.response.edit_message(
+                content=build_database_add_confirmation(result.database), view=None
+            )
+            return True
+
+        await send_destination_choice(
+            source_interaction,
+            bot,
+            guild_id=guild_id,
+            current_channel=current_channel,
+            prompt=f'Where should "{name}" suggestions post?',
+            thread_name_default=name,
+            on_destination_resolved=create_collection,
+            on_cancel=on_cancel,
+        )
+
+    async def on_type_chosen(type_interaction: discord.Interaction, key: str) -> None:
+        if key == "special":
+
+            async def on_name_submit(modal_interaction: discord.Interaction, name: str) -> None:
+                await show_destination_choice(modal_interaction, name)
+
+            await type_interaction.response.send_modal(
+                CreateDatabaseNameModal(
+                    on_name_submit,
+                    title="Name Your Special Collection",
+                    label="Collection name",
+                    placeholder="e.g. Horror Movies, Anime, Documentaries",
+                )
+            )
+            return
+        if key == "custom":
+
+            async def on_name_submit(modal_interaction: discord.Interaction, name: str) -> None:
+                await show_destination_choice(modal_interaction, name)
+
+            await type_interaction.response.send_modal(
+                CreateDatabaseNameModal(on_name_submit, title="Name Your Collection", label="Collection name")
+            )
+            return
+
+        standard_type = next(candidate for candidate in STANDARD_COLLECTION_TYPES if candidate.key == key)
+        await show_destination_choice(type_interaction, standard_type.default_thread_name)
+
+    view = CollectionTypeSelectionView(used_type_keys, on_type_chosen, on_cancel)
+    await interaction.response.send_message(
+        "What type of collection would you like to create?", view=view, ephemeral=True
+    )
 
 
 def perform_database_list(
@@ -7618,15 +7954,32 @@ def perform_database_remove(
     return result.message, True
 
 
+async def start_database_remove(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, database_id: int
+) -> None:
+    """Deactivate one already-known database. Shared by /database remove
+    (after its own picker) and /database manage's Remove Collection
+    action -- neither duplicates this logic. perform_database_remove
+    itself is unchanged (still the single source of truth for the
+    permission checks and deactivation rule).
+    """
+    message, ephemeral = perform_database_remove(
+        suggestion_service=bot.suggestion_service,
+        user=interaction.user,
+        wash_crew_role_id=bot.wash_crew_role_id,
+        guild_id=guild_id,
+        database_id=database_id,
+    )
+    await interaction.response.send_message(message, ephemeral=ephemeral)
+
+
 async def handle_database_remove(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
     """Show a "which database?" picker, then deactivate the chosen one.
 
     Release Polish (Discord-native UX): database_id is no longer a
     command parameter -- WASH Crew picks the target from a selector
     showing each database's name, Active/Inactive status, and watch-item
-    count instead of typing an internal ID. perform_database_remove
-    itself is unchanged (still the single source of truth for the
-    permission checks and deactivation rule).
+    count instead of typing an internal ID.
     """
     if bot.wash_crew_role_id is None:
         await interaction.response.send_message(
@@ -7651,20 +8004,209 @@ async def handle_database_remove(interaction: discord.Interaction, bot: "WatchPa
         return
 
     async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
-        message, ephemeral = perform_database_remove(
-            suggestion_service=bot.suggestion_service,
-            user=select_interaction.user,
-            wash_crew_role_id=bot.wash_crew_role_id,
-            guild_id=guild_id,
-            database_id=database_id,
-        )
-        await select_interaction.response.send_message(message, ephemeral=ephemeral)
+        await start_database_remove(select_interaction, bot, guild_id, database_id)
 
     options = build_database_admin_options(bot.suggestion_service, databases, interaction.guild, bot.suggestion_database_configuration_repository)
     view = DatabaseAdminSelectView(
         options, on_select, custom_id="wpm_database_remove_select", placeholder="Choose a collection to remove..."
     )
     await interaction.response.send_message("Choose which collection to remove:", view=view, ephemeral=True)
+
+
+async def start_database_move(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, database_id: int
+) -> None:
+    """Show the destination choice and move one already-known database's
+    suggestion destination. Shared by /database move (after its own
+    picker) and /database manage's Move Collection action -- neither
+    duplicates this logic.
+
+    Moves ONLY the suggestion destination -- reuses
+    ConfigService.set_database_suggestion_destination() unchanged, the
+    exact same operation /config's Manage Collections -> Suggestion
+    Destination already performs, so this can never disagree with it.
+    That method already enforces destination validation (still exists,
+    still usable) and duplicate-destination prevention (no other
+    collection may already route there); it changes only the collection's
+    configured suggestion_channel_id, never its database ID, suggestions,
+    statuses, vote history, rotation history, or statistics. Existing
+    Discord suggestion posts are untouched -- they keep whatever
+    channel/message reference they already had -- only future
+    suggestions post to the new destination.
+    """
+    database = bot.suggestion_service.get_database(database_id)
+    if database is None or database.guild_id != guild_id:
+        await interaction.response.edit_message(content="That collection no longer exists.", view=None)
+        return
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        await cancel_interaction.response.edit_message(content="Move cancelled. No changes were made.", view=None)
+
+    async def apply_move(
+        response_interaction: discord.Interaction, channel_id: int, created_thread_name: Optional[str]
+    ) -> bool:
+        # created_thread_name (a Create New Thread rename) never affects
+        # a collection's own name -- that's an /database add-only rule,
+        # since a move never touches the collection's established name.
+        result = bot.config_service.set_database_suggestion_destination(
+            guild_id, database_id, channel_id, response_interaction.guild
+        )
+        await response_interaction.response.edit_message(content=result.message, view=None)
+        return result.success
+
+    await send_destination_choice(
+        interaction,
+        bot,
+        guild_id=guild_id,
+        current_channel=interaction.channel,
+        prompt=f'Where should "{database.name}" suggestions post now?',
+        thread_name_default=database.name,
+        on_destination_resolved=apply_move,
+        on_cancel=on_cancel,
+    )
+
+
+async def handle_database_move(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """/database move (Command Structure Cleanup, pre-v1): pick a
+    collection, then move its suggestion destination to a different
+    channel or thread. See start_database_move for the actual move.
+    """
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message(
+            "You need the WASH Crew role to move a collection.", ephemeral=True
+        )
+        return
+
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    databases = bot.suggestion_service.list_databases(guild_id)
+    if not databases:
+        await interaction.response.send_message("No collections are configured yet.", ephemeral=True)
+        return
+
+    async def on_database_selected(select_interaction: discord.Interaction, database_id: int) -> None:
+        await start_database_move(select_interaction, bot, guild_id, database_id)
+
+    options = build_database_admin_options(
+        bot.suggestion_service, databases, interaction.guild, bot.suggestion_database_configuration_repository
+    )
+    view = DatabaseAdminSelectView(
+        options, on_database_selected, custom_id="wpm_database_move_select", placeholder="Choose a collection to move..."
+    )
+    await interaction.response.send_message("Choose which collection to move:", view=view, ephemeral=True)
+
+
+async def show_database_management_menu(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, database_id: int
+) -> None:
+    """/database manage's per-collection action menu: Move Collection,
+    Edit Collection, Backup Collection, Restore Collection, Reset
+    Collection, Remove Collection, or Cancel.
+
+    Every action reuses the exact same logic its direct /database
+    subcommand uses -- Move/Backup/Reset/Remove call the same
+    start_database_*() functions their subcommands call after their own
+    picker (see handle_database_move/backup/reset/remove), and Edit
+    reuses /config's own send_config_database_settings_menu unchanged,
+    with its Back button wired to return here instead of to /config's
+    collection picker. Restore Collection can't be driven from a button
+    click at all -- Discord doesn't allow attaching a file upload in
+    response to a component interaction -- so it points at running
+    `/database restore` directly, the same way the Setup Wizard's
+    "Import Existing Database" option points at `/import` for the exact
+    same platform reason.
+    """
+    database = bot.suggestion_service.get_database(database_id)
+    if database is None or database.guild_id != guild_id:
+        await interaction.response.edit_message(content="That collection no longer exists.", view=None)
+        return
+
+    collection_name = format_collection_display(
+        _resolve_collection_name(
+            bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+        )
+    )
+
+    async def on_back_to_menu(back_interaction: discord.Interaction) -> None:
+        await show_database_management_menu(back_interaction, bot, guild_id, database_id)
+
+    async def on_action_chosen(action_interaction: discord.Interaction, action: str) -> None:
+        if action == "move":
+            await start_database_move(action_interaction, bot, guild_id, database_id)
+        elif action == "edit":
+            await send_config_database_settings_menu(action_interaction, bot, guild_id, database_id, on_back_to_menu)
+        elif action == "backup":
+            await start_database_backup(action_interaction, bot, guild_id, database_id)
+        elif action == "restore":
+            await action_interaction.response.edit_message(
+                content=(
+                    f'To restore "{collection_name}", run `/database restore` directly and choose Merge or '
+                    "Replace, then select an existing local backup or upload one -- Discord doesn't allow "
+                    "attaching a file from inside this menu."
+                ),
+                view=None,
+            )
+        elif action == "reset":
+            await start_database_reset(action_interaction, bot, guild_id, database_id)
+        else:
+            await start_database_remove(action_interaction, bot, guild_id, database_id)
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        await cancel_interaction.response.edit_message(content="No changes were made.", view=None)
+
+    view = CollectionManagementMenuView(on_action_chosen, on_cancel)
+    await interaction.response.edit_message(
+        content=f'**Manage "{collection_name}"**\n\nChoose an action.', view=view
+    )
+
+
+async def handle_database_manage(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """/database manage (Command Structure Cleanup Refinement): the
+    guided workflow -- pick a collection, then choose what to do with
+    it -- alongside the existing direct /database subcommands, which
+    remain available as shortcuts for experienced administrators.
+    """
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message(
+            "You need the WASH Crew role to manage a collection.", ephemeral=True
+        )
+        return
+
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    databases = bot.suggestion_service.list_databases(guild_id)
+    if not databases:
+        await interaction.response.send_message("No collections are configured yet.", ephemeral=True)
+        return
+
+    async def on_database_selected(select_interaction: discord.Interaction, database_id: int) -> None:
+        await show_database_management_menu(select_interaction, bot, guild_id, database_id)
+
+    options = build_database_admin_options(
+        bot.suggestion_service, databases, interaction.guild, bot.suggestion_database_configuration_repository
+    )
+    view = DatabaseAdminSelectView(
+        options, on_database_selected, custom_id="wpm_database_manage_select", placeholder="Choose a collection to manage..."
+    )
+    await interaction.response.send_message("Choose which collection to manage:", view=view, ephemeral=True)
 
 
 def parse_watch_party_schedule_time(value: str) -> datetime:

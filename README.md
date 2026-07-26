@@ -8,7 +8,7 @@ WASH manages suggestion databases and suggestions (with IMDb link normalization 
 ## Current Status
 
 - **Version:** 1.0.0
-- **Automated tests:** 2850 passing
+- **Automated tests:** 3075 passing
 - **Python:** 3.12 or later
 - **Discord library:** discord.py 2.4 or later
 - **Persistence:** JSON repositories
@@ -69,9 +69,9 @@ WASH's in-Discord `/help` command always reflects the exact command set availabl
 ### WASH Crew
 
 - Suggestions: `/remove`, `/edit_suggestion`, `/repair_suggestions`
-- Voting: `/start_vote`, `/vote_status`, `/edit_vote`
-- Suggestion databases: `/database_add`, `/database_list`, `/database_remove`, `/database_backup`, `/database_restore`, `/database_reset`
-- Watch parties: `/schedule_watch_party`, `/reschedule_watch_party`, `/cancel_watch_party`, `/watch_party_status`
+- Voting: `/voting start`, `/voting status`, `/voting edit`
+- Suggestion databases: `/database add`, `/database manage`, `/database list`, `/database move`, `/database remove`, `/database backup`, `/database restore`, `/database reset`
+- Watch parties: `/watch-party schedule`, `/watch-party reschedule`, `/watch-party cancel`, `/watch-party status`
 - Membership: `/watch_party`
 - Configuration: `/setup`, `/config`
 - Maintenance: `/backup`, `/restore`, `/factory_reset`, `/import`
