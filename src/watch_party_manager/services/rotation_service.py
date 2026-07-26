@@ -136,9 +136,49 @@ class RotationService:
         fresh one if the open rotation is already exhausted (every
         assigned suggestion has reached a terminal state) -- this is the
         "automatic new rotation" behavior FR-033B Section 1 describes.
+
+        This only ever rolls over on full exhaustion. It does not know
+        how many candidates an upcoming vote actually needs, so a
+        rotation with e.g. one pending suggestion out of three assigned
+        is left alone here even if a vote needs more than one nominee --
+        see resolve_rotation_for_requested_count for the count-aware
+        version callers with a known vote size should prefer.
         """
         rotation = self.get_or_start_rotation(database_id)
         if self._is_exhausted(rotation):
+            rotation = self.begin_next_rotation(database_id)
+        return rotation
+
+    def resolve_rotation_for_requested_count(self, database_id: int, requested_count: int) -> Rotation:
+        """Return the rotation to use for a selection needing `requested_count` candidates.
+
+        Release-blocking fix: a rotation with some, but not enough,
+        pending suggestions to satisfy an upcoming vote used to be left
+        alone until every assigned suggestion reached a terminal state
+        (see current_rotation_for_selection) -- a database could show
+        plenty of "Available" suggestions in /list while /start_vote saw
+        far fewer, because the rest were on Rotation Cooldown in a
+        rotation nowhere near exhausted.
+
+        Bootstraps a rotation if none is open. If the open rotation's
+        pending (not yet presented, and not otherwise terminal)
+        suggestions already meet or exceed requested_count, it is
+        returned unchanged -- never restart a rotation that can already
+        satisfy the request. Otherwise, rolls the rotation forward
+        (completing the current one and starting a fresh one, which
+        reassigns every currently eligible suggestion, including ones
+        presented earlier in the outgoing rotation) -- but only when
+        doing so would actually admit more pending suggestions than the
+        rotation already has. This avoids manufacturing a pointless
+        completed/open rotation pair when the collection genuinely
+        doesn't have enough suggestions and rolling over wouldn't change
+        anything; a repeat call in that situation is a safe no-op, not a
+        second rollover.
+        """
+        rotation = self.get_or_start_rotation(database_id)
+        if self._pending_count(rotation) >= requested_count:
+            return rotation
+        if self._rollover_would_help(database_id, rotation):
             rotation = self.begin_next_rotation(database_id)
         return rotation
 
@@ -307,6 +347,36 @@ class RotationService:
             if self._classify(item, rotation.id) == "pending":
                 return False
         return True
+
+    def _pending_count(self, rotation: Rotation) -> int:
+        return sum(
+            1
+            for suggestion_id in rotation.assigned_suggestion_ids
+            if self._classify(self._suggestion_source.get_suggestion(suggestion_id), rotation.id) == "pending"
+        )
+
+    def _rollover_would_help(self, database_id: int, rotation: Rotation) -> bool:
+        """Whether starting a fresh rotation would admit more pending
+        suggestions than `rotation` currently has.
+
+        A fresh rotation reassigns every non-archived, non-Vote-Winner
+        suggestion in the database (see _begin_rotation), regardless of
+        whether it was presented in an earlier rotation -- so the
+        largest possible pending count after a rollover is simply the
+        database's current count of such suggestions. Comparing that
+        ceiling against the current pending count answers "is there
+        anything to reclaim" without actually performing the rollover,
+        so a genuinely small collection is correctly reported as
+        insufficient without manufacturing a needless completed/open
+        rotation pair.
+        """
+        current_pending = self._pending_count(rotation)
+        potential_pending = sum(
+            1
+            for item in self._suggestion_source.get_suggestions_for_database(database_id)
+            if item.status is not WatchItemStatus.VOTE_WINNER
+        )
+        return potential_pending > current_pending
 
     # --- Low Pool Reminder interval tracking (FR-033B Section 7) --------------------------
 

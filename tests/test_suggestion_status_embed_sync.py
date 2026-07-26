@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import (
     build_suggestion_confirmation_embed,
+    sync_rotation_rollover_status_embeds,
     sync_suggestion_status_embed,
     sync_vote_completion_status_embeds,
 )
@@ -303,6 +304,122 @@ class RotationCooldownAutomaticallyRevertsTests(unittest.TestCase):
         self.rotation_service.begin_next_rotation(self.database.database_id)
         refreshed_item = self.suggestion_service.get_suggestion(item.id)
         self.assertFalse(self.rotation_service.is_in_rotation_cooldown(refreshed_item))
+
+
+class SyncRotationRolloverStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
+    """Release-blocking rotation rollover fix: when a rollover clears
+    Rotation Cooldown for one or more suggestions, their confirmation
+    posts must be refreshed (edited in place, never recreated) so /list,
+    /start_vote, and the embeds all agree immediately -- mirroring
+    sync_vote_completion_status_embeds's existing per-candidate pattern.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp_dir.cleanup)
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
+
+        self.rotation_service = RotationService(
+            self.suggestion_service, repository=JsonRotationRepository(root / "rotations.json")
+        )
+        self.database = self.suggestion_service.create_database("Movies", GUILD_ID, CHANNEL_ID).database
+
+    def _status_of(self, embed) -> str:
+        return next(field.value for field in embed.fields if field.name == "Status")
+
+    async def test_refreshes_every_suggestion_that_left_cooldown(self) -> None:
+        item_a = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        item_b = self.suggestion_service.suggest(
+            "Predator", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(item_a.id, GUILD_ID, CHANNEL_ID, 777)
+        self.suggestion_service.set_confirmation_post_reference(item_b.id, GUILD_ID, CHANNEL_ID, 778)
+
+        self.rotation_service.get_or_start_rotation(self.database.database_id)
+        self.rotation_service.record_presentation(self.database.database_id, [item_a.id, item_b.id])
+        previously_cooled_down = {item_a.id, item_b.id}
+
+        # Simulate the rollover a caller like perform_start_vote already
+        # triggered before calling this function.
+        self.rotation_service.begin_next_rotation(self.database.database_id)
+
+        message_a = FakeMessage(message_id=777)
+        message_b = FakeMessage(message_id=778)
+        channel = FakeChannel(message_a, message_b)
+        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+
+        await sync_rotation_rollover_status_embeds(bot, self.database.database_id, previously_cooled_down)
+
+        self.assertEqual(1, message_a.edit_calls)
+        self.assertEqual("🟢 Available", self._status_of(message_a.edited_embed))
+        self.assertEqual(1, message_b.edit_calls)
+        self.assertEqual("🟢 Available", self._status_of(message_b.edited_embed))
+        # Never recreates the message.
+        self.assertEqual([], channel.sent_messages)
+
+    async def test_skips_a_suggestion_that_is_still_on_cooldown(self) -> None:
+        """No rollover actually happened (or this particular suggestion
+        was re-presented in the meantime) -- its post must not be
+        touched, avoiding a pointless edit.
+        """
+        item = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(item.id, GUILD_ID, CHANNEL_ID, 777)
+        self.rotation_service.get_or_start_rotation(self.database.database_id)
+        self.rotation_service.record_presentation(self.database.database_id, [item.id])
+
+        message = FakeMessage(message_id=777)
+        channel = FakeChannel(message)
+        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+
+        await sync_rotation_rollover_status_embeds(bot, self.database.database_id, {item.id})
+
+        self.assertEqual(0, message.edit_calls)
+
+    async def test_skips_a_suggestion_from_a_different_database(self) -> None:
+        other_database = self.suggestion_service.create_database("TV Shows", GUILD_ID, 300).database
+        item = self.suggestion_service.suggest(
+            "Alien", database_id=other_database.database_id, guild_id=GUILD_ID, channel_id=300
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(item.id, GUILD_ID, 300, 777)
+
+        message = FakeMessage(message_id=777)
+        channel = FakeChannel(message)
+        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+
+        await sync_rotation_rollover_status_embeds(bot, self.database.database_id, {item.id})
+
+        self.assertEqual(0, message.edit_calls)
+
+    async def test_gracefully_skips_a_suggestion_that_no_longer_exists(self) -> None:
+        channel = FakeChannel()
+        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+
+        # Must not raise even though suggestion id 999 was never created.
+        await sync_rotation_rollover_status_embeds(bot, self.database.database_id, {999})
+
+    async def test_gracefully_skips_an_unreachable_message(self) -> None:
+        item = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(item.id, GUILD_ID, CHANNEL_ID, 777)
+        self.rotation_service.get_or_start_rotation(self.database.database_id)
+        self.rotation_service.record_presentation(self.database.database_id, [item.id])
+        self.rotation_service.begin_next_rotation(self.database.database_id)
+
+        channel = FakeChannel(FakeMessage(message_id=777), fail_fetch=True)
+        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+
+        # Must not raise.
+        await sync_rotation_rollover_status_embeds(bot, self.database.database_id, {item.id})
 
 
 if __name__ == "__main__":

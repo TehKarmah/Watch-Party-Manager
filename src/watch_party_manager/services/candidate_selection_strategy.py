@@ -30,7 +30,7 @@ without changing any strategy's shape.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Protocol, Sequence, runtime_checkable
+from typing import List, Optional, Protocol, Sequence, runtime_checkable
 
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.domain.watch_item import WatchItem
@@ -78,7 +78,7 @@ class CandidateSelectionStrategy(Protocol):
     presentation) only for suggestions that were actually selected.
     """
 
-    def candidate_pool(self, database_id: int) -> List[WatchItem]: ...
+    def candidate_pool(self, database_id: int, requested_count: Optional[int] = None) -> List[WatchItem]: ...
 
     def weight_for(self, watch_item: WatchItem) -> float: ...
 
@@ -97,10 +97,18 @@ class RotationPoolStrategy:
 
     rotation_service: RotationService
 
-    def candidate_pool(self, database_id: int) -> List[WatchItem]:
-        # Triggers auto-transition to a fresh rotation first, if the
-        # current one is already exhausted (FR-033B Section 1).
-        self.rotation_service.current_rotation_for_selection(database_id)
+    def candidate_pool(self, database_id: int, requested_count: Optional[int] = None) -> List[WatchItem]:
+        # requested_count is known: use the count-aware rollover rule,
+        # which rolls the rotation forward whenever it can't currently
+        # supply enough pending candidates (release-blocking fix -- see
+        # RotationService.resolve_rotation_for_requested_count). When no
+        # count is known (a caller checking eligibility with no vote size
+        # in mind), fall back to the original exhaustion-only rollover so
+        # that behavior is unchanged for those callers.
+        if requested_count is not None:
+            self.rotation_service.resolve_rotation_for_requested_count(database_id, requested_count)
+        else:
+            self.rotation_service.current_rotation_for_selection(database_id)
         return self.rotation_service.remaining_suggestions(database_id)
 
     def weight_for(self, watch_item: WatchItem) -> float:
@@ -137,7 +145,11 @@ class SoftRotationStrategy:
         if self.weighting is None:
             self.weighting = CompositeWeighting(factors=(_PresentedWeighting(),))
 
-    def candidate_pool(self, database_id: int) -> List[WatchItem]:
+    def candidate_pool(self, database_id: int, requested_count: Optional[int] = None) -> List[WatchItem]:
+        # requested_count is intentionally unused: Soft Rotation never
+        # excludes anything (see class docstring), so there is nothing
+        # for a requested vote size to roll over -- preserves this
+        # mode's existing behavior unchanged.
         return list(self.suggestion_source.get_suggestions_for_database(database_id))
 
     def weight_for(self, watch_item: WatchItem) -> float:
@@ -153,7 +165,11 @@ class InfinitePoolStrategy:
 
     suggestion_source: RotationPoolSuggestionSource
 
-    def candidate_pool(self, database_id: int) -> List[WatchItem]:
+    def candidate_pool(self, database_id: int, requested_count: Optional[int] = None) -> List[WatchItem]:
+        # requested_count is intentionally unused: Infinite Pool has no
+        # rotation concept at all (see class docstring), so there is
+        # nothing to roll over -- preserves this mode's existing
+        # behavior unchanged.
         return list(self.suggestion_source.get_suggestions_for_database(database_id))
 
     def weight_for(self, watch_item: WatchItem) -> float:

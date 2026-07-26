@@ -7,12 +7,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.domain.vote import VoteVisibility
+from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
+from watch_party_manager.services.candidate_selection_strategy import RotationPoolStrategy
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
+from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import VoteService
 
@@ -301,6 +304,49 @@ class NomineeSelectionServiceTests(unittest.TestCase):
 
         self.assertEqual(self.selector.eligible_candidate_count(self.database_id, strategy), 0)
 
+    def test_eligible_candidate_count_passes_requested_count_through_to_the_strategy(self) -> None:
+        # Rotation rollover fix: eligible_candidate_count must forward
+        # its own requested_count straight to the strategy's
+        # candidate_pool(), the same way select_nominees does, so a
+        # Rotation Pool strategy can decide whether to roll over.
+        item_a = self.suggestion_service.get_suggestion(self._suggest("A"))
+        strategy = FakeCandidateSelectionStrategy(pool=[item_a])
+
+        self.selector.eligible_candidate_count(self.database_id, strategy, requested_count=4)
+
+        self.assertEqual(strategy.received_requested_counts, [4])
+
+    def test_select_nominees_passes_its_count_through_to_the_strategy(self) -> None:
+        item_a = self.suggestion_service.get_suggestion(self._suggest("A"))
+        item_b = self.suggestion_service.get_suggestion(self._suggest("B"))
+        strategy = FakeCandidateSelectionStrategy(pool=[item_a, item_b])
+
+        self.selector.select_nominees(self.database_id, 2, rng=random.Random(1), strategy=strategy)
+
+        self.assertEqual(strategy.received_requested_counts, [2])
+
+    def test_select_nominees_and_eligible_candidate_count_agree_when_given_the_same_requested_count(self) -> None:
+        # The pre-check (eligible_candidate_count) and the final
+        # selection (select_nominees) must resolve the identical
+        # rotation state and rollover decision when given the same
+        # requested_count -- this is what makes /start_vote's pre-flight
+        # check trustworthy.
+        for title in ("A", "B", "C"):
+            self._suggest(title)
+        rotation_service = RotationService(
+            self.suggestion_service, repository=JsonRotationRepository(Path(self._temp_dir.name) / "rotations.json")
+        )
+        strategy = RotationPoolStrategy(rotation_service=rotation_service)
+        strategy.candidate_pool(self.database_id)
+        first_item = self.suggestion_service.get_suggestions_for_database(self.database_id)[0]
+        strategy.on_presented(self.database_id, [first_item.id])
+
+        count = self.selector.eligible_candidate_count(self.database_id, strategy, requested_count=3)
+        selected = self.selector.select_nominees(self.database_id, 3, rng=random.Random(1), strategy=strategy)
+
+        self.assertEqual(count, len(selected))
+        self.assertEqual(count, 3)
+
 
 class FakeCandidateSelectionStrategy:
     """A minimal CandidateSelectionStrategy for testing NomineeSelectionService's integration."""
@@ -309,8 +355,10 @@ class FakeCandidateSelectionStrategy:
         self._pool = pool
         self._weights = weights or {}
         self.presented_calls: list[tuple[int, list[int]]] = []
+        self.received_requested_counts: list[object] = []
 
-    def candidate_pool(self, database_id: int):
+    def candidate_pool(self, database_id: int, requested_count=None):
+        self.received_requested_counts.append(requested_count)
         return list(self._pool)
 
     def weight_for(self, watch_item) -> float:

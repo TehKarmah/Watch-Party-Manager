@@ -22,7 +22,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - Check exactly one of Pass/Fail per test. A test you could not run at all (missing prerequisite, environment issue) should be marked **Fail** with the reason in Notes -- do not leave it blank.
 - "WASH Crew" and "Watch Party member" below refer to whichever Discord roles your test server has configured for those purposes (see Section 2).
 - Where a step says "confirm the exact wording," minor phrasing drift is not itself a failure -- flag it in Notes as a documentation/consistency item rather than blocking the release on it, unless the message is actually misleading or wrong.
-- Run `python -m unittest discover -s tests -v` (baseline: 2972 tests, 0 failures) before starting manual validation, and again before final sign-off. This checklist verifies real-world behavior the automated suite cannot (Discord UI rendering, actual message delivery, a real bot process restarting) -- it does not replace the automated suite.
+- Run `python -m unittest discover -s tests -v` (baseline: 2998 tests, 0 failures) before starting manual validation, and again before final sign-off. This checklist verifies real-world behavior the automated suite cannot (Discord UI rendering, actual message delivery, a real bot process restarting) -- it does not replace the automated suite.
 
 ---
 
@@ -615,6 +615,19 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Switch to **Soft Rotation**; confirm presented suggestions can reappear but are less frequent than fresh ones.
   3. Switch to **Pure Random**; confirm no exclusion/weighting is applied at all.
 - **Expected Result:** Behavior matches [Administration](05-Administration.md)'s "Candidate selection and rotation management" section for each mode.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 5.5b Rotation rollover when the current rotation can't supply enough candidates
+
+- **Objective:** Confirm a Balanced Random (Rotation Pool) collection with plenty of "Available" suggestions -- most of them just on Rotation Cooldown from a recent round -- automatically rolls over to a fresh rotation and starts the vote, instead of reporting an insufficient-candidates error.
+- **Preconditions:** A Balanced Random collection with exactly 3 suggestions.
+- **Steps:**
+  1. Run `/start_vote` with a candidate count of 2; confirm it succeeds and note which 2 suggestions were nominated.
+  2. Let the round complete (or use `/edit_vote` -> **End Now**).
+  3. Confirm `/list` still shows all 3 suggestions as available, but only 1 is unpresented in the current rotation.
+  4. Run `/start_vote` again with a candidate count of 2.
+- **Expected Result:** The second `/start_vote` succeeds (does not report "not enough eligible suggestions"), automatically starting a fresh rotation and returning the 2 previously-cooled-down suggestions to eligibility. Any suggestion whose confirmation post was showing 🟡 Rotation Cooldown and is not re-nominated this round updates in place to 🟢 Available; Vote Winner and Retired suggestions are never made eligible by this rollover. Repeating the same request a third time in a row (with nothing else changed) behaves the same way -- no duplicate or orphaned rotation is created.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

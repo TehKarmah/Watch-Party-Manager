@@ -25,6 +25,7 @@ from watch_party_manager.persistence.suggestion_database_configuration_repositor
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
+from watch_party_manager.services.candidate_selection_strategy import RotationPoolStrategy
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
@@ -113,25 +114,48 @@ class RotationPoolModeTests(StartVoteRotationStrategyTestCase):
             refreshed = self.suggestion_service.get_suggestion(candidate_id)
             self.assertIn(rotation.id, refreshed.journey.rotation_history)
 
-    def test_a_presented_candidate_is_excluded_from_a_second_vote(self) -> None:
+    def test_a_presented_candidate_is_temporarily_excluded_from_a_second_vote(self) -> None:
+        """Immediately after the first round closes, the 2 presented
+        candidates are on Rotation Cooldown and the rotation (not yet
+        exhausted -- 1 of 3 is still pending) is untouched, as long as no
+        requested vote size is given -- this is Rotation Pool mode
+        working as intended, not the release-blocking bug (see the
+        rollover test below for that).
+        """
         self._configure_mode(CandidateSelectionMode.ROTATION_POOL)
         self._start_vote(nominee_count=2)
         first_round = self.vote_service.get_open_round()
         self.vote_service.close_round(first_round.id)
         presented_ids = set(first_round.candidate_suggestion_ids)
+        all_ids = {item.id for item in self.suggestion_service.get_suggestions_for_database(self.database.database_id)}
+
+        strategy = RotationPoolStrategy(rotation_service=self.rotation_service)
+        remaining_ids = {item.id for item in strategy.candidate_pool(self.database.database_id)}
+
+        self.assertEqual(remaining_ids, all_ids - presented_ids)
+
+    def test_a_rotation_with_too_few_pending_candidates_rolls_over_to_satisfy_the_request(self) -> None:
+        """Release-blocking rotation rollover fix: 3 suggestions exist,
+        the first round presents 2 of them, leaving only 1 pending --
+        not enough to satisfy a second nominee_count=2 request even
+        though the rotation isn't fully exhausted. /start_vote must roll
+        the rotation forward automatically and succeed, returning the 2
+        previously-cooled-down candidates to eligibility, rather than
+        reporting an insufficient-candidates error.
+        """
+        self._configure_mode(CandidateSelectionMode.ROTATION_POOL)
+        self._start_vote(nominee_count=2)
+        first_round = self.vote_service.get_open_round()
+        self.vote_service.close_round(first_round.id)
+        first_rotation = self.rotation_service.get_open_rotation(self.database.database_id)
 
         message, ephemeral = self._start_vote(nominee_count=2)
 
-        if not ephemeral:
-            second_round = self.vote_service.get_open_round()
-            self.assertFalse(set(second_round.candidate_suggestion_ids) & presented_ids)
-        else:
-            # Only one item was left unpresented (3 total, 2 presented);
-            # requesting 2 nominees but only 1 unpresented candidate
-            # remains means MIN_CANDIDATES_FOR_A_ROUND (2) blocks starting
-            # a new round -- itself confirming the presented items were
-            # excluded from the pool.
-            self.assertIn("requires at least 2 candidates", message)
+        self.assertFalse(ephemeral, msg=message)
+        second_round = self.vote_service.get_open_round()
+        self.assertEqual(len(second_round.candidate_suggestion_ids), 2)
+        second_rotation = self.rotation_service.get_open_rotation(self.database.database_id)
+        self.assertNotEqual(first_rotation.id, second_rotation.id)
 
 
 class InfinitePoolModeTests(StartVoteRotationStrategyTestCase):

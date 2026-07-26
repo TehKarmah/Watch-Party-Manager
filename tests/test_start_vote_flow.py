@@ -208,7 +208,9 @@ class UseDefaultsTests(StartVoteFlowTestCase):
         )
 
         self.assertTrue(interaction.response.sent_ephemeral)
-        self.assertIn("requires at least 2 candidates", interaction.response.sent_message)
+        # No nominee_count was given, so the message reports the
+        # configured default (3), not a hardcoded floor.
+        self.assertIn("requires at least 3 candidates", interaction.response.sent_message)
         self.assertIsNone(empty_vote_service.get_open_round())
 
 

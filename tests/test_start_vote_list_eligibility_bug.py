@@ -272,9 +272,7 @@ class RotationCooldownVoteWinnerRetiredTests(EligibilityParityTestCase):
         # Presenting 2 of the 3 in a vote round puts them on Rotation
         # Cooldown once the round closes -- /list still shows all 3 as
         # "available" (Rotation Cooldown is a derived display state, not a
-        # separate filter bucket -- see SuggestionListStatusFilter.AVAILABLE),
-        # but they are correctly excluded from a fresh Rotation Pool vote's
-        # eligible count until a new rotation begins.
+        # separate filter bucket -- see SuggestionListStatusFilter.AVAILABLE).
         first_message, first_ephemeral = self._start_vote(database, nominee_count=2)
         self.assertFalse(first_ephemeral)
         first_round = self.vote_service.get_open_round()
@@ -282,13 +280,26 @@ class RotationCooldownVoteWinnerRetiredTests(EligibilityParityTestCase):
 
         strategy = RotationPoolStrategy(rotation_service=self.rotation_service)
         self.assertEqual(self._list_available_count(database.database_id), 3)
+        # With no vote size in mind, the pre-existing exhaustion-only
+        # query still reports just the 1 truly-pending suggestion.
         self.assertEqual(
             self.nominee_selection_service.eligible_candidate_count(database.database_id, strategy), 1
         )
+        # Rotation rollover fix: knowing the vote actually needs 2
+        # candidates, the same query rolls the rotation forward and
+        # returns all 3 previously-cooled-down suggestions to
+        # eligibility, rather than staying locked at 1.
+        self.assertEqual(
+            self.nominee_selection_service.eligible_candidate_count(
+                database.database_id, strategy, requested_count=2
+            ),
+            3,
+        )
 
         second_message, second_ephemeral = self._start_vote(database, nominee_count=2)
-        self.assertTrue(second_ephemeral)
-        self.assertIn("1 eligible suggestion", second_message)
+        self.assertFalse(second_ephemeral, msg=second_message)
+        second_round = self.vote_service.get_open_round()
+        self.assertEqual(len(second_round.candidate_suggestion_ids), 2)
 
     def test_vote_winner_is_excluded_from_both_list_and_eligible_count(self) -> None:
         database = self._create_database("Movie Suggestions", channel_id=200)

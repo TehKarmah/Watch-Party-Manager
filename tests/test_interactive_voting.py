@@ -693,7 +693,9 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(ephemeral)
-        self.assertIn("requires at least 2 candidates", message)
+        # No nominee_count was given, so the message reports the
+        # server's actual configured default (3), not a hardcoded floor.
+        self.assertIn("requires at least 3 candidates", message)
         self.assertIsNone(self.vote_service.get_open_round())
 
     def test_selected_nominees_persist_correctly(self) -> None:

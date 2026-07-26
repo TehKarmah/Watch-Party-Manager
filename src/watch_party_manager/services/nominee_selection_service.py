@@ -135,7 +135,7 @@ class NomineeSelectionService:
         if count <= 0:
             raise ValueError("count must be positive")
 
-        candidates = self._resolve_candidate_pool(database_id, strategy)
+        candidates = self._resolve_candidate_pool(database_id, strategy, requested_count=count)
         if len(candidates) < 2:
             return []
         if len(candidates) <= count:
@@ -194,7 +194,11 @@ class NomineeSelectionService:
         return selected
 
     def eligible_candidate_count(
-        self, database_id: int, strategy: Optional["CandidateSelectionStrategy"] = None
+        self,
+        database_id: int,
+        strategy: Optional["CandidateSelectionStrategy"] = None,
+        *,
+        requested_count: Optional[int] = None,
     ) -> int:
         """The one authoritative count of suggestions eligible for a new
         voting round right now, for a database.
@@ -205,18 +209,34 @@ class NomineeSelectionService:
         never disagree with what starting a vote will actually see (the
         release-blocking bug this guards against: /list and /start_vote
         must always agree on what counts as eligible).
+
+        requested_count: the actual vote size a caller is about to
+        request, when known (e.g. /start_vote's pre-flight check -- see
+        bot.perform_start_vote). Passing the same value here and to the
+        select_nominees() call that follows guarantees both calls resolve
+        the identical rotation state and rollover decision (release-
+        blocking fix: a Rotation Pool database used to stay locked with
+        suggestions on Rotation Cooldown even when the current rotation
+        couldn't supply enough candidates for the request -- see
+        RotationService.resolve_rotation_for_requested_count). Omitted
+        (the default) preserves the original exhaustion-only rollover
+        behavior for callers with no specific vote size in mind.
         """
-        return len(self._resolve_candidate_pool(database_id, strategy))
+        return len(self._resolve_candidate_pool(database_id, strategy, requested_count=requested_count))
 
     def _resolve_candidate_pool(
-        self, database_id: int, strategy: Optional["CandidateSelectionStrategy"]
+        self,
+        database_id: int,
+        strategy: Optional["CandidateSelectionStrategy"],
+        *,
+        requested_count: Optional[int] = None,
     ) -> List[WatchItem]:
         """Resolve database_id's current candidate pool -- a database's
         suggestions directly, or strategy.candidate_pool() when a
         CandidateSelectionStrategy is supplied (see select_nominees).
         """
         return (
-            strategy.candidate_pool(database_id)
+            strategy.candidate_pool(database_id, requested_count)
             if strategy is not None
             else self._suggestion_service.get_suggestions_for_database(database_id)
         )

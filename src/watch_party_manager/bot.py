@@ -575,6 +575,7 @@ class WatchPartyBot(commands.Bot):
                     guild_configuration_repository=self.guild_configuration_repository,
                     rotation_service=self.rotation_service,
                     suggestion_database_configuration_repository=self.suggestion_database_configuration_repository,
+                    bot=self,
                 )
 
             async def on_customize(choice_interaction: discord.Interaction) -> None:
@@ -604,6 +605,7 @@ class WatchPartyBot(commands.Bot):
                         suggestion_database_configuration_repository=(
                             self.suggestion_database_configuration_repository
                         ),
+                        bot=self,
                     )
 
                 modal_defaults = build_customize_vote_modal_defaults(
@@ -1386,7 +1388,13 @@ def build_vote_status_text(
     return "\n".join(lines)
 
 
-def build_insufficient_candidates_message(collection_display_name: Optional[str], eligible_count: int) -> str:
+def build_insufficient_candidates_message(
+    collection_display_name: Optional[str],
+    eligible_count: int,
+    requested_count: int = MIN_CANDIDATES_FOR_A_ROUND,
+    *,
+    rollover_occurred: bool = False,
+) -> str:
     """Build /start_vote's "not enough eligible suggestions" message.
 
     Names the collection, the actual eligible count, and the required
@@ -1404,12 +1412,23 @@ def build_insufficient_candidates_message(collection_display_name: Optional[str]
         eligible_count: The actual number of eligible suggestions found,
             from the same authoritative source /start_vote uses to select
             nominees (see NomineeSelectionService.eligible_candidate_count).
+        requested_count: The candidate count this vote actually asked
+            for. Defaults to MIN_CANDIDATES_FOR_A_ROUND, preserving the
+            original wording for callers with no specific vote size in
+            mind (e.g. the no-database-context fallback pool).
+        rollover_occurred: Rotation rollover fix -- whether a rotation
+            rollover was attempted before this message was built (see
+            RotationService.resolve_rotation_for_requested_count). Only
+            mentioned when True: a collection whose rotation was never
+            close to exhausted shouldn't be told a rollover happened when
+            it didn't.
     """
     subject = f'"{collection_display_name}"' if collection_display_name else "This server"
     count_word = "suggestion" if eligible_count == 1 else "suggestions"
+    rollover_clause = " after starting a new rotation" if rollover_occurred else ""
     return (
-        f"{subject} contains {eligible_count if eligible_count else 'no'} eligible {count_word}.\n"
-        f"This vote requires at least {MIN_CANDIDATES_FOR_A_ROUND} candidates."
+        f"{subject} contains {eligible_count if eligible_count else 'no'} eligible {count_word}{rollover_clause}.\n"
+        f"This vote requires at least {requested_count} candidates."
     )
 
 
@@ -1563,13 +1582,37 @@ def perform_start_vote(
                 else CandidateSelectionMode.ROTATION_POOL
             )
             strategy = build_candidate_selection_strategy(mode, rotation_service, suggestion_service)
+
+        # Rotation rollover fix: resolve eligibility for the actual
+        # requested vote size (count), not just a generic check, so a
+        # Rotation Pool database whose current rotation can't supply
+        # `count` candidates rolls over here -- before the insufficiency
+        # check below -- rather than staying locked with suggestions on
+        # Rotation Cooldown. Snapshot the open rotation's identity first
+        # so a rollover can be detected (its id changes) purely by
+        # comparison, with no separate flag threaded out of RotationService.
+        rotation_before = (
+            rotation_service.get_open_rotation(resolution.database.database_id)
+            if rotation_service is not None
+            else None
+        )
         eligible_count = nominee_selection_service.eligible_candidate_count(
-            resolution.database.database_id, strategy
+            resolution.database.database_id, strategy, requested_count=count
+        )
+        rotation_after = (
+            rotation_service.get_open_rotation(resolution.database.database_id)
+            if rotation_service is not None
+            else None
+        )
+        rollover_occurred = (
+            rotation_before is not None and rotation_after is not None and rotation_before.id != rotation_after.id
         )
         if eligible_count < MIN_CANDIDATES_FOR_A_ROUND:
             collection_display_name = format_collection_display(resolution.database.name)
             return (
-                build_insufficient_candidates_message(collection_display_name, eligible_count),
+                build_insufficient_candidates_message(
+                    collection_display_name, eligible_count, count, rollover_occurred=rollover_occurred
+                ),
                 True,
             )
         candidates = nominee_selection_service.select_nominees(
@@ -3572,6 +3615,7 @@ async def handle_start_vote_completion(
     rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
     resolved_database_id: Optional[int] = None,
+    bot: Optional["WatchPartyBot"] = None,
 ) -> None:
     """Create a round and publish its interactive voting post.
 
@@ -3588,7 +3632,14 @@ async def handle_start_vote_completion(
     database configured, none matching this channel), a picker is shown
     first and this function recurses with the WASH Crew member's choice
     once made -- see the ambiguity pre-check immediately below.
+    bot: optional, used only to refresh the confirmation posts of any
+    suggestions a rotation rollover returns to eligibility (see
+    sync_rotation_rollover_status_embeds). Defaults to None so existing
+    callers/tests keep working unchanged; when omitted, a rollover still
+    happens correctly, its posts simply aren't refreshed until something
+    else edits them.
     """
+    target_database_id = resolved_database_id
     if (
         resolved_database_id is None
         and interaction.guild_id is not None
@@ -3617,6 +3668,7 @@ async def handle_start_vote_completion(
                     rotation_service=rotation_service,
                     suggestion_database_configuration_repository=suggestion_database_configuration_repository,
                     resolved_database_id=database_id,
+                    bot=bot,
                 )
 
             options = [
@@ -3635,6 +3687,16 @@ async def handle_start_vote_completion(
                 "Which collection would you like to use?", view=view, ephemeral=True
             )
             return
+
+        target_database_id = pre_resolution.database.database_id if pre_resolution.database is not None else None
+
+    previously_cooled_down_ids: set[int] = set()
+    if target_database_id is not None and rotation_service is not None:
+        previously_cooled_down_ids = {
+            item.id
+            for item in suggestion_service.get_suggestions_for_database(target_database_id)
+            if item.id is not None and rotation_service.is_in_rotation_cooldown(item)
+        }
 
     message, ephemeral = perform_start_vote(
         vote_service=vote_service,
@@ -3655,6 +3717,14 @@ async def handle_start_vote_completion(
         guild_configuration_repository=guild_configuration_repository,
         resolved_database_id=resolved_database_id,
     )
+
+    # A rotation rollover (see RotationService.resolve_rotation_for_requested_count)
+    # is a persisted side effect of perform_start_vote's eligibility check
+    # above, whether or not a round actually ended up being created --
+    # refresh any affected posts regardless of `ephemeral` below.
+    if previously_cooled_down_ids and bot is not None:
+        await sync_rotation_rollover_status_embeds(bot, target_database_id, previously_cooled_down_ids)
+
     if ephemeral:
         await interaction.response.send_message(message, ephemeral=True)
         return
@@ -3726,6 +3796,7 @@ async def handle_start_vote_use_defaults(
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
     rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
+    bot: Optional["WatchPartyBot"] = None,
 ) -> None:
     """Start a round using the configured defaults, including the guild's
     configured default voting visibility (visibility_str=None; see
@@ -3744,6 +3815,7 @@ async def handle_start_vote_use_defaults(
         guild_configuration_repository=guild_configuration_repository,
         rotation_service=rotation_service,
         suggestion_database_configuration_repository=suggestion_database_configuration_repository,
+        bot=bot,
     )
 
 
@@ -3763,6 +3835,7 @@ async def handle_customize_vote_submit(
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
     rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
+    bot: Optional["WatchPartyBot"] = None,
 ) -> None:
     """Start a round using optional one-time modal overrides."""
     try:
@@ -3791,6 +3864,7 @@ async def handle_customize_vote_submit(
         reminder_minutes_before_close=reminder_minutes_before_close,
         rotation_service=rotation_service,
         suggestion_database_configuration_repository=suggestion_database_configuration_repository,
+        bot=bot,
     )
 
 
@@ -5444,6 +5518,35 @@ async def sync_vote_completion_status_embeds(bot: "WatchPartyBot", result: VoteC
         watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
         if watch_item is not None:
             await sync_suggestion_status_embed(bot, watch_item)
+
+
+async def sync_rotation_rollover_status_embeds(
+    bot: "WatchPartyBot", database_id: int, previously_cooled_down_suggestion_ids: "set[int]"
+) -> None:
+    """Refresh the confirmation posts of suggestions a rotation rollover
+    just returned to eligibility (see
+    RotationService.resolve_rotation_for_requested_count).
+
+    previously_cooled_down_suggestion_ids is a snapshot taken by the
+    caller *before* the rollover-triggering call, of every suggestion in
+    this database that was on Rotation Cooldown at that moment. Only
+    suggestions that actually left cooldown (a rollover clears it for
+    every previously-presented suggestion at once, but a suggestion
+    already removed, retired, or re-presented in the meantime should not
+    be touched) get their post refreshed -- avoiding a pointless edit
+    when nothing actually changed. Missing/deleted posts are skipped
+    gracefully by sync_suggestion_status_embed itself; posts are always
+    edited in place, never recreated.
+    """
+    for suggestion_id in previously_cooled_down_suggestion_ids:
+        watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
+        if watch_item is None:
+            continue
+        if watch_item.database_id != database_id:
+            continue
+        if bot.rotation_service.is_in_rotation_cooldown(watch_item):
+            continue
+        await sync_suggestion_status_embed(bot, watch_item)
 
 
 def admit_suggestion_to_rotation(bot: "WatchPartyBot", database: SuggestionDatabase, watch_item: WatchItem) -> None:

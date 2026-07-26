@@ -188,6 +188,162 @@ class AutomaticFreshRotationTests(RotationServiceTestCase):
         self.assertEqual(first.id, current.id)
 
 
+class ResolveRotationForRequestedCountTests(RotationServiceTestCase):
+    """Release-blocking rotation rollover fix: a rotation with some, but
+    not enough, pending suggestions to satisfy an upcoming vote must roll
+    forward automatically -- current_rotation_for_selection alone only
+    rolled over once every assigned suggestion reached a terminal state,
+    leaving a database that still had "Available" suggestions (just on
+    Rotation Cooldown) locked out of a bigger vote indefinitely.
+    """
+
+    def test_does_not_restart_a_rotation_that_can_already_satisfy_the_request(self) -> None:
+        self._add("Alien")
+        self._add("The Matrix")
+        first = self.rotation_service.get_or_start_rotation(DATABASE_ID)
+
+        current = self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+
+        self.assertEqual(first.id, current.id)
+
+    def test_does_not_roll_over_while_pending_still_satisfies_the_request(self) -> None:
+        item_a = self._add("Alien")
+        self._add("The Matrix")
+        self._add("Brazil")
+        first = self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self.rotation_service.record_presentation(DATABASE_ID, [item_a.id])
+
+        # 2 of 3 remain pending -- enough for a 2-candidate vote, so no
+        # rollover yet, even though 1 item is already on cooldown.
+        unchanged = self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+
+        self.assertEqual(first.id, unchanged.id)
+
+    def test_rolls_over_when_pending_drops_below_the_requested_count(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self._add("Brazil")
+        first = self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self.rotation_service.record_presentation(DATABASE_ID, [item_a.id, item_b.id])
+
+        # Only 1 of 3 remains pending -- not enough for a 2-candidate
+        # vote, even though the rotation itself (1 item still
+        # unpresented) is not exhausted.
+        rolled_over = self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+
+        self.assertNotEqual(first.id, rolled_over.id)
+        self.assertEqual(self.rotation_service._pending_count(rolled_over), 3)
+
+    def test_rolled_over_rotation_re_includes_previously_presented_items(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        item_c = self._add("Brazil")
+        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self.rotation_service.record_presentation(DATABASE_ID, [item_a.id, item_b.id])
+
+        fresh = self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+
+        self.assertIn(item_a.id, fresh.assigned_suggestion_ids)
+        self.assertIn(item_b.id, fresh.assigned_suggestion_ids)
+        remaining = {item.id for item in self.rotation_service.remaining_suggestions(DATABASE_ID)}
+        self.assertEqual(remaining, {item_a.id, item_b.id, item_c.id})
+
+    def test_the_outgoing_rotation_is_marked_completed_on_rollover(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self._add("Brazil")
+        first = self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self.rotation_service.record_presentation(DATABASE_ID, [item_a.id, item_b.id])
+
+        self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+
+        completed_first = self.rotation_service._rotations[first.id]
+        self.assertEqual(completed_first.status, RotationStatus.COMPLETED)
+        self.assertIsNotNone(completed_first.completed_at)
+
+    def test_does_not_roll_over_when_rollover_would_not_help(self) -> None:
+        """Only 1 suggestion exists at all -- rolling over would just
+        reassign the same single item, so it must not manufacture a
+        pointless completed/open rotation pair.
+        """
+        item = self._add("Alien")
+        first = self.rotation_service.get_or_start_rotation(DATABASE_ID)
+
+        current = self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+
+        self.assertEqual(first.id, current.id)
+        self.assertEqual(len(self.rotation_service.list_rotations(DATABASE_ID)), 1)
+
+    def test_vote_winner_items_never_count_toward_a_potential_rollovers_pending_total(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        item_b.status = WatchItemStatus.VOTE_WINNER
+
+        # item_a is already pending and item_b is a permanent Vote
+        # Winner -- rolling over would not admit any new pending
+        # suggestion (a fresh rotation still couldn't count item_b), so
+        # it must not happen even though the request (2) exceeds the
+        # current pending count (1).
+        current = self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+
+        self.assertEqual(len(self.rotation_service.list_rotations(DATABASE_ID)), 1)
+        self.assertEqual(self.rotation_service._pending_count(current), 1)
+
+    def test_retired_items_never_count_toward_a_potential_rollovers_pending_total(self) -> None:
+        item_a = self._add("Alien")
+        self._add("The Matrix")
+        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self.rotation_service.record_presentation(DATABASE_ID, [item_a.id])
+        self.suggestion_service.reject_suggestion(item_a.id, 1, rejection_threshold=1)
+
+        # item_a is retired (permanently ineligible); The Matrix is
+        # already pending -- rolling over would not add anything.
+        current = self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+
+        self.assertEqual(len(self.rotation_service.list_rotations(DATABASE_ID)), 1)
+
+    def test_repeated_calls_do_not_create_duplicate_rotations(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self.rotation_service.record_presentation(DATABASE_ID, [item_a.id, item_b.id])
+
+        first_call = self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+        second_call = self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+
+        self.assertEqual(first_call.id, second_call.id)
+        self.assertEqual(len(self.rotation_service.list_rotations(DATABASE_ID)), 2)
+
+    def test_a_newly_added_suggestion_is_picked_up_by_the_rollover(self) -> None:
+        item_a = self._add("Alien")
+        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self.rotation_service.record_presentation(DATABASE_ID, [item_a.id])
+        new_item = self._add("The Matrix")
+
+        fresh = self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+
+        self.assertIn(item_a.id, fresh.assigned_suggestion_ids)
+        self.assertIn(new_item.id, fresh.assigned_suggestion_ids)
+
+    def test_different_databases_roll_over_independently(self) -> None:
+        item_a = self._add("Alien")
+        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self.rotation_service.record_presentation(DATABASE_ID, [item_a.id])
+
+        other_result = self.suggestion_service.suggest("Brazil", database_id=2, guild_id=100)
+        self.assertTrue(other_result.success)
+        other_rotation = self.rotation_service.get_or_start_rotation(2)
+
+        self.rotation_service.resolve_rotation_for_requested_count(DATABASE_ID, 2)
+
+        # Database 2's rotation must be completely untouched by database
+        # 1's rollover.
+        still_open = self.rotation_service.get_open_rotation(2)
+        self.assertEqual(still_open.id, other_rotation.id)
+        self.assertEqual(still_open.status, RotationStatus.OPEN)
+
+
 class AdmissionModeTests(RotationServiceTestCase):
     def test_next_rotation_admission_is_a_no_op_when_a_rotation_is_open(self) -> None:
         self._add("Alien")

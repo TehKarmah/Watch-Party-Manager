@@ -84,6 +84,26 @@ class RotationPoolStrategyTests(CandidateSelectionStrategyTestCase):
         # A fresh rotation re-includes the previously presented item.
         self.assertEqual({candidate.id for candidate in pool}, {item.id})
 
+    def test_candidate_pool_rolls_over_when_a_requested_count_cannot_be_satisfied(self) -> None:
+        """Release-blocking rotation rollover fix: with no requested_count
+        given, a rotation with pending items left (even below what a vote
+        needs) is left alone -- see the exhaustion-only test above. Once
+        a requested_count is supplied, the same call rolls the rotation
+        forward instead, since it isn't fully exhausted but also can't
+        satisfy the request.
+        """
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        strategy = RotationPoolStrategy(rotation_service=self.rotation_service)
+        strategy.candidate_pool(DATABASE_ID)
+        strategy.on_presented(DATABASE_ID, [item_a.id])
+
+        no_count_pool = strategy.candidate_pool(DATABASE_ID)
+        self.assertEqual({candidate.id for candidate in no_count_pool}, {item_b.id})
+
+        with_count_pool = strategy.candidate_pool(DATABASE_ID, 2)
+        self.assertEqual({candidate.id for candidate in with_count_pool}, {item_a.id, item_b.id})
+
 
 class SoftRotationStrategyTests(CandidateSelectionStrategyTestCase):
     def test_candidate_pool_includes_everything_including_presented_items(self) -> None:
@@ -120,6 +140,21 @@ class SoftRotationStrategyTests(CandidateSelectionStrategyTestCase):
 
         self.assertGreater(strategy.weight_for(refreshed), 0.0)
 
+    def test_candidate_pool_ignores_a_requested_count_and_never_rolls_over(self) -> None:
+        """Soft Rotation never excludes anything, so there is nothing for
+        a requested vote size to roll over -- passing requested_count
+        must not change the pool or create rotation state, preserving
+        this mode's existing behavior exactly.
+        """
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        strategy = SoftRotationStrategy(rotation_service=self.rotation_service, suggestion_source=self.suggestion_service)
+        strategy.on_presented(DATABASE_ID, [item_a.id])
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID, 5)}
+
+        self.assertEqual(pool_ids, {item_a.id, item_b.id})
+
 
 class InfinitePoolStrategyTests(CandidateSelectionStrategyTestCase):
     def test_candidate_pool_includes_every_eligible_suggestion(self) -> None:
@@ -151,6 +186,16 @@ class InfinitePoolStrategyTests(CandidateSelectionStrategyTestCase):
 
         strategy.candidate_pool(DATABASE_ID)
 
+        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
+
+    def test_candidate_pool_ignores_a_requested_count(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        strategy = InfinitePoolStrategy(suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID, 5)}
+
+        self.assertEqual(pool_ids, {item_a.id, item_b.id})
         self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
 
 
