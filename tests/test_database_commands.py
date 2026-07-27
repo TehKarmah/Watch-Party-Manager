@@ -10,13 +10,6 @@ from watch_party_manager.bot import (
     perform_database_list,
     perform_database_remove,
 )
-from watch_party_manager.domain.suggestion_database_configuration import (
-    SuggestionDatabaseChannelsConfig,
-    SuggestionDatabaseConfiguration,
-)
-from watch_party_manager.persistence.suggestion_database_configuration_repository import (
-    SuggestionDatabaseConfigurationRepository,
-)
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
@@ -147,37 +140,6 @@ class DatabaseCommandTests(unittest.TestCase):
         self.assertIn("Status: Active\n", message)
         self.assertIn(f"Channel: <#{CHANNEL_ID}>\n", message)
         self.assertIn("Watch items: 1 watch item", message)
-
-    def test_database_list_channel_line_reflects_a_move(self) -> None:
-        # Context Resolution Audit: /database list's Channel line must
-        # show a collection's *current* destination after /database move,
-        # not its stale original home channel -- otherwise it would
-        # contradict the resolution WASH actually uses for /add etc.
-        created = self.suggestion_service.create_database(
-            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CHANNEL_ID
-        )
-        configuration_repository = SuggestionDatabaseConfigurationRepository(
-            Path(self._temp_dir.name) / "suggestion_database_configurations.json"
-        )
-        configuration_repository.save(
-            SuggestionDatabaseConfiguration(
-                guild_id=GUILD_ID,
-                database_id=created.database.database_id,
-                display_name="Sunday Watch Party",
-                channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=OTHER_CHANNEL_ID),
-            )
-        )
-
-        message, _ = perform_database_list(
-            self.suggestion_service,
-            self._wash_crew_member(),
-            WASH_CREW_ROLE_ID,
-            GUILD_ID,
-            suggestion_database_configuration_repository=configuration_repository,
-        )
-
-        self.assertIn(f"Channel: <#{OTHER_CHANNEL_ID}>\n", message)
-        self.assertNotIn(f"Channel: <#{CHANNEL_ID}>\n", message)
 
     def test_database_list_only_shows_databases_for_the_current_guild(self) -> None:
         self.suggestion_service.create_database("Sunday Watch Party", guild_id=GUILD_ID, channel_id=CHANNEL_ID)

@@ -34,7 +34,7 @@ The current command list and short descriptions remain available through `/help`
 - `/vote status`
 - `/vote edit`
 
-Casting a vote itself happens through the interactive buttons on the voting post, not a slash command. When a vote closes, its results post gains a **Schedule Watch Party** button (or **Choose Winner to Schedule**, if there was a tie) -- this is the normal way WASH Crew schedules the watch party for the winning title, and it creates a real Discord Scheduled Event, not just an internal WASH record. See [Administration](05-Administration.md) for the full Watch Party lifecycle.
+Casting a vote itself happens through the interactive buttons on the voting post, not a slash command.
 
 ### WASH Crew
 
@@ -67,7 +67,6 @@ The complete definitions are maintained in [Terminology & Concepts](98-Glossary.
 - Journey
 - Rotation
 - Voting Round
-- Watch Party
 
 ## Planned Expansion
 

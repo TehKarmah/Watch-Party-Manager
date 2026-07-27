@@ -211,22 +211,6 @@ class WatchItemJourney:
         self._validate_watch_date(watch_date)
         self.watch_dates = (*self.watch_dates, watch_date)
 
-    def remove_last_watch_date(self) -> bool:
-        """Remove the most recently recorded watch date (Watch Party
-        Lifecycle corrections): a scheduled watch party's automatic
-        completion sometimes turns out to be wrong (the group never
-        actually watched it) -- this undoes exactly the one watch date
-        that completion recorded, never an earlier rewatch's date.
-
-        Returns:
-            True if a watch date was removed. False if watch_dates was
-            already empty -- a no-op.
-        """
-        if not self.watch_dates:
-            return False
-        self.watch_dates = self.watch_dates[:-1]
-        return True
-
     def record_rewatch(self) -> None:
         self.rewatch_count += 1
 

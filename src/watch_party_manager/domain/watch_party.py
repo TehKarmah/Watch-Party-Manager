@@ -11,7 +11,7 @@ rather than ScheduledEvent keeps that distinction clear.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
@@ -21,12 +21,6 @@ class WatchPartyStatus(str, Enum):
 
     SCHEDULED = "scheduled"
     CANCELLED = "cancelled"
-    # Watch Party Lifecycle: set by WatchPartyCompletionService once a
-    # scheduled watch party's end time (scheduled_at + duration_minutes)
-    # passes -- see that module for the full Vote Winner -> Watched
-    # transition. A watch party with no known duration_minutes has no
-    # end time and therefore never automatically completes.
-    COMPLETED = "completed"
 
 
 @dataclass(slots=True)
@@ -46,24 +40,6 @@ class WatchParty:
     channel_id: Optional[int] = None
     status: WatchPartyStatus = WatchPartyStatus.SCHEDULED
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    # Watch Party Lifecycle additions below -- all optional so every
-    # existing caller/persisted record (from before this milestone) keeps
-    # working unchanged with these simply unset.
-    duration_minutes: Optional[int] = None
-    # The voting round whose win produced this watch party, when scheduled
-    # via the winner announcement's Schedule Watch Party button. None for
-    # a watch party scheduled directly via /watch-party schedule (no vote
-    # round is known there) -- database association doesn't need its own
-    # field since it's always resolvable through watch_item_id.
-    vote_round_id: Optional[int] = None
-    description_override: Optional[str] = None
-    # Discord Scheduled Events integration: the native Discord Scheduled
-    # Event created alongside this watch party, when creation succeeded
-    # (see winner-announcement scheduling in bot.py). None when Discord
-    # Scheduled Events couldn't be used (missing permissions, API error,
-    # or a watch party scheduled before this integration existed) --
-    # WASH's own internal schedule remains authoritative either way.
-    discord_event_id: Optional[int] = None
 
     def __post_init__(self) -> None:
         self._validate_id()
@@ -71,10 +47,6 @@ class WatchParty:
         self._validate_guild_id()
         self._validate_channel_id()
         self._validate_timestamps()
-        self._validate_duration_minutes()
-        self._validate_vote_round_id()
-        self._validate_discord_event_id()
-        self.description_override = self._normalize_description(self.description_override)
 
     def _validate_id(self) -> None:
         if self.id <= 0:
@@ -97,35 +69,6 @@ class WatchParty:
             raise ValueError("scheduled_at must be timezone-aware")
         if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
             raise ValueError("created_at must be timezone-aware")
-
-    def _validate_duration_minutes(self) -> None:
-        if self.duration_minutes is not None and self.duration_minutes <= 0:
-            raise ValueError("duration_minutes must be a positive integer when provided")
-
-    def _validate_vote_round_id(self) -> None:
-        if self.vote_round_id is not None and self.vote_round_id <= 0:
-            raise ValueError("vote_round_id must be a positive integer when provided")
-
-    def _validate_discord_event_id(self) -> None:
-        if self.discord_event_id is not None and self.discord_event_id <= 0:
-            raise ValueError("discord_event_id must be a positive integer when provided")
-
-    @staticmethod
-    def _normalize_description(description: Optional[str]) -> Optional[str]:
-        if description is None:
-            return None
-        trimmed = description.strip()
-        return trimmed or None
-
-    @property
-    def ends_at(self) -> Optional[datetime]:
-        """When this watch party is expected to end, or None if
-        duration_minutes isn't known -- see WatchPartyCompletionService,
-        which schedules automatic completion off of this.
-        """
-        if self.duration_minutes is None:
-            return None
-        return self.scheduled_at + timedelta(minutes=self.duration_minutes)
 
     def with_changes(self, **changes: Any) -> "WatchParty":
         """Return a new, revalidated WatchParty with the given fields replaced.

@@ -216,11 +216,7 @@ class StatisticsServiceTests(unittest.TestCase):
         self.assertEqual(1, service.watched_count())
 
     def test_all_non_watched_states_count_as_suggestions(self):
-        statuses = [
-            status
-            for status in WatchItemStatus
-            if status not in (WatchItemStatus.VOTE_WINNER, WatchItemStatus.WATCHED)
-        ]
+        statuses = [status for status in WatchItemStatus if status != WatchItemStatus.VOTE_WINNER]
         service, _ = self.make_service(
             items=[make_item(index + 1, status=status) for index, status in enumerate(statuses)]
         )
@@ -752,7 +748,7 @@ class MemberStatisticsTests(unittest.TestCase):
 
     def test_counts_watched_and_retired_suggestions_among_submitted(self):
         watched = make_item(
-            1, status=WatchItemStatus.WATCHED, journey=WatchItemJourney(original_suggester="555")
+            1, status=WatchItemStatus.VOTE_WINNER, journey=WatchItemJourney(original_suggester="555")
         )
         retired = make_item(
             2,
@@ -910,7 +906,7 @@ class DatabaseStatisticsTests(RotationStatisticsTestCase):
     def test_counts_suggestions_by_status(self):
         items = [
             make_item(1, database_id=1, status=WatchItemStatus.SUGGESTED),
-            make_item(2, database_id=1, status=WatchItemStatus.WATCHED),
+            make_item(2, database_id=1, status=WatchItemStatus.VOTE_WINNER),
             make_item(
                 3,
                 database_id=1,

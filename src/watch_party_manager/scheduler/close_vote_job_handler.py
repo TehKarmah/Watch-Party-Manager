@@ -23,7 +23,7 @@ manual completion always produce an identical presentation.
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 from watch_party_manager.services.vote_completion_announcer import (
     DiscordChannelMessenger,
@@ -37,7 +37,6 @@ from .job_handler import JobExecutionResult
 from .scheduled_job import JobResult, ScheduledJob
 
 OnVoteCompletionFinalized = Callable[[VoteCompletionResult], Awaitable[None]]
-BuildResultsView = Callable[[VoteCompletionResult], Optional[Any]]
 
 
 class CloseVoteJobHandler:
@@ -58,7 +57,6 @@ class CloseVoteJobHandler:
         *,
         logger: Optional[logging.Logger] = None,
         on_finalized: Optional[OnVoteCompletionFinalized] = None,
-        build_results_view: Optional[BuildResultsView] = None,
     ) -> None:
         """Initialize the handler.
 
@@ -84,11 +82,6 @@ class CloseVoteJobHandler:
                 callback rather than a direct call, since this scheduler
                 package must not import from bot.py (bot.py already
                 imports from here).
-            build_results_view: Optional factory forwarded straight
-                through to finalize_vote_completion() -- see that
-                function's own docstring. bot.py uses this to attach the
-                Watch Party Lifecycle's scheduling button to the results
-                announcement.
         """
         self._vote_completion_service = vote_completion_service
         self._vote_service = vote_service
@@ -96,7 +89,6 @@ class CloseVoteJobHandler:
         self._messenger = messenger
         self._logger = logger or logging.getLogger(__name__)
         self._on_finalized = on_finalized
-        self._build_results_view = build_results_view
 
     async def execute(self, job: ScheduledJob) -> JobExecutionResult:
         """Execute one claimed close_vote job.
@@ -138,13 +130,7 @@ class CloseVoteJobHandler:
             "Closed vote %s; winning suggestion id(s): %s", vote_id, result.winning_suggestion_ids
         )
 
-        await finalize_vote_completion(
-            self._vote_service,
-            self._suggestion_service,
-            self._messenger,
-            result,
-            build_results_view=self._build_results_view,
-        )
+        await finalize_vote_completion(self._vote_service, self._suggestion_service, self._messenger, result)
 
         if self._on_finalized is not None:
             await self._on_finalized(result)

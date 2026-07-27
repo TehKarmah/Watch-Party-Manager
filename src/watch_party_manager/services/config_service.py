@@ -66,11 +66,6 @@ class ConfigSection(str, Enum):
     WATCH_PARTY_JOIN_MODE = "watch_party_join_mode"
     ADMIN_CHANNEL = "admin_channel"
     HOME_CHANNEL = "home_channel"
-    # Watch Party Lifecycle: where scheduled/reminder/completion/
-    # cancellation announcements post -- deliberately separate from Home
-    # Channel, a collection's suggestion thread, and the Watched Movie
-    # Destination (see set_watch_party_announcement_destination).
-    WATCH_PARTY_ANNOUNCEMENT_DESTINATION = "watch_party_announcement_destination"
     MANAGE_COLLECTIONS = "manage_collections"
     WATCH_DESTINATION = "watch_destination"
     VOTING_DEFAULTS = "voting_defaults"
@@ -89,7 +84,6 @@ CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
     # so an administrator needs to see its status at a glance, not
     # discover it only indirectly via a failed Create New Thread.
     ConfigSection.HOME_CHANNEL,
-    ConfigSection.WATCH_PARTY_ANNOUNCEMENT_DESTINATION,
     ConfigSection.MANAGE_COLLECTIONS,
     ConfigSection.WATCH_DESTINATION,
     ConfigSection.VOTING_DEFAULTS,
@@ -103,7 +97,6 @@ CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
     ConfigSection.WATCH_PARTY_JOIN_MODE: "Watch Party Join Mode",
     ConfigSection.ADMIN_CHANNEL: "Admin Channel",
     ConfigSection.HOME_CHANNEL: "Watch Party Home Channel",
-    ConfigSection.WATCH_PARTY_ANNOUNCEMENT_DESTINATION: "Watch Party Announcement Destination",
     ConfigSection.MANAGE_COLLECTIONS: "Manage Collections",
     ConfigSection.WATCH_DESTINATION: "Watched Movie Destination (Default)",
     ConfigSection.VOTING_DEFAULTS: "Voting Defaults",
@@ -196,16 +189,6 @@ class ConfigService:
             lines.append(f"Watch Party Home Channel: Invalid (<#{home_channel_id}> no longer usable)")
         else:
             lines.append(f"Watch Party Home Channel: Configured (<#{home_channel_id}>)")
-
-        announcement_channel_id = configuration.channels.announcements_channel_id
-        if announcement_channel_id is None:
-            lines.append("Watch Party Announcement Destination: Configured (using Home Channel)")
-        elif validate_channel_usable(announcement_channel_id, guild, resource_label="Announcement Destination"):
-            lines.append(
-                f"Watch Party Announcement Destination: Invalid (<#{announcement_channel_id}> no longer usable)"
-            )
-        else:
-            lines.append(f"Watch Party Announcement Destination: Configured (<#{announcement_channel_id}>)")
 
         databases = self._suggestion_service.list_databases(guild_id)
         active_databases = [database for database in databases if database.active]
@@ -380,63 +363,6 @@ class ConfigService:
             "configured parent channel until a new one is set.",
             updated,
         )
-
-    # --- Watch Party Announcement Destination --------------------------------------------
-    #
-    # Where scheduled/reminder/completion/cancellation announcements post
-    # (Watch Party Lifecycle). Deliberately separate from Home Channel (a
-    # collection's own home for organizing threads and hosting general
-    # discussion), a collection's suggestion thread, and the Watched
-    # Movie Destination (a running record of what's already been
-    # watched) -- this is specifically for forward-looking watch party
-    # announcements. None means "use the Home Channel" (the documented
-    # default), resolved dynamically at each use (see
-    # resolve_watch_party_announcement_destination) rather than copying
-    # the Home Channel's ID at the moment this is cleared, so it keeps
-    # following the Home Channel if that's ever changed later. Threads
-    # are never valid here -- announcements always post to a real channel.
-
-    def set_watch_party_announcement_destination(
-        self, guild_id: int, channel_id: int, guild: GuildLookup
-    ) -> ConfigUpdateResult:
-        configuration = self.get_configuration(guild_id)
-        if configuration is None:
-            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
-
-        error = validate_channel_usable(channel_id, guild, resource_label="Announcement Destination")
-        if error:
-            return ConfigUpdateResult(False, error)
-
-        updated = replace(
-            configuration, channels=replace(configuration.channels, announcements_channel_id=channel_id)
-        )
-        self._guild_configuration_repository.save(updated)
-        return ConfigUpdateResult(
-            True, f"Watch Party Announcement Destination updated to <#{channel_id}>.", updated
-        )
-
-    def clear_watch_party_announcement_destination(self, guild_id: int) -> ConfigUpdateResult:
-        configuration = self.get_configuration(guild_id)
-        if configuration is None:
-            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
-
-        updated = replace(configuration, channels=replace(configuration.channels, announcements_channel_id=None))
-        self._guild_configuration_repository.save(updated)
-        return ConfigUpdateResult(
-            True, "Watch Party Announcement Destination will now use the Home Channel.", updated
-        )
-
-    def resolve_watch_party_announcement_destination(self, guild_id: int) -> Optional[int]:
-        """The channel watch party announcements should post to: the
-        explicitly configured destination if set, otherwise WASH's Home
-        Channel, otherwise None (nowhere configured to announce to).
-        """
-        configuration = self.get_configuration(guild_id)
-        if configuration is None:
-            return None
-        if configuration.channels.announcements_channel_id is not None:
-            return configuration.channels.announcements_channel_id
-        return configuration.channels.home_channel_id
 
     # --- Watched Movie Destination (guild-wide default) -----------------------------------
 

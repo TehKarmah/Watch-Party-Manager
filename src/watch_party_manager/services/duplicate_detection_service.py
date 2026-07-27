@@ -52,7 +52,6 @@ class DuplicateMatchCategory(str, Enum):
     ARCHIVED_REJECTED = "archived_rejected"
     ARCHIVED_OTHER = "archived_other"
     VOTE_WINNER = "vote_winner"
-    WATCHED = "watched"
 
 
 class DuplicateMatchKind(str, Enum):
@@ -108,8 +107,6 @@ def categorize_watch_item(watch_item: WatchItem) -> DuplicateMatchCategory:
     none was archived some other way (e.g. WASH Crew directly archiving
     it via /remove).
     """
-    if watch_item.status is WatchItemStatus.WATCHED:
-        return DuplicateMatchCategory.WATCHED
     if watch_item.status is WatchItemStatus.VOTE_WINNER:
         return DuplicateMatchCategory.VOTE_WINNER
     if watch_item.status is WatchItemStatus.ARCHIVED:

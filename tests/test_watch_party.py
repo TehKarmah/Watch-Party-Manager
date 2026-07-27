@@ -1,6 +1,6 @@
 import sys
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -72,62 +72,6 @@ class WatchPartyModelTests(unittest.TestCase):
                 guild_id=1,
                 created_at=datetime(2026, 7, 20, 18, 0),
             )
-
-
-class WatchPartyLifecycleFieldsTests(unittest.TestCase):
-    """Watch Party Lifecycle additions: duration_minutes, vote_round_id,
-    description_override, and the derived ends_at property.
-    """
-
-    def test_new_fields_default_to_none(self) -> None:
-        watch_party = WatchParty(id=1, watch_item_id=1, scheduled_at=utc_now(), guild_id=1)
-
-        self.assertIsNone(watch_party.duration_minutes)
-        self.assertIsNone(watch_party.vote_round_id)
-        self.assertIsNone(watch_party.description_override)
-        self.assertIsNone(watch_party.discord_event_id)
-        self.assertIsNone(watch_party.ends_at)
-
-    def test_rejects_non_positive_discord_event_id(self) -> None:
-        with self.assertRaises(ValueError):
-            WatchParty(id=1, watch_item_id=1, scheduled_at=utc_now(), guild_id=1, discord_event_id=0)
-
-    def test_accepts_a_valid_discord_event_id(self) -> None:
-        watch_party = WatchParty(
-            id=1, watch_item_id=1, scheduled_at=utc_now(), guild_id=1, discord_event_id=123456789
-        )
-
-        self.assertEqual(watch_party.discord_event_id, 123456789)
-
-    def test_ends_at_is_scheduled_at_plus_duration(self) -> None:
-        scheduled_at = utc_now()
-        watch_party = WatchParty(
-            id=1, watch_item_id=1, scheduled_at=scheduled_at, guild_id=1, duration_minutes=150
-        )
-
-        self.assertEqual(watch_party.ends_at, scheduled_at + timedelta(minutes=150))
-
-    def test_rejects_non_positive_duration_minutes(self) -> None:
-        with self.assertRaises(ValueError):
-            WatchParty(id=1, watch_item_id=1, scheduled_at=utc_now(), guild_id=1, duration_minutes=0)
-
-    def test_rejects_non_positive_vote_round_id(self) -> None:
-        with self.assertRaises(ValueError):
-            WatchParty(id=1, watch_item_id=1, scheduled_at=utc_now(), guild_id=1, vote_round_id=0)
-
-    def test_description_override_is_trimmed(self) -> None:
-        watch_party = WatchParty(
-            id=1, watch_item_id=1, scheduled_at=utc_now(), guild_id=1, description_override="  Bring snacks!  "
-        )
-
-        self.assertEqual(watch_party.description_override, "Bring snacks!")
-
-    def test_blank_description_override_normalizes_to_none(self) -> None:
-        watch_party = WatchParty(
-            id=1, watch_item_id=1, scheduled_at=utc_now(), guild_id=1, description_override="   "
-        )
-
-        self.assertIsNone(watch_party.description_override)
 
 
 class WatchPartyWithChangesTests(unittest.TestCase):

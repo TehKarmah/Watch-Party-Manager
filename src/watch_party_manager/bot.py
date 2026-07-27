@@ -6,7 +6,7 @@ import os
 import platform
 import re
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -73,20 +73,15 @@ from watch_party_manager.scheduler import (
     SchedulerService,
     VOTE_REMINDER_JOB_TYPE,
     VoteReminderJobHandler,
-    WATCH_PARTY_COMPLETION_JOB_TYPE,
     WATCH_PARTY_REMINDER_JOB_TYPE,
-    WatchPartyCompletionJobHandler,
     WatchPartyReminderJobHandler,
     cancel_vote_jobs,
-    cancel_watch_party_completion,
     cancel_watch_party_reminder,
     reconcile_automatic_backup_schedule,
     reschedule_vote_jobs,
-    reschedule_watch_party_completion,
     reschedule_watch_party_reminder,
     resolve_vote_reminder_settings,
     schedule_vote_jobs,
-    schedule_watch_party_completion,
     schedule_watch_party_reminder,
 )
 from watch_party_manager.services.about_service import (
@@ -203,10 +198,6 @@ from watch_party_manager.services.vote_completion_service import (
     VoteCompletionService,
 )
 from watch_party_manager.services.vote_service import StandingsEntry, VoteService
-from watch_party_manager.services.watch_party_completion_service import (
-    WatchPartyCompletionResult,
-    WatchPartyCompletionService,
-)
 from watch_party_manager.services.watch_party_service import WatchPartyService
 from watch_party_manager.edit_suggestion_view import (
     ChangeStatusSelectView,
@@ -231,7 +222,6 @@ from watch_party_manager.config_view import (
     ConfigDatabaseSettingsMenuView,
     ConfigHomeChannelSectionView,
     ConfigJoinModeSectionView,
-    ConfigWatchPartyAnnouncementDestinationSectionView,
     ConfigMainMenuView,
     ConfigModalRetryView,
     ConfigRoleSectionView,
@@ -250,11 +240,6 @@ from watch_party_manager.suggestion_selection_view import (
 )
 from watch_party_manager.type_to_confirm_view import DestructiveConfirmationView
 from watch_party_manager.watch_party_selection_view import WatchPartySelectView
-from watch_party_manager.winner_announcement_view import (
-    ChooseWinnerSelectView,
-    ScheduleWatchPartyModal,
-    WinnerAnnouncementView,
-)
 from watch_party_manager.setup_wizard_view import (
     AdminChannelStepView,
     BackupDefaultsChoiceView,
@@ -328,9 +313,6 @@ class WatchPartyBot(commands.Bot):
         self.rotation_service = RotationService(self.suggestion_service)
         self.vote_completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
         self.watch_party_service = WatchPartyService(self.suggestion_service)
-        self.watch_party_completion_service = WatchPartyCompletionService(
-            self.watch_party_service, self.suggestion_service
-        )
         self.statistics_service = StatisticsService(
             self.suggestion_service,
             rotation_service=self.rotation_service,
@@ -364,7 +346,6 @@ class WatchPartyBot(commands.Bot):
                 self.suggestion_service,
                 self,
                 on_finalized=lambda result: sync_vote_completion_status_embeds(self, result),
-                build_results_view=lambda result: build_winner_announcement_view(self, result),
             ),
         )
         self.scheduler_host.scheduler_service.register_handler(
@@ -373,13 +354,6 @@ class WatchPartyBot(commands.Bot):
         self.scheduler_host.scheduler_service.register_handler(
             WATCH_PARTY_REMINDER_JOB_TYPE,
             WatchPartyReminderJobHandler(self.watch_party_service, self.suggestion_service, self),
-        )
-        self.scheduler_host.scheduler_service.register_handler(
-            WATCH_PARTY_COMPLETION_JOB_TYPE,
-            WatchPartyCompletionJobHandler(
-                self.watch_party_completion_service,
-                on_finalized=lambda result: sync_watch_party_completion(self, result),
-            ),
         )
         self.guild_configuration_repository = GuildConfigurationRepository()
         self.scheduler_host.scheduler_service.register_handler(
@@ -499,7 +473,6 @@ class WatchPartyBot(commands.Bot):
             status=[
                 discord.app_commands.Choice(name="Available (eligible for future voting)", value="available"),
                 discord.app_commands.Choice(name="Vote Winner", value="vote_winner"),
-                discord.app_commands.Choice(name="Watched", value="watched"),
                 discord.app_commands.Choice(name="Retired (removed from consideration)", value="retired"),
             ]
         )
@@ -758,22 +731,6 @@ class WatchPartyBot(commands.Bot):
         )
         logger.info("Nominee selector initialized")
         logger.info("Ready")
-
-    async def on_scheduled_event_update(
-        self, before: discord.ScheduledEvent, after: discord.ScheduledEvent
-    ) -> None:
-        """Discord Scheduled Events: Event Synchronization. Delegates to
-        the standalone, bot-free-signature handler so it stays testable
-        without a live Discord connection -- see
-        handle_discord_scheduled_event_update.
-        """
-        await handle_discord_scheduled_event_update(self, before, after)
-
-    async def on_scheduled_event_delete(self, event: discord.ScheduledEvent) -> None:
-        """Discord Scheduled Events: Event Synchronization (deletion --
-        distinct from cancellation, see handle_discord_scheduled_event_delete).
-        """
-        await handle_discord_scheduled_event_delete(self, event)
 
     async def start_bot(self) -> None:
         if not self.token:
@@ -2640,61 +2597,6 @@ async def send_config_section(
             "watched-movie destination thread) should be created as a sibling under."
         )
 
-    elif section == ConfigSection.WATCH_PARTY_ANNOUNCEMENT_DESTINATION:
-
-        def announcement_destination_view() -> ConfigWatchPartyAnnouncementDestinationSectionView:
-            return ConfigWatchPartyAnnouncementDestinationSectionView(
-                on_use_home_channel,
-                on_use_existing,
-                on_create_new,
-                on_back,
-            )
-
-        async def on_use_home_channel(current_interaction: discord.Interaction) -> None:
-            result = config_service.clear_watch_party_announcement_destination(guild_id)
-            await send_config_result(current_interaction, bot, guild_id, result)
-
-        async def on_use_existing(existing_interaction: discord.Interaction) -> None:
-            async def on_channel_selected(select_interaction: discord.Interaction, channel_id: int) -> None:
-                result = config_service.set_watch_party_announcement_destination(
-                    guild_id, channel_id, select_interaction.guild
-                )
-                await send_config_result(select_interaction, bot, guild_id, result)
-
-            await existing_interaction.response.edit_message(
-                content=f"{body}\n\nChoose an existing text channel:",
-                view=ExistingChannelSelectView(on_channel_selected, on_back),
-            )
-
-        async def on_create_new(create_interaction: discord.Interaction) -> None:
-            async def on_name_submit(modal_interaction: discord.Interaction, channel_name: str) -> None:
-                if modal_interaction.guild is None:
-                    await modal_interaction.response.edit_message(
-                        content=f"{body}\n\n⚠ That server is no longer available. Choose another option.",
-                        view=announcement_destination_view(),
-                    )
-                    return
-                try:
-                    channel = await modal_interaction.guild.create_text_channel(name=channel_name)
-                except (discord.Forbidden, discord.HTTPException) as exc:
-                    await modal_interaction.response.edit_message(
-                        content=f"{body}\n\n⚠ Could not create the channel: {exc}",
-                        view=announcement_destination_view(),
-                    )
-                    return
-                result = config_service.set_watch_party_announcement_destination(
-                    guild_id, channel.id, modal_interaction.guild
-                )
-                await send_config_result(modal_interaction, bot, guild_id, result)
-
-            await create_interaction.response.send_modal(HomeChannelNameModal(on_name_submit, default="Watch Party Announcements"))
-
-        view = announcement_destination_view()
-        body += (
-            "\n\nChoose where scheduled watch party announcements, reminders, completion notices, "
-            "and cancellation notices should post. Defaults to WASH's Home Channel; never a thread."
-        )
-
     else:  # ConfigSection.WATCH_DESTINATION (guild-wide default)
 
         async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
@@ -3395,7 +3297,6 @@ class DatabaseGroup(discord.app_commands.Group):
             user=interaction.user,
             wash_crew_role_id=self.bot.wash_crew_role_id,
             guild_id=interaction.guild_id,
-            suggestion_database_configuration_repository=self.bot.suggestion_database_configuration_repository,
         )
         await interaction.response.send_message(message, ephemeral=ephemeral)
 
@@ -5416,9 +5317,7 @@ async def handle_end_vote_now_completion(
     # disabled).
     await cancel_vote_jobs(scheduler_service, round_id)
 
-    await finalize_vote_completion(
-        vote_service, suggestion_service, bot, result, build_results_view=lambda r: build_winner_announcement_view(bot, r)
-    )
+    await finalize_vote_completion(vote_service, suggestion_service, bot, result)
     await sync_vote_completion_status_embeds(bot, result)
 
 
@@ -5594,7 +5493,6 @@ def build_duplicate_match_line(match: DuplicateMatch) -> str:
 _ARCHIVE_CATEGORY_LABELS = {
     DuplicateMatchCategory.ARCHIVED_REJECTED: 'archived after being rejected ("I WILL NOT WATCH")',
     DuplicateMatchCategory.VOTE_WINNER: "already won a vote",
-    DuplicateMatchCategory.WATCHED: "already been watched",
     DuplicateMatchCategory.ARCHIVED_OTHER: "already been archived",
 }
 
@@ -6928,13 +6826,12 @@ class SuggestionListStatusFilter(str, Enum):
     AVAILABLE (the default) is the pool currently eligible for future
     voting -- it also includes suggestions on Rotation Cooldown, since
     that's a derived display state, not a separate filter bucket.
-    VOTE_WINNER, WATCHED, and RETIRED are separate, explicitly-selected
-    views -- never combined with each other or with AVAILABLE.
+    VOTE_WINNER and RETIRED are separate, explicitly-selected views --
+    never combined with each other or with AVAILABLE.
     """
 
     AVAILABLE = "available"
     VOTE_WINNER = "vote_winner"
-    WATCHED = "watched"
     RETIRED = "retired"
 
 
@@ -6943,13 +6840,7 @@ def filter_items_by_status(items: List[WatchItem], status_filter: SuggestionList
         return [item for item in items if item.status is WatchItemStatus.ARCHIVED]
     if status_filter is SuggestionListStatusFilter.VOTE_WINNER:
         return [item for item in items if item.status is WatchItemStatus.VOTE_WINNER]
-    if status_filter is SuggestionListStatusFilter.WATCHED:
-        return [item for item in items if item.status is WatchItemStatus.WATCHED]
-    return [
-        item
-        for item in items
-        if item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.VOTE_WINNER, WatchItemStatus.WATCHED)
-    ]
+    return [item for item in items if item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.VOTE_WINNER)]
 
 
 def build_suggestion_entry_line(item: WatchItem) -> str:
@@ -7433,14 +7324,11 @@ def build_database_list_text(
                 suggestion_service, database, guild, suggestion_database_configuration_repository
             )
         )
-        current_channel_id = suggestion_service.resolve_collection_channel_id(
-            database, suggestion_database_configuration_repository
-        )
         sections.append(
             f"Database ID: {database.database_id}\n"
             f"Name: {display_name}\n"
             f"Status: {status}\n"
-            f"Channel: <#{current_channel_id}>\n"
+            f"Channel: <#{database.channel_id}>\n"
             f"Watch items: {suggestion_count} {item_word}"
         )
     return "\n\n".join(sections)
@@ -7658,19 +7546,7 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
             return
 
         async def on_status_selected(select_interaction: discord.Interaction, new_status: WatchItemStatus) -> None:
-            # Watch Party Lifecycle correction: reverting Watched back to
-            # Vote Winner through this exact same Change Status action
-            # also removes the watch date that automatic completion
-            # recorded -- bundled here rather than as a separate
-            # "corrections" screen, since this is the one WASH Crew
-            # action that actually means "that scheduled watch party
-            # didn't happen." Only fires for this specific transition;
-            # every other status change is unaffected.
-            reverting_a_watch = current_item.status is WatchItemStatus.WATCHED and new_status is WatchItemStatus.VOTE_WINNER
             result = bot.suggestion_service.set_suggestion_status(item.id, new_status)
-            if result.success and reverting_a_watch:
-                bot.suggestion_service.remove_last_watch_date(item.id)
-                result = replace(result, message=result.message + " Its most recent watch date was also removed.")
             await select_interaction.response.send_message(result.message, ephemeral=True)
             if result.success:
                 await sync_suggestion_status_embed(bot, result.watch_item)
@@ -8125,7 +8001,6 @@ def perform_database_list(
     user: object,
     wash_crew_role_id: Optional[int],
     guild_id: Optional[int],
-    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
 ) -> tuple[str, bool]:
     """Core logic for /database_list, kept free of Discord objects except `user`.
 
@@ -8135,13 +8010,6 @@ def perform_database_list(
         wash_crew_role_id: The configured WASH Crew role ID, or None if
             unconfigured.
         guild_id: The Discord guild the command was run in.
-        suggestion_database_configuration_repository: Optional; when
-            supplied, each collection's Channel line reflects its current
-            resolved destination (Context Resolution Audit) rather than
-            always its original home channel. Omitted by callers/tests
-            with no repository in scope, in which case the home channel
-            is shown (unchanged prior behavior for a never-moved
-            collection).
 
     Returns:
         A (message, ephemeral) tuple. Every /database_list response is
@@ -8164,14 +8032,7 @@ def perform_database_list(
     if not databases:
         return "No collections are configured yet.", True
 
-    return (
-        build_database_list_text(
-            suggestion_service,
-            databases,
-            suggestion_database_configuration_repository=suggestion_database_configuration_repository,
-        ),
-        True,
-    )
+    return build_database_list_text(suggestion_service, databases), True
 
 
 def perform_database_remove(
@@ -8548,554 +8409,12 @@ def parse_discord_timestamp_vote_end_time(value: str, *, now: Optional[datetime]
 def build_schedule_watch_party_confirmation(
     watch_party: WatchParty, watch_item: Optional[WatchItem]
 ) -> str:
-    """Build the public confirmation for a newly scheduled watch party.
-
-    duration_minutes/description_override are optional (Watch Party
-    Lifecycle additions) -- a watch party scheduled without either (e.g.
-    via /watch-party schedule, which doesn't collect a duration) simply
-    omits those lines, so this stays identical to its pre-lifecycle text
-    for every existing caller. discord_event_id (Discord Scheduled
-    Events) is likewise optional -- unset when Scheduled Event creation
-    wasn't available (see the Fallback Behavior in
-    finalize_schedule_watch_party_for_winner), in which case this simply
-    omits the Discord Event line rather than showing a broken link.
-    """
+    """Build the public confirmation for a newly scheduled watch party."""
     title = watch_item.title if watch_item is not None else f"watch item #{watch_party.watch_item_id}"
-    lines = [
-        f'Watch party #{watch_party.id} scheduled for "{title}".',
-        f"Starts: {format_datetime_for_display(watch_party.scheduled_at)}",
-    ]
-    if watch_party.duration_minutes is not None:
-        lines.append(f"Duration: {format_duration_minutes(watch_party.duration_minutes)}")
-    if watch_party.description_override is not None:
-        lines.append(watch_party.description_override)
-    if watch_party.discord_event_id is not None:
-        lines.append(f"Discord Event: {build_discord_scheduled_event_url(watch_party)}")
-    return "\n".join(lines)
-
-
-# --- Discord Scheduled Events integration ------------------------------------------------------
-#
-# Investigation finding (see deliverables report): discord.py/Discord's
-# API give bots no way to open the native "Create Event" dialog with
-# prefilled fields -- that dialog is client-side only. A bot can only
-# create a Scheduled Event directly through the API
-# (Guild.create_scheduled_event), which is what this integration does;
-# "the closest native-supported workflow" is creating the real event
-# outright, not a pre-filled prompt. WASH always creates an External-type
-# event (never Voice/Stage) so it never has to choose a voice channel on
-# the administrator's behalf -- see ScheduleWatchPartyModal's docstring.
-
-DISCORD_EVENT_DESCRIPTION_MAX_LENGTH = 1000
-DISCORD_EVENT_NAME_MAX_LENGTH = 100
-
-
-def build_discord_scheduled_event_url(watch_party: WatchParty) -> str:
-    """The public URL for a watch party's linked Discord Scheduled Event.
-
-    Matches discord.py's own ScheduledEvent.url property format exactly,
-    built from IDs alone since WASH doesn't always hold a live
-    ScheduledEvent object (e.g. when reporting on an existing schedule
-    from persisted data).
-    """
-    return f"https://discord.com/events/{watch_party.guild_id}/{watch_party.discord_event_id}"
-
-
-def build_scheduled_event_name(watch_item: WatchItem) -> str:
-    """Event Defaults: "🎬 Watch Party: <Movie Title>", e.g. "🎬 Watch
-    Party: Oblivion (2013)" -- truncated defensively to Discord's 100-
-    character event name limit (movie titles essentially never hit this,
-    but a raw external string should never be able to cause an
-    HTTPException here).
-    """
-    name = f"🎬 Watch Party: {watch_item.title}"
-    if watch_item.release_year:
-        name += f" ({watch_item.release_year})"
-    if len(name) > DISCORD_EVENT_NAME_MAX_LENGTH:
-        name = name[: DISCORD_EVENT_NAME_MAX_LENGTH - 1] + "…"
-    return name
-
-
-def build_scheduled_event_description(watch_item: WatchItem) -> str:
-    """Event Defaults: IMDb summary, then the IMDb link, then "Hosted by
-    WASH" -- each part included only when actually available, mirroring
-    build_suggestion_confirmation_embed's own "only what's known" style.
-    Truncated defensively to Discord's 1,000-character description limit.
-    """
-    imdb_url = watch_item.metadata_ids.get(MetadataProvider.IMDB)
-    parts: List[str] = []
-    if watch_item.description:
-        parts.append(watch_item.description)
-    if imdb_url:
-        parts.append(imdb_url)
-    parts.append("Hosted by WASH")
-    description = "\n\n".join(parts)
-    if len(description) > DISCORD_EVENT_DESCRIPTION_MAX_LENGTH:
-        description = description[: DISCORD_EVENT_DESCRIPTION_MAX_LENGTH - 1] + "…"
-    return description
-
-
-async def create_discord_scheduled_event_for_watch_party(
-    guild: Optional[discord.Guild],
-    watch_item: WatchItem,
-    scheduled_at: datetime,
-    duration_minutes: int,
-    location: str,
-) -> Tuple[Optional[int], Optional[str]]:
-    """Create the native Discord Scheduled Event for a newly scheduled
-    watch party.
-
-    Returns (discord_event_id, error_message) -- exactly one is not
-    None. Fallback Behavior: never raises. A missing guild, missing
-    "Manage Events" permission (discord.Forbidden), or any other API
-    rejection (discord.HTTPException) all come back as a clear,
-    human-readable error_message instead of silently failing or crashing
-    the scheduling flow that already succeeded on WASH's side.
-    """
-    if guild is None:
-        return None, "This can only be used in a Discord server, so no Discord Event was created."
-
-    try:
-        scheduled_event = await guild.create_scheduled_event(
-            name=build_scheduled_event_name(watch_item),
-            description=build_scheduled_event_description(watch_item),
-            start_time=scheduled_at,
-            end_time=scheduled_at + timedelta(minutes=duration_minutes),
-            entity_type=discord.EntityType.external,
-            privacy_level=discord.PrivacyLevel.guild_only,
-            location=location,
-        )
-        return scheduled_event.id, None
-    except discord.Forbidden:
-        return None, (
-            "WASH doesn't have permission to create Discord Scheduled Events here "
-            '(needs the "Manage Events" permission). The watch party is still scheduled in WASH -- '
-            "ask a server admin to grant that permission, or create the Discord event manually."
-        )
-    except discord.HTTPException as exc:
-        return None, (
-            f"Discord rejected the Scheduled Event ({exc}). The watch party is still scheduled in WASH."
-        )
-
-
-# --- Watch Party Lifecycle: winner-announcement scheduling button -----------------------------
-#
-# Reuses WatchPartyService.schedule_watch_party() (the exact same method
-# /watch-party schedule calls) and build_schedule_watch_party_confirmation
-# (the exact same confirmation text) -- neither the scheduling call nor
-# its confirmation is duplicated for this entry point.
-
-
-def build_winner_announcement_view(bot: "WatchPartyBot", result: VoteCompletionResult) -> Optional[discord.ui.View]:
-    """Build the results announcement's Schedule Watch Party/Choose
-    Winner to Schedule/Watch Party Scheduled button, or None if the round
-    had no winner at all (e.g. zero votes cast).
-    """
-    if not result.winning_suggestion_ids:
-        return None
-
-    vote_round_id = result.vote_round.id
-    already_scheduled = any(
-        bot.watch_party_service.get_active_watch_party_for_item(suggestion_id) is not None
-        for suggestion_id in result.winning_suggestion_ids
+    return (
+        f'Watch party #{watch_party.id} scheduled for "{title}".\n'
+        f"Starts: {format_datetime_for_display(watch_party.scheduled_at)}"
     )
-
-    async def on_schedule(interaction: discord.Interaction, suggestion_id: int) -> None:
-        await handle_schedule_watch_party_button(interaction, bot, suggestion_id, vote_round_id)
-
-    async def on_choose_winner(interaction: discord.Interaction) -> None:
-        await handle_choose_winner_to_schedule(interaction, bot, result)
-
-    return WinnerAnnouncementView(
-        vote_round_id,
-        result.winning_suggestion_ids,
-        on_schedule,
-        on_choose_winner,
-        already_scheduled=already_scheduled,
-    )
-
-
-async def handle_choose_winner_to_schedule(
-    interaction: discord.Interaction, bot: "WatchPartyBot", result: VoteCompletionResult
-) -> None:
-    """Tie Handling: let WASH Crew choose which winning title to schedule."""
-    if bot.wash_crew_role_id is None:
-        await interaction.response.send_message(
-            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
-            ephemeral=True,
-        )
-        return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
-        await interaction.response.send_message(
-            "You need the WASH Crew role to schedule a watch party.", ephemeral=True
-        )
-        return
-
-    options = []
-    for suggestion_id in result.winning_suggestion_ids:
-        watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
-        label = watch_item.title if watch_item is not None else f"Suggestion #{suggestion_id}"
-        description = f"({watch_item.release_year})" if watch_item is not None and watch_item.release_year else ""
-        options.append((suggestion_id, label, description))
-
-    vote_round_id = result.vote_round.id
-
-    async def on_winner_chosen(select_interaction: discord.Interaction, suggestion_id: int) -> None:
-        await handle_schedule_watch_party_button(select_interaction, bot, suggestion_id, vote_round_id)
-
-    await interaction.response.send_message(
-        "Choose which title to schedule:",
-        view=ChooseWinnerSelectView(options, on_winner_chosen),
-        ephemeral=True,
-    )
-
-
-async def handle_schedule_watch_party_button(
-    interaction: discord.Interaction, bot: "WatchPartyBot", suggestion_id: int, vote_round_id: int
-) -> None:
-    """Remove Friction: the guided scheduling flow already knows the
-    collection, winning suggestion, IMDb data, runtime, title, and year --
-    only date/time, duration, and an optional description are collected.
-
-    Duplicate Scheduling Prevention: checked here (before ever opening
-    the modal) and re-checked in finalize_schedule_watch_party_for_winner
-    (right before actually scheduling) -- a race between the two is the
-    only way a duplicate could otherwise slip through.
-    """
-    if bot.wash_crew_role_id is None:
-        await interaction.response.send_message(
-            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
-            ephemeral=True,
-        )
-        return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
-        await interaction.response.send_message(
-            "You need the WASH Crew role to schedule a watch party.", ephemeral=True
-        )
-        return
-
-    existing = bot.watch_party_service.get_active_watch_party_for_item(suggestion_id)
-    if existing is not None:
-        await interaction.response.send_message(
-            build_schedule_watch_party_confirmation(existing, bot.suggestion_service.get_suggestion(suggestion_id))
-            + "\n\n(A watch party for this title already exists -- shown above.)",
-            ephemeral=True,
-        )
-        return
-
-    watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
-    if watch_item is None:
-        await interaction.response.send_message("That suggestion no longer exists.", ephemeral=True)
-        return
-
-    default_duration_text = (
-        format_duration_minutes_compact(watch_item.runtime_minutes) if watch_item.runtime_minutes else ""
-    )
-
-    async def on_modal_submit(
-        modal_interaction: discord.Interaction,
-        when_text: str,
-        duration_text: str,
-        location_text: str,
-        description_text: str,
-    ) -> None:
-        await finalize_schedule_watch_party_for_winner(
-            modal_interaction,
-            bot,
-            suggestion_id,
-            vote_round_id,
-            when_text,
-            duration_text,
-            location_text,
-            description_text,
-        )
-
-    await interaction.response.send_modal(
-        ScheduleWatchPartyModal(on_modal_submit, default_duration_text=default_duration_text)
-    )
-
-
-async def finalize_schedule_watch_party_for_winner(
-    interaction: discord.Interaction,
-    bot: "WatchPartyBot",
-    suggestion_id: int,
-    vote_round_id: int,
-    when_text: str,
-    duration_text: str,
-    location_text: str,
-    description_text: str,
-) -> None:
-    """Parse the modal's input and schedule the watch party, reusing
-    WatchPartyService.schedule_watch_party() directly -- no second
-    scheduling implementation. Also creates the native Discord Scheduled
-    Event and links it (Track Discord Events), falling back gracefully
-    (Fallback Behavior) if Discord Scheduled Events aren't available
-    rather than failing the whole scheduling flow.
-    """
-    try:
-        scheduled_at = parse_watch_party_schedule_time(when_text)
-    except ValueError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-
-    try:
-        duration_minutes = parse_duration_text_to_minutes(duration_text)
-    except ValueError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-
-    # Re-checked here (see handle_schedule_watch_party_button) as defense
-    # against a race between opening the modal and submitting it.
-    existing = bot.watch_party_service.get_active_watch_party_for_item(suggestion_id)
-    if existing is not None:
-        await interaction.response.send_message(
-            "A watch party for this title has already been scheduled.", ephemeral=True
-        )
-        return
-
-    guild_id = interaction.guild_id
-    if guild_id is None:
-        await interaction.response.send_message("This can only be used in a Discord server.", ephemeral=True)
-        return
-
-    announcement_channel_id = bot.config_service.resolve_watch_party_announcement_destination(guild_id)
-
-    result = bot.watch_party_service.schedule_watch_party(
-        watch_item_id=suggestion_id,
-        scheduled_at=scheduled_at,
-        guild_id=guild_id,
-        channel_id=announcement_channel_id,
-        duration_minutes=duration_minutes,
-        vote_round_id=vote_round_id,
-        description_override=description_text or None,
-    )
-    if not result.success:
-        await interaction.response.send_message(result.message, ephemeral=True)
-        return
-
-    watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
-    watch_party = result.watch_party
-
-    # Discord Scheduled Events: create the native event now that WASH's
-    # own record exists. A failure here never rolls back the scheduling
-    # above -- WASH's internal schedule (reminder + automatic completion)
-    # remains the reliable fallback either way (see Fallback Behavior).
-    event_error: Optional[str] = None
-    if watch_item is not None:
-        discord_event_id, event_error = await create_discord_scheduled_event_for_watch_party(
-            interaction.guild, watch_item, scheduled_at, duration_minutes, location_text
-        )
-        if discord_event_id is not None:
-            link_result = bot.watch_party_service.set_discord_event_id(watch_party.id, discord_event_id)
-            if link_result.success:
-                watch_party = link_result.watch_party
-
-    confirmation = f'"{watch_item.title if watch_item is not None else "Watch party"}" scheduled.'
-    if event_error is not None:
-        confirmation += f"\n\n⚠ {event_error}"
-    await interaction.response.send_message(confirmation, ephemeral=True)
-
-    await schedule_watch_party_reminder(
-        bot.scheduler_host.scheduler_service,
-        watch_party,
-        guild_id,
-        guild_configuration_repository=bot.guild_configuration_repository,
-    )
-    await schedule_watch_party_completion(bot.scheduler_host.scheduler_service, watch_party, guild_id)
-
-    await post_watch_party_announcement(bot, announcement_channel_id, build_schedule_watch_party_confirmation(
-        watch_party, watch_item
-    ))
-    await sync_winner_announcement_button(bot, vote_round_id)
-
-
-async def post_watch_party_announcement(bot: "WatchPartyBot", channel_id: Optional[int], text: str) -> None:
-    """Post one Watch Party Lifecycle announcement (scheduled, reminder,
-    completion, or cancellation) to the configured Announcement
-    Destination, if any -- a best-effort send, mirroring
-    sync_suggestion_status_embed's own "log and move on" failure handling,
-    since a failed announcement should never break the underlying
-    scheduling/completion transition it's reporting on.
-    """
-    if channel_id is None:
-        return
-    try:
-        channel = bot.get_channel(channel_id)
-        if channel is None:
-            channel = await bot.fetch_channel(channel_id)
-        await channel.send(text)
-    except Exception:
-        logger.warning("Could not post a watch party announcement to channel %s", channel_id, exc_info=True)
-
-
-async def sync_winner_announcement_button(bot: "WatchPartyBot", vote_round_id: int) -> None:
-    """Winner Announcement Updates: after scheduling, replace the results
-    announcement's Schedule Watch Party/Choose Winner to Schedule button
-    with the disabled Watch Party Scheduled state.
-
-    Best-effort: the vote round's results message may no longer be
-    reachable (deleted, permissions revoked) -- logged and skipped rather
-    than failing the scheduling that already succeeded.
-    """
-    vote_round = bot.vote_service.get_round(vote_round_id)
-    if vote_round is None or vote_round.channel_id is None or vote_round.results_message_id is None:
-        return
-
-    winner_result = bot.vote_service.get_current_winners(vote_round_id)
-    winning_suggestion_ids = winner_result.winning_suggestion_ids if winner_result.success else []
-
-    try:
-        channel = bot.get_channel(vote_round.channel_id)
-        if channel is None:
-            channel = await bot.fetch_channel(vote_round.channel_id)
-        message = await channel.fetch_message(vote_round.results_message_id)
-        view = WinnerAnnouncementView(
-            vote_round_id,
-            winning_suggestion_ids,
-            # No further scheduling is possible from this disabled state,
-            # so these two callbacks are never actually invoked.
-            lambda *_args: None,
-            lambda *_args: None,
-            already_scheduled=True,
-        )
-        await message.edit(view=view)
-    except Exception:
-        logger.warning(
-            "Could not update the results announcement's button for voting round %s", vote_round_id, exc_info=True
-        )
-
-
-async def sync_watch_party_completion(bot: "WatchPartyBot", result: WatchPartyCompletionResult) -> None:
-    """After a watch party automatically completes: sync its Watch Item's
-    public confirmation-post Status field (reusing
-    sync_suggestion_status_embed unchanged) and post a completion
-    announcement to the configured Announcement Destination.
-    """
-    if result.watch_item is not None:
-        await sync_suggestion_status_embed(bot, result.watch_item)
-
-    title = result.watch_item.title if result.watch_item is not None else f"watch item #{result.watch_party.watch_item_id}"
-    await post_watch_party_announcement(
-        bot, result.watch_party.channel_id, f'"{title}" has been watched! Hope you enjoyed the watch party.'
-    )
-
-
-# --- Discord Scheduled Events: event synchronization -------------------------------------------
-#
-# One-directional (Discord -> WASH): these react to changes made directly
-# to the Discord Scheduled Event (via the Discord client or another
-# tool), keeping WASH's own record from silently diverging. A change
-# made through WASH's own commands (/watch-party reschedule, /watch-party
-# cancel) is not pushed back to the Discord event -- a documented
-# limitation (see deliverables report), not an oversight: goal 5 asks
-# WASH to "watch for" Discord's changes, not to become a second place
-# that pushes writes to Discord's event.
-#
-# Automatic Completion finding: Discord does not itself transition a
-# Scheduled Event from scheduled to completed as its end_time passes --
-# that requires an explicit start()/end() (via the client's "End Event"
-# button, or the API). Since that can't be relied on to always happen,
-# WASH's own end_time-based completion job (see
-# scheduler/watch_party_completion_job_handler.py, unchanged by this
-# integration) remains the primary, reliable completion mechanism.
-# on_scheduled_event_update below is the secondary path: if the event IS
-# manually ended (or cancelled) in Discord, WASH reacts immediately
-# rather than waiting for its own job -- whichever happens first wins,
-# safely, since WatchPartyService.mark_completed()/cancel_watch_party()
-# are both idempotent guards.
-
-
-async def _cancel_watch_party_from_discord_event(bot: "WatchPartyBot", watch_party: WatchParty) -> None:
-    """Shared by both on_scheduled_event_update (status -> canceled) and
-    on_scheduled_event_delete: mirrors handle_cancel_watch_party_completion's
-    own cancellation side effects exactly (reminder/completion jobs
-    removed, cancellation announcement posted) so a watch party cancelled
-    directly in Discord ends up in the identical state as one cancelled
-    through /watch-party cancel.
-    """
-    result = bot.watch_party_service.cancel_watch_party(watch_party.id)
-    if not result.success:
-        return
-
-    scheduler_service = bot.scheduler_host.scheduler_service
-    await cancel_watch_party_reminder(scheduler_service, watch_party.id)
-    await cancel_watch_party_completion(scheduler_service, watch_party.id)
-
-    watch_item = bot.suggestion_service.get_suggestion(watch_party.watch_item_id)
-    title = watch_item.title if watch_item is not None else f"watch item #{watch_party.watch_item_id}"
-    await post_watch_party_announcement(
-        bot, watch_party.channel_id, f'The watch party for "{title}" has been cancelled.'
-    )
-
-
-async def handle_discord_scheduled_event_update(
-    bot: "WatchPartyBot", before: "discord.ScheduledEvent", after: "discord.ScheduledEvent"
-) -> None:
-    """Event Synchronization: react to a Discord Scheduled Event being
-    edited, cancelled, or ended. A no-op for any event WASH doesn't
-    recognize (not linked to a watch party) or for one WASH already
-    considers over (CANCELLED) -- there's nothing left to sync.
-    """
-    watch_party = bot.watch_party_service.get_watch_party_by_discord_event_id(after.id)
-    if watch_party is None or watch_party.status == WatchPartyStatus.CANCELLED:
-        return
-
-    if after.status is discord.EventStatus.completed:
-        if watch_party.status == WatchPartyStatus.COMPLETED:
-            return
-        completion_result = bot.watch_party_completion_service.complete_watch_party(watch_party.id)
-        if completion_result is None:
-            return
-        scheduler_service = bot.scheduler_host.scheduler_service
-        await cancel_watch_party_completion(scheduler_service, watch_party.id)
-        await sync_watch_party_completion(bot, completion_result)
-        return
-
-    if after.status is discord.EventStatus.canceled:
-        await _cancel_watch_party_from_discord_event(bot, watch_party)
-        return
-
-    if after.status is not discord.EventStatus.scheduled:
-        # active, or any future status discord.py adds -- nothing in
-        # WASH's own model distinguishes "active" from "scheduled", so
-        # there's nothing to sync until it's completed or cancelled.
-        return
-
-    # Still scheduled -- sync a start-time/duration edit made in Discord.
-    if after.start_time == watch_party.scheduled_at and after.end_time == watch_party.ends_at:
-        return
-
-    new_duration_minutes = watch_party.duration_minutes
-    if after.end_time is not None:
-        new_duration_minutes = max(1, round((after.end_time - after.start_time).total_seconds() / 60))
-
-    sync_result = bot.watch_party_service.sync_from_discord_event(
-        watch_party.id, after.start_time, new_duration_minutes
-    )
-    if not sync_result.success:
-        return
-
-    scheduler_service = bot.scheduler_host.scheduler_service
-    await reschedule_watch_party_reminder(
-        scheduler_service,
-        sync_result.watch_party,
-        watch_party.guild_id,
-        guild_configuration_repository=bot.guild_configuration_repository,
-    )
-    await reschedule_watch_party_completion(scheduler_service, sync_result.watch_party, watch_party.guild_id)
-
-
-async def handle_discord_scheduled_event_delete(bot: "WatchPartyBot", event: "discord.ScheduledEvent") -> None:
-    """Event Synchronization: react to a Discord Scheduled Event being
-    deleted outright (distinct from being cancelled -- see
-    discord.ScheduledEvent.delete() vs .cancel()). Treated identically to
-    a cancellation from WASH's perspective: either way, the event is
-    gone and the watch party it was tracking never happened.
-    """
-    watch_party = bot.watch_party_service.get_watch_party_by_discord_event_id(event.id)
-    if watch_party is None or watch_party.status == WatchPartyStatus.CANCELLED:
-        return
-    await _cancel_watch_party_from_discord_event(bot, watch_party)
 
 
 def build_watch_party_select_options(
@@ -9360,19 +8679,12 @@ async def handle_reschedule_watch_party_completion(
         await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
         return
 
-    # Watch Party Lifecycle: a COMPLETED watch party is also offered here,
-    # not just SCHEDULED ones -- this is the correction workflow's
-    # "reschedule watch party" action (the automatic completion was
-    # wrong), reusing this exact picker/command rather than building a
-    # separate one. WatchPartyService.reschedule_watch_party() already
-    # reverts a COMPLETED watch party's status back to SCHEDULED as part
-    # of rescheduling it.
-    reschedulable = [
+    scheduled = [
         watch_party
         for watch_party in watch_party_service.list_watch_parties(guild_id)
-        if watch_party.status in (WatchPartyStatus.SCHEDULED, WatchPartyStatus.COMPLETED)
+        if watch_party.status == WatchPartyStatus.SCHEDULED
     ]
-    if not reschedulable:
+    if not scheduled:
         await interaction.response.send_message("No watch parties are currently scheduled.", ephemeral=True)
         return
 
@@ -9399,11 +8711,8 @@ async def handle_reschedule_watch_party_completion(
             watch_party.guild_id,
             guild_configuration_repository=guild_configuration_repository,
         )
-        # Watch Party Lifecycle: same rescheduling policy applies to the
-        # automatic-completion job.
-        await reschedule_watch_party_completion(scheduler_service, watch_party, watch_party.guild_id)
 
-    options = build_watch_party_select_options(reschedulable, suggestion_service)
+    options = build_watch_party_select_options(scheduled, suggestion_service)
     view = WatchPartySelectView(
         options,
         on_select,
@@ -9493,7 +8802,6 @@ async def handle_cancel_watch_party_completion(
         return
 
     async def on_select(select_interaction: discord.Interaction, watch_party_id: int) -> None:
-        watch_party_before = watch_party_service.get_watch_party(watch_party_id)
         message, ephemeral = perform_cancel_watch_party(
             watch_party_service=watch_party_service,
             user=select_interaction.user,
@@ -9508,21 +8816,6 @@ async def handle_cancel_watch_party_completion(
         # cancelled -- a no-op if none is active (e.g. reminders were
         # disabled, or it already fired).
         await cancel_watch_party_reminder(scheduler_service, watch_party_id)
-        # Watch Party Lifecycle: same cleanup applies to the
-        # automatic-completion job -- a cancelled watch party must never
-        # still complete itself later.
-        await cancel_watch_party_completion(scheduler_service, watch_party_id)
-
-        if watch_party_before is not None:
-            watch_item = (
-                suggestion_service.get_suggestion(watch_party_before.watch_item_id)
-                if suggestion_service is not None
-                else None
-            )
-            title = watch_item.title if watch_item is not None else f"watch item #{watch_party_before.watch_item_id}"
-            await post_watch_party_announcement(
-                select_interaction.client, watch_party_before.channel_id, f'The watch party for "{title}" has been cancelled.'
-            )
 
     options = build_watch_party_select_options(scheduled, suggestion_service)
     view = WatchPartySelectView(

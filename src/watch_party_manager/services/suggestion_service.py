@@ -324,48 +324,6 @@ class SuggestionService:
         self._save()
         return True
 
-    def record_watch(self, suggestion_id: int, watch_date) -> bool:
-        """Record that a suggestion's scheduled watch party actually
-        happened (Watch Party Lifecycle: automatic completion).
-
-        Marks the suggestion Watched -- unless a WASH Crew member has
-        already archived/retired it in the meantime, mirroring
-        record_vote_win's same precedence rule -- and appends watch_date
-        to its journey, which every existing watch-history statistic
-        already reads (see StatisticsService.suggestion_statistics()).
-        """
-        watch_item = self.get_suggestion(suggestion_id)
-        if watch_item is None:
-            return False
-        watch_item.journey.record_watch_date(watch_date)
-        if watch_item.status is not WatchItemStatus.ARCHIVED:
-            watch_item.status = WatchItemStatus.WATCHED
-        self._save()
-        return True
-
-    def remove_last_watch_date(self, suggestion_id: int) -> bool:
-        """Undo the most recently recorded watch date (Watch Party
-        Lifecycle correction: a scheduled watch party's automatic
-        completion turned out to be wrong).
-
-        Deliberately does not touch watch_item.status -- reverting the
-        status itself (typically back to VOTE_WINNER) is a separate,
-        explicit choice made through set_suggestion_status(), so a
-        correction can remove the erroneous watch date without silently
-        also deciding what the status should become.
-
-        Returns:
-            True if a watch date was removed. False if the suggestion
-            doesn't exist or had no watch date to remove.
-        """
-        watch_item = self.get_suggestion(suggestion_id)
-        if watch_item is None:
-            return False
-        removed = watch_item.journey.remove_last_watch_date()
-        if removed:
-            self._save()
-        return removed
-
     def record_rotation_presentation(self, suggestion_id: int, rotation_id: int) -> bool:
         """Record that a suggestion was presented within a rotation, then persist.
 
@@ -425,12 +383,6 @@ class SuggestionService:
             return SuggestionResult(
                 success=False,
                 message="That suggestion has already been archived and can no longer be rejected.",
-            )
-
-        if watch_item.status == WatchItemStatus.WATCHED:
-            return SuggestionResult(
-                success=False,
-                message="That suggestion has already been watched and can no longer be rejected.",
             )
 
         if not watch_item.journey.record_rejection(discord_user_id):
@@ -558,12 +510,9 @@ class SuggestionService:
         to specific member-facing events -- a rejection threshold, a
         re-suggestion -- and enforce their own preconditions), this is an
         unconditional administrative override: WASH Crew may always move
-        a suggestion directly to any of the four persisted statuses --
-        including WATCHED, so a Watch Party Lifecycle correction ("that
-        scheduled watch party didn't actually happen") can revert one back
-        to VOTE_WINNER through this exact same mechanism. Rotation
-        Cooldown is never a valid value here -- it's a computed display
-        state, not something to assign (see
+        a suggestion directly to any of the three persisted statuses.
+        Rotation Cooldown is never a valid value here -- it's a computed
+        display state, not something to assign (see
         services/suggestion_display_status.py).
         """
         watch_item = self.get_suggestion(suggestion_id)
@@ -582,21 +531,15 @@ class SuggestionService:
     ) -> list[WatchItem]:
         """Return suggestions belonging to one database, in insertion order.
 
-        Archived and Watched suggestions are excluded by default, since
-        both have left the active suggestion pool for good (Watched:
-        Watch Party Lifecycle -- once a suggestion's scheduled watch
-        party actually completes, it's done, exactly like an archived
-        suggestion, and should stop being reassigned into fresh
-        rotations) -- pass include_archived=True for administrative views
-        that still need to see them (e.g. the WASH Crew /list view). The
-        parameter name is unchanged (not include_archived_or_watched) to
-        avoid rippling every existing call site for what's conceptually
-        the same "show me everything, not just the active pool" toggle.
+        Archived suggestions (see reject_suggestion) are excluded by
+        default, since they've been removed from the active suggestion
+        pool -- pass include_archived=True for administrative views that
+        still need to see them (e.g. the WASH Crew /list view).
         """
         items = [item for item in self._suggestions.values() if item.database_id == database_id]
         if include_archived:
             return items
-        return [item for item in items if item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.WATCHED)]
+        return [item for item in items if item.status != WatchItemStatus.ARCHIVED]
 
     def clear_suggestions(self) -> None:
         """Clear all suggestions. Used for testing or bot reset."""
@@ -905,14 +848,14 @@ class SuggestionService:
                 groundwork for future archive behavior.
             suggestion_database_configuration_repository: Optional; when
                 supplied, channel_id is also checked against every other
-                guild database's *currently resolved* suggestion
-                destination (resolve_collection_channel_id), via the same
-                find_database_using_channel used to keep /database move
-                collision-free -- one shared implementation, so a channel
-                can never be creatable here while also being reported as
-                occupied elsewhere (or vice versa). Omitted by callers
-                that don't have this repository in scope, in which case
-                only each database's home channel is checked.
+                guild database's *configured* suggestion post destination
+                (SuggestionDatabaseConfiguration.channels.suggestion_channel_id),
+                not just each database's operational home channel --
+                contextual command resolution (resolve_database_for_channel)
+                considers both, so both must be kept collision-free.
+                Omitted by callers that don't have this repository in
+                scope, in which case only the operational-channel check
+                below runs.
 
         Returns:
             SuggestionDatabaseResult indicating success or failure.
@@ -934,12 +877,18 @@ class SuggestionService:
                     success=False,
                     message=f'A collection named "{trimmed_name}" already exists in this server.',
                 )
-
-        if self.find_database_using_channel(guild_id, channel_id, suggestion_database_configuration_repository):
-            return SuggestionDatabaseResult(
-                success=False,
-                message="This channel already has a collection.",
-            )
+            if database.channel_id == channel_id:
+                return SuggestionDatabaseResult(
+                    success=False,
+                    message="This channel already has a collection.",
+                )
+            if suggestion_database_configuration_repository is not None:
+                configuration = suggestion_database_configuration_repository.get(guild_id, database.database_id)
+                if configuration is not None and configuration.channels.suggestion_channel_id == channel_id:
+                    return SuggestionDatabaseResult(
+                        success=False,
+                        message="This channel is already the suggestion destination for another collection.",
+                    )
 
         is_first_database = len(self._databases) == 0
 
@@ -1059,21 +1008,19 @@ class SuggestionService:
     ) -> Optional[SuggestionDatabase]:
         """Return the database (if any) already routing channel_id in this guild.
 
-        Checks each database's *currently resolved* suggestion
-        destination (resolve_collection_channel_id) -- the exact same
-        single source of truth resolve_database_for_channel consults, so
-        a channel can never be "free" by one function's judgment and
-        "occupied" by the other's. A database's original home channel is
-        no longer considered occupied once a configured override moves
-        it elsewhere -- it's free for reuse, matching the fact that
-        nothing resolves to that database there anymore.
+        Checks both a database's operational home channel (channel_id)
+        and, when suggestion_database_configuration_repository is
+        supplied, its configured suggestion post destination
+        (SuggestionDatabaseConfiguration.channels.suggestion_channel_id)
+        -- the same two properties resolve_database_for_channel consults.
+        Used to keep a channel/thread from ever routing ambiguously to
+        more than one database.
 
         Args:
             guild_id: The Discord guild to search within.
             channel_id: The channel or thread ID to check.
             suggestion_database_configuration_repository: Optional; when
-                omitted, only each database's home channel is checked
-                (its configured override, if any, can't be seen).
+                omitted, only the operational-channel check runs.
             exclude_database_id: Skip this database (used when checking a
                 channel against every *other* database while editing this
                 one's own destination).
@@ -1085,11 +1032,12 @@ class SuggestionService:
         for database in self.list_databases(guild_id):
             if database.database_id == exclude_database_id:
                 continue
-            resolved_channel_id = self.resolve_collection_channel_id(
-                database, suggestion_database_configuration_repository
-            )
-            if resolved_channel_id == channel_id:
+            if database.channel_id == channel_id:
                 return database
+            if suggestion_database_configuration_repository is not None:
+                configuration = suggestion_database_configuration_repository.get(guild_id, database.database_id)
+                if configuration is not None and configuration.channels.suggestion_channel_id == channel_id:
+                    return database
         return None
 
     def deactivate_database(
@@ -1195,31 +1143,33 @@ class SuggestionService:
         supplied guild -- an inactive (deactivated) database is never
         selected automatically, whether by a direct channel match or as
         the guild's sole database:
-          1. A database whose *currently resolved* suggestion destination
-             (resolve_collection_channel_id -- its configured override
-             when one is set via /config or /database move, otherwise its
-             original creation-time "home" channel) is this exact channel
-             (or thread) ID. A database's original home channel stops
-             matching the moment a configured override is set for it --
-             only ever one channel resolves to a given database at a
-             time, matching what /database list and /config already
-             display as that collection's channel (Context Resolution
-             Audit: previously, the original home channel kept matching
-             even after a move, so both the old and new location
-             resolved to the same collection at once).
-          2. If none matches but exactly one database exists in the guild, use it.
-          3. If multiple databases exist in the guild and none match, resolution
+          1. A database configured for this exact channel (or thread) ID
+             (its original creation-time "home" channel).
+          2. A database whose *configured suggestion post destination*
+             (SuggestionDatabaseConfiguration.channels.suggestion_channel_id,
+             settable independently via /config or the Setup Wizard) is
+             this exact channel (or thread) ID -- only checked when
+             suggestion_database_configuration_repository is supplied.
+             Without this step, a database whose post destination was
+             later changed away from its home channel (e.g. to a public
+             thread) would be invisible to every command run there, even
+             though /config correctly reports that destination as
+             configured -- the single resolver used everywhere is the
+             fix, not a second parallel one.
+          3. If none matches but exactly one database exists in the guild, use it.
+          4. If multiple databases exist in the guild and none match, resolution
              is ambiguous -- returned via ambiguous_candidates for the caller to
              present as a picker, never guessed.
-          4. If the guild has no (active) databases, WASH Crew needs to configure one.
+          5. If the guild has no (active) databases, WASH Crew needs to configure one.
 
         Args:
             guild_id: The Discord guild (server) where the command was run.
             channel_id: The Discord channel or thread ID where it was run.
             suggestion_database_configuration_repository: Optional; when
-                omitted, a database's configured override (if any) can't be
-                seen, so resolution falls back to each database's home
-                channel only -- see resolve_collection_channel_id.
+                supplied, step 2 above is also checked. Omitted by callers
+                that don't have this repository in scope, in which case
+                resolution falls back to home-channel/sole-database rules
+                only.
 
         Returns:
             DatabaseResolution with either a usable database or a clear
@@ -1227,11 +1177,16 @@ class SuggestionService:
         """
         databases = [database for database in self.list_databases(guild_id) if database.active]
         for database in databases:
-            resolved_channel_id = self.resolve_collection_channel_id(
-                database, suggestion_database_configuration_repository
-            )
-            if resolved_channel_id == channel_id:
+            if database.channel_id == channel_id:
                 return DatabaseResolution(database=database)
+
+        if suggestion_database_configuration_repository is not None:
+            for database in databases:
+                configuration = suggestion_database_configuration_repository.get(
+                    guild_id, database.database_id
+                )
+                if configuration is not None and configuration.channels.suggestion_channel_id == channel_id:
+                    return DatabaseResolution(database=database)
 
         if len(databases) == 1:
             return DatabaseResolution(database=databases[0])

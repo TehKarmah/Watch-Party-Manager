@@ -111,23 +111,6 @@ class RotationCompletionTests(RotationServiceTestCase):
 
         self.assertTrue(self.rotation_service._is_exhausted(rotation))
 
-    def test_completion_via_watched_status(self) -> None:
-        # Watch Party Lifecycle: a Watched item is terminal for rotation
-        # purposes exactly like Vote Winner -- it must never block
-        # exhaustion or be treated as still "pending" (re-nominable).
-        item = self._add("Alien")
-        rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)
-        item.status = WatchItemStatus.WATCHED
-
-        self.assertTrue(self.rotation_service._is_exhausted(rotation))
-
-    def test_watched_item_is_not_candidate_eligible(self) -> None:
-        item = self._add("Alien")
-        self.rotation_service.get_or_start_rotation(DATABASE_ID)
-        item.status = WatchItemStatus.WATCHED
-
-        self.assertFalse(self.rotation_service.is_candidate_eligible(item, DATABASE_ID))
-
     def test_completion_via_retirement(self) -> None:
         item = self._add("Alien")
         rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)

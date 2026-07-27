@@ -417,51 +417,6 @@ class ConfigHomeChannelSectionView(discord.ui.View):
         self.add_item(BackToMenuButton(on_back))
 
 
-# --- Watch Party Announcement Destination -----------------------------------------------------
-#
-# Where scheduled/reminder/completion/cancellation announcements post
-# (Watch Party Lifecycle) -- separate from Home Channel, a collection's
-# suggestion thread, and the Watched Movie Destination. Reuses
-# setup_wizard_view.py's CreateNewChannelButton/UseExistingChannelButton
-# unchanged, exactly like the Home Channel section above. Threads are
-# never valid here, so Use Existing Channel/Create New Channel are both
-# restricted to plain text channels the same way Home Channel's own
-# pickers already are.
-
-
-class ConfigUseHomeChannelButton(discord.ui.Button):
-    def __init__(self, on_click: OnConfigSkip) -> None:
-        super().__init__(
-            label="Use Home Channel (Recommended)",
-            style=discord.ButtonStyle.primary,
-            custom_id="wpm_config_announcement_destination_use_home_channel",
-        )
-        self._on_click = on_click
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await self._on_click(interaction)
-
-
-class ConfigWatchPartyAnnouncementDestinationSectionView(discord.ui.View):
-    """/config's Watch Party Announcement Destination section: Use Home
-    Channel (Recommended, the default), Use Existing Channel, Create New
-    Channel, or Back to Menu.
-    """
-
-    def __init__(
-        self,
-        on_use_home_channel: OnConfigSkip,
-        on_use_existing: OnConfigSkip,
-        on_create_new: OnConfigSkip,
-        on_back: OnBackToMenu,
-    ) -> None:
-        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
-        self.add_item(ConfigUseHomeChannelButton(on_use_home_channel))
-        self.add_item(UseExistingChannelButton(on_use_existing))
-        self.add_item(CreateNewChannelButton(on_create_new))
-        self.add_item(BackToMenuButton(on_back))
-
-
 # --- Modal-defaults retry screen (Voting / Reminder / Backup Defaults) ---------------------
 
 

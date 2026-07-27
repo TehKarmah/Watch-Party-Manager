@@ -355,7 +355,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** Section 2 completed.
 - **Steps:**
   1. Run `/config` as WASH Crew.
-- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Manage Collections, Watched Movie Destination (Default), Watch Party Announcement Destination, Voting Defaults, Reminder Defaults, Backup Defaults) appears, each showing its current status.
+- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Manage Collections, Watched Movie Destination (Default), Voting Defaults, Reminder Defaults, Backup Defaults) appears, each showing its current status.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -367,19 +367,6 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   1. For each section in the menu, open it, change its value, and submit.
   2. Re-run `/config` and confirm the new value is reflected in the main menu summary.
 - **Expected Result:** Every section's edit is saved individually; editing one section never resets or clears another.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 3.2b Watch Party Announcement Destination
-
-- **Objective:** Confirm the Watch Party Announcement Destination section (Watch Party Lifecycle) can be set to the Home Channel, an existing channel, or a newly created channel, defaults sensibly, and rejects threads.
-- **Preconditions:** Test 3.1 passed.
-- **Steps:**
-  1. Run `/config` -> **Watch Party Announcement Destination**; confirm it offers **Use Home Channel (Recommended)**, **Use Existing Channel**, **Create New Channel**, and **Back to Menu**, and that the summary shows the current setting (Home Channel, by default).
-  2. Choose **Use Existing Channel** and select a different text channel; confirm the main menu summary updates to show that channel.
-  3. Return to the section and choose **Use Home Channel (Recommended)**; confirm the override is cleared and the summary reverts to reflecting the Home Channel.
-  4. Confirm no option in this section allows selecting a thread.
-- **Expected Result:** The setting is independent of Home Channel, the suggestion-thread destination, and the Watched Movie Destination -- changing one never changes another. Clearing the override falls back to the Home Channel; a thread can never be chosen here.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -443,20 +430,6 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   9. Run `/database move` again from a plain text channel, including WASH's own Home Channel; confirm **Use Current Thread** stays disabled in both cases.
   10. Attempt to route a collection's suggestion destination to WASH's configured Home Channel (e.g. via `/config` -> Manage Collections -> Suggestion Destination, if reachable, or by any other means available); confirm it's clearly rejected and nothing changes.
 - **Expected Result:** Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, rotation history, and statistics are all unchanged (spot-check via `/stats type:Collection` or `/config` -> Manage Collections before and after); existing Discord suggestion posts are never moved; only suggestions added after the move appear in the new destination; a duplicate destination is rejected cleanly; **Use Current Thread** behaves identically to `/database add`'s version (same enable/disable rule) but never renames the collection; WASH's Home Channel is never accepted as a destination, from any path.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 3.4b2 Context Resolution Audit: commands stop resolving a moved collection's old location
-
-- **Objective:** Confirm the bug fix -- a collection moved into its own thread must no longer resolve from wherever it used to be, and the new destination must resolve immediately, for every context-sensitive command.
-- **Preconditions:** Two collections in the same server (so the "exactly one collection" convenience fallback can't mask a failure); collection A moved via Test 3.4b, from its original location to a new thread.
-- **Steps:**
-  1. From collection A's *original* (pre-move) location, run `/add`, `/list`, `/vote start`, and `/stats type:Collection`; confirm none of them resolve to collection A there anymore (each should show its usual ambiguous/no-match picker or message, since collection B still exists too).
-  2. From collection A's *new* thread, run the same four commands; confirm all four resolve to collection A immediately, with no extra step.
-  3. Restart the bot, then repeat step 2.
-  4. Run `/database list` and `/config` -> Manage Collections; confirm both show collection A's *current* (post-move) channel, not its original one.
-  5. Create a brand-new collection C using collection A's *original*, now-freed location as its destination; confirm this succeeds (the old location is genuinely free for reuse, not permanently reserved).
-- **Expected Result:** Exactly one location resolves to collection A at any given time -- its current destination -- both before and after a restart; `/database list`/`/config` never show a stale channel; a freed-up former destination can be reused by a different collection.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -573,15 +546,14 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.7 `/list` -- Vote Winner, Watched, and Retired
+### 4.7 `/list` -- Vote Winner and Retired
 
-- **Objective:** Confirm the other status filters work.
-- **Preconditions:** At least one retired suggestion (reject one below the retirement threshold in Test 4.10 first, if none exist yet), at least one completed vote (a suggestion should now be Vote Winner), and at least one Watched suggestion (Test 6.10 or 6.11).
+- **Objective:** Confirm the other two status filters work.
+- **Preconditions:** At least one retired suggestion (reject one below the retirement threshold in Test 4.10 first, if none exist yet) and at least one completed vote (a suggestion should now be Vote Winner).
 - **Steps:**
   1. Run `/list status:Retired`.
   2. Run `/list status:Vote Winner`.
-  3. Run `/list status:Watched`.
-- **Expected Result:** Retired shows retired/archived items. Vote Winner shows the suggestion(s) that have won a voting round but not yet been marked Watched -- their public confirmation post's Status field should also read "🟣 Vote Winner". Watched shows only suggestions WASH has confirmed were watched -- their post's Status field reads "🔵 Watched", and none of them also appear under Vote Winner or Available.
+- **Expected Result:** Retired shows retired/archived items. Vote Winner shows the suggestion(s) that have won a voting round -- their public confirmation post's Status field should also read "🟣 Vote Winner".
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -627,7 +599,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** WASH Crew role; at least one suggestion; at least two collections in the server.
 - **Steps:**
   1. Run `/edit_suggestion`; confirm it shows a read-only summary (title, year, collection, status, IMDb link) plus Change Status, Move to Another Collection, and Cancel -- no title/release year/IMDb link fields to type into.
-  2. Choose Change Status; confirm the dropdown offers only Available, Vote Winner, Watched, and Retired (never Rotation Cooldown); pick one and confirm the suggestion's status updates and its public confirmation post's Status field updates in place. Also see Test 6.11 for the specific Watched -> Vote Winner correction behavior.
+  2. Choose Change Status; confirm the dropdown offers only Available, Vote Winner, and Retired (never Rotation Cooldown); pick one and confirm the suggestion's status updates and its public confirmation post's Status field updates in place.
   3. Choose Move to Another Collection; confirm the duplicate check re-runs against the destination collection, and that the suggestion's status is unchanged after the move.
   4. Choose Cancel; confirm nothing changes.
   5. Run `/remove` with a reference number, then again with an exact title; confirm both resolve correctly and archive (not delete) the record.
@@ -767,7 +739,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Wait for the round to reach its deadline (or use **End Now**).
   2. Observe the results announcement.
-- **Expected Result:** The original post is updated to a closed record with final standings; a single results announcement is posted with the collection, the winner, who suggested it (when recorded), an "About the Winner" embed (poster/runtime/rating/genres when known), and a link back to the original post. No duplicate announcement is posted. The results announcement also carries a **Schedule Watch Party** button (WASH Crew only) -- see Test 6.7.
+- **Expected Result:** The original post is updated to a closed record with final standings; a single results announcement is posted with the collection, the winner, who suggested it (when recorded), an "About the Winner" embed (poster/runtime/rating/genres when known), and a link back to the original post. No duplicate announcement is posted.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -777,7 +749,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** Ability to arrange two candidates with equal votes (e.g. a 2-member test server voting for different candidates in a 2-candidate round).
 - **Steps:**
   1. Produce a tie and let the round complete.
-- **Expected Result:** Both winners are announced ("It's a tie! Winners: ..."), each gets its own "About the Winner" embed, and neither embed shows a poster thumbnail (thumbnails are suppressed for any tie). The results announcement carries a **Choose Winner to Schedule** button rather than **Schedule Watch Party** -- see Test 6.8.
+- **Expected Result:** Both winners are announced ("It's a tie! Winners: ..."), each gets its own "About the Winner" embed, and neither embed shows a poster thumbnail (thumbnails are suppressed for any tie).
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -848,152 +820,6 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   1. Stop and restart the bot process.
   2. Wait for the reminder's scheduled time.
 - **Expected Result:** The reminder still fires at the correct time after the restart -- it is not lost, and it is not duplicated.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.7 Schedule Watch Party button (single winner)
-
-- **Objective:** Confirm the winner-driven scheduling flow already knows the winning suggestion's details and asks only for what it doesn't.
-- **Preconditions:** Test 5.8 passed (a vote closed with a single winner); WASH Crew role.
-- **Steps:**
-  1. On the results announcement, click **Schedule Watch Party**.
-  2. Fill in a watch date/time and confirm the duration field is pre-filled from the winning title's runtime when known (editable).
-  3. Optionally set a description override, then submit.
-- **Expected Result:** No step asks which movie to schedule -- the modal only collects date/time, duration, and an optional description. On submit, a watch party is created identical in effect to `/watch-party schedule`, a confirmation is shown, and an announcement posts to the configured Watch Party Announcement Destination (Test 3.2b).
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.8 Choose Winner to Schedule (tie)
-
-- **Objective:** Confirm a tied vote lets WASH Crew choose which winning title to schedule.
-- **Preconditions:** Test 5.9 passed (a tied round).
-- **Steps:**
-  1. On the results announcement, click **Choose Winner to Schedule**.
-  2. Confirm a picker lists each tied title.
-  3. Choose one; confirm the same modal from Test 6.7 opens, already knowing that title's details.
-- **Expected Result:** WASH never guesses which tied title to schedule; only the chosen one is scheduled, and the other(s) remain unscheduled and still selectable afterward (until one is picked, or scheduled through another path).
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.9 Duplicate scheduling prevention and button state
-
-- **Objective:** Confirm a suggestion can never be scheduled twice through the winner-announcement button, and that the button's state reflects reality immediately.
-- **Preconditions:** Test 6.7 passed (a winner already scheduled).
-- **Steps:**
-  1. Re-open the same results announcement; confirm the button now reads **Watch Party Scheduled** and is disabled.
-  2. Separately, run `/watch-party schedule` for the same winning suggestion and confirm WASH shows the existing scheduled watch party instead of creating a second one.
-- **Expected Result:** No path -- the button or the manual command -- can create a second watch party for a suggestion that already has an active (Scheduled or Watched) one.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.10 Automatic completion (Watched transition)
-
-- **Objective:** Confirm a watch party scheduled with a known duration is completed automatically at its scheduled end time, with no confirmation prompt.
-- **Preconditions:** Test 6.7 passed, scheduled to end within a few minutes (adjust date/time/duration for testing).
-- **Steps:**
-  1. Wait for the watch party's scheduled end time (`scheduled_at` + duration).
-  2. Observe the suggestion's status, its public post, `/stats`, and `/list status:Watched`.
-- **Expected Result:** With no confirmation dialog, the suggestion's status becomes Watched, a watch date is recorded, its public post updates to show Watched, `/stats` (Member and Collection types) reflects the change, `/list status:Watched` lists it, and a completion announcement posts to the configured Announcement Destination.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.11 Corrected watch workflow
-
-- **Objective:** Confirm a watch party WASH marked complete in error can be corrected, reusing existing edit/reschedule functionality rather than a dedicated screen.
-- **Preconditions:** Test 6.10 passed.
-- **Steps:**
-  1. Run `/edit_suggestion` on the now-Watched suggestion -> **Change Status** -> **Vote Winner**.
-  2. Confirm its most recently recorded watch date is removed in the same action.
-  3. Run `/watch-party reschedule`; confirm the picker also lists this watch party (even though it was Watched) and select it with a new time.
-  4. Confirm it reverts to Scheduled with the new time.
-- **Expected Result:** No new UI is needed for either step -- both reuse `/edit_suggestion`'s existing Change Status dropdown and `/watch-party reschedule`'s existing picker. The suggestion's status, watch date, and the watch party's status all end up consistent with "this hasn't happened yet."
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.12 `/watch-party schedule` remains available for manual/special events
-
-- **Objective:** Confirm the pre-existing manual scheduling command still works unchanged, for events outside the normal vote-winner flow.
-- **Preconditions:** A suggestion that has not won a vote (or any watch item ID).
-- **Steps:**
-  1. Run `/watch-party schedule` for that suggestion directly, as in Test 6.1.
-- **Expected Result:** Scheduling succeeds exactly as before. Since this path collects no duration, confirm the watch party is **not** completed automatically at any point -- it must be marked Watched by hand via `/edit_suggestion` if it actually happens.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.13 Discord Scheduled Event creation and defaults
-
-- **Objective:** Confirm the **Schedule Watch Party** modal now also creates a real Discord Scheduled Event, with correct defaults, and that a Location field is the only new thing it asks for.
-- **Preconditions:** WASH's bot role has the Manage Events permission (Installation Guide Section 6).
-- **Steps:**
-  1. On a results announcement, click **Schedule Watch Party**; confirm the modal now has four fields: watch date & time, event duration, Location, and the optional description override.
-  2. Fill in a Location (e.g. "Discord Voice Chat") and submit.
-  3. In Discord, open the server's Events tab and find the newly created event.
-- **Expected Result:** The event's title is `🎬 Watch Party: <Title> (<Year>)`; its description includes the IMDb summary (when known), the IMDb link, and "Hosted by WASH"; its start time matches what was entered; its end time matches start + the entered duration; its location matches what was typed; it is an External-type event (not tied to a voice channel). WASH's own confirmation includes a link to this event.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.14 Discord Event tracking and duplicate prevention
-
-- **Objective:** Confirm the created event is linked to WASH's watch party record, and that a duplicate can't be created through any path.
-- **Preconditions:** Test 6.13 passed.
-- **Steps:**
-  1. Re-open the same results announcement; confirm the button reads **Watch Party Scheduled** (disabled).
-  2. Run `/watch-party schedule` for the same suggestion; confirm WASH reports the existing schedule rather than creating a second watch party or a second Discord Event.
-- **Expected Result:** Exactly one Discord Scheduled Event and one WASH watch party exist for this suggestion.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.15 Event synchronization: editing in Discord
-
-- **Objective:** Confirm editing the linked Discord Event's time directly in Discord updates WASH's own record.
-- **Preconditions:** Test 6.13 passed.
-- **Steps:**
-  1. In Discord, edit the event's start time (and/or duration) directly.
-  2. Run `/watch-party status` or re-check the watch party's scheduled time in WASH.
-- **Expected Result:** WASH's record reflects the new time/duration within moments, and the watch-party reminder/completion jobs are rescheduled to match (no duplicate jobs).
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.16 Event synchronization: cancelling or deleting in Discord
-
-- **Objective:** Confirm cancelling (or deleting) the linked Discord Event directly in Discord cancels the WASH watch party too.
-- **Preconditions:** Test 6.13 passed (use a fresh watch party per sub-case if testing both).
-- **Steps:**
-  1. Cancel the event directly in Discord (its own "Cancel Event" action); confirm WASH's watch party becomes Cancelled and a cancellation announcement posts.
-  2. Separately, on another watch party, delete the event directly in Discord; confirm the same result.
-- **Expected Result:** Both actions leave WASH's watch party Cancelled, with its reminder/completion jobs removed and a cancellation announcement posted -- identical to running `/watch-party cancel` directly.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.17 Automatic completion is not dependent on manually ending the Discord Event
-
-- **Objective:** Confirm WASH's own schedule -- not the Discord Event's status -- is what actually drives automatic completion (Discord does not auto-end an event on its own).
-- **Preconditions:** Test 6.13 passed, scheduled to end within a few minutes.
-- **Steps:**
-  1. Do **not** manually start or end the Discord Event.
-  2. Wait for the watch party's scheduled end time (see Test 6.10).
-- **Expected Result:** The suggestion is still marked Watched automatically, exactly as in Test 6.10, whether or not anyone ever touched the Discord Event's own status.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.18 Fallback Behavior: Discord Scheduled Events unavailable
-
-- **Objective:** Confirm a graceful, explicit message when Discord Scheduled Event creation can't succeed, with the WASH-side schedule still intact.
-- **Preconditions:** Temporarily remove WASH's Manage Events permission (server-wide, or via a role override).
-- **Steps:**
-  1. Click **Schedule Watch Party** and submit the modal.
-- **Expected Result:** WASH clearly explains it couldn't create the Discord Event (naming the Manage Events permission) and confirms the watch party is still scheduled in WASH regardless -- reminder and automatic completion still work normally. Restore the permission afterward.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 6.19 WASH-initiated changes are not pushed back to a linked Discord Event
-
-- **Objective:** Confirm the documented one-directional limitation: rescheduling/cancelling via WASH's own commands does not touch an already-linked Discord Event.
-- **Preconditions:** Test 6.13 passed.
-- **Steps:**
-  1. Run `/watch-party reschedule` and select this watch party; give it a new time.
-  2. Check the Discord Event's own start time in Discord.
-- **Expected Result:** WASH's record shows the new time, but the Discord Event itself is unchanged -- matching the documented limitation in [Administration](05-Administration.md)'s Watch Party Lifecycle section.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -1341,8 +1167,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 11.2 Scheduled jobs survive restart
 
-- **Objective:** Confirm pending close-vote, vote-reminder, watch-party-reminder, and watch-party-completion jobs are not lost or duplicated by a restart.
-- **Preconditions:** An open vote with a pending reminder, and/or a watch party (Test 6.7) with a pending reminder and/or pending automatic completion.
+- **Objective:** Confirm pending close-vote, vote-reminder, and watch-party-reminder jobs are not lost or duplicated by a restart.
+- **Preconditions:** An open vote with a pending reminder, and/or a scheduled watch party with a pending reminder.
 - **Steps:**
   1. Restart the bot.
   2. Wait for each pending job's scheduled time.
@@ -1392,7 +1218,7 @@ For each document, confirm it matches actual current behavior observed during Se
 
 ### 12.3 Administration Guide
 
-- **Steps:** Spot-check the sections exercised in Sections 3-9 above (voting, Watch Party Lifecycle, backup/restore, statistics) against actual behavior.
+- **Steps:** Spot-check the sections exercised in Sections 3-9 above (voting, backup/restore, statistics) against actual behavior.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

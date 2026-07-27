@@ -1,16 +1,13 @@
 """Derives a suggestion's admin-facing display status.
 
-Originally replaced an older Watched-based model with four statuses:
-Available, Rotation Cooldown, Vote Winner, Retired ("Vote Winner replaces
-Watched for v1" -- WASH knew a suggestion won a vote, but not that the
-group actually watched it). The Watch Party Lifecycle milestone completes
-that deferred placeholder: WASH now knows when a scheduled watch party's
-end time passes (see services/watch_party_completion_service.py), so
-Watched returns as its own genuine fifth status.
+Replaces the old Watched-based model with four statuses: Available,
+Rotation Cooldown, Vote Winner, Retired ("Vote Winner replaces Watched
+for v1" -- WASH knows a suggestion won a vote, not that the group
+actually watched it).
 
-Four of those five are persisted on WatchItemStatus (SUGGESTED,
-VOTE_WINNER, WATCHED, ARCHIVED) -- Rotation Cooldown is deliberately NOT a
-persisted member. It's computed fresh every time from
+Only three of those are persisted on WatchItemStatus (SUGGESTED,
+VOTE_WINNER, ARCHIVED) -- Rotation Cooldown is deliberately NOT a fourth
+enum member. It's computed fresh every time from
 RotationService.is_in_rotation_cooldown(), since it must automatically
 revert to Available the moment a fresh rotation begins (see that
 method's docstring), with no persisted "clear cooldown" step required.
@@ -25,12 +22,11 @@ from watch_party_manager.domain.watch_item import WatchItem, WatchItemStatus
 
 
 class SuggestionDisplayStatus(str, Enum):
-    """One of the five statuses shown on a suggestion's embed/listing."""
+    """One of the four statuses shown on a suggestion's embed/listing."""
 
     AVAILABLE = "available"
     ROTATION_COOLDOWN = "rotation_cooldown"
     VOTE_WINNER = "vote_winner"
-    WATCHED = "watched"
     RETIRED = "retired"
 
 
@@ -38,7 +34,6 @@ SUGGESTION_DISPLAY_STATUS_LABELS: dict[SuggestionDisplayStatus, str] = {
     SuggestionDisplayStatus.AVAILABLE: "🟢 Available",
     SuggestionDisplayStatus.ROTATION_COOLDOWN: "🟡 Rotation Cooldown",
     SuggestionDisplayStatus.VOTE_WINNER: "🟣 Vote Winner",
-    SuggestionDisplayStatus.WATCHED: "🔵 Watched",
     SuggestionDisplayStatus.RETIRED: "🔴 Retired",
 }
 
@@ -59,8 +54,6 @@ def compute_display_status(watch_item: WatchItem, *, in_rotation_cooldown: bool)
     """
     if watch_item.status is WatchItemStatus.ARCHIVED:
         return SuggestionDisplayStatus.RETIRED
-    if watch_item.status is WatchItemStatus.WATCHED:
-        return SuggestionDisplayStatus.WATCHED
     if watch_item.status is WatchItemStatus.VOTE_WINNER:
         return SuggestionDisplayStatus.VOTE_WINNER
     if in_rotation_cooldown:

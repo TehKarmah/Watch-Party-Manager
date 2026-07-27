@@ -22,21 +22,11 @@ from watch_party_manager.scheduler.scheduled_job import ScheduledJob
 from watch_party_manager.scheduler.scheduler_service import SchedulerService
 
 WATCH_PARTY_REMINDER_JOB_TYPE = "watch_party_reminder"
-# Watch Party Lifecycle: fires once a watch party's expected end time
-# (scheduled_at + duration_minutes, see WatchParty.ends_at) passes,
-# automatically transitioning it to COMPLETED and its Watch Item to
-# Watched -- see WatchPartyCompletionJobHandler.
-WATCH_PARTY_COMPLETION_JOB_TYPE = "watch_party_completion"
 
 
 def watch_party_reminder_logical_key(watch_party_id: int) -> str:
     """Build the logical key that makes a watch party's reminder job idempotent."""
     return f"watch_party:{watch_party_id}:reminder"
-
-
-def watch_party_completion_logical_key(watch_party_id: int) -> str:
-    """Build the logical key that makes a watch party's completion job idempotent."""
-    return f"watch_party:{watch_party_id}:completion"
 
 
 def build_watch_party_reminder_job(
@@ -224,122 +214,4 @@ async def cancel_watch_party_reminder(
         return None
     return await scheduler_service.cancel_by_logical_key(
         watch_party_reminder_logical_key(watch_party_id)
-    )
-
-
-def build_watch_party_completion_job(watch_party: WatchParty, guild_id: int) -> Optional[ScheduledJob]:
-    """Build the job that will automatically complete this watch party
-    once its expected end time passes (Watch Party Lifecycle).
-
-    Returns None if the watch party has no known duration_minutes (see
-    WatchParty.ends_at) -- there's no end time to schedule against, so
-    automatic completion simply never happens for it (e.g. a watch party
-    scheduled via /watch-party schedule, which doesn't collect a
-    duration). This is a deliberate no-op, not an error.
-
-    Args:
-        watch_party: The just-created (or just-rescheduled) watch party.
-        guild_id: The Discord guild this watch party belongs to.
-
-    Returns:
-        The watch_party_completion job, or None if no duration is known.
-    """
-    ends_at = watch_party.ends_at
-    if ends_at is None:
-        return None
-
-    return ScheduledJob(
-        guild_id=guild_id,
-        job_type=WATCH_PARTY_COMPLETION_JOB_TYPE,
-        logical_key=watch_party_completion_logical_key(watch_party.id),
-        run_at=ends_at,
-        payload={"watch_party_id": watch_party.id},
-    )
-
-
-async def schedule_watch_party_completion(
-    scheduler_service: Optional[SchedulerService],
-    watch_party: WatchParty,
-    guild_id: int,
-) -> Optional[ScheduledJob]:
-    """Schedule the automatic-completion job for a newly created watch party.
-
-    Must only be called after the watch party has been successfully
-    scheduled and persisted, mirroring schedule_watch_party_reminder's
-    same contract. Idempotency is entirely SchedulerService.schedule()'s
-    existing responsibility, exactly as with the reminder job.
-
-    Args:
-        scheduler_service: The scheduler to schedule the job through. If
-            None, scheduling is skipped entirely (a no-op).
-        watch_party: The just-created, just-persisted watch party.
-        guild_id: The Discord guild this watch party belongs to.
-
-    Returns:
-        The scheduled job, or None if scheduler_service was None or the
-        watch party has no known duration (see build_watch_party_completion_job).
-    """
-    if scheduler_service is None:
-        return None
-
-    job = build_watch_party_completion_job(watch_party, guild_id)
-    if job is None:
-        return None
-    return await scheduler_service.schedule(job)
-
-
-async def reschedule_watch_party_completion(
-    scheduler_service: Optional[SchedulerService],
-    watch_party: WatchParty,
-    guild_id: int,
-) -> Optional[ScheduledJob]:
-    """Replace a watch party's completion job after it has been rescheduled.
-
-    Cancels whatever completion job is currently active under this watch
-    party's logical key (a no-op if none is active -- e.g. no duration
-    was known, or it already fired) and schedules a fresh one against the
-    watch party's current ends_at. Mirrors
-    reschedule_watch_party_reminder's identical "cancel the obsolete
-    pending job and create the replacement" policy.
-
-    Args:
-        scheduler_service: The scheduler to cancel/schedule through. If
-            None, this is a no-op.
-        watch_party: The watch party, already updated to its new
-            scheduled_at (e.g. via WatchPartyService.reschedule_watch_party()).
-        guild_id: The Discord guild this watch party belongs to.
-
-    Returns:
-        The newly scheduled job, or None if scheduler_service was None or
-        the watch party has no known duration.
-    """
-    if scheduler_service is None:
-        return None
-
-    await scheduler_service.cancel_by_logical_key(watch_party_completion_logical_key(watch_party.id))
-    return await schedule_watch_party_completion(scheduler_service, watch_party, guild_id)
-
-
-async def cancel_watch_party_completion(
-    scheduler_service: Optional[SchedulerService],
-    watch_party_id: int,
-) -> Optional[ScheduledJob]:
-    """Remove a watch party's scheduled completion job.
-
-    Used when a watch party is cancelled. Safe to call unconditionally: a
-    no-op (returns None) if scheduler_service is None or no completion
-    job is currently active for this watch party.
-
-    Args:
-        scheduler_service: The scheduler to cancel the job through. If
-            None, this is a no-op.
-        watch_party_id: The watch party whose completion job should be removed.
-
-    Returns:
-        The cancelled job, or None if there was nothing to cancel.
-    """
-    if scheduler_service is None:
-        return None
-    return await scheduler_service.cancel_by_logical_key(
-        watch_party_completion_logical_key(watch_party_id)
     )

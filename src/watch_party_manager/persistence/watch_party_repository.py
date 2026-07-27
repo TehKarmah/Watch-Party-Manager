@@ -103,10 +103,6 @@ class JsonWatchPartyRepository:
             "channel_id": watch_party.channel_id,
             "status": watch_party.status.value,
             "created_at": watch_party.created_at.isoformat(),
-            "duration_minutes": watch_party.duration_minutes,
-            "vote_round_id": watch_party.vote_round_id,
-            "description_override": watch_party.description_override,
-            "discord_event_id": watch_party.discord_event_id,
         }
 
     @staticmethod
@@ -119,8 +115,4 @@ class JsonWatchPartyRepository:
             channel_id=entry.get("channel_id"),
             status=WatchPartyStatus(entry.get("status", WatchPartyStatus.SCHEDULED.value)),
             created_at=datetime.fromisoformat(entry["created_at"]),
-            duration_minutes=entry.get("duration_minutes"),
-            vote_round_id=entry.get("vote_round_id"),
-            description_override=entry.get("description_override"),
-            discord_event_id=entry.get("discord_event_id"),
         )

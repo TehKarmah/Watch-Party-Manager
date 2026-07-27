@@ -66,29 +66,6 @@ class FakeResponse:
         self.sent_view = view
 
 
-class FakeAnnouncementChannel:
-    def __init__(self) -> None:
-        self.sent_messages: list = []
-
-    async def send(self, content=None, **kwargs) -> None:
-        self.sent_messages.append(content)
-
-
-class FakeClient:
-    """Minimal stand-in for Interaction.client -- just enough for
-    post_watch_party_announcement's get_channel/fetch_channel/send.
-    """
-
-    def __init__(self) -> None:
-        self.announcement_channel = FakeAnnouncementChannel()
-
-    def get_channel(self, channel_id):
-        return self.announcement_channel
-
-    async def fetch_channel(self, channel_id):
-        return self.announcement_channel
-
-
 class FakeInteraction:
     def __init__(self, user_id: int = 1, is_wash_crew: bool = True, guild_id=100, channel_id=200) -> None:
         roles = [FakeRole(WASH_CREW_ROLE_ID)] if is_wash_crew else [FakeRole(1)]
@@ -96,7 +73,6 @@ class FakeInteraction:
         self.guild_id = guild_id
         self.channel_id = channel_id
         self.response = FakeResponse()
-        self.client = FakeClient()
 
 
 class MemorySchedulerRepository:
@@ -777,33 +753,6 @@ class HandleRescheduleWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase
         self.assertIsNone(interaction.response.sent_view)
         self.assertEqual(self.scheduler_repository.jobs[original_job.job_id].status, JobStatus.PENDING)
 
-    async def test_a_completed_watch_party_appears_in_the_picker_and_reverts_to_scheduled(self) -> None:
-        # Correction workflow (Watch Party Lifecycle goal 7): automatic
-        # completion marked this watch party COMPLETED, but it didn't
-        # actually happen. Rescheduling it through the ordinary
-        # /reschedule_watch_party picker should revert it to SCHEDULED.
-        watch_party = await self._schedule()
-        self.watch_party_service.mark_completed(watch_party.id)
-        interaction = FakeInteraction(is_wash_crew=True)
-
-        await handle_reschedule_watch_party_completion(
-            interaction,
-            watch_party_service=self.watch_party_service,
-            wash_crew_role_id=WASH_CREW_ROLE_ID,
-            when="2026-09-01 20:00",
-            scheduler_service=self.scheduler_service,
-            suggestion_service=self.suggestion_service,
-        )
-        select = interaction.response.sent_view.children[0]
-        self.assertEqual(str(watch_party.id), select.options[0].value)
-
-        select_interaction = await _select_watch_party(interaction.response.sent_view, watch_party.id)
-
-        self.assertFalse(select_interaction.response.sent_ephemeral)
-        updated = self.watch_party_service.get_watch_party(watch_party.id)
-        self.assertEqual(WatchPartyStatus.SCHEDULED, updated.status)
-        self.assertEqual(datetime(2026, 9, 1, 20, 0, tzinfo=timezone.utc), updated.scheduled_at)
-
 
 class HandleCancelWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
@@ -958,16 +907,6 @@ class HandleCancelWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(select_interaction.response.sent_ephemeral)
         self.assertIn("already cancelled", select_interaction.response.sent_message)
-
-    async def test_posts_a_cancellation_announcement_naming_the_title(self) -> None:
-        watch_party = await self._schedule()
-
-        select_interaction = await self._cancel(watch_party)
-
-        announcement_channel = select_interaction.client.announcement_channel
-        self.assertEqual(1, len(announcement_channel.sent_messages))
-        self.assertIn("The Matrix", announcement_channel.sent_messages[0])
-        self.assertIn("cancelled", announcement_channel.sent_messages[0])
 
 
 if __name__ == "__main__":

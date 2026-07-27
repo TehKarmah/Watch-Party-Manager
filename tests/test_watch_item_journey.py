@@ -163,37 +163,6 @@ class RemoveRejectionTests(unittest.TestCase):
         self.assertEqual(journey.rejected_by_discord_user_ids, (2,))
 
 
-class RemoveLastWatchDateTests(unittest.TestCase):
-    """Watch Party Lifecycle correction: undoing a wrong automatic
-    completion removes exactly the most recently recorded watch date.
-    """
-
-    def test_removes_the_only_watch_date(self) -> None:
-        journey = WatchItemJourney()
-        journey.record_watch_date(date(2026, 7, 9))
-
-        removed = journey.remove_last_watch_date()
-
-        self.assertTrue(removed)
-        self.assertEqual(journey.watch_dates, ())
-
-    def test_removing_with_no_watch_dates_is_a_no_op(self) -> None:
-        journey = WatchItemJourney()
-
-        removed = journey.remove_last_watch_date()
-
-        self.assertFalse(removed)
-
-    def test_removes_only_the_most_recent_watch_date(self) -> None:
-        journey = WatchItemJourney()
-        journey.record_watch_date(date(2026, 1, 1))
-        journey.record_watch_date(date(2026, 7, 9))
-
-        journey.remove_last_watch_date()
-
-        self.assertEqual(journey.watch_dates, (date(2026, 1, 1),))
-
-
 class RecordRotationEntryIdempotencyTests(unittest.TestCase):
     def test_recording_the_same_rotation_twice_does_not_duplicate_it(self) -> None:
         journey = WatchItemJourney()

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import date
 from pathlib import Path
 
 from watch_party_manager.bot import build_edit_suggestion_summary, handle_edit_suggestion
@@ -218,48 +217,7 @@ class ChangeStatusActionTests(EditSuggestionTestCase):
         button_interaction = await self._open_change_status()
         select = button_interaction.response.edited_view.children[0]
         offered_values = {option.value for option in select.options}
-        self.assertEqual({"suggested", "vote_winner", "watched", "archived"}, offered_values)
-
-    async def test_selecting_watched_sets_the_status(self) -> None:
-        button_interaction = await self._open_change_status()
-        select = button_interaction.response.edited_view.children[0]
-        select._values = ["watched"]
-
-        select_interaction = FakeInteraction()
-        await select.callback(select_interaction)
-
-        self.assertEqual(WatchItemStatus.WATCHED, self.suggestion_service.get_suggestion(self.item.id).status)
-
-    async def test_reverting_watched_to_vote_winner_also_removes_the_watch_date(self) -> None:
-        # Watch Party Lifecycle correction: "that scheduled watch party
-        # didn't actually happen" -- reverting through this exact same
-        # Change Status action also undoes the recorded watch date.
-        self.suggestion_service.record_watch(self.item.id, date(2026, 7, 9))
-        button_interaction = await self._open_change_status()
-        select = button_interaction.response.edited_view.children[0]
-        select._values = ["vote_winner"]
-
-        select_interaction = FakeInteraction()
-        await select.callback(select_interaction)
-
-        updated = self.suggestion_service.get_suggestion(self.item.id)
-        self.assertEqual(WatchItemStatus.VOTE_WINNER, updated.status)
-        self.assertEqual(updated.journey.watch_dates, ())
-        self.assertIn("watch date was also removed", select_interaction.response.sent_message)
-
-    async def test_reverting_to_vote_winner_from_a_non_watched_status_does_not_touch_watch_dates(self) -> None:
-        self.suggestion_service.record_watch(self.item.id, date(2026, 7, 9))
-        self.suggestion_service.set_suggestion_status(self.item.id, WatchItemStatus.SUGGESTED)
-        button_interaction = await self._open_change_status()
-        select = button_interaction.response.edited_view.children[0]
-        select._values = ["vote_winner"]
-
-        select_interaction = FakeInteraction()
-        await select.callback(select_interaction)
-
-        updated = self.suggestion_service.get_suggestion(self.item.id)
-        self.assertEqual(updated.journey.watch_dates, (date(2026, 7, 9),))
-        self.assertNotIn("watch date was also removed", select_interaction.response.sent_message)
+        self.assertEqual({"suggested", "vote_winner", "archived"}, offered_values)
 
 
 class MoveCollectionActionTests(EditSuggestionTestCase):

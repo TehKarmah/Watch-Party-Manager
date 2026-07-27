@@ -331,7 +331,7 @@ class RotationService:
         """
         if item is None:
             return "removed"
-        if item.status in (WatchItemStatus.VOTE_WINNER, WatchItemStatus.WATCHED):
+        if item.status is WatchItemStatus.VOTE_WINNER:
             return "watched"
         if item.status is WatchItemStatus.ARCHIVED:
             return "retired" if item.journey.retired_at is not None else "archived"

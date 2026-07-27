@@ -77,10 +77,6 @@ class WatchPartyService:
         scheduled_at: datetime,
         guild_id: int,
         channel_id: Optional[int] = None,
-        *,
-        duration_minutes: Optional[int] = None,
-        vote_round_id: Optional[int] = None,
-        description_override: Optional[str] = None,
     ) -> WatchPartyResult:
         """Schedule a new watch party.
 
@@ -92,19 +88,6 @@ class WatchPartyService:
             guild_id: The Discord guild this watch party belongs to.
             channel_id: The Discord channel or thread to post the
                 reminder to, if already known.
-            duration_minutes: How long the watch party is expected to
-                run, if known. Watch Party Lifecycle: this is what lets
-                WatchPartyCompletionService know when to automatically
-                mark the Watch Item Watched -- a watch party scheduled
-                with no duration (e.g. via /watch-party schedule, which
-                doesn't collect one) simply never completes
-                automatically.
-            vote_round_id: The voting round whose win produced this watch
-                party, when scheduled via the winner announcement's
-                Schedule Watch Party button. None for a watch party
-                scheduled directly via /watch-party schedule.
-            description_override: A description to use instead of the
-                Watch Item's own, if the administrator supplied one.
 
         Returns:
             WatchPartyResult indicating success or failure. On success,
@@ -122,9 +105,6 @@ class WatchPartyService:
             scheduled_at=scheduled_at,
             guild_id=guild_id,
             channel_id=channel_id,
-            duration_minutes=duration_minutes,
-            vote_round_id=vote_round_id,
-            description_override=description_override,
         )
         self._next_id += 1
         self._watch_parties[watch_party.id] = watch_party
@@ -134,39 +114,6 @@ class WatchPartyService:
             message=f"Watch party #{watch_party.id} scheduled.",
             watch_party=watch_party,
         )
-
-    def get_active_watch_party_for_item(self, watch_item_id: int) -> Optional[WatchParty]:
-        """Return the non-cancelled watch party already scheduled for this
-        Watch Item, if any (Watch Party Lifecycle: duplicate-scheduling
-        prevention).
-
-        A completed watch party still counts as "already exists" here --
-        rewatching an already-watched item isn't this method's concern
-        (see the Watch Party Lifecycle correction workflow for undoing a
-        wrong automatic completion instead of scheduling a duplicate).
-        Only CANCELLED watch parties are excluded, since a cancelled one
-        never happened and shouldn't block scheduling a fresh attempt.
-
-        Returns:
-            The matching WatchParty (there is at most one, by
-            construction -- callers always check here before scheduling
-            another), or None if no active watch party exists for this item.
-        """
-        for watch_party in self._watch_parties.values():
-            if watch_party.watch_item_id == watch_item_id and watch_party.status != WatchPartyStatus.CANCELLED:
-                return watch_party
-        return None
-
-    def get_watch_party_by_discord_event_id(self, discord_event_id: int) -> Optional[WatchParty]:
-        """Find the watch party linked to a given Discord Scheduled Event
-        ID, if any (Discord Scheduled Events: event synchronization uses
-        this to map an incoming discord.py gateway event back to WASH's
-        own record).
-        """
-        for watch_party in self._watch_parties.values():
-            if watch_party.discord_event_id == discord_event_id:
-                return watch_party
-        return None
 
     def get_watch_party(self, watch_party_id: int) -> Optional[WatchParty]:
         """Get a watch party by ID.
@@ -234,13 +181,6 @@ class WatchPartyService:
         Returns:
             WatchPartyResult indicating success or failure. On success,
             watch_party is the updated watch party.
-
-        A COMPLETED watch party may also be rescheduled -- Watch Party
-        Lifecycle correction workflow: "that scheduled watch party didn't
-        actually happen" reschedules it to a new time and reverts its
-        status back to SCHEDULED in the same step, rather than leaving a
-        stale COMPLETED record alongside a fresh SCHEDULED one. Only
-        CANCELLED remains genuinely terminal.
         """
         watch_party = self._watch_parties.get(watch_party_id)
         if watch_party is None:
@@ -252,89 +192,13 @@ class WatchPartyService:
                 message="That watch party has been cancelled and cannot be rescheduled.",
             )
 
-        updated = watch_party.with_changes(scheduled_at=new_scheduled_at, status=WatchPartyStatus.SCHEDULED)
+        updated = watch_party.with_changes(scheduled_at=new_scheduled_at)
         self._watch_parties[watch_party_id] = updated
         self._save()
         return WatchPartyResult(
             success=True,
             message=f"Watch party #{watch_party_id} rescheduled.",
             watch_party=updated,
-        )
-
-    def set_discord_event_id(self, watch_party_id: int, discord_event_id: int) -> WatchPartyResult:
-        """Link a watch party to the Discord Scheduled Event created for
-        it (Discord Scheduled Events: Track Discord Events). Called once,
-        right after the event is successfully created -- a watch party
-        scheduled while Discord Scheduled Events are unavailable (see the
-        Fallback Behavior in bot.py) simply never calls this and keeps
-        discord_event_id unset.
-        """
-        watch_party = self._watch_parties.get(watch_party_id)
-        if watch_party is None:
-            return WatchPartyResult(success=False, message="That watch party doesn't exist.")
-
-        updated = watch_party.with_changes(discord_event_id=discord_event_id)
-        self._watch_parties[watch_party_id] = updated
-        self._save()
-        return WatchPartyResult(
-            success=True,
-            message=f"Watch party #{watch_party_id} linked to Discord event {discord_event_id}.",
-            watch_party=updated,
-        )
-
-    def sync_from_discord_event(
-        self, watch_party_id: int, scheduled_at: datetime, duration_minutes: Optional[int]
-    ) -> WatchPartyResult:
-        """Update a watch party's time/duration to match an edit made
-        directly to its linked Discord Scheduled Event (Discord Scheduled
-        Events: Event Synchronization -- Discord is the source of truth
-        once an event exists; WASH's own record follows it, never the
-        other way around, so the two can never silently diverge).
-
-        A CANCELLED watch party is left alone -- there's nothing to sync
-        once WASH already considers it over.
-        """
-        watch_party = self._watch_parties.get(watch_party_id)
-        if watch_party is None:
-            return WatchPartyResult(success=False, message="That watch party doesn't exist.")
-
-        if watch_party.status == WatchPartyStatus.CANCELLED:
-            return WatchPartyResult(success=False, message="That watch party has been cancelled.")
-
-        updated = watch_party.with_changes(scheduled_at=scheduled_at, duration_minutes=duration_minutes)
-        self._watch_parties[watch_party_id] = updated
-        self._save()
-        return WatchPartyResult(
-            success=True,
-            message=f"Watch party #{watch_party_id} synced from its Discord event.",
-            watch_party=updated,
-        )
-
-    def mark_completed(self, watch_party_id: int) -> WatchPartyResult:
-        """Transition a watch party from SCHEDULED to COMPLETED (Watch
-        Party Lifecycle: automatic completion once its end time passes).
-
-        Idempotency guard: only a currently-SCHEDULED watch party can be
-        completed -- calling this again for one already COMPLETED (or one
-        that's since been CANCELLED) fails rather than re-completing it,
-        mirroring VoteService.close_round()'s same "already closed"
-        guard. This is what makes WatchPartyCompletionService.
-        complete_watch_party() safe to call more than once for the same
-        watch_party_id.
-        """
-        watch_party = self._watch_parties.get(watch_party_id)
-        if watch_party is None:
-            return WatchPartyResult(success=False, message="That watch party doesn't exist.")
-
-        if watch_party.status != WatchPartyStatus.SCHEDULED:
-            return WatchPartyResult(success=False, message="That watch party is not currently scheduled.")
-
-        watch_party.status = WatchPartyStatus.COMPLETED
-        self._save()
-        return WatchPartyResult(
-            success=True,
-            message=f"Watch party #{watch_party_id} completed.",
-            watch_party=watch_party,
         )
 
     def cancel_watch_party(self, watch_party_id: int) -> WatchPartyResult:

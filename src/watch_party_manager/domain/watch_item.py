@@ -34,21 +34,10 @@ class WatchItemStatus(str, Enum):
     rotation state (see RotationService.is_in_rotation_cooldown) rather
     than persisted, since it reverts to Available automatically the
     moment a new rotation begins. SUGGESTED covers both.
-
-    WATCHED (Watch Party Lifecycle): previously "Vote Winner replaces
-    Watched for v1" (see services/suggestion_display_status.py's older
-    history) -- WASH now knows when a scheduled watch party's end time
-    passes (see services/watch_party_completion_service.py), so a Vote
-    Winner transitions to Watched automatically once that happens,
-    rather than staying Vote Winner forever. A correction (the watch
-    party didn't actually happen) reverts this back to VOTE_WINNER via
-    the same generic set_suggestion_status() every other status change
-    already uses.
     """
 
     SUGGESTED = "suggested"
     VOTE_WINNER = "vote_winner"
-    WATCHED = "watched"
     ARCHIVED = "archived"
 
 
