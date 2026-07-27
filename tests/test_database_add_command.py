@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -97,11 +98,22 @@ class FakeGuild:
 
 
 class FakeCurrentLocation:
-    """A minimal stand-in for the channel/thread a command was run in."""
+    """A minimal stand-in for the channel/thread a command was run in.
 
-    def __init__(self, location_id: int, channel_type) -> None:
+    Also doubles as a thread parent for the Create New Thread Improvement
+    fallback tests -- when this location is a text channel, Create New
+    Thread may fall back to creating the new thread here.
+    """
+
+    def __init__(self, location_id: int, channel_type, *, new_thread_id: Optional[int] = None) -> None:
         self.id = location_id
         self.type = channel_type
+        self._new_thread_id = new_thread_id
+        self.created_thread: "FakeThread | None" = None
+
+    async def create_thread(self, *, name, type):
+        self.created_thread = FakeThread(self._new_thread_id if self._new_thread_id is not None else self.id)
+        return self.created_thread
 
 
 class FakeInteraction:
@@ -440,6 +452,93 @@ class UseCurrentThreadOrChannelTests(DatabaseAddCommandTestCase):
 
         self.assertIn("already exists", destination_interaction.response.edited_content)
         self.assertEqual(len(self.suggestion_service.list_databases(GUILD_ID)), 1)
+
+
+class CreateNewThreadFallbackTests(DatabaseAddCommandTestCase):
+    """Create New Thread Improvement (polish batch): when no Home Channel
+    is configured (or it's no longer available), Create New Thread falls
+    back to creating the new thread under the current channel instead of
+    presenting an option that can never succeed -- but only when the
+    current channel is actually eligible to parent one (Discord doesn't
+    allow nesting a thread under another thread).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # No home_channel_id configured at all -- the unconfigured case.
+        self.guild_configuration_repository.save(
+            GuildConfiguration(guild_id=GUILD_ID, guild_name="Test Guild", setup_completed=True)
+        )
+
+    async def _reach_destination_choice(self, *, guild=None, channel=None):
+        interaction = FakeInteraction(guild=guild, channel=channel)
+        await handle_database_add(interaction, self.bot)
+        type_view = interaction.response.sent_view
+        movies_button = next(b for b in type_view.children if b.custom_id == "wpm_database_add_type_movies")
+
+        type_interaction = FakeInteraction(guild=guild, channel=channel)
+        await movies_button.callback(interaction=type_interaction)
+        return type_interaction
+
+    def _create_thread_button(self, destination_view):
+        return next(
+            b for b in destination_view.children
+            if b.custom_id == "wpm_database_admin_destination_create_thread"
+        )
+
+    async def test_falls_back_to_the_current_text_channel(self) -> None:
+        current_channel = FakeCurrentLocation(556, discord.ChannelType.text, new_thread_id=888)
+        guild = FakeGuild()
+        type_interaction = await self._reach_destination_choice(guild=guild, channel=current_channel)
+        destination_view = type_interaction.response.edited_view
+        create_thread_button = self._create_thread_button(destination_view)
+        self.assertFalse(create_thread_button.disabled)
+        self.assertIn("here in this channel instead", type_interaction.response.edited_content)
+
+        destination_interaction = FakeInteraction(guild=guild, channel=current_channel)
+        await create_thread_button.callback(interaction=destination_interaction)
+        modal = destination_interaction.response.sent_modal
+
+        modal_interaction = FakeInteraction(guild=guild, channel=current_channel)
+        await modal.on_submit(interaction=modal_interaction)
+
+        self.assertEqual(current_channel.created_thread.id, 888)
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        self.assertEqual(len(databases), 1)
+        self.assertEqual(databases[0].channel_id, 888)
+
+    async def test_disabled_when_current_location_cannot_parent_a_thread_either(self) -> None:
+        current_thread = FakeCurrentLocation(557, discord.ChannelType.public_thread)
+        guild = FakeGuild()
+        type_interaction = await self._reach_destination_choice(guild=guild, channel=current_thread)
+        destination_view = type_interaction.response.edited_view
+
+        create_thread_button = self._create_thread_button(destination_view)
+
+        self.assertTrue(create_thread_button.disabled)
+        self.assertNotIn("here in this channel instead", type_interaction.response.edited_content)
+
+    async def test_disabled_when_no_current_location_is_known_either(self) -> None:
+        guild = FakeGuild()
+        type_interaction = await self._reach_destination_choice(guild=guild, channel=None)
+        destination_view = type_interaction.response.edited_view
+
+        create_thread_button = self._create_thread_button(destination_view)
+
+        self.assertTrue(create_thread_button.disabled)
+
+    async def test_a_stale_click_on_the_disabled_button_shows_a_clear_error(self) -> None:
+        current_thread = FakeCurrentLocation(557, discord.ChannelType.public_thread)
+        guild = FakeGuild()
+        type_interaction = await self._reach_destination_choice(guild=guild, channel=current_thread)
+        destination_view = type_interaction.response.edited_view
+        create_thread_button = self._create_thread_button(destination_view)
+
+        destination_interaction = FakeInteraction(guild=guild, channel=current_thread)
+        await create_thread_button.callback(interaction=destination_interaction)
+
+        self.assertIn("nowhere to create a new thread", destination_interaction.response.edited_content)
+        self.assertEqual(self.suggestion_service.list_databases(GUILD_ID), [])
 
 
 class CustomTypeTests(DatabaseAddCommandTestCase):

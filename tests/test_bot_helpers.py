@@ -58,8 +58,8 @@ class BotHelperTests(unittest.TestCase):
             "/add",
             "/list",
             "/remove",
-            "/voting start",
-            "/voting status",
+            "/vote start",
+            "/vote status",
             "/database add",
             "/database list",
             "/database remove",
@@ -108,7 +108,7 @@ class BotHelperTests(unittest.TestCase):
         # FR-033A extends the Watch Party Member tier: /add and /list
         # (view-only, never public) are visible over "everyone". FR-034
         # additionally gives them /stats (privacy-scoped -- see
-        # StatsType/handle_stats). /remove, /voting status, and
+        # StatsType/handle_stats). /remove, /vote status, and
         # /watch-party status remain WASH Crew only.
         help_text = build_help_text(show_admin=False, show_member=True)
 
@@ -118,7 +118,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("/list", help_text)
         self.assertIn("/stats", help_text)
         self.assertNotIn("/remove", help_text)
-        self.assertNotIn("/voting status", help_text)
+        self.assertNotIn("/vote status", help_text)
         self.assertNotIn("/watch-party status", help_text)
         self.assertNotIn("**WASH Crew: Collections**", help_text)
         self.assertNotIn("**WASH Crew: Configuration**", help_text)

@@ -220,6 +220,7 @@ from watch_party_manager.config_view import (
     ConfigDatabaseCandidateSelectionView,
     ConfigDatabaseSectionView,
     ConfigDatabaseSettingsMenuView,
+    ConfigHomeChannelSectionView,
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
     ConfigModalRetryView,
@@ -2529,6 +2530,73 @@ async def send_config_section(
             "posted for WASH Crew, or clear it."
         )
 
+    elif section == ConfigSection.HOME_CHANNEL:
+        current_channel_available = _can_be_new_thread_parent(interaction.channel)
+
+        def home_channel_view() -> ConfigHomeChannelSectionView:
+            return ConfigHomeChannelSectionView(
+                on_create_new,
+                on_use_current,
+                on_use_existing,
+                on_clear,
+                on_back,
+                current_channel_available=current_channel_available,
+            )
+
+        async def on_use_current(current_interaction: discord.Interaction) -> None:
+            if not current_channel_available or interaction.channel is None:
+                # Defense in depth -- the button is already disabled for
+                # this case, but a stale/cached component could still be
+                # clicked.
+                await current_interaction.response.edit_message(
+                    content=f"{body}\n\n⚠ This option isn't available here. Choose a different option.",
+                    view=home_channel_view(),
+                )
+                return
+            result = config_service.set_home_channel(guild_id, interaction.channel.id, current_interaction.guild)
+            await send_config_result(current_interaction, bot, guild_id, result)
+
+        async def on_use_existing(existing_interaction: discord.Interaction) -> None:
+            async def on_channel_selected(select_interaction: discord.Interaction, channel_id: int) -> None:
+                result = config_service.set_home_channel(guild_id, channel_id, select_interaction.guild)
+                await send_config_result(select_interaction, bot, guild_id, result)
+
+            await existing_interaction.response.edit_message(
+                content=f"{body}\n\nChoose an existing text channel:",
+                view=ExistingChannelSelectView(on_channel_selected, on_back),
+            )
+
+        async def on_create_new(create_interaction: discord.Interaction) -> None:
+            async def on_name_submit(modal_interaction: discord.Interaction, channel_name: str) -> None:
+                if modal_interaction.guild is None:
+                    await modal_interaction.response.edit_message(
+                        content=f"{body}\n\n⚠ That server is no longer available. Choose another option.",
+                        view=home_channel_view(),
+                    )
+                    return
+                try:
+                    channel = await modal_interaction.guild.create_text_channel(name=channel_name)
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    await modal_interaction.response.edit_message(
+                        content=f"{body}\n\n⚠ Could not create the channel: {exc}",
+                        view=home_channel_view(),
+                    )
+                    return
+                result = config_service.set_home_channel(guild_id, channel.id, modal_interaction.guild)
+                await send_config_result(modal_interaction, bot, guild_id, result)
+
+            await create_interaction.response.send_modal(HomeChannelNameModal(on_name_submit))
+
+        async def on_clear(clear_interaction: discord.Interaction) -> None:
+            result = config_service.clear_home_channel(guild_id)
+            await send_config_result(clear_interaction, bot, guild_id, result)
+
+        view = home_channel_view()
+        body += (
+            "\n\nChoose the channel every collection's suggestion thread (and, by default, the "
+            "watched-movie destination thread) should be created as a sibling under."
+        )
+
     else:  # ConfigSection.WATCH_DESTINATION (guild-wide default)
 
         async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
@@ -3203,7 +3271,7 @@ class DatabaseGroup(discord.app_commands.Group):
     command in this file, so behavior stays unit-testable without a live
     Discord connection. No group-level interaction_check: every
     subcommand already performs its own WASH Crew check internally (some,
-    like /voting edit, deliberately check only after resolving context)
+    like /vote edit, deliberately check only after resolving context)
     -- unchanged from before this move so that ordering is preserved
     exactly.
     """
@@ -3274,22 +3342,23 @@ class DatabaseGroup(discord.app_commands.Group):
 
 
 class VotingGroup(discord.app_commands.Group):
-    """WASH Crew-only /voting command group (Command Structure Cleanup, pre-v1).
+    """WASH Crew-only /vote command group (Command Structure Cleanup, pre-v1).
 
     Replaces the former top-level /start_vote, /vote_status, and
     /edit_vote commands -- removed outright, with no compatibility alias.
-    /vote itself (member vote casting) is unaffected -- voting still
-    happens entirely through the interactive buttons on a voting post,
-    never a slash command, so there is nothing under this group for
-    members to cast a vote with; /voting is WASH Crew administration only.
-    Subcommand bodies are unchanged from their former top-level commands,
-    including each one's own permission check ordering (e.g. /voting
-    edit's WASH Crew check deliberately happens after collection
-    resolution, exactly as /edit_vote's did).
+    Casting a vote still happens entirely through the interactive buttons
+    on a voting post, never a slash command, so there is no standalone
+    /vote command and no naming conflict with this group; /vote is WASH
+    Crew administration only. Subcommand bodies are unchanged from their
+    former top-level commands, including each one's own permission check
+    ordering (e.g. /vote edit's WASH Crew check deliberately happens after
+    collection resolution, exactly as /edit_vote's did). Renamed from
+    /voting to /vote per approved polish batch; no compatibility alias
+    kept (pre-release).
     """
 
     def __init__(self, bot: "WatchPartyBot") -> None:
-        super().__init__(name="voting", description="Manage voting rounds (WASH Crew only).")
+        super().__init__(name="vote", description="Manage voting rounds (WASH Crew only).")
         self.bot = bot
 
     @discord.app_commands.command(name="start", description="Start a new voting round.")
@@ -7612,6 +7681,42 @@ def _is_usable_current_location(channel: Optional[Any]) -> bool:
     return channel is not None and getattr(channel, "type", None) in _USABLE_CURRENT_LOCATION_TYPES
 
 
+def _can_be_new_thread_parent(channel: Optional[Any]) -> bool:
+    """Whether `channel` could parent a brand-new thread.
+
+    Only a top-level text channel qualifies -- Discord does not support
+    nesting a thread under another thread. Used by Create New Thread's
+    fallback: when no Home Channel is configured (or it's no longer
+    available), the current channel becomes the new thread's parent
+    instead, but only if it's actually eligible; a thread invocation
+    location never is, so the button is disabled in that case rather
+    than offered and left to fail.
+    """
+    return channel is not None and getattr(channel, "type", None) == discord.ChannelType.text
+
+
+def _register_freshly_created_thread(guild: Optional[Any], thread: discord.Thread) -> None:
+    """Bug fix: discord.py's TextChannel.create_thread() returns the new
+    Thread but never adds it to the guild's own cache -- that only
+    happens once the gateway later dispatches THREAD_CREATE (handled by
+    ConnectionState.parse_thread_create), which is not guaranteed to have
+    arrived yet by the time code immediately following create_thread()
+    runs. Create New Thread's on_destination_resolved callback for
+    /database move (ConfigService.set_database_suggestion_destination)
+    re-validates the destination via validate_channel_usable(), which
+    calls guild.get_channel_or_thread() -- against the stale cache this
+    reports the brand-new thread as "no longer exists", so the move
+    fails and finalize()'s rollback deletes the very thread that was
+    just created. Registering it immediately (mirroring what
+    ConnectionState.parse_thread_create itself does) closes that race.
+    A no-op for any guild-like object that doesn't expose this
+    discord.py-internal hook (e.g. a test double that doesn't model it).
+    """
+    register = getattr(guild, "_add_thread", None)
+    if callable(register):
+        register(thread)
+
+
 async def send_destination_choice(
     interaction: discord.Interaction,
     bot: "WatchPartyBot",
@@ -7663,6 +7768,27 @@ async def send_destination_choice(
     """
     current_location_available = _is_usable_current_location(current_channel)
 
+    guild_configuration = bot.guild_configuration_repository.get(guild_id)
+    home_channel_id = guild_configuration.channels.home_channel_id if guild_configuration is not None else None
+    home_channel = (
+        interaction.guild.get_channel(home_channel_id)
+        if interaction.guild is not None and home_channel_id is not None
+        else None
+    )
+    # Create New Thread Improvement: prefer the configured Home Channel
+    # as the new thread's parent, same as before. When there isn't one
+    # (unconfigured, or no longer available), fall back to the current
+    # channel *only* if it's a usable parent for a brand-new thread --
+    # Discord doesn't allow nesting a thread under another thread, so
+    # this fallback never applies when the command was run inside a
+    # thread. If neither is available, the button is disabled instead of
+    # presenting an option that can never succeed.
+    thread_parent = home_channel if home_channel is not None else (
+        current_channel if _can_be_new_thread_parent(current_channel) else None
+    )
+    create_new_thread_available = thread_parent is not None
+    using_current_channel_as_parent = home_channel is None and thread_parent is not None
+
     async def finalize(
         final_interaction: discord.Interaction,
         channel_id: int,
@@ -7689,21 +7815,19 @@ async def send_destination_choice(
             on_use_existing_channel,
             on_cancel,
             current_location_available=current_location_available,
+            create_new_thread_available=create_new_thread_available,
         )
 
     async def on_create_new_thread(destination_interaction: discord.Interaction) -> None:
-        guild_configuration = bot.guild_configuration_repository.get(guild_id)
-        home_channel_id = guild_configuration.channels.home_channel_id if guild_configuration is not None else None
-        home_channel = (
-            destination_interaction.guild.get_channel(home_channel_id)
-            if destination_interaction.guild is not None and home_channel_id is not None
-            else None
-        )
-        if home_channel is None:
+        if thread_parent is None:
+            # Defense in depth -- the button is already disabled for this
+            # case, but a stale/cached component could still be clicked.
             await destination_interaction.response.edit_message(
                 content=(
-                    "⚠ WASH's home channel isn't configured or is no longer available. "
-                    "Choose a different destination option instead."
+                    "⚠ There's nowhere to create a new thread here. WASH's home channel isn't "
+                    "configured (or is no longer available), and this command wasn't run in a "
+                    "text channel that could parent one. Choose a different destination option, "
+                    "or configure a Home Channel in `/config`."
                 ),
                 view=destination_view(),
             )
@@ -7711,12 +7835,13 @@ async def send_destination_choice(
 
         async def on_thread_name_submit(modal_interaction: discord.Interaction, thread_name: str) -> None:
             try:
-                thread = await home_channel.create_thread(name=thread_name, type=discord.ChannelType.public_thread)
+                thread = await thread_parent.create_thread(name=thread_name, type=discord.ChannelType.public_thread)
             except (discord.Forbidden, discord.HTTPException) as exc:
                 await modal_interaction.response.edit_message(
                     content=f"⚠ Could not create the thread: {exc}", view=destination_view()
                 )
                 return
+            _register_freshly_created_thread(modal_interaction.guild, thread)
             await finalize(modal_interaction, thread.id, created_thread=thread, created_thread_name=thread_name)
 
         await destination_interaction.response.send_modal(
@@ -7752,6 +7877,12 @@ async def send_destination_choice(
             view=ExistingChannelSelectView(on_channel_selected, on_cancel),
         )
 
+    if using_current_channel_as_parent:
+        prompt = (
+            f"{prompt}\n\n"
+            "*(WASH's Home Channel isn't configured, so **Create New Thread** will create the "
+            "new thread here in this channel instead. Set a Home Channel in `/config` to change this.)*"
+        )
     await interaction.response.edit_message(content=prompt, view=destination_view())
 
 

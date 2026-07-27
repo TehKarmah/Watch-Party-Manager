@@ -140,7 +140,7 @@ A "possible duplicate" warning is only ever raised because a candidate's title a
 
 ## 4. Starting a Vote
 
-Use `/voting start` to begin an interactive setup flow.
+Use `/vote start` to begin an interactive setup flow.
 
 WASH offers:
 
@@ -155,13 +155,13 @@ The target database is resolved the same contextual, automatic-then-picker way `
 
 **Default voting duration.** New servers default to **1 day**, configurable (1 minute through 30 days) via the Setup Wizard's Voting Defaults step or `/config`, both of which display it in natural language (e.g. "10 minutes", "4 hours", or "3 days" -- the largest whole unit it evenly divides into). An older server configuration that only ever saved a whole number of hours or days loads as the exact equivalent number of minutes, with no action required.
 
-**Duration syntax.** Every relative duration WASH accepts -- vote duration, reminder-before-close, and `/voting edit`'s Shorten Vote/Extend Vote -- uses the same one syntax: a whole number immediately followed by a unit. Short forms `m`/`h`/`d`/`w` and the words `minute(s)`/`hour(s)`/`day(s)`/`week(s)` are both accepted (e.g. `10m`, `1h`, `3 days`, `1w`); a bare number with no unit is rejected. Vote duration supports the same minute precision as reminders and Shorten/Extend Vote -- `10m` and `30m` are perfectly valid vote durations, not just whole-hour amounts.
+**Duration syntax.** Every relative duration WASH accepts -- vote duration, reminder-before-close, and `/vote edit`'s Shorten Vote/Extend Vote -- uses the same one syntax: a whole number immediately followed by a unit. Short forms `m`/`h`/`d`/`w` and the words `minute(s)`/`hour(s)`/`day(s)`/`week(s)` are both accepted (e.g. `10m`, `1h`, `3 days`, `1w`); a bare number with no unit is rejected. Vote duration supports the same minute precision as reminders and Shorten/Extend Vote -- `10m` and `30m` are perfectly valid vote durations, not just whole-hour amounts.
 
 Only one open round is supported by the current voting service behavior.
 
 ### Candidate selection and rotation management
 
-Each database's `suggestion_rules.candidate_selection` setting chooses how `/voting start` picks nominees from that database's eligible suggestions. It's configured through the Setup Wizard's Voting Defaults step (where, during first-time setup, exactly one collection exists so far) or, afterward, through `/config`'s Manage Collections section -- select the collection, then its Candidate Selection setting; both show and save the exact same value, chosen from a Discord dropdown rather than typed. The Setup Wizard and `/config` present these three modes under friendlier names; the underlying value in parentheses is what's actually persisted:
+Each database's `suggestion_rules.candidate_selection` setting chooses how `/vote start` picks nominees from that database's eligible suggestions. It's configured through the Setup Wizard's Voting Defaults step (where, during first-time setup, exactly one collection exists so far) or, afterward, through `/config`'s Manage Collections section -- select the collection, then its Candidate Selection setting; both show and save the exact same value, chosen from a Discord dropdown rather than typed. The Setup Wizard and `/config` present these three modes under friendlier names; the underlying value in parentheses is what's actually persisted:
 
 - **Balanced Random** (`rotation_pool`, the recommended and default choice) -- every eligible suggestion belongs to a rotation. Once presented in a vote, a suggestion is excluded from selection until the rotation is exhausted and a fresh one begins automatically.
 - **Soft Rotation** (`soft_rotation`) -- unpresented suggestions are strongly preferred, but a previously presented suggestion remains technically eligible at a much lower selection weight rather than being excluded outright.
@@ -173,7 +173,7 @@ Within whichever pool a mode produces, WASH still applies its existing genre/med
 
 **Rotation lifecycle.** A rotation tracks an identifier, its start and completion time, which suggestions were assigned to it, and which of those have been presented. A rotation completes once every assigned suggestion has reached one of: presented, Vote Winner, retired, or administratively archived/removed. Retired suggestions (see below) count toward completing a rotation but are never counted as presented. Rotation state is stored in its own JSON file under `data/` and is therefore covered automatically by `/backup`, `/restore`, and bot restarts, the same as every other repository.
 
-A rotation also completes early -- before every assigned suggestion has reached one of those states -- whenever `/voting start` needs more candidates than the current rotation has left to present. A collection with plenty of "Available" suggestions can still have most of them on Rotation Cooldown from a recent round; rather than blocking the next vote until the rotation is fully exhausted, WASH starts a fresh rotation immediately, returning every non-Vote-Winner, non-Retired suggestion (including the ones just on cooldown) to eligibility. This only happens when doing so would actually help -- a rotation is never restarted while it can already supply the requested number of candidates, and a genuinely small collection is reported as having too few eligible suggestions rather than restarting pointlessly.
+A rotation also completes early -- before every assigned suggestion has reached one of those states -- whenever `/vote start` needs more candidates than the current rotation has left to present. A collection with plenty of "Available" suggestions can still have most of them on Rotation Cooldown from a recent round; rather than blocking the next vote until the rotation is fully exhausted, WASH starts a fresh rotation immediately, returning every non-Vote-Winner, non-Retired suggestion (including the ones just on cooldown) to eligibility. This only happens when doing so would actually help -- a rotation is never restarted while it can already supply the requested number of candidates, and a genuinely small collection is reported as having too few eligible suggestions rather than restarting pointlessly.
 
 **Retired suggestions.** A suggestion reaching the "I WILL NOT WATCH" rejection threshold is *retired*, a distinct lifecycle from a WASH Crew-initiated `/remove` archive: WASH records a retirement date, reason, and (when known) the rotation it retired from. Retired suggestions leave the active rotation and are excluded from further selection, but remain visible through `/list status:Retired` and may later be reactivated through `/add`, exactly like any other archived suggestion.
 
@@ -187,7 +187,7 @@ A rotation also completes early -- before every assigned suggestion has reached 
 
 ## 5. Voting Operations
 
-Community members vote by clicking a candidate's button on the interactive voting post -- there is no separate `/vote` slash command; casting a vote and changing it both go through the same buttons. `/voting status` (WASH Crew) reports the current round, with standings shown as candidate titles (e.g. `Happy Gilmore (1996) — 1 vote`), never the internal suggestion number; if a candidate's record is somehow missing, that entry falls back to its suggestion number rather than failing the command.
+Community members vote by clicking a candidate's button on the interactive voting post -- there is no separate `/vote` slash command; casting a vote and changing it both go through the same buttons. `/vote status` (WASH Crew) reports the current round, with standings shown as candidate titles (e.g. `Happy Gilmore (1996) — 1 vote`), never the internal suggestion number; if a candidate's record is somehow missing, that entry falls back to its suggestion number rather than failing the command.
 
 Current voting capabilities include:
 
@@ -201,7 +201,7 @@ Current voting capabilities include:
 
 Automatic expiration, closing, and winner announcements are fully implemented, driven by the persistent scheduler rather than requiring a WASH Crew member to close a round manually.
 
-**Changing a vote's end time.** `/voting edit`'s Change End Time action offers four options: **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
+**Changing a vote's end time.** `/vote edit`'s Change End Time action offers four options: **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
 
 - **End Now** closes the round immediately (with a confirmation prompt first, since this can't be undone).
 - **Shorten Vote** and **Extend Vote** each open a submenu -- **1 Hour**, **1 Day**, or **Custom...** -- that adjusts the round's *current* end time by that amount (never relative to "now"): Shorten subtracts it, Extend adds it. **Custom...** opens a modal accepting any duration in WASH's shared syntax (e.g. `10m`, `1h`, `1d`, `1w`). Shortening past the current time is rejected with a clear message ("would move the end time into the past") rather than silently producing an already-closed-looking round.

@@ -14,6 +14,7 @@ from watch_party_manager.config_view import (
     CONFIG_VIEW_TIMEOUT_SECONDS,
     ConfigAdminChannelSectionView,
     ConfigDatabaseSectionView,
+    ConfigHomeChannelSectionView,
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
     ConfigModalRetryView,
@@ -200,6 +201,46 @@ class ConfigWatchDestinationSectionViewTests(unittest.IsolatedAsyncioTestCase):
         view = ConfigWatchDestinationSectionView(_noop, on_skip, _noop)
         await view.children[1].callback(interaction=object())
         self.assertEqual(calls, ["skip"])
+
+
+class ConfigHomeChannelSectionViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_create_new_use_current_use_existing_clear_and_back(self) -> None:
+        view = ConfigHomeChannelSectionView(_noop, _noop, _noop, _noop, _noop)
+        self.assertEqual(
+            [(button.label, button.custom_id) for button in view.children],
+            [
+                ("Create New Channel (Recommended)", "wpm_setup_destination_create_channel"),
+                ("Use Current Channel", "wpm_config_home_channel_use_current"),
+                ("Use Existing Channel", "wpm_setup_destination_existing_channel"),
+                ("Clear Home Channel", "wpm_config_home_channel_clear"),
+                ("Back to Menu", "wpm_config_back_to_menu"),
+            ],
+        )
+
+    async def test_use_current_is_enabled_by_default(self) -> None:
+        view = ConfigHomeChannelSectionView(_noop, _noop, _noop, _noop, _noop)
+        use_current_button = next(
+            b for b in view.children if b.custom_id == "wpm_config_home_channel_use_current"
+        )
+        self.assertFalse(use_current_button.disabled)
+
+    async def test_use_current_is_disabled_when_unavailable(self) -> None:
+        view = ConfigHomeChannelSectionView(_noop, _noop, _noop, _noop, _noop, current_channel_available=False)
+        use_current_button = next(
+            b for b in view.children if b.custom_id == "wpm_config_home_channel_use_current"
+        )
+        self.assertTrue(use_current_button.disabled)
+
+    async def test_clear_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_clear(interaction) -> None:
+            calls.append("clear")
+
+        view = ConfigHomeChannelSectionView(_noop, _noop, _noop, on_clear, _noop)
+        clear_button = next(b for b in view.children if b.custom_id == "wpm_config_home_channel_clear")
+        await clear_button.callback(interaction=object())
+        self.assertEqual(calls, ["clear"])
 
 
 class ConfigModalRetryViewTests(unittest.IsolatedAsyncioTestCase):

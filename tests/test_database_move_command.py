@@ -97,11 +97,21 @@ class FakeUsableChannel:
 class FakeGuild:
     """Satisfies both ChannelLookup (validate_channel_usable, via
     get_channel_or_thread/me) and the home-channel lookup (get_channel).
+
+    _add_thread mirrors real discord.py's Guild._add_thread -- a plain
+    cache insert with no validation of its own. It's deliberately absent
+    from usable_channel_ids until called, modeling the real-world race a
+    freshly created thread is NOT yet in discord.py's own guild cache
+    immediately after TextChannel.create_thread() returns (that only
+    happens once the gateway's THREAD_CREATE event arrives) -- production
+    code must call it explicitly right after creating a thread, or a
+    live validate_channel_usable() check moments later will wrongly
+    report the brand-new thread as gone.
     """
 
     def __init__(self, home_channel=None, *, usable_channel_ids=frozenset()) -> None:
         self._home_channel = home_channel
-        self._usable_channel_ids = usable_channel_ids
+        self._usable_channel_ids = set(usable_channel_ids)
         self.me = object()
 
     def get_channel(self, channel_id):
@@ -114,13 +124,27 @@ class FakeGuild:
             return FakeUsableChannel()
         return None
 
+    def _add_thread(self, thread) -> None:
+        self._usable_channel_ids.add(thread.id)
+
 
 class FakeCurrentLocation:
-    """A minimal stand-in for the channel/thread a command was run in."""
+    """A minimal stand-in for the channel/thread a command was run in.
 
-    def __init__(self, location_id: int, channel_type) -> None:
+    Also doubles as a thread parent for the Create New Thread Improvement
+    fallback tests -- when this location is a text channel, Create New
+    Thread may fall back to creating the new thread here.
+    """
+
+    def __init__(self, location_id: int, channel_type, *, new_thread_id: int | None = None) -> None:
         self.id = location_id
         self.type = channel_type
+        self._new_thread_id = new_thread_id
+        self.created_thread: FakeThread | None = None
+
+    async def create_thread(self, *, name, type):
+        self.created_thread = FakeThread(self._new_thread_id if self._new_thread_id is not None else self.id)
+        return self.created_thread
 
 
 class FakeInteraction:
@@ -330,7 +354,13 @@ class MoveFlowTests(DatabaseMoveCommandTestCase):
 
     async def test_create_new_thread_moves_the_suggestion_destination(self) -> None:
         home_channel = FakeHomeChannel(thread_id=777)
-        guild = FakeGuild(home_channel, usable_channel_ids={777})
+        # Deliberately NOT pre-seeded with 777 -- the newly created thread
+        # is not yet "usable" until production code registers it via
+        # _add_thread, exactly as it must against a real discord.py guild
+        # (see FakeGuild's docstring and _register_freshly_created_thread
+        # in bot.py). If that registration is missing or removed, this
+        # test fails because the move is wrongly rejected/rolled back.
+        guild = FakeGuild(home_channel)
         select_interaction = await self._reach_destination_choice(guild=guild)
         destination_view = select_interaction.response.edited_view
         create_thread_button = next(
@@ -490,6 +520,97 @@ class UseCurrentThreadOrChannelTests(DatabaseMoveCommandTestCase):
         await use_current_button.callback(interaction=destination_interaction)
 
         self.assertIn("already routed", destination_interaction.response.edited_content)
+        resolved = self.suggestion_service.resolve_collection_channel_id(
+            self.database, self.suggestion_database_configuration_repository
+        )
+        self.assertEqual(resolved, ORIGINAL_CHANNEL_ID)
+
+
+class CreateNewThreadFallbackTests(DatabaseMoveCommandTestCase):
+    """Create New Thread Improvement (polish batch): when no Home Channel
+    is configured (or it's no longer available), Create New Thread falls
+    back to creating the new thread under the current channel instead of
+    presenting an option that can never succeed -- but only when the
+    current channel is actually eligible to parent one (Discord doesn't
+    allow nesting a thread under another thread).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # No home_channel_id configured at all -- the unconfigured case.
+        self.guild_configuration_repository.save(
+            GuildConfiguration(guild_id=GUILD_ID, guild_name="Test Guild", setup_completed=True)
+        )
+
+    async def _reach_destination_choice(self, *, guild=None, channel=None):
+        interaction = FakeInteraction()
+        await handle_database_move(interaction, self.bot)
+        select = interaction.response.sent_view.children[0]
+        select._values = [str(self.database.database_id)]
+
+        select_interaction = FakeInteraction(guild=guild, channel=channel)
+        await select.callback(interaction=select_interaction)
+        return select_interaction
+
+    def _create_thread_button(self, destination_view):
+        return next(
+            b for b in destination_view.children
+            if b.custom_id == "wpm_database_admin_destination_create_thread"
+        )
+
+    async def test_falls_back_to_the_current_text_channel(self) -> None:
+        current_channel = FakeCurrentLocation(602, discord.ChannelType.text, new_thread_id=888)
+        guild = FakeGuild(usable_channel_ids={888})
+        select_interaction = await self._reach_destination_choice(guild=guild, channel=current_channel)
+        destination_view = select_interaction.response.edited_view
+        create_thread_button = self._create_thread_button(destination_view)
+        self.assertFalse(create_thread_button.disabled)
+        self.assertIn("here in this channel instead", select_interaction.response.edited_content)
+
+        destination_interaction = FakeInteraction(guild=guild, channel=current_channel)
+        await create_thread_button.callback(interaction=destination_interaction)
+        modal = destination_interaction.response.sent_modal
+
+        modal_interaction = FakeInteraction(guild=guild, channel=current_channel)
+        await modal.on_submit(interaction=modal_interaction)
+
+        self.assertEqual(current_channel.created_thread.id, 888)
+        resolved = self.suggestion_service.resolve_collection_channel_id(
+            self.database, self.suggestion_database_configuration_repository
+        )
+        self.assertEqual(resolved, 888)
+
+    async def test_disabled_when_current_location_cannot_parent_a_thread_either(self) -> None:
+        current_thread = FakeCurrentLocation(603, discord.ChannelType.public_thread)
+        guild = FakeGuild()
+        select_interaction = await self._reach_destination_choice(guild=guild, channel=current_thread)
+        destination_view = select_interaction.response.edited_view
+
+        create_thread_button = self._create_thread_button(destination_view)
+
+        self.assertTrue(create_thread_button.disabled)
+        self.assertNotIn("here in this channel instead", select_interaction.response.edited_content)
+
+    async def test_disabled_when_no_current_location_is_known_either(self) -> None:
+        guild = FakeGuild()
+        select_interaction = await self._reach_destination_choice(guild=guild, channel=None)
+        destination_view = select_interaction.response.edited_view
+
+        create_thread_button = self._create_thread_button(destination_view)
+
+        self.assertTrue(create_thread_button.disabled)
+
+    async def test_a_stale_click_on_the_disabled_button_shows_a_clear_error(self) -> None:
+        current_thread = FakeCurrentLocation(603, discord.ChannelType.public_thread)
+        guild = FakeGuild()
+        select_interaction = await self._reach_destination_choice(guild=guild, channel=current_thread)
+        destination_view = select_interaction.response.edited_view
+        create_thread_button = self._create_thread_button(destination_view)
+
+        destination_interaction = FakeInteraction(guild=guild, channel=current_thread)
+        await create_thread_button.callback(interaction=destination_interaction)
+
+        self.assertIn("nowhere to create a new thread", destination_interaction.response.edited_content)
         resolved = self.suggestion_service.resolve_collection_channel_id(
             self.database, self.suggestion_database_configuration_repository
         )

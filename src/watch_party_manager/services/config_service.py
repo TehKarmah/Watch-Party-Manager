@@ -65,6 +65,7 @@ class ConfigSection(str, Enum):
     WATCH_PARTY_ROLE = "watch_party_role"
     WATCH_PARTY_JOIN_MODE = "watch_party_join_mode"
     ADMIN_CHANNEL = "admin_channel"
+    HOME_CHANNEL = "home_channel"
     MANAGE_COLLECTIONS = "manage_collections"
     WATCH_DESTINATION = "watch_destination"
     VOTING_DEFAULTS = "voting_defaults"
@@ -77,6 +78,12 @@ CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
     ConfigSection.WATCH_PARTY_ROLE,
     ConfigSection.WATCH_PARTY_JOIN_MODE,
     ConfigSection.ADMIN_CHANNEL,
+    # Polish batch: given its own top-level, prominently-labeled section
+    # and summary line (previously it had neither) -- every collection's
+    # suggestion/watched-movie thread is created as a sibling under it,
+    # so an administrator needs to see its status at a glance, not
+    # discover it only indirectly via a failed Create New Thread.
+    ConfigSection.HOME_CHANNEL,
     ConfigSection.MANAGE_COLLECTIONS,
     ConfigSection.WATCH_DESTINATION,
     ConfigSection.VOTING_DEFAULTS,
@@ -89,6 +96,7 @@ CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
     ConfigSection.WATCH_PARTY_ROLE: "Watch Party Role",
     ConfigSection.WATCH_PARTY_JOIN_MODE: "Watch Party Join Mode",
     ConfigSection.ADMIN_CHANNEL: "Admin Channel",
+    ConfigSection.HOME_CHANNEL: "Watch Party Home Channel",
     ConfigSection.MANAGE_COLLECTIONS: "Manage Collections",
     ConfigSection.WATCH_DESTINATION: "Watched Movie Destination (Default)",
     ConfigSection.VOTING_DEFAULTS: "Voting Defaults",
@@ -173,6 +181,14 @@ class ConfigService:
             lines.append(f"Admin Channel: Invalid (<#{admin_channel_id}> no longer usable)")
         else:
             lines.append(f"Admin Channel: Configured (<#{admin_channel_id}>)")
+
+        home_channel_id = configuration.channels.home_channel_id
+        if home_channel_id is None:
+            lines.append("Watch Party Home Channel: Not configured")
+        elif validate_channel_usable(home_channel_id, guild, resource_label="Home Channel"):
+            lines.append(f"Watch Party Home Channel: Invalid (<#{home_channel_id}> no longer usable)")
+        else:
+            lines.append(f"Watch Party Home Channel: Configured (<#{home_channel_id}>)")
 
         databases = self._suggestion_service.list_databases(guild_id)
         active_databases = [database for database in databases if database.active]
@@ -318,6 +334,35 @@ class ConfigService:
         updated = replace(configuration, channels=replace(configuration.channels, admin_channel_id=None))
         self._guild_configuration_repository.save(updated)
         return ConfigUpdateResult(True, "Admin channel cleared.", updated)
+
+    # --- Home Channel ---------------------------------------------------------------
+
+    def set_home_channel(self, guild_id: int, channel_id: int, guild: GuildLookup) -> ConfigUpdateResult:
+        configuration = self.get_configuration(guild_id)
+        if configuration is None:
+            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
+
+        error = validate_channel_usable(channel_id, guild, resource_label="Home Channel")
+        if error:
+            return ConfigUpdateResult(False, error)
+
+        updated = replace(configuration, channels=replace(configuration.channels, home_channel_id=channel_id))
+        self._guild_configuration_repository.save(updated)
+        return ConfigUpdateResult(True, f"Watch Party Home Channel updated to <#{channel_id}>.", updated)
+
+    def clear_home_channel(self, guild_id: int) -> ConfigUpdateResult:
+        configuration = self.get_configuration(guild_id)
+        if configuration is None:
+            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
+
+        updated = replace(configuration, channels=replace(configuration.channels, home_channel_id=None))
+        self._guild_configuration_repository.save(updated)
+        return ConfigUpdateResult(
+            True,
+            "Watch Party Home Channel cleared. Create New Thread will no longer have a "
+            "configured parent channel until a new one is set.",
+            updated,
+        )
 
     # --- Watched Movie Destination (guild-wide default) -----------------------------------
 

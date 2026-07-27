@@ -83,7 +83,7 @@ class HelpServiceTests(unittest.TestCase):
 
         self.assertNotIn("`/remove`", response.command_text)
         self.assertNotIn("`/edit_suggestion`", response.command_text)
-        self.assertNotIn("`/voting status`", response.command_text)
+        self.assertNotIn("`/vote status`", response.command_text)
         self.assertNotIn("`/watch-party status`", response.command_text)
         self.assertNotIn("`/database add`", response.command_text)
         self.assertNotIn("`/diagnostics`", response.command_text)
@@ -91,8 +91,8 @@ class HelpServiceTests(unittest.TestCase):
         self.assertNotIn("`/restore`", response.command_text)
         self.assertNotIn("`/setup`", response.command_text)
         self.assertNotIn("`/config`", response.command_text)
-        self.assertNotIn("`/voting start`", response.command_text)
-        self.assertNotIn("`/voting edit`", response.command_text)
+        self.assertNotIn("`/vote start`", response.command_text)
+        self.assertNotIn("`/vote edit`", response.command_text)
 
     def test_wash_crew_help_includes_administrative_commands(self) -> None:
         response = build_help_response(show_wash_crew=True)

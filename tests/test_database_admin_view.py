@@ -136,6 +136,25 @@ class DestinationChoiceViewTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(use_current_button.disabled)
 
+    def test_create_new_thread_is_enabled_by_default(self) -> None:
+        view = DestinationChoiceView(_noop, _noop, _noop, _noop, _noop)
+        create_thread_button = next(
+            button for button in view.children
+            if button.custom_id == "wpm_database_admin_destination_create_thread"
+        )
+        self.assertFalse(create_thread_button.disabled)
+
+    def test_create_new_thread_is_disabled_when_unavailable(self) -> None:
+        # Create New Thread Improvement: disabled when there's nowhere to
+        # create a new thread (no Home Channel, and the current location
+        # can't parent one either).
+        view = DestinationChoiceView(_noop, _noop, _noop, _noop, _noop, create_new_thread_available=False)
+        create_thread_button = next(
+            button for button in view.children
+            if button.custom_id == "wpm_database_admin_destination_create_thread"
+        )
+        self.assertTrue(create_thread_button.disabled)
+
 
 class CollectionManagementMenuViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_has_every_management_action_plus_cancel(self) -> None:

@@ -29,7 +29,11 @@ from watch_party_manager.setup_wizard_view import (
     _JOIN_MODE_OPTIONS,
     CandidateSelectionSelectComponent,
     ConfigureStepButton,
+    CreateNewChannelButton,
     DestinationChannelSelect,
+    ExistingChannelSelectView,
+    HomeChannelNameModal,
+    UseExistingChannelButton,
 )
 
 CONFIG_VIEW_TIMEOUT_SECONDS = 900
@@ -332,6 +336,75 @@ class ConfigWatchDestinationSectionView(discord.ui.View):
         self.add_item(ConfigSkipDestinationButton(on_skip))
         self.add_item(BackToMenuButton(on_back))
 
+
+
+# --- Home Channel ----------------------------------------------------------------------------
+#
+# The channel every collection's suggestion thread (and, by default, the
+# watched-movie destination thread) is created as a sibling under (see
+# GuildChannelsConfig.home_channel_id). Reuses setup_wizard_view.py's
+# CreateNewChannelButton/UseExistingChannelButton -- the exact same
+# "create vs. use existing" buttons /setup's own Home Channel step
+# offers -- so creating/selecting a channel here can never drift from
+# how /setup does it. Unlike /setup's HomeChannelChoiceView (which has
+# no Clear -- setup always requires one), /config additionally offers
+# Use Current Channel and Clear Home Channel, since this edits an
+# already-configured server rather than bootstrapping one.
+
+
+class ConfigUseCurrentChannelButton(discord.ui.Button):
+    """disabled (not omitted) when the current channel isn't a usable
+    top-level text channel -- the Home Channel can never be a thread
+    (every collection's own thread is created as a sibling under it, and
+    Discord doesn't allow nesting a thread under another thread).
+    """
+
+    def __init__(self, on_click: OnConfigSkip, *, disabled: bool = False) -> None:
+        super().__init__(
+            label="Use Current Channel",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_config_home_channel_use_current",
+            disabled=disabled,
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigClearHomeChannelButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigSkip) -> None:
+        super().__init__(
+            label="Clear Home Channel", style=discord.ButtonStyle.secondary, custom_id="wpm_config_home_channel_clear"
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigHomeChannelSectionView(discord.ui.View):
+    """/config's Home Channel section: Create New Channel (Recommended),
+    Use Current Channel, Use Existing Channel, Clear Home Channel, or
+    Back to Menu.
+    """
+
+    def __init__(
+        self,
+        on_create_new: OnConfigSkip,
+        on_use_current: OnConfigSkip,
+        on_use_existing: OnConfigSkip,
+        on_clear: OnConfigSkip,
+        on_back: OnBackToMenu,
+        *,
+        current_channel_available: bool = True,
+    ) -> None:
+        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
+        self.add_item(CreateNewChannelButton(on_create_new))
+        self.add_item(ConfigUseCurrentChannelButton(on_use_current, disabled=not current_channel_available))
+        self.add_item(UseExistingChannelButton(on_use_existing))
+        self.add_item(ConfigClearHomeChannelButton(on_clear))
+        self.add_item(BackToMenuButton(on_back))
 
 
 # --- Modal-defaults retry screen (Voting / Reminder / Backup Defaults) ---------------------

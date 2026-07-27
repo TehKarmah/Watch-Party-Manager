@@ -49,9 +49,9 @@ Required Role reflects WASH's three-tier permission model:
 
 | Command | Required Role | Description |
 | --- | --- | --- |
-| `/voting start` | WASH Crew | Start a new voting round. |
-| `/voting status` | WASH Crew | View the current voting round. |
-| `/voting edit` | WASH Crew | Change, end, or cancel the active vote. |
+| `/vote start` | WASH Crew | Start a new voting round. |
+| `/vote status` | WASH Crew | View the current voting round. |
+| `/vote edit` | WASH Crew | Change, end, or cancel the active vote. |
 
 Casting a vote itself happens through the interactive buttons on the voting post, not a slash command.
 

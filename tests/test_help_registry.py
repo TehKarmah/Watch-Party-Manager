@@ -69,7 +69,7 @@ class HelpRegistryTests(unittest.TestCase):
         self.assertIn("/stats", commands)
         self.assertNotIn("/remove", commands)
         self.assertNotIn("/edit_suggestion", commands)
-        self.assertNotIn("/voting status", commands)
+        self.assertNotIn("/vote status", commands)
         self.assertNotIn("/watch-party status", commands)
         self.assertNotIn("/database add", commands)
         self.assertNotIn("/setup", commands)
@@ -100,7 +100,7 @@ class HelpRegistryTests(unittest.TestCase):
         commands = [entry.name for _, entries in sections for entry in entries]
         self.assertIn("/add", commands)
         self.assertIn("/list", commands)
-        self.assertIn("/voting status", commands)
+        self.assertIn("/vote status", commands)
 
     def test_sections_preserve_declared_order(self) -> None:
         sections = command_sections(show_wash_crew=True)
@@ -181,11 +181,11 @@ class HelpRegistryTests(unittest.TestCase):
 
     def test_edit_vote_is_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        self.assertIs(entries["/voting edit"].audience, HelpAudience.WASH_CREW)
+        self.assertIs(entries["/vote edit"].audience, HelpAudience.WASH_CREW)
 
     def test_start_vote_is_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        self.assertIs(entries["/voting start"].audience, HelpAudience.WASH_CREW)
+        self.assertIs(entries["/vote start"].audience, HelpAudience.WASH_CREW)
 
     def test_add_list_and_stats_are_the_only_watch_party_member_commands(self) -> None:
         member_commands = [entry.name for entry in COMMAND_HELP if entry.audience is HelpAudience.WATCH_PARTY_MEMBER]
@@ -193,7 +193,7 @@ class HelpRegistryTests(unittest.TestCase):
 
     def test_remove_vote_status_and_watch_party_status_are_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        for name in ("/remove", "/voting status", "/watch-party status"):
+        for name in ("/remove", "/vote status", "/watch-party status"):
             self.assertIs(entries[name].audience, HelpAudience.WASH_CREW)
 
     def test_diagnostics_no_longer_exists_in_the_registry(self) -> None:

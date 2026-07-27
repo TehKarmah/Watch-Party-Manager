@@ -115,11 +115,19 @@ class CollectionTypeSelectionView(discord.ui.View):
 
 
 class CreateNewThreadButton(discord.ui.Button):
-    def __init__(self, on_click: OnDestinationChoice) -> None:
+    """disabled (not omitted) when there's nowhere to create a new
+    thread: no Home Channel is configured (or it's no longer available)
+    and the invocation location can't parent one either (e.g. a thread,
+    which Discord doesn't allow nesting a thread under) -- presenting an
+    option that could never succeed would be confusing.
+    """
+
+    def __init__(self, on_click: OnDestinationChoice, *, disabled: bool = False) -> None:
         super().__init__(
             label="Create New Thread (Recommended)",
             style=discord.ButtonStyle.primary,
             custom_id="wpm_database_admin_destination_create_thread",
+            disabled=disabled,
         )
         self._on_click = on_click
 
@@ -191,9 +199,10 @@ class DestinationChoiceView(discord.ui.View):
         on_cancel: OnCancel,
         *,
         current_location_available: bool = True,
+        create_new_thread_available: bool = True,
     ) -> None:
         super().__init__(timeout=DATABASE_ADMIN_VIEW_TIMEOUT_SECONDS)
-        self.add_item(CreateNewThreadButton(on_create_new_thread))
+        self.add_item(CreateNewThreadButton(on_create_new_thread, disabled=not create_new_thread_available))
         self.add_item(UseCurrentLocationButton(on_use_current, disabled=not current_location_available))
         self.add_item(UseExistingThreadButton(on_use_existing_thread))
         self.add_item(UseExistingChannelButton(on_use_existing_channel))

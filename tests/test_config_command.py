@@ -16,6 +16,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import discord
+
 from watch_party_manager.bot import (
     handle_config_wash_crew_role_selected,
     send_config_backup_defaults_modal,
@@ -26,7 +28,7 @@ from watch_party_manager.bot import (
     send_config_section,
     send_config_voting_defaults_modal,
 )
-from watch_party_manager.domain.guild_configuration import GuildConfiguration
+from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, GuildConfiguration
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
@@ -137,11 +139,12 @@ class FakePermissions:
 
 
 class FakeChannel:
-    def __init__(self, channel_id: int) -> None:
+    def __init__(self, channel_id: int, *, permissions: FakePermissions = None) -> None:
         self.id = channel_id
+        self._permissions = permissions or FakePermissions()
 
     def permissions_for(self, member) -> FakePermissions:
-        return FakePermissions()
+        return self._permissions
 
 
 class _FakeChannelValue:
@@ -153,10 +156,23 @@ class _FakeChannelValue:
         self.id = channel_id
 
 
+class FakeCreatedChannel:
+    def __init__(self, channel_id: int) -> None:
+        self.id = channel_id
+
+
+class FakeHTTPResponse:
+    status = 403
+    reason = "Forbidden"
+
+
 class FakeGuildForValidation:
-    def __init__(self, *, role_ids=(), channel_ids=()) -> None:
+    def __init__(self, *, role_ids=(), channel_ids=(), new_channel_id=None, fail_create: bool = False) -> None:
         self._role_ids = set(role_ids)
         self._channels = {channel_id: FakeChannel(channel_id) for channel_id in channel_ids}
+        self._new_channel_id = new_channel_id
+        self._fail_create = fail_create
+        self.created_channel: "FakeCreatedChannel | None" = None
         self.me = object()
 
     def get_role(self, role_id):
@@ -164,6 +180,22 @@ class FakeGuildForValidation:
 
     def get_channel_or_thread(self, channel_id):
         return self._channels.get(channel_id)
+
+    async def create_text_channel(self, *, name):
+        if self._fail_create:
+            raise discord.HTTPException(response=FakeHTTPResponse(), message="boom")
+        channel_id = self._new_channel_id if self._new_channel_id is not None else 999999
+        self.created_channel = FakeCreatedChannel(channel_id)
+        self._channels[channel_id] = FakeChannel(channel_id)
+        return self.created_channel
+
+
+class FakeCurrentChannel:
+    """A minimal stand-in for the channel/thread /config was run in."""
+
+    def __init__(self, channel_id: int, channel_type) -> None:
+        self.id = channel_id
+        self.type = channel_type
 
 
 class FakeResponse:
@@ -189,12 +221,13 @@ class FakeResponse:
 
 
 class FakeInteraction:
-    def __init__(self, user=None, guild=None) -> None:
+    def __init__(self, user=None, guild=None, channel=None) -> None:
         self.user = user if user is not None else FakeMember()
         self.response = FakeResponse()
         self.guild = guild if guild is not None else FakeGuildForValidation(
             role_ids={WASH_CREW_ROLE_ID, WATCH_PARTY_ROLE_ID}, channel_ids={DESTINATION_CHANNEL_ID}
         )
+        self.channel = channel
 
 
 class ConfigCommandTestCase(unittest.IsolatedAsyncioTestCase):
@@ -598,6 +631,180 @@ class SectionRenderingTests(ConfigCommandTestCase):
         self.assertIn("already routed", second_select_interaction.response.edited_content)
         second_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, second.database_id)
         self.assertIsNone(second_configuration)
+
+
+class HomeChannelSectionTests(ConfigCommandTestCase):
+    """Home Channel Visibility & Configuration (polish batch): a dedicated
+    Home Channel section offering Create New Channel, Use Current
+    Channel, Select Existing Channel, and Clear Home Channel.
+    """
+
+    async def test_section_shows_all_four_options_plus_back(self) -> None:
+        from watch_party_manager.config_view import ConfigHomeChannelSectionView
+
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.HOME_CHANNEL, edit=False)
+
+        self.assertIsInstance(interaction.response.sent_view, ConfigHomeChannelSectionView)
+        self.assertEqual(
+            [button.custom_id for button in interaction.response.sent_view.children],
+            [
+                "wpm_setup_destination_create_channel",
+                "wpm_config_home_channel_use_current",
+                "wpm_setup_destination_existing_channel",
+                "wpm_config_home_channel_clear",
+                "wpm_config_back_to_menu",
+            ],
+        )
+
+    async def test_use_current_channel_is_enabled_from_a_text_channel(self) -> None:
+        current_channel = FakeCurrentChannel(700, discord.ChannelType.text)
+        guild = FakeGuildForValidation(channel_ids={700})
+        self._seed_completed_setup()
+        interaction = FakeInteraction(channel=current_channel)
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.HOME_CHANNEL, edit=False)
+        use_current_button = next(
+            b for b in interaction.response.sent_view.children
+            if b.custom_id == "wpm_config_home_channel_use_current"
+        )
+        self.assertFalse(use_current_button.disabled)
+
+        button_interaction = FakeInteraction(guild=guild, channel=current_channel)
+        await use_current_button.callback(interaction=button_interaction)
+
+        self.assertIn("Watch Party Home Channel updated", button_interaction.response.edited_content)
+        self.assertEqual(self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id, 700)
+
+    async def test_use_current_channel_is_disabled_from_a_thread(self) -> None:
+        current_thread = FakeCurrentChannel(701, discord.ChannelType.public_thread)
+        self._seed_completed_setup()
+        interaction = FakeInteraction(channel=current_thread)
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.HOME_CHANNEL, edit=False)
+        use_current_button = next(
+            b for b in interaction.response.sent_view.children
+            if b.custom_id == "wpm_config_home_channel_use_current"
+        )
+        self.assertTrue(use_current_button.disabled)
+
+    async def test_stale_click_on_disabled_use_current_shows_a_clear_error(self) -> None:
+        current_thread = FakeCurrentChannel(701, discord.ChannelType.public_thread)
+        self._seed_completed_setup()
+        interaction = FakeInteraction(channel=current_thread)
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.HOME_CHANNEL, edit=False)
+        use_current_button = next(
+            b for b in interaction.response.sent_view.children
+            if b.custom_id == "wpm_config_home_channel_use_current"
+        )
+
+        button_interaction = FakeInteraction(channel=current_thread)
+        await use_current_button.callback(interaction=button_interaction)
+
+        self.assertIn("isn't available here", button_interaction.response.edited_content)
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id)
+
+    async def test_select_existing_channel_saves_immediately(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.HOME_CHANNEL, edit=False)
+        existing_button = next(
+            b for b in interaction.response.sent_view.children
+            if b.custom_id == "wpm_setup_destination_existing_channel"
+        )
+
+        destination_interaction = FakeInteraction()
+        await existing_button.callback(interaction=destination_interaction)
+        select = destination_interaction.response.edited_view.children[0]
+        select._values = [_FakeChannelValue(DESTINATION_CHANNEL_ID)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+
+        self.assertIn("Watch Party Home Channel updated", select_interaction.response.edited_content)
+        self.assertEqual(
+            self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id, DESTINATION_CHANNEL_ID
+        )
+
+    async def test_create_new_channel_creates_and_saves(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.HOME_CHANNEL, edit=False)
+        create_button = next(
+            b for b in interaction.response.sent_view.children
+            if b.custom_id == "wpm_setup_destination_create_channel"
+        )
+
+        create_interaction = FakeInteraction()
+        await create_button.callback(interaction=create_interaction)
+        modal = create_interaction.response.sent_modal
+
+        guild = FakeGuildForValidation(new_channel_id=800)
+        modal_interaction = FakeInteraction(guild=guild)
+        await modal.on_submit(interaction=modal_interaction)
+
+        self.assertEqual(guild.created_channel.id, 800)
+        self.assertIn("Watch Party Home Channel updated", modal_interaction.response.edited_content)
+        self.assertEqual(self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id, 800)
+
+    async def test_create_new_channel_reports_a_creation_failure(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.HOME_CHANNEL, edit=False)
+        create_button = next(
+            b for b in interaction.response.sent_view.children
+            if b.custom_id == "wpm_setup_destination_create_channel"
+        )
+
+        create_interaction = FakeInteraction()
+        await create_button.callback(interaction=create_interaction)
+        modal = create_interaction.response.sent_modal
+
+        guild = FakeGuildForValidation(fail_create=True)
+        modal_interaction = FakeInteraction(guild=guild)
+        await modal.on_submit(interaction=modal_interaction)
+
+        self.assertIn("Could not create the channel", modal_interaction.response.edited_content)
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id)
+
+    async def test_clear_home_channel(self) -> None:
+        self._seed_completed_setup(channels=GuildChannelsConfig(home_channel_id=DESTINATION_CHANNEL_ID))
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.HOME_CHANNEL, edit=False)
+        clear_button = next(
+            b for b in interaction.response.sent_view.children
+            if b.custom_id == "wpm_config_home_channel_clear"
+        )
+
+        clear_interaction = FakeInteraction()
+        await clear_button.callback(interaction=clear_interaction)
+
+        self.assertIn("cleared", clear_interaction.response.edited_content)
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id)
+
+    async def test_insufficient_permissions_is_rejected(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.HOME_CHANNEL, edit=False)
+        existing_button = next(
+            b for b in interaction.response.sent_view.children
+            if b.custom_id == "wpm_setup_destination_existing_channel"
+        )
+
+        destination_interaction = FakeInteraction()
+        await existing_button.callback(interaction=destination_interaction)
+        select = destination_interaction.response.edited_view.children[0]
+        restricted_channel_id = 850
+        guild = FakeGuildForValidation()
+        guild._channels[restricted_channel_id] = FakeChannel(
+            restricted_channel_id, permissions=FakePermissions(send_messages=False)
+        )
+        select._values = [_FakeChannelValue(restricted_channel_id)]
+
+        select_interaction = FakeInteraction(guild=guild)
+        await select.callback(interaction=select_interaction)
+
+        self.assertIn("does not have permission", select_interaction.response.edited_content)
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id)
 
 
 class GuildWideWatchDestinationSectionTests(ConfigCommandTestCase):

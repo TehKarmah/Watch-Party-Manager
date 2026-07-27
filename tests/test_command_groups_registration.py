@@ -1,5 +1,5 @@
 """Tests for the Command Structure Cleanup (pre-v1) command group
-registrations: /database, /voting, and /watch-party each expose the
+registrations: /database, /vote, and /watch-party each expose the
 expected subcommands, and each subcommand still delegates to the same
 module-level handler its former top-level command used, so behavior is
 provably unchanged even though its registration moved.
@@ -109,9 +109,9 @@ class DatabaseGroupRegistrationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VotingGroupRegistrationTests(unittest.TestCase):
-    def test_group_name_is_voting(self) -> None:
+    def test_group_name_is_vote(self) -> None:
         group = VotingGroup(MinimalFakeBot())
-        self.assertEqual(group.name, "voting")
+        self.assertEqual(group.name, "vote")
 
     def test_exposes_exactly_the_expected_subcommands(self) -> None:
         group = VotingGroup(MinimalFakeBot())

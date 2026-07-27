@@ -295,6 +295,63 @@ class AdminChannelSectionTests(ConfigServiceTestCase):
         self.assertTrue(any(line.startswith("Admin Channel: Invalid") for line in lines))
 
 
+class HomeChannelSectionTests(ConfigServiceTestCase):
+    """Home Channel Visibility & Configuration (polish batch): a dedicated,
+    prominently-labeled Watch Party Home Channel section -- previously
+    this setting had no summary line and no dedicated section at all.
+    """
+
+    def test_channel_is_selected(self) -> None:
+        self._seed_completed_setup()
+        result = self.service.set_home_channel(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        self.assertTrue(result.success)
+        self.assertEqual(
+            self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id, DESTINATION_CHANNEL_ID
+        )
+
+    def test_missing_resource_is_rejected(self):
+        self._seed_completed_setup()
+        guild = FakeGuild(channel_ids=set())
+        result = self.service.set_home_channel(GUILD_ID, 555, guild)
+        self.assertFalse(result.success)
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id)
+
+    def test_insufficient_bot_permissions_is_rejected(self):
+        self._seed_completed_setup()
+        guild = FakeGuild(
+            channel_ids={DESTINATION_CHANNEL_ID},
+            channel_permissions={DESTINATION_CHANNEL_ID: FakePermissions(send_messages=False)},
+        )
+        result = self.service.set_home_channel(GUILD_ID, DESTINATION_CHANNEL_ID, guild)
+        self.assertFalse(result.success)
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id)
+
+    def test_channel_can_be_cleared(self):
+        self._seed_completed_setup()
+        self.service.set_home_channel(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        result = self.service.clear_home_channel(GUILD_ID)
+        self.assertTrue(result.success)
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id)
+
+    def test_summary_reports_not_configured_when_unset(self):
+        self._seed_completed_setup()
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertIn("Watch Party Home Channel: Not configured", lines)
+
+    def test_summary_reports_configured_when_set(self):
+        self._seed_completed_setup()
+        self.service.set_home_channel(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertIn(f"Watch Party Home Channel: Configured (<#{DESTINATION_CHANNEL_ID}>)", lines)
+
+    def test_summary_reports_invalid_when_channel_no_longer_usable(self):
+        self._seed_completed_setup()
+        self.service.set_home_channel(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        guild = FakeGuild(channel_ids=set())
+        lines = self.service.build_summary_lines(GUILD_ID, guild)
+        self.assertTrue(any(line.startswith("Watch Party Home Channel: Invalid") for line in lines))
+
+
 class ManageDatabasesSectionTests(ConfigServiceTestCase):
     """Contextual Database Resolution / Collections refinement: replaces
     the old "Active Suggestion Database" model. Each collection owns its

@@ -93,16 +93,16 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
-        "/voting start", "Start a new voting round.", "WASH Crew: Voting", HelpAudience.WASH_CREW
+        "/vote start", "Start a new voting round.", "WASH Crew: Voting", HelpAudience.WASH_CREW
     ),
     CommandHelp(
-        "/voting status",
+        "/vote status",
         "View the current voting round.",
         "Voting",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
-        "/voting edit",
+        "/vote edit",
         "Change, end, or cancel the active vote.",
         "WASH Crew: Voting",
         HelpAudience.WASH_CREW,

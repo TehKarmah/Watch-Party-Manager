@@ -183,7 +183,7 @@ Open `.env` in a text editor and fill in the values you need. **Never commit `.e
 | `DISCORD_GUILD_ID` | Optional | Syncs slash commands to one server instantly instead of waiting up to an hour for global sync. Strongly recommended while you're setting up and testing. |
 | `WASH_CREW_ROLE_ID` | Optional, but see note | The Discord role ID authorized to run administrative commands. |
 | `WATCH_PARTY_MEMBER_ROLE_ID` | Optional, but see note | The Discord role ID authorized to use participant commands (`/add`, `/list`, `/stats`, etc.). WASH Crew members automatically have these permissions too. |
-| `DEFAULT_VOTE_NOMINEE_COUNT` | Optional | Default number of nominees `/voting start` selects (2-10). Defaults to 3. |
+| `DEFAULT_VOTE_NOMINEE_COUNT` | Optional | Default number of nominees `/vote start` selects (2-10). Defaults to 3. |
 | `OMDB_API_KEY` | Optional | Enables resolving pasted IMDb links into a title, runtime, genres, and poster. See Section 8. |
 
 > [!IMPORTANT]
@@ -284,7 +284,7 @@ Work through this list after your first startup and `/setup` run. Everything sho
 - [ ] `/config` opens and shows the settings you just configured.
 - [ ] A Watch Party member (or WASH Crew, which always qualifies) can run `/add` with a plain title and see it confirmed.
 - [ ] `/list` shows the suggestion you just added.
-- [ ] WASH Crew can run `/voting start` and see an interactive voting post with buttons.
+- [ ] WASH Crew can run `/vote start` and see an interactive voting post with buttons.
 - [ ] `/stats` responds ephemerally (visible only to you).
 - [ ] As WASH Crew, `/about` also shows Health, Configuration, and Runtime sections with no reported errors.
 

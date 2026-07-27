@@ -143,7 +143,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** Section 1.9 passed (bot online, commands synced).
 - **Steps:**
   1. Type `/database` in Discord's command box; confirm autocomplete offers exactly `add`, `manage`, `list`, `move`, `backup`, `restore`, `remove`, `reset` as subcommands, and that typing `/database_add`, `/database_backup`, `/database_restore`, `/database_reset`, `/database_list`, or `/database_remove` (the old top-level names) finds nothing.
-  2. Type `/voting`; confirm autocomplete offers exactly `start`, `status`, `edit`, and that `/start_vote`, `/vote_status`, `/edit_vote` no longer exist.
+  2. Type `/vote`; confirm autocomplete offers exactly `start`, `status`, `edit`, and that `/start_vote`, `/vote_status`, `/edit_vote`, and the pre-release `/voting` group no longer exist.
   3. Type `/watch-party`; confirm autocomplete offers exactly `schedule`, `status`, `reschedule`, `cancel`, and that `/schedule_watch_party`, `/reschedule_watch_party`, `/cancel_watch_party`, `/watch_party_status` no longer exist.
   4. Type `/watch_party` (underscore); confirm it still exists, separately from `/watch-party` (hyphen), and still offers `members`, `pending`, `approved`, `denied`, `add`, `remove`, `search` -- membership administration is unaffected by this cleanup.
   5. Confirm every other command named in [Command Reference](10-Command-Reference.md) (e.g. `/about`, `/add`, `/backup`, `/config`, `/help`, `/list`, `/restore`, `/setup`, `/stats`, `/remove`, `/edit_suggestion`, `/reject`, `/unreject`, `/repair_suggestions`, `/factory_reset`, `/import`, `/join_watch_party`) still appears as a plain top-level command, unchanged.
@@ -377,8 +377,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Note the candidate count, duration, visibility, and candidate-selection mode shown in `/config`'s Voting Defaults section.
   2. Change the duration in `/config` (e.g. to `12h`).
-  3. Run `/voting start` -> **Use Defaults** and confirm the new duration is what's actually used (see Test 5.2).
-- **Expected Result:** The value changed in `/config` is the value `/voting start` actually applies -- no separate/stale value anywhere.
+  3. Run `/vote start` -> **Use Defaults** and confirm the new duration is what's actually used (see Test 5.2).
+- **Expected Result:** The value changed in `/config` is the value `/vote start` actually applies -- no separate/stale value anywhere.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -454,7 +454,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm behavior is well-defined when more than one suggestion database exists -- WASH resolves the database from context (channel/thread), never from a server-wide "active" pointer.
 - **Preconditions:** At least two active suggestion databases in the same server, each tied to a different channel.
 - **Steps:**
-  1. Run `/add`, `/list`, `/voting start`, or `/stats type:Rotation`/`type:Database` inside one database's configured channel or thread; confirm WASH uses that database automatically, with no prompt.
+  1. Run `/add`, `/list`, `/vote start`, or `/stats type:Rotation`/`type:Database` inside one database's configured channel or thread; confirm WASH uses that database automatically, with no prompt.
   2. Run the same command in a channel not tied to either database; confirm WASH asks "Which collection would you like to use?" with a picker listing both instead of guessing.
   3. Run `/config` -> **Manage Collections**; confirm both collections are listed and each is directly, independently editable (destinations and candidate selection) -- neither is reported as "Invalid" for being simultaneously active.
 - **Expected Result:** WASH never silently guesses between multiple databases; a matching channel resolves automatically, and an unmatched channel always shows a picker.
@@ -616,12 +616,12 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ## 5. Voting
 
-### 5.1 `/voting start` -- Use Defaults
+### 5.1 `/vote start` -- Use Defaults
 
 - **Objective:** Confirm the default voting flow creates a round using the server's configured defaults.
 - **Preconditions:** At least 2 eligible suggestions; Voting Defaults configured (Section 2/3).
 - **Steps:**
-  1. Run `/voting start` -> **Use Defaults**.
+  1. Run `/vote start` -> **Use Defaults**.
 - **Expected Result:** A round opens using the configured candidate count, duration, and visibility -- not hardcoded values. The public voting post is WASH's standard embed (yellow accent, no branding) showing visibility, duration/end time, and clean candidate titles (no leading number).
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -631,7 +631,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm both minute- and hour-based durations work end to end.
 - **Preconditions:** No open round.
 - **Steps:**
-  1. Run `/voting start` -> **Customize This Vote**; confirm both the duration field and the reminder-before-close field show a placeholder starting "e.g. 10m, 1h, 1d, or 1w".
+  1. Run `/vote start` -> **Customize This Vote**; confirm both the duration field and the reminder-before-close field show a placeholder starting "e.g. 10m, 1h, 1d, or 1w".
   2. Enter a duration of `10m`, submit, and confirm the round's end time is ~10 minutes out.
   3. Repeat with `30m`, `1h`, `4h`, `12h`, and `3d` to confirm all forms are accepted. Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
 - **Expected Result:** All forms with an explicit unit are accepted, including minute-level precision; the resulting end time matches; a value outside 1 minute-30 days (e.g. `0h`, `31w`) is rejected with a clear, actionable error.
@@ -645,8 +645,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Cast votes as two or more members.
   2. Observe the public voting post update after each vote.
-  3. Run `/voting status` as WASH Crew.
-- **Expected Result:** The post's standings (progress bar, count, percentage) update after every vote; `/voting status` shows candidate titles (never an internal suggestion number) with totals and percentages.
+  3. Run `/vote status` as WASH Crew.
+- **Expected Result:** The post's standings (progress bar, count, percentage) update after every vote; `/vote status` shows candidate titles (never an internal suggestion number) with totals and percentages.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -657,8 +657,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Cast a vote and read your own ephemeral confirmation.
   2. Have a second member cast a vote; confirm the first member cannot see it anywhere.
-  3. Run `/voting status` while the round is still open.
-- **Expected Result:** No standings, counts, or other members' choices are ever revealed while a blind round is open; your own vote confirmation never mentions anyone else's choice; `/voting status` shows only that the round is open and blind, with total votes cast but no per-candidate breakdown.
+  3. Run `/vote status` while the round is still open.
+- **Expected Result:** No standings, counts, or other members' choices are ever revealed while a blind round is open; your own vote confirmation never mentions anyone else's choice; `/vote status` shows only that the round is open and blind, with total votes cast but no per-candidate breakdown.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -679,11 +679,11 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm a Balanced Random (Rotation Pool) collection with plenty of "Available" suggestions -- most of them just on Rotation Cooldown from a recent round -- automatically rolls over to a fresh rotation and starts the vote, instead of reporting an insufficient-candidates error.
 - **Preconditions:** A Balanced Random collection with exactly 3 suggestions.
 - **Steps:**
-  1. Run `/voting start` with a candidate count of 2; confirm it succeeds and note which 2 suggestions were nominated.
-  2. Let the round complete (or use `/voting edit` -> **End Now**).
+  1. Run `/vote start` with a candidate count of 2; confirm it succeeds and note which 2 suggestions were nominated.
+  2. Let the round complete (or use `/vote edit` -> **End Now**).
   3. Confirm `/list` still shows all 3 suggestions as available, but only 1 is unpresented in the current rotation.
-  4. Run `/voting start` again with a candidate count of 2.
-- **Expected Result:** The second `/voting start` succeeds (does not report "not enough eligible suggestions"), automatically starting a fresh rotation and returning the 2 previously-cooled-down suggestions to eligibility. Any suggestion whose confirmation post was showing 🟡 Rotation Cooldown and is not re-nominated this round updates in place to 🟢 Available; Vote Winner and Retired suggestions are never made eligible by this rollover. Repeating the same request a third time in a row (with nothing else changed) behaves the same way -- no duplicate or orphaned rotation is created.
+  4. Run `/vote start` again with a candidate count of 2.
+- **Expected Result:** The second `/vote start` succeeds (does not report "not enough eligible suggestions"), automatically starting a fresh rotation and returning the 2 previously-cooled-down suggestions to eligibility. Any suggestion whose confirmation post was showing 🟡 Rotation Cooldown and is not re-nominated this round updates in place to 🟢 Available; Vote Winner and Retired suggestions are never made eligible by this rollover. Repeating the same request a third time in a row (with nothing else changed) behaves the same way -- no duplicate or orphaned rotation is created.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -699,18 +699,18 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 5.7 `/voting edit` -- change end time, end now, cancel
+### 5.7 `/vote edit` -- change end time, end now, cancel
 
 - **Objective:** Confirm WASH Crew's administrative controls over an in-progress round.
 - **Preconditions:** An open round; WASH Crew role.
 - **Steps:**
-  1. Run `/voting edit` -> **Change End Time**; confirm the menu offers **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
+  1. Run `/vote edit` -> **Change End Time**; confirm the menu offers **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
   2. Use **Shorten Vote** -> **1 Hour**; confirm the round's end time moves 1 hour *earlier than its current deadline* (not 1 hour from now), and that the public post and a public notice both reflect the new deadline with a Discord relative timestamp shown. Repeat with **Extend Vote** -> **1 Day** and confirm it moves 1 day *later* than the current deadline.
   3. Use **Shorten Vote** -> **Custom...**; confirm the modal is titled "Shorten Vote" with a "Duration" field (placeholder `e.g. 10m, 1h, 1d, or 1w`). Try `10m`, `2h`. Repeat with **Extend Vote** -> **Custom...** (modal titled "Extend Vote"). Confirm a malformed value (e.g. a bare number with no unit) is rejected with a clear error.
   4. On a round closing soon, use **Shorten Vote** with an amount larger than the time remaining; confirm it's rejected with a clear "would move the end time into the past" message rather than silently succeeding.
   5. Use **Set Exact End Time**; confirm the modal presents a single "Discord Timestamp" field with placeholder `<t:1785639600:F>` and help text explaining how to generate one (type `@time` in any normal Discord message box, pick a date/time, then copy the generated timestamp here). Confirm a malformed value (e.g. plain text, or a timestamp missing the `<t:...>` wrapper), and a validly-formatted but past timestamp, are each rejected with a clear message; confirm a valid future timestamp (in any of the standard styles, e.g. `<t:1785639600:F>` or `<t:1785639600:R>`) reschedules correctly.
-  6. Start a second round (after the first completes or is cancelled) and use `/voting edit` -> **End Now**; confirm it closes immediately with correct results (a confirmation prompt appears first, since this can't be undone).
-  7. Start a third round and use `/voting edit` -> **Cancel Vote**; confirm it's cancelled with no winner announced and the original post's buttons are disabled.
+  6. Start a second round (after the first completes or is cancelled) and use `/vote edit` -> **End Now**; confirm it closes immediately with correct results (a confirmation prompt appears first, since this can't be undone).
+  7. Start a third round and use `/vote edit` -> **Cancel Vote**; confirm it's cancelled with no winner announced and the original post's buttons are disabled.
 - **Expected Result:** All actions behave exactly as described, and each updates the original voting post appropriately (new deadline / closed with results / cancelled notice). Every new deadline is still stored and scheduled internally as UTC.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -718,7 +718,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 ### 5.8 Vote completion and winner announcement
 
 - **Objective:** Confirm a round closes automatically at its deadline and announces a winner correctly.
-- **Preconditions:** A round started with a short duration (e.g. `1h`, or manually adjusted via `/voting edit` to close within a few minutes for testing).
+- **Preconditions:** A round started with a short duration (e.g. `1h`, or manually adjusted via `/vote edit` to close within a few minutes for testing).
 - **Steps:**
   1. Wait for the round to reach its deadline (or use **End Now**).
   2. Observe the results announcement.
@@ -1085,7 +1085,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm WASH Crew-only commands are usable by WASH Crew and inherit member-level access too.
 - **Preconditions:** A member with the WASH Crew role.
 - **Steps:**
-  1. Run a representative sample: `/voting start`, `/voting status`, `/database add`, `/config`, `/backup`.
+  1. Run a representative sample: `/vote start`, `/vote status`, `/database add`, `/config`, `/backup`.
   2. Confirm the same member can also run `/add`/`/list`/`/stats` (inherited member access).
 - **Expected Result:** All succeed; `/help` shows the full WASH Crew command list.
 - **Result:** [ ] Pass [ ] Fail
@@ -1096,7 +1096,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm a member with neither role is correctly restricted.
 - **Preconditions:** A member with no configured role.
 - **Steps:**
-  1. Run `/add` and a WASH Crew-only command (e.g. `/voting start`).
+  1. Run `/add` and a WASH Crew-only command (e.g. `/vote start`).
 - **Expected Result:** `/add` is rejected (member role required); the WASH Crew command is rejected with a message distinguishable from "role not configured" (Test 10.4). `/help`, `/about`, and `/join_watch_party` remain available to everyone.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________

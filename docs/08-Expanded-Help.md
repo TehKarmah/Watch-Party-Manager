@@ -30,9 +30,9 @@ The current command list and short descriptions remain available through `/help`
 
 ### Voting
 
-- `/voting start`
-- `/voting status`
-- `/voting edit`
+- `/vote start`
+- `/vote status`
+- `/vote edit`
 
 Casting a vote itself happens through the interactive buttons on the voting post, not a slash command.
 
