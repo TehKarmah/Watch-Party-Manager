@@ -3297,6 +3297,7 @@ class DatabaseGroup(discord.app_commands.Group):
             user=interaction.user,
             wash_crew_role_id=self.bot.wash_crew_role_id,
             guild_id=interaction.guild_id,
+            suggestion_database_configuration_repository=self.bot.suggestion_database_configuration_repository,
         )
         await interaction.response.send_message(message, ephemeral=ephemeral)
 
@@ -7324,11 +7325,14 @@ def build_database_list_text(
                 suggestion_service, database, guild, suggestion_database_configuration_repository
             )
         )
+        current_channel_id = suggestion_service.resolve_collection_channel_id(
+            database, suggestion_database_configuration_repository
+        )
         sections.append(
             f"Database ID: {database.database_id}\n"
             f"Name: {display_name}\n"
             f"Status: {status}\n"
-            f"Channel: <#{database.channel_id}>\n"
+            f"Channel: <#{current_channel_id}>\n"
             f"Watch items: {suggestion_count} {item_word}"
         )
     return "\n\n".join(sections)
@@ -8001,6 +8005,7 @@ def perform_database_list(
     user: object,
     wash_crew_role_id: Optional[int],
     guild_id: Optional[int],
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
 ) -> tuple[str, bool]:
     """Core logic for /database_list, kept free of Discord objects except `user`.
 
@@ -8010,6 +8015,13 @@ def perform_database_list(
         wash_crew_role_id: The configured WASH Crew role ID, or None if
             unconfigured.
         guild_id: The Discord guild the command was run in.
+        suggestion_database_configuration_repository: Optional; when
+            supplied, each collection's Channel line reflects its current
+            resolved destination (Context Resolution Audit) rather than
+            always its original home channel. Omitted by callers/tests
+            with no repository in scope, in which case the home channel
+            is shown (unchanged prior behavior for a never-moved
+            collection).
 
     Returns:
         A (message, ephemeral) tuple. Every /database_list response is
@@ -8032,7 +8044,14 @@ def perform_database_list(
     if not databases:
         return "No collections are configured yet.", True
 
-    return build_database_list_text(suggestion_service, databases), True
+    return (
+        build_database_list_text(
+            suggestion_service,
+            databases,
+            suggestion_database_configuration_repository=suggestion_database_configuration_repository,
+        ),
+        True,
+    )
 
 
 def perform_database_remove(

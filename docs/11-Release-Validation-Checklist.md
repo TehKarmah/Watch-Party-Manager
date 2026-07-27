@@ -433,6 +433,20 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 3.4b2 Context Resolution Audit: commands stop resolving a moved collection's old location
+
+- **Objective:** Confirm the bug fix -- a collection moved into its own thread must no longer resolve from wherever it used to be, and the new destination must resolve immediately, for every context-sensitive command.
+- **Preconditions:** Two collections in the same server (so the "exactly one collection" convenience fallback can't mask a failure); collection A moved via Test 3.4b, from its original location to a new thread.
+- **Steps:**
+  1. From collection A's *original* (pre-move) location, run `/add`, `/list`, `/vote start`, and `/stats type:Collection`; confirm none of them resolve to collection A there anymore (each should show its usual ambiguous/no-match picker or message, since collection B still exists too).
+  2. From collection A's *new* thread, run the same four commands; confirm all four resolve to collection A immediately, with no extra step.
+  3. Restart the bot, then repeat step 2.
+  4. Run `/database list` and `/config` -> Manage Collections; confirm both show collection A's *current* (post-move) channel, not its original one.
+  5. Create a brand-new collection C using collection A's *original*, now-freed location as its destination; confirm this succeeds (the old location is genuinely free for reuse, not permanently reserved).
+- **Expected Result:** Exactly one location resolves to collection A at any given time -- its current destination -- both before and after a restart; `/database list`/`/config` never show a stale channel; a freed-up former destination can be reused by a different collection.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 3.4c `/database manage`
 
 - **Objective:** Confirm the guided management workflow correctly reuses the existing move, edit, backup, restore, reset, and remove logic without duplicating it.
