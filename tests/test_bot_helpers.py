@@ -62,7 +62,7 @@ class BotHelperTests(unittest.TestCase):
             "/vote status",
             "/database add",
             "/database list",
-            "/database remove",
+            "/database manage",
         )
         for command in expected_commands:
             self.assertIn(command, help_text)
@@ -99,7 +99,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("/remove", help_text)
         self.assertNotIn("/database add", help_text)
         self.assertNotIn("/database list", help_text)
-        self.assertNotIn("/database remove", help_text)
+        self.assertNotIn("/database manage", help_text)
         self.assertNotIn("/setup", help_text)
         self.assertNotIn("/config", help_text)
         self.assertNotIn("/stats", help_text)
@@ -124,7 +124,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("**WASH Crew: Configuration**", help_text)
         self.assertNotIn("/database add", help_text)
         self.assertNotIn("/database list", help_text)
-        self.assertNotIn("/database remove", help_text)
+        self.assertNotIn("/database manage", help_text)
         self.assertNotIn("/setup", help_text)
         self.assertNotIn("/config", help_text)
 

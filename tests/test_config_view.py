@@ -8,6 +8,8 @@ services/config_service.py and bot.py's wiring around it.
 
 import unittest
 
+import discord
+
 from watch_party_manager.config_view import (
     BackToMenuButton,
     BackToMenuOnlyView,
@@ -19,6 +21,7 @@ from watch_party_manager.config_view import (
     ConfigMainMenuView,
     ConfigModalRetryView,
     ConfigRoleSectionView,
+    ConfigSuggestionDestinationSectionView,
     ConfigWatchDestinationSectionView,
 )
 from watch_party_manager.domain.guild_configuration import JoinMode
@@ -241,6 +244,19 @@ class ConfigHomeChannelSectionViewTests(unittest.IsolatedAsyncioTestCase):
         clear_button = next(b for b in view.children if b.custom_id == "wpm_config_home_channel_clear")
         await clear_button.callback(interaction=object())
         self.assertEqual(calls, ["clear"])
+
+
+class ConfigSuggestionDestinationSectionViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_channel_select_is_restricted_to_threads_only(self) -> None:
+        # Collections Should Live In Threads: a collection's suggestion
+        # destination can only ever be a thread -- this also makes
+        # WASH's Home Channel (always a plain text channel) structurally
+        # unselectable here, on top of ConfigService's explicit rejection.
+        view = ConfigSuggestionDestinationSectionView(_noop, _noop)
+        select = next(child for child in view.children if isinstance(child, discord.ui.ChannelSelect))
+        self.assertEqual(
+            set(select.channel_types), {discord.ChannelType.public_thread, discord.ChannelType.private_thread}
+        )
 
 
 class ConfigModalRetryViewTests(unittest.IsolatedAsyncioTestCase):

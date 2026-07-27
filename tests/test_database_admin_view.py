@@ -12,7 +12,6 @@ from watch_party_manager.database_admin_view import (
     CollectionManagementMenuView,
     CollectionTypeSelectionView,
     DestinationChoiceView,
-    ExistingChannelSelectView,
     ExistingThreadSelectView,
 )
 
@@ -91,22 +90,26 @@ class CollectionTypeSelectionViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DestinationChoiceViewTests(unittest.IsolatedAsyncioTestCase):
-    def test_has_create_new_thread_use_current_use_existing_thread_use_existing_channel_and_cancel(self) -> None:
-        view = DestinationChoiceView(_noop, _noop, _noop, _noop, _noop)
+    """Collections Should Live In Threads: the destination choice is
+    thread-only -- Use Current Channel and Use Existing Channel were
+    removed outright (pre-release, no compatibility alias needed).
+    """
+
+    def test_has_create_new_thread_use_current_thread_use_existing_thread_and_cancel(self) -> None:
+        view = DestinationChoiceView(_noop, _noop, _noop, _noop)
 
         self.assertEqual(
             [(button.label, button.custom_id) for button in view.children],
             [
                 ("Create New Thread (Recommended)", "wpm_database_admin_destination_create_thread"),
-                ("Use Current Thread/Channel", "wpm_database_admin_destination_use_current"),
+                ("Use Current Thread", "wpm_database_admin_destination_use_current"),
                 ("Use Existing Thread", "wpm_database_admin_destination_existing_thread"),
-                ("Use Existing Channel", "wpm_database_admin_destination_existing_channel"),
                 ("Cancel", "wpm_database_admin_destination_cancel"),
             ],
         )
 
     def test_create_new_thread_is_the_primary_recommended_style(self) -> None:
-        view = DestinationChoiceView(_noop, _noop, _noop, _noop, _noop)
+        view = DestinationChoiceView(_noop, _noop, _noop, _noop)
         create_thread_button = next(
             button for button in view.children
             if button.custom_id == "wpm_database_admin_destination_create_thread"
@@ -114,14 +117,14 @@ class DestinationChoiceViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(create_thread_button.style, discord.ButtonStyle.primary)
 
     def test_cancel_uses_the_danger_style(self) -> None:
-        view = DestinationChoiceView(_noop, _noop, _noop, _noop, _noop)
+        view = DestinationChoiceView(_noop, _noop, _noop, _noop)
         cancel_button = next(
             button for button in view.children if button.custom_id == "wpm_database_admin_destination_cancel"
         )
         self.assertEqual(cancel_button.style, discord.ButtonStyle.danger)
 
     def test_use_current_is_enabled_by_default(self) -> None:
-        view = DestinationChoiceView(_noop, _noop, _noop, _noop, _noop)
+        view = DestinationChoiceView(_noop, _noop, _noop, _noop)
         use_current_button = next(
             button for button in view.children
             if button.custom_id == "wpm_database_admin_destination_use_current"
@@ -129,7 +132,7 @@ class DestinationChoiceViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(use_current_button.disabled)
 
     def test_use_current_is_disabled_when_the_current_location_is_unavailable(self) -> None:
-        view = DestinationChoiceView(_noop, _noop, _noop, _noop, _noop, current_location_available=False)
+        view = DestinationChoiceView(_noop, _noop, _noop, _noop, current_location_available=False)
         use_current_button = next(
             button for button in view.children
             if button.custom_id == "wpm_database_admin_destination_use_current"
@@ -137,7 +140,7 @@ class DestinationChoiceViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(use_current_button.disabled)
 
     def test_create_new_thread_is_enabled_by_default(self) -> None:
-        view = DestinationChoiceView(_noop, _noop, _noop, _noop, _noop)
+        view = DestinationChoiceView(_noop, _noop, _noop, _noop)
         create_thread_button = next(
             button for button in view.children
             if button.custom_id == "wpm_database_admin_destination_create_thread"
@@ -148,7 +151,7 @@ class DestinationChoiceViewTests(unittest.IsolatedAsyncioTestCase):
         # Create New Thread Improvement: disabled when there's nowhere to
         # create a new thread (no Home Channel, and the current location
         # can't parent one either).
-        view = DestinationChoiceView(_noop, _noop, _noop, _noop, _noop, create_new_thread_available=False)
+        view = DestinationChoiceView(_noop, _noop, _noop, _noop, create_new_thread_available=False)
         create_thread_button = next(
             button for button in view.children
             if button.custom_id == "wpm_database_admin_destination_create_thread"
@@ -199,13 +202,6 @@ class ExistingThreadSelectViewTests(unittest.TestCase):
         self.assertEqual(
             set(select.channel_types), {discord.ChannelType.public_thread, discord.ChannelType.private_thread}
         )
-
-
-class ExistingChannelSelectViewTests(unittest.TestCase):
-    def test_select_is_filtered_to_text_channels_only(self) -> None:
-        view = ExistingChannelSelectView(_noop, _noop)
-        select = next(child for child in view.children if isinstance(child, discord.ui.ChannelSelect))
-        self.assertEqual(set(select.channel_types), {discord.ChannelType.text})
 
 
 if __name__ == "__main__":

@@ -504,6 +504,36 @@ class SectionRenderingTests(ConfigCommandTestCase):
         )
         self.assertEqual(database_configuration.channels.suggestion_channel_id, DESTINATION_CHANNEL_ID)
 
+    async def test_suggestion_destination_rejects_the_configured_home_channel(self) -> None:
+        # Prevent Collections From Using The Home Channel: /config's own
+        # Suggestion Destination section must reject it too, not just
+        # /database move.
+        home_channel_id = 750
+        self._seed_completed_setup(channels=GuildChannelsConfig(home_channel_id=home_channel_id))
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        guild = FakeGuildForValidation(channel_ids={home_channel_id})
+        interaction = FakeInteraction(guild=guild)
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_suggestion_destination
+
+        await send_config_database_suggestion_destination(
+            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        )
+        select = interaction.response.edited_view.children[0]
+        select._values = [_FakeChannelValue(home_channel_id)]
+
+        select_interaction = FakeInteraction(guild=guild)
+        await select.callback(interaction=select_interaction)
+
+        self.assertIn("Home Channel", select_interaction.response.edited_content)
+        database_configuration = self.suggestion_database_configuration_repository.get(
+            GUILD_ID, database_result.database.database_id
+        )
+        self.assertIsNone(database_configuration)
+
     async def test_suggestion_destination_screen_has_no_clear_button(self) -> None:
         # Every collection MUST have exactly one dedicated suggestion
         # destination -- this screen can only change it, never clear it.

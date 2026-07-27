@@ -278,48 +278,23 @@ class MoveFlowTests(DatabaseMoveCommandTestCase):
         await select.callback(interaction=select_interaction)
         return select_interaction
 
-    async def test_use_existing_channel_moves_the_suggestion_destination(self) -> None:
-        new_channel_id = 400
-        guild = FakeGuild(usable_channel_ids={new_channel_id})
-        select_interaction = await self._reach_destination_choice(guild=guild)
-        destination_view = select_interaction.response.edited_view
-        existing_channel_button = next(
-            b for b in destination_view.children
-            if b.custom_id == "wpm_database_admin_destination_existing_channel"
-        )
-
-        destination_interaction = FakeInteraction(guild=guild)
-        await existing_channel_button.callback(interaction=destination_interaction)
-        select_view = destination_interaction.response.edited_view
-        channel_select = select_view.children[0]
-        channel_select._values = [type("FakeChannelValue", (), {"id": new_channel_id})()]
-
-        select_interaction2 = FakeInteraction(guild=guild)
-        await channel_select.callback(interaction=select_interaction2)
-
-        resolved = self.suggestion_service.resolve_collection_channel_id(
-            self.database, self.suggestion_database_configuration_repository
-        )
-        self.assertEqual(resolved, new_channel_id)
-        self.assertIn("updated", select_interaction2.response.edited_content)
-
     async def test_database_id_and_suggestions_are_preserved_after_a_move(self) -> None:
         self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id)
-        new_channel_id = 400
-        guild = FakeGuild(usable_channel_ids={new_channel_id})
+        new_thread_id = 400
+        guild = FakeGuild(usable_channel_ids={new_thread_id})
         select_interaction = await self._reach_destination_choice(guild=guild)
         destination_view = select_interaction.response.edited_view
-        existing_channel_button = next(
+        existing_thread_button = next(
             b for b in destination_view.children
-            if b.custom_id == "wpm_database_admin_destination_existing_channel"
+            if b.custom_id == "wpm_database_admin_destination_existing_thread"
         )
         destination_interaction = FakeInteraction(guild=guild)
-        await existing_channel_button.callback(interaction=destination_interaction)
+        await existing_thread_button.callback(interaction=destination_interaction)
         select_view = destination_interaction.response.edited_view
-        channel_select = select_view.children[0]
-        channel_select._values = [type("FakeChannelValue", (), {"id": new_channel_id})()]
+        thread_select = select_view.children[0]
+        thread_select._values = [type("FakeChannelValue", (), {"id": new_thread_id})()]
         select_interaction2 = FakeInteraction(guild=guild)
-        await channel_select.callback(interaction=select_interaction2)
+        await thread_select.callback(interaction=select_interaction2)
 
         unchanged = self.suggestion_service.get_database(self.database.database_id)
         self.assertEqual(unchanged.database_id, self.database.database_id)
@@ -388,22 +363,22 @@ class MoveFlowTests(DatabaseMoveCommandTestCase):
         other = self.suggestion_service.create_database(
             "TV Suggestions", guild_id=GUILD_ID, channel_id=350
         ).database
-        new_channel_id = other.channel_id
-        guild = FakeGuild(usable_channel_ids={new_channel_id})
+        new_thread_id = other.channel_id
+        guild = FakeGuild(usable_channel_ids={new_thread_id})
         select_interaction = await self._reach_destination_choice(guild=guild)
         destination_view = select_interaction.response.edited_view
-        existing_channel_button = next(
+        existing_thread_button = next(
             b for b in destination_view.children
-            if b.custom_id == "wpm_database_admin_destination_existing_channel"
+            if b.custom_id == "wpm_database_admin_destination_existing_thread"
         )
         destination_interaction = FakeInteraction(guild=guild)
-        await existing_channel_button.callback(interaction=destination_interaction)
+        await existing_thread_button.callback(interaction=destination_interaction)
         select_view = destination_interaction.response.edited_view
-        channel_select = select_view.children[0]
-        channel_select._values = [type("FakeChannelValue", (), {"id": new_channel_id})()]
+        thread_select = select_view.children[0]
+        thread_select._values = [type("FakeChannelValue", (), {"id": new_thread_id})()]
 
         select_interaction2 = FakeInteraction(guild=guild)
-        await channel_select.callback(interaction=select_interaction2)
+        await thread_select.callback(interaction=select_interaction2)
 
         self.assertIn("already routed", select_interaction2.response.edited_content)
         resolved = self.suggestion_service.resolve_collection_channel_id(
@@ -432,11 +407,41 @@ class MoveFlowTests(DatabaseMoveCommandTestCase):
 
         self.assertTrue(home_channel.created_thread.deleted)
 
+    async def test_the_configured_home_channel_is_rejected_as_a_destination(self) -> None:
+        # Prevent Collections From Using The Home Channel: even though the
+        # guided UI can no longer produce this (Use Existing Thread only
+        # lists threads, and the Home Channel is always a plain text
+        # channel), ConfigService.set_database_suggestion_destination --
+        # the one shared implementation behind this select and /config's
+        # own Suggestion Destination section -- rejects it explicitly,
+        # as defense in depth against a stale or manually crafted value.
+        guild = FakeGuild(usable_channel_ids={HOME_CHANNEL_ID})
+        select_interaction = await self._reach_destination_choice(guild=guild)
+        destination_view = select_interaction.response.edited_view
+        existing_thread_button = next(
+            b for b in destination_view.children
+            if b.custom_id == "wpm_database_admin_destination_existing_thread"
+        )
+        destination_interaction = FakeInteraction(guild=guild)
+        await existing_thread_button.callback(interaction=destination_interaction)
+        select_view = destination_interaction.response.edited_view
+        thread_select = select_view.children[0]
+        thread_select._values = [type("FakeChannelValue", (), {"id": HOME_CHANNEL_ID})()]
 
-class UseCurrentThreadOrChannelTests(DatabaseMoveCommandTestCase):
-    """Command Structure Cleanup Refinement: /database move's destination
-    choice offers "Use Current Thread/Channel" too, behaving identically
-    to /database add's.
+        select_interaction2 = FakeInteraction(guild=guild)
+        await thread_select.callback(interaction=select_interaction2)
+
+        self.assertIn("Home Channel", select_interaction2.response.edited_content)
+        resolved = self.suggestion_service.resolve_collection_channel_id(
+            self.database, self.suggestion_database_configuration_repository
+        )
+        self.assertEqual(resolved, ORIGINAL_CHANNEL_ID)
+
+
+class UseCurrentThreadTests(DatabaseMoveCommandTestCase):
+    """Collections Should Live In Threads: /database move's destination
+    choice offers "Use Current Thread" too, behaving identically to
+    /database add's -- enabled only inside a thread.
     """
 
     async def _reach_destination_choice(self, *, guild=None, channel=None):
@@ -472,22 +477,16 @@ class UseCurrentThreadOrChannelTests(DatabaseMoveCommandTestCase):
         )
         self.assertEqual(resolved, new_thread_id)
 
-    async def test_enabled_and_moves_when_invoked_from_a_text_channel(self) -> None:
-        new_channel_id = 602
-        guild = FakeGuild(usable_channel_ids={new_channel_id})
-        current_channel = FakeCurrentLocation(new_channel_id, discord.ChannelType.text)
-        select_interaction = await self._reach_destination_choice(guild=guild, channel=current_channel)
+    async def test_disabled_when_invoked_from_a_text_channel(self) -> None:
+        # A plain text channel is never a usable "Use Current Thread"
+        # location -- not even WASH's own configured Home Channel.
+        current_channel = FakeCurrentLocation(602, discord.ChannelType.text)
+        select_interaction = await self._reach_destination_choice(channel=current_channel)
         destination_view = select_interaction.response.edited_view
+
         use_current_button = self._use_current_button(destination_view)
-        self.assertFalse(use_current_button.disabled)
 
-        destination_interaction = FakeInteraction(guild=guild, channel=current_channel)
-        await use_current_button.callback(interaction=destination_interaction)
-
-        resolved = self.suggestion_service.resolve_collection_channel_id(
-            self.database, self.suggestion_database_configuration_repository
-        )
-        self.assertEqual(resolved, new_channel_id)
+        self.assertTrue(use_current_button.disabled)
 
     async def test_disabled_when_invoked_somewhere_unsuitable(self) -> None:
         unsuitable_location = FakeCurrentLocation(603, discord.ChannelType.voice)
@@ -510,13 +509,13 @@ class UseCurrentThreadOrChannelTests(DatabaseMoveCommandTestCase):
         other = self.suggestion_service.create_database(
             "TV Suggestions", guild_id=GUILD_ID, channel_id=350
         ).database
-        current_channel = FakeCurrentLocation(other.channel_id, discord.ChannelType.text)
+        current_thread = FakeCurrentLocation(other.channel_id, discord.ChannelType.public_thread)
         guild = FakeGuild(usable_channel_ids={other.channel_id})
-        select_interaction = await self._reach_destination_choice(guild=guild, channel=current_channel)
+        select_interaction = await self._reach_destination_choice(guild=guild, channel=current_thread)
         destination_view = select_interaction.response.edited_view
         use_current_button = self._use_current_button(destination_view)
 
-        destination_interaction = FakeInteraction(guild=guild, channel=current_channel)
+        destination_interaction = FakeInteraction(guild=guild, channel=current_thread)
         await use_current_button.callback(interaction=destination_interaction)
 
         self.assertIn("already routed", destination_interaction.response.edited_content)

@@ -38,14 +38,9 @@ Casting a vote itself happens through the interactive buttons on the voting post
 
 ### WASH Crew
 
-- `/database add`
-- `/database manage`
-- `/database list`
-- `/database move`
-- `/database remove`
-- `/database backup`
-- `/database restore`
-- `/database reset`
+- `/database add` -- Create a collection.
+- `/database list` -- View collections.
+- `/database manage` -- Move, edit, back up, restore, reset, or remove collections (additional shortcuts -- `/database move`, `/database backup`, `/database restore`, `/database reset`, `/database remove` -- are documented in the [Command Reference](10-Command-Reference.md)).
 - `/repair_suggestions`
 - `/backup`
 - `/restore`

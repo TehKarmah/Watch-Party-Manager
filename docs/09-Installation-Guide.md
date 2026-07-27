@@ -268,7 +268,7 @@ Every setting the wizard can set (including candidate-selection mode) can also b
 Everything the setup wizard collects is stored per-server and can be changed afterward without re-running the whole wizard:
 
 - `/config` opens the same settings in a menu, section by section, for quick individual changes.
-- `/database add`, `/database list`, `/database move`, and `/database remove` manage additional suggestion databases beyond the one created during setup -- or run `/database manage` for a single guided menu that walks through the same actions (plus Edit/Backup/Restore/Reset) for a chosen collection.
+- `/database add` and `/database list` create and list additional suggestion databases beyond the one created during setup -- or run `/database manage` for a single guided menu that walks through every action (move, edit, back up, restore, reset, or remove) for a chosen collection. Direct shortcuts (`/database move`, `/database backup`, `/database restore`, `/database reset`, `/database remove`) remain available for experienced administrators.
 - `/watch_party` (WASH Crew only) manages membership directly: list, approve/deny pending requests, manually add or remove members, and search a member's history.
 
 For the complete, current administrative command reference -- including suggestion management, voting operations, backup/restore, and diagnostics -- see [Administration](05-Administration.md). For the full technical shape of what gets persisted (every field the wizard and `/config` can set), see [`guild_configuration_spec.md`](guild_configuration_spec.md).

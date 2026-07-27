@@ -13,7 +13,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from watch_party_manager.domain.guild_configuration import GuildConfiguration, GuildVoteVisibility, JoinMode
+from watch_party_manager.domain.guild_configuration import (
+    GuildChannelsConfig,
+    GuildConfiguration,
+    GuildVoteVisibility,
+    JoinMode,
+)
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
@@ -409,6 +414,22 @@ class ManageDatabasesSectionTests(ConfigServiceTestCase):
             database, self.suggestion_database_configuration_repository
         )
         self.assertEqual(channel_id, database.channel_id)
+
+    def test_suggestion_destination_rejects_the_configured_home_channel(self) -> None:
+        # Prevent Collections From Using The Home Channel: the one shared
+        # implementation behind both /config's Suggestion Destination
+        # section and /database move must reject WASH's configured Home
+        # Channel as a collection's suggestion destination.
+        home_channel_id = 700
+        self._seed_completed_setup(channels=GuildChannelsConfig(home_channel_id=home_channel_id))
+        database = self._create_database()
+        guild = self._full_guild(extra_channel_ids=[home_channel_id])
+
+        result = self.service.set_database_suggestion_destination(GUILD_ID, database.database_id, home_channel_id, guild)
+
+        self.assertFalse(result.success)
+        self.assertIn("Home Channel", result.message)
+        self.assertIsNone(self.suggestion_database_configuration_repository.get(GUILD_ID, database.database_id))
 
     def test_suggestion_destination_missing_channel_is_rejected(self) -> None:
         self._seed_completed_setup()

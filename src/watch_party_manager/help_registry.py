@@ -114,44 +114,14 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
-        "/database manage",
-        "Guided per-collection management menu.",
-        "WASH Crew: Collections",
-        HelpAudience.WASH_CREW,
-    ),
-    CommandHelp(
         "/database list",
-        "List this server's collections.",
+        "View collections.",
         "WASH Crew: Collections",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
-        "/database move",
-        "Move a collection's suggestion destination to a different channel or thread.",
-        "WASH Crew: Collections",
-        HelpAudience.WASH_CREW,
-    ),
-    CommandHelp(
-        "/database remove",
-        "Deactivate a collection.",
-        "WASH Crew: Collections",
-        HelpAudience.WASH_CREW,
-    ),
-    CommandHelp(
-        "/database backup",
-        "Back up a single collection.",
-        "WASH Crew: Collections",
-        HelpAudience.WASH_CREW,
-    ),
-    CommandHelp(
-        "/database restore",
-        "Restore a collection backup.",
-        "WASH Crew: Collections",
-        HelpAudience.WASH_CREW,
-    ),
-    CommandHelp(
-        "/database reset",
-        "Clear one collection's suggestions.",
+        "/database manage",
+        "Move, edit, back up, restore, reset, or remove collections.",
         "WASH Crew: Collections",
         HelpAudience.WASH_CREW,
     ),
@@ -212,6 +182,19 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
 )
 
 
+# Database Manage Cleanup: a plain-text note appended after a section's
+# command lines in build_command_help_text -- for pointing users at
+# additional shortcuts without inventing a fake "/command" entry for
+# what isn't actually a command. Keyed by the exact section name used in
+# COMMAND_HELP.
+SECTION_NOTES: dict[str, str] = {
+    "WASH Crew: Collections": (
+        "Additional collection shortcuts are available under `/database`. "
+        "The full command list remains documented in the Command Reference."
+    ),
+}
+
+
 def command_sections(
     *, show_wash_crew: bool, show_watch_party_member: bool = False
 ) -> tuple[tuple[str, tuple[CommandHelp, ...]], ...]:
@@ -240,5 +223,8 @@ def build_command_help_text(*, show_wash_crew: bool = True, show_watch_party_mem
     ):
         lines = [f"**{section}**"]
         lines.extend(f"`{entry.name}` - {entry.summary}" for entry in entries)
+        note = SECTION_NOTES.get(section)
+        if note:
+            lines.append(note)
         sections.append("\n".join(lines))
     return "\n\n".join(sections)

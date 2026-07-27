@@ -288,13 +288,22 @@ class ConfigDatabaseCandidateSelectionView(discord.ui.View):
 # --- Suggestion Post Destination ------------------------------------------------------------
 
 
+_SUGGESTION_DESTINATION_CHANNEL_TYPES = [discord.ChannelType.public_thread, discord.ChannelType.private_thread]
+
+
 class ConfigSuggestionDestinationSectionView(discord.ui.View):
-    """Reuses setup_wizard_view.py's generic DestinationChannelSelect.
+    """Reuses setup_wizard_view.py's generic DestinationChannelSelect,
+    restricted to threads only (Collections Should Live In Threads):
+    collections no longer live directly in text channels, so this picker
+    only ever offers a thread -- which also makes WASH's Watch Party Home
+    Channel (always a plain text channel) structurally unselectable here,
+    on top of the explicit rejection in
+    ConfigService.set_database_suggestion_destination.
 
     Deliberately has no Clear/Skip button, unlike ConfigWatchDestinationSectionView:
     every collection MUST have exactly one dedicated suggestion
     destination, so this section can only change it to a different
-    channel or thread, never unset it.
+    thread, never unset it.
     """
 
     def __init__(self, on_select: OnConfigChannelSelected, on_back: OnBackToMenu) -> None:
@@ -303,7 +312,8 @@ class ConfigSuggestionDestinationSectionView(discord.ui.View):
             DestinationChannelSelect(
                 on_select,
                 custom_id="wpm_config_suggestion_destination_channel_select",
-                placeholder="Choose an existing channel or thread",
+                placeholder="Choose an existing thread",
+                channel_types=_SUGGESTION_DESTINATION_CHANNEL_TYPES,
             )
         )
         self.add_item(BackToMenuButton(on_back))

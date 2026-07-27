@@ -427,6 +427,24 @@ class ConfigService:
         if database is None:
             return ConfigUpdateResult(False, "That collection doesn't exist.")
 
+        # Collections Should Live In Threads: WASH's configured Home
+        # Channel organizes collection threads and hosts announcements/
+        # discussion -- it must never itself become a collection's
+        # suggestion destination. Checked here, the one shared
+        # implementation behind both /config's Suggestion Destination
+        # section and /database move (and, through it, /database
+        # manage's Move Collection), so the rule can't be bypassed
+        # through either path.
+        configuration = self.get_configuration(guild_id)
+        home_channel_id = configuration.channels.home_channel_id if configuration is not None else None
+        if home_channel_id is not None and channel_id == home_channel_id:
+            return ConfigUpdateResult(
+                False,
+                "WASH's Watch Party Home Channel can't be used as a collection's suggestion "
+                "destination -- it's reserved for discussion, announcements, and navigation. "
+                "Choose a thread instead.",
+            )
+
         error = validate_channel_usable(channel_id, guild)
         if error:
             return ConfigUpdateResult(False, error)
@@ -439,7 +457,7 @@ class ConfigService:
         )
         if conflict is not None:
             return ConfigUpdateResult(
-                False, f'<#{channel_id}> is already routed to "{conflict.name}". Choose a different channel or thread.'
+                False, f'<#{channel_id}> is already routed to "{conflict.name}". Choose a different thread.'
             )
 
         self._save_database_channel(guild_id, database, channel_id, field_name="suggestion_channel_id")

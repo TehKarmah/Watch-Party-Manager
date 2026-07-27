@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.help_registry import (
     COMMAND_HELP,
+    SECTION_NOTES,
     CommandHelp,
     HelpAudience,
     build_command_help_text,
@@ -79,15 +80,11 @@ class HelpRegistryTests(unittest.TestCase):
         sections = command_sections(show_wash_crew=True)
         commands = [entry.name for _, entries in sections for entry in entries]
         self.assertIn("/database add", commands)
-        self.assertIn("/database move", commands)
+        self.assertIn("/database list", commands)
         self.assertIn("/database manage", commands)
         self.assertIn("/repair_suggestions", commands)
         self.assertIn("/setup", commands)
         self.assertIn("/config", commands)
-
-    def test_database_move_is_wash_crew_only(self) -> None:
-        entries = {entry.name: entry for entry in COMMAND_HELP}
-        self.assertIs(entries["/database move"].audience, HelpAudience.WASH_CREW)
 
     def test_database_manage_is_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
@@ -226,39 +223,65 @@ class HelpRegistryTests(unittest.TestCase):
         text = build_command_help_text(show_wash_crew=False)
         self.assertNotIn("/watch_party", text)
 
-    # --- FR-032B: /database backup and /database restore are WASH Crew only -----
-
-    def test_database_backup_and_restore_are_wash_crew_only(self) -> None:
-        entries = {entry.name: entry for entry in COMMAND_HELP}
-        self.assertIs(entries["/database backup"].audience, HelpAudience.WASH_CREW)
-        self.assertIs(entries["/database restore"].audience, HelpAudience.WASH_CREW)
-
-    def test_database_backup_and_restore_hidden_from_everyone_and_watch_party_member(self) -> None:
-        for show_watch_party_member in (False, True):
-            sections = command_sections(show_wash_crew=False, show_watch_party_member=show_watch_party_member)
-            commands = [entry.name for _, entries in sections for entry in entries]
-            self.assertNotIn("/database backup", commands)
-            self.assertNotIn("/database restore", commands)
-
-    # --- FR-032C: /database reset, /factory_reset, /import are WASH Crew only ---
+    # --- FR-032B/C: /factory_reset and /import are WASH Crew only ---------------
+    # (/database backup, /database restore, and /database reset no longer have
+    # their own registry entries -- see Database Manage Cleanup below.)
 
     def test_reset_and_import_commands_are_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        for name in ("/database reset", "/factory_reset", "/import"):
+        for name in ("/factory_reset", "/import"):
             self.assertIs(entries[name].audience, HelpAudience.WASH_CREW)
 
     def test_reset_and_import_commands_hidden_from_everyone_and_watch_party_member(self) -> None:
         for show_watch_party_member in (False, True):
             sections = command_sections(show_wash_crew=False, show_watch_party_member=show_watch_party_member)
             commands = [entry.name for _, entries in sections for entry in entries]
-            for name in ("/database reset", "/factory_reset", "/import"):
+            for name in ("/factory_reset", "/import"):
                 self.assertNotIn(name, commands)
 
     def test_reset_and_import_commands_visible_to_wash_crew(self) -> None:
         sections = command_sections(show_wash_crew=True)
         commands = [entry.name for _, entries in sections for entry in entries]
-        for name in ("/database reset", "/factory_reset", "/import"):
+        for name in ("/factory_reset", "/import"):
             self.assertIn(name, commands)
+
+    # --- Database Manage Cleanup: /help's Collections section only lists ---------
+    # /database add, /database list, and /database manage -- every other
+    # direct subcommand (move, backup, restore, reset, remove) remains a
+    # fully working shortcut for power users, but is no longer individually
+    # advertised in /help; /database manage's summary and a section note
+    # point crew members at them instead. The full list stays documented in
+    # the Command Reference (docs/10-Command-Reference.md).
+
+    def test_collections_section_only_lists_add_list_and_manage(self) -> None:
+        sections = dict(command_sections(show_wash_crew=True))
+        collection_names = [entry.name for entry in sections["WASH Crew: Collections"]]
+        self.assertEqual(collection_names, ["/database add", "/database list", "/database manage"])
+
+    def test_shortcut_subcommands_no_longer_have_registry_entries(self) -> None:
+        names = [entry.name for entry in COMMAND_HELP]
+        for name in ("/database move", "/database backup", "/database restore", "/database reset", "/database remove"):
+            self.assertNotIn(name, names)
+
+    def test_database_manage_summary_covers_every_shortcut(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        summary = entries["/database manage"].summary
+        for word in ("move", "edit", "back up", "restore", "reset", "remove"):
+            self.assertIn(word, summary)
+
+    def test_database_list_summary_is_simplified(self) -> None:
+        entries = {entry.name: entry for entry in COMMAND_HELP}
+        self.assertEqual(entries["/database list"].summary, "View collections.")
+
+    def test_collections_section_has_a_shortcut_note(self) -> None:
+        self.assertIn("WASH Crew: Collections", SECTION_NOTES)
+        note = SECTION_NOTES["WASH Crew: Collections"]
+        self.assertIn("/database", note)
+
+    def test_command_text_includes_the_shortcut_note(self) -> None:
+        text = build_command_help_text(show_wash_crew=True)
+        self.assertIn("Additional collection shortcuts are available under `/database`.", text)
+        self.assertIn("Command Reference", text)
 
     def test_existing_help_tier_visibility_is_unchanged(self) -> None:
         # The Everyone tier has never changed across any FR: only

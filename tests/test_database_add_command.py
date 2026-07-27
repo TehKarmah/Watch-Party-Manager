@@ -283,27 +283,6 @@ class DestinationFlowTests(DatabaseAddCommandTestCase):
         self.assertEqual(len(databases), 1)
         self.assertEqual(databases[0].channel_id, 888)
 
-    async def test_use_existing_channel_persists_the_collection(self) -> None:
-        type_interaction = await self._reach_destination_choice()
-        destination_view = type_interaction.response.edited_view
-        existing_channel_button = next(
-            b for b in destination_view.children
-            if b.custom_id == "wpm_database_admin_destination_existing_channel"
-        )
-
-        destination_interaction = FakeInteraction()
-        await existing_channel_button.callback(interaction=destination_interaction)
-        select_view = destination_interaction.response.edited_view
-        select = select_view.children[0]
-        select._values = [type("FakeChannelValue", (), {"id": 999})()]
-
-        select_interaction = FakeInteraction()
-        await select.callback(interaction=select_interaction)
-
-        databases = self.suggestion_service.list_databases(GUILD_ID)
-        self.assertEqual(len(databases), 1)
-        self.assertEqual(databases[0].channel_id, 999)
-
     async def test_missing_home_channel_shows_an_error_and_offers_existing_options(self) -> None:
         self.guild_configuration_repository.save(
             GuildConfiguration(guild_id=GUILD_ID, guild_name="Test Guild", setup_completed=True)
@@ -345,11 +324,12 @@ class DestinationFlowTests(DatabaseAddCommandTestCase):
         self.assertEqual(len(self.suggestion_service.list_databases(GUILD_ID)), 1)
 
 
-class UseCurrentThreadOrChannelTests(DatabaseAddCommandTestCase):
-    """Command Structure Cleanup Refinement: /database add's destination
-    choice offers "Use Current Thread/Channel" -- whatever the command
-    was actually run in -- alongside Create New Thread/Use Existing
-    Thread/Use Existing Channel.
+class UseCurrentThreadTests(DatabaseAddCommandTestCase):
+    """Collections Should Live In Threads: /database add's destination
+    choice offers "Use Current Thread" -- enabled only when the command
+    was actually run inside a thread. A plain text channel (even WASH's
+    Home Channel) no longer qualifies, since collections no longer live
+    directly in text channels at all.
     """
 
     async def _reach_destination_choice(self, *, channel=None):
@@ -383,19 +363,30 @@ class UseCurrentThreadOrChannelTests(DatabaseAddCommandTestCase):
         self.assertEqual(databases[0].channel_id, 555)
         self.assertIn("created", destination_interaction.response.edited_content)
 
-    async def test_enabled_and_persists_when_invoked_from_a_text_channel(self) -> None:
+    async def test_disabled_when_invoked_from_a_text_channel(self) -> None:
+        # A plain text channel is never a usable "Use Current Thread"
+        # location -- not even WASH's own configured Home Channel.
         current_channel = FakeCurrentLocation(556, discord.ChannelType.text)
         type_interaction = await self._reach_destination_choice(channel=current_channel)
         destination_view = type_interaction.response.edited_view
+
         use_current_button = self._use_current_button(destination_view)
-        self.assertFalse(use_current_button.disabled)
 
-        destination_interaction = FakeInteraction(channel=current_channel)
-        await use_current_button.callback(interaction=destination_interaction)
+        self.assertTrue(use_current_button.disabled)
 
-        databases = self.suggestion_service.list_databases(GUILD_ID)
-        self.assertEqual(len(databases), 1)
-        self.assertEqual(databases[0].channel_id, 556)
+    async def test_disabled_even_when_invoked_from_the_configured_home_channel(self) -> None:
+        # Prevent Collections From Using The Home Channel: running the
+        # command directly inside WASH's configured Home Channel must
+        # never make it selectable via Use Current Thread either -- the
+        # Home Channel is always a plain text channel, which this option
+        # never accepts regardless of identity.
+        home_channel_location = FakeCurrentLocation(HOME_CHANNEL_ID, discord.ChannelType.text)
+        type_interaction = await self._reach_destination_choice(channel=home_channel_location)
+        destination_view = type_interaction.response.edited_view
+
+        use_current_button = self._use_current_button(destination_view)
+
+        self.assertTrue(use_current_button.disabled)
 
     async def test_disabled_when_invoked_somewhere_unsuitable(self) -> None:
         unsuitable_location = FakeCurrentLocation(557, discord.ChannelType.voice)
@@ -433,21 +424,21 @@ class UseCurrentThreadOrChannelTests(DatabaseAddCommandTestCase):
         # (e.g. a duplicate name) has nothing to roll back -- confirm it
         # simply reports the failure.
         self.suggestion_service.create_database("Existing", guild_id=GUILD_ID, channel_id=200)
-        current_channel = FakeCurrentLocation(558, discord.ChannelType.text)
-        interaction = FakeInteraction(channel=current_channel)
+        current_thread = FakeCurrentLocation(558, discord.ChannelType.public_thread)
+        interaction = FakeInteraction(channel=current_thread)
         await handle_database_add(interaction, self.bot)
         type_view = interaction.response.sent_view
         custom_button = next(b for b in type_view.children if b.custom_id == "wpm_database_add_type_custom")
-        type_interaction = FakeInteraction(channel=current_channel)
+        type_interaction = FakeInteraction(channel=current_thread)
         await custom_button.callback(interaction=type_interaction)
         modal = type_interaction.response.sent_modal
         modal.name_input._value = "Existing"
-        modal_interaction = FakeInteraction(channel=current_channel)
+        modal_interaction = FakeInteraction(channel=current_thread)
         await modal.on_submit(interaction=modal_interaction)
         destination_view = modal_interaction.response.edited_view
         use_current_button = self._use_current_button(destination_view)
 
-        destination_interaction = FakeInteraction(channel=current_channel)
+        destination_interaction = FakeInteraction(channel=current_thread)
         await use_current_button.callback(interaction=destination_interaction)
 
         self.assertIn("already exists", destination_interaction.response.edited_content)

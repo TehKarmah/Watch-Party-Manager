@@ -2758,7 +2758,7 @@ async def send_config_database_suggestion_destination(
         f'**WASH Configuration -- "{collection_name}" Suggestion Destination**\n\n'
         f"Current value -- <#{current}>\n\n"
         "Every collection must have exactly one dedicated suggestion destination -- choose the "
-        "channel or public thread new-suggestion confirmation posts should use instead."
+        "thread new-suggestion confirmation posts should use instead."
     )
 
     async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
@@ -3301,7 +3301,7 @@ class DatabaseGroup(discord.app_commands.Group):
         await interaction.response.send_message(message, ephemeral=ephemeral)
 
     @discord.app_commands.command(
-        name="move", description="Move a collection's suggestion destination to a different channel or thread."
+        name="move", description="Move a collection's suggestion destination to a different thread."
     )
     async def move(self, interaction: discord.Interaction) -> None:
         await handle_database_move(interaction, self.bot)
@@ -7663,22 +7663,22 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
     )
 
 
-_USABLE_CURRENT_LOCATION_TYPES = (
-    discord.ChannelType.text,
+_USABLE_CURRENT_THREAD_TYPES = (
     discord.ChannelType.public_thread,
     discord.ChannelType.private_thread,
 )
 
 
-def _is_usable_current_location(channel: Optional[Any]) -> bool:
-    """Whether "Use Current Thread/Channel" is offerable for `channel`.
+def _is_usable_current_thread(channel: Optional[Any]) -> bool:
+    """Whether "Use Current Thread" is offerable for `channel`.
 
-    True only for a text channel or thread -- the same set of channel
-    types every other destination path (Create New Thread, Use Existing
-    Thread/Channel) already accepts. Used to disable (never omit) the
-    button so it appears consistently across every invocation.
+    True only when the command was actually run inside a thread --
+    Collections Should Live In Threads: a plain text channel (even
+    WASH's configured Home Channel) no longer qualifies as a collection
+    destination at all. Used to disable (never omit) the button so it
+    appears consistently across every invocation.
     """
-    return channel is not None and getattr(channel, "type", None) in _USABLE_CURRENT_LOCATION_TYPES
+    return channel is not None and getattr(channel, "type", None) in _USABLE_CURRENT_THREAD_TYPES
 
 
 def _can_be_new_thread_parent(channel: Optional[Any]) -> bool:
@@ -7729,11 +7729,15 @@ async def send_destination_choice(
     on_cancel: Callable[[discord.Interaction], Awaitable[None]],
 ) -> None:
     """The one shared "where should this collection's suggestions post?"
-    flow for /database add and /database move (Command Structure Cleanup
-    Refinement): Create New Thread (Recommended), Use Current
-    Thread/Channel, Use Existing Thread, or Use Existing Channel.
+    flow for /database add and /database move (Collections Should Live In
+    Threads): Create New Thread (Recommended), Use Current Thread, or Use
+    Existing Thread. Collections no longer offer a plain-channel
+    destination at all -- WASH's Watch Party Home Channel is reserved for
+    discussion, announcements, and navigation, never a collection
+    destination itself; collection activity always lives in a thread
+    beneath it.
 
-    Neither destination validation, thread creation, channel selection,
+    Neither destination validation, thread creation, thread selection,
     nor rollback is duplicated between /database add and /database move
     (or /database manage's Move Collection action) -- all three call this
     one function.
@@ -7749,8 +7753,8 @@ async def send_destination_choice(
         current_channel: The channel or thread the originating command
             was actually run in (typically `interaction.channel` at the
             top of the caller), or None. Determines whether Use Current
-            Thread/Channel is enabled, and which channel_id it resolves
-            to.
+            Thread is enabled (only when this is itself a thread), and
+            which channel_id it resolves to.
         prompt: The message content to show alongside the choice.
         thread_name_default: The suggested (editable) name for Create New
             Thread's rename modal.
@@ -7766,7 +7770,7 @@ async def send_destination_choice(
             rolled back on failure.
         on_cancel: Called if Cancel is clicked at any point in the flow.
     """
-    current_location_available = _is_usable_current_location(current_channel)
+    current_location_available = _is_usable_current_thread(current_channel)
 
     guild_configuration = bot.guild_configuration_repository.get(guild_id)
     home_channel_id = guild_configuration.channels.home_channel_id if guild_configuration is not None else None
@@ -7812,7 +7816,6 @@ async def send_destination_choice(
             on_create_new_thread,
             on_use_current,
             on_use_existing_thread,
-            on_use_existing_channel,
             on_cancel,
             current_location_available=current_location_available,
             create_new_thread_available=create_new_thread_available,
@@ -7868,15 +7871,6 @@ async def send_destination_choice(
             view=ExistingThreadSelectView(on_thread_selected, on_cancel),
         )
 
-    async def on_use_existing_channel(destination_interaction: discord.Interaction) -> None:
-        async def on_channel_selected(select_interaction: discord.Interaction, channel_id: int) -> None:
-            await finalize(select_interaction, channel_id)
-
-        await destination_interaction.response.edit_message(
-            content="Choose an existing channel:",
-            view=ExistingChannelSelectView(on_channel_selected, on_cancel),
-        )
-
     if using_current_channel_as_parent:
         prompt = (
             f"{prompt}\n\n"
@@ -7894,8 +7888,8 @@ async def handle_database_add(interaction: discord.Interaction, bot: "WatchParty
     Holiday, Documentaries, Horror) this server doesn't already have a
     matching collection for, plus Special Collection and Custom (always
     available) -- then choose where its suggestions should post, the
-    same Create New Thread (Recommended)/Use Existing Thread/Use
-    Existing Channel choice /database move offers. name is no longer a
+    same Create New Thread (Recommended)/Use Current Thread/Use
+    Existing Thread choice /database move offers. name is no longer a
     typed command parameter for the standard types; Special Collection
     and Custom still collect it via modal, exactly as the wizard does.
 
@@ -8198,9 +8192,9 @@ async def start_database_move(
 
 
 async def handle_database_move(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
-    """/database move (Command Structure Cleanup, pre-v1): pick a
+    """/database move (Collections Should Live In Threads): pick a
     collection, then move its suggestion destination to a different
-    channel or thread. See start_database_move for the actual move.
+    thread. See start_database_move for the actual move.
     """
     if bot.wash_crew_role_id is None:
         await interaction.response.send_message(

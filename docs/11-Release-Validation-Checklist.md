@@ -397,36 +397,39 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 3.4 Database management: create, list, remove
 
-- **Objective:** Confirm suggestion database administration works outside the wizard, using `/database add`'s modernized type-then-destination flow.
-- **Preconditions:** WASH Crew role configured; at least one collection (e.g. "Movie Suggestions") already exists.
+- **Objective:** Confirm suggestion database administration works outside the wizard, using `/database add`'s modernized type-then-destination flow, and that collections live in threads only.
+- **Preconditions:** WASH Crew role configured; at least one collection (e.g. "Movie Suggestions") already exists; a Home Channel is configured.
 - **Steps:**
   1. Run `/database add`; confirm the type screen offers every standard type (Movies, TV Shows, Anime, Holiday, Documentaries, Horror) this server doesn't already have a matching collection for, plus **Special Collection** and **Custom** (always present), and does **not** re-offer a type already matching an existing collection (e.g. Movies, from the precondition).
   2. Choose **Custom**; type a new, unused name in the modal.
-  3. Confirm the destination screen appears with **Create New Thread (Recommended)**, **Use Current Thread/Channel**, **Use Existing Thread**, and **Use Existing Channel**, in that order; choose **Create New Thread**, confirm the suggested name is editable, and submit.
-  4. Run `/database add` again from inside a thread; confirm **Use Current Thread/Channel** is enabled and, when chosen, the collection is created on that same thread with no further prompts.
-  5. Run `/database add` again from a plain text channel; confirm **Use Current Thread/Channel** is enabled and, when chosen, the collection is created on that channel.
-  6. Run `/database add` again from a location where the current channel/thread isn't a usable destination (e.g. a voice channel's text chat, if reachable); confirm **Use Current Thread/Channel** appears disabled/greyed out rather than causing an error.
-  7. Run `/database list` and confirm the new database(s) appear.
-  8. Run `/database remove`, choose a new database from the picker, and confirm.
-- **Expected Result:** The type screen correctly excludes already-used standard types while always offering Special Collection/Custom; the new thread is created as a sibling under WASH's configured home channel and the collection is created on it immediately (rejects a duplicate name); **Use Current Thread/Channel** correctly targets the invoking thread or channel and is disabled rather than broken when the invocation location isn't usable; the list shows name, Active/Inactive status, and item count; removal applies the documented safety/ownership checks and the database no longer appears afterward.
+  3. Confirm the destination screen appears with exactly **Create New Thread (Recommended)**, **Use Current Thread**, and **Use Existing Thread**, in that order -- no channel-based option is offered; choose **Create New Thread**, confirm the suggested name is editable, and submit.
+  4. Confirm the new thread is created as a sibling under WASH's configured Home Channel.
+  5. Run `/database add` again from inside a thread; confirm **Use Current Thread** is enabled and, when chosen, the collection is created on that same thread with no further prompts.
+  6. Run `/database add` again from a plain text channel, including WASH's own Home Channel; confirm **Use Current Thread** appears disabled/greyed out in both cases (never just for the Home Channel specifically).
+  7. Run `/database add` again from a location where nothing is usable (e.g. a voice channel's text chat, if reachable) and confirm **Use Current Thread** stays disabled rather than causing an error.
+  8. Choose **Use Existing Thread**; confirm the picker lists threads only -- no text channels, including the Home Channel, ever appear.
+  9. Run `/database list` and confirm the new database(s) appear.
+  10. Run `/database remove`, choose a new database from the picker, and confirm.
+- **Expected Result:** The type screen correctly excludes already-used standard types while always offering Special Collection/Custom; the new thread is created as a sibling under WASH's configured Home Channel and the collection is created on it immediately (rejects a duplicate name); **Use Current Thread** is enabled only inside a thread (a text channel, even the Home Channel, never qualifies) and disabled rather than broken otherwise; **Use Existing Thread** never offers a text channel; the list shows name, Active/Inactive status, and item count; removal applies the documented safety/ownership checks and the database no longer appears afterward.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
 ### 3.4b `/database move`
 
-- **Objective:** Confirm a collection's suggestion destination can be moved to a different channel or thread without affecting anything else about it.
-- **Preconditions:** At least one collection with existing suggestions and at least one completed vote round.
+- **Objective:** Confirm a collection's suggestion destination can be moved to a different thread without affecting anything else about it, and that WASH's Home Channel can never become a destination.
+- **Preconditions:** At least one collection with existing suggestions and at least one completed vote round; a Home Channel is configured.
 - **Steps:**
   1. Run `/database move`, choose the collection from the picker.
-  2. Confirm the destination screen shows **Create New Thread (Recommended)**, **Use Current Thread/Channel**, **Use Existing Thread**, and **Use Existing Channel**, in that order (same order as `/database add`).
-  3. Choose **Use Existing Channel** (or **Use Existing Thread**) and select a destination not already used by another collection.
+  2. Confirm the destination screen shows exactly **Create New Thread (Recommended)**, **Use Current Thread**, and **Use Existing Thread**, in that order (same order and options as `/database add`) -- no channel-based option is offered.
+  3. Choose **Use Existing Thread** and select a destination thread not already used by another collection.
   4. Confirm the move succeeds; run `/add` in the new destination and confirm the suggestion is created there.
-  5. Confirm the collection's earlier suggestion posts (from before the move) are still visible in their original channel/thread, untouched.
+  5. Confirm the collection's earlier suggestion posts (from before the move) are still visible in their original thread, untouched.
   6. Attempt a second move to a destination already used by another collection; confirm it's rejected with a clear "already routed" message and nothing changes.
-  7. Repeat step 1-4 choosing **Create New Thread** instead; confirm the new thread is created under WASH's configured home channel and the suggested default name can be renamed before creation (renaming here must not change the collection's own name -- only `/database add`'s Create New Thread renames the collection).
-  8. Run `/database move` again from inside a thread or a plain text channel; confirm **Use Current Thread/Channel** is enabled and, when chosen, moves the collection's destination to that same thread/channel with no further prompts.
-  9. Run `/database move` again from a location where the current channel/thread isn't a usable destination; confirm **Use Current Thread/Channel** appears disabled/greyed out rather than causing an error.
-- **Expected Result:** Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, rotation history, and statistics are all unchanged (spot-check via `/stats type:Collection` or `/config` -> Manage Collections before and after); existing Discord suggestion posts are never moved; only suggestions added after the move appear in the new destination; a duplicate destination is rejected cleanly; **Use Current Thread/Channel** behaves identically to `/database add`'s version (same enable/disable rule) but never renames the collection.
+  7. Repeat step 1-4 choosing **Create New Thread** instead; confirm the new thread is created under WASH's configured Home Channel and the suggested default name can be renamed before creation (renaming here must not change the collection's own name -- only `/database add`'s Create New Thread renames the collection).
+  8. Run `/database move` again from inside a thread; confirm **Use Current Thread** is enabled and, when chosen, moves the collection's destination to that same thread with no further prompts.
+  9. Run `/database move` again from a plain text channel, including WASH's own Home Channel; confirm **Use Current Thread** stays disabled in both cases.
+  10. Attempt to route a collection's suggestion destination to WASH's configured Home Channel (e.g. via `/config` -> Manage Collections -> Suggestion Destination, if reachable, or by any other means available); confirm it's clearly rejected and nothing changes.
+- **Expected Result:** Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, rotation history, and statistics are all unchanged (spot-check via `/stats type:Collection` or `/config` -> Manage Collections before and after); existing Discord suggestion posts are never moved; only suggestions added after the move appear in the new destination; a duplicate destination is rejected cleanly; **Use Current Thread** behaves identically to `/database add`'s version (same enable/disable rule) but never renames the collection; WASH's Home Channel is never accepted as a destination, from any path.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -437,7 +440,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/database manage`; confirm the same collection picker used elsewhere in `/database` appears.
   2. Choose a collection; confirm a management menu appears offering exactly: **Move Collection**, **Edit Collection**, **Backup Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, **Cancel**.
-  3. Choose **Move Collection**; confirm it launches the identical destination-choice screen used by `/database move` (same four options, same order) and completes the move.
+  3. Choose **Move Collection**; confirm it launches the identical destination-choice screen used by `/database move` (same three thread-only options, same order) and completes the move.
   4. Return to `/database manage` and choose **Edit Collection**; confirm it shows the same settings menu `/config` -> Manage Collections shows for that database, and that its **Back** button returns to the `/database manage` management menu (not to `/config`'s picker).
   5. Choose **Backup Collection**; confirm a backup file is produced, matching `/database backup`'s output.
   6. Choose **Restore Collection**; confirm it points the user at running `/database restore` directly (a modal/component interaction cannot carry a file upload, so this cannot be button-driven) rather than silently failing.
@@ -446,6 +449,20 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   9. Choose **Cancel** at the management menu; confirm the message states no changes were made and nothing is altered.
   10. Confirm `/database move`, `/database backup`, `/database restore`, `/database reset`, and `/database remove` still work directly and unchanged, independent of `/database manage`.
 - **Expected Result:** `/database manage` is a thin guided wrapper around the same underlying move/edit/backup/restore/reset/remove logic used by the direct subcommands -- no behavior is duplicated or diverges between the guided and direct paths; the direct subcommands remain fully functional as shortcuts.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 3.4d `/help`'s simplified Collections section
+
+- **Objective:** Confirm `/help`'s Collections section is decluttered to the primary workflow, with the remaining shortcuts still fully documented elsewhere.
+- **Preconditions:** WASH Crew role configured.
+- **Steps:**
+  1. Run `/help` as WASH Crew; find the Collections section.
+  2. Confirm it lists exactly `/database add`, `/database list`, and `/database manage` -- not `/database move`, `/database backup`, `/database restore`, `/database reset`, or `/database remove` individually.
+  3. Confirm `/database manage`'s summary mentions move, edit, back up, restore, reset, and remove.
+  4. Confirm a note appears pointing at additional shortcuts under `/database` and the Command Reference.
+  5. Confirm every direct subcommand still runs correctly even though it's no longer individually listed (see 3.4/3.4b/3.4c above).
+- **Expected Result:** `/help` reads as a curated, primary-workflow-first summary; nothing about any subcommand's actual behavior changed -- only what `/help` chooses to list.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
