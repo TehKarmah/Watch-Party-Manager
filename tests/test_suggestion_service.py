@@ -988,6 +988,38 @@ class ResolveDatabaseForChannelWithConfiguredDestinationTests(unittest.TestCase)
         )
         self.assertIsNone(match)
 
+    def test_original_home_channel_no_longer_resolves_a_moved_collection(self) -> None:
+        # Context Resolution Audit: the exact reported bug -- a collection
+        # moved into its own thread must stop resolving from its old
+        # location. Two databases are required to prove this: with only
+        # one database in the guild, the sole-database fallback would
+        # incidentally still "succeed" for the wrong reason.
+        moved = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+        self._configure_destination(moved.database.database_id, 555)
+
+        resolution = self.service.resolve_database_for_channel(100, 200, self.configuration_repository)
+
+        self.assertIsNone(resolution.database)
+        self.assertEqual(len(resolution.ambiguous_candidates), 2)
+
+    def test_new_thread_resolves_a_moved_collection_immediately(self) -> None:
+        moved = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self.service.create_database("Kung Fu Movies", guild_id=100, channel_id=201)
+        self._configure_destination(moved.database.database_id, 555)
+
+        resolution = self.service.resolve_database_for_channel(100, 555, self.configuration_repository)
+
+        self.assertEqual(resolution.database.database_id, moved.database.database_id)
+
+    def test_find_database_using_channel_frees_the_original_home_channel_after_a_move(self) -> None:
+        moved = self.service.create_database("Sunday Watch Party", guild_id=100, channel_id=200)
+        self._configure_destination(moved.database.database_id, 555)
+
+        match = self.service.find_database_using_channel(100, 200, self.configuration_repository)
+
+        self.assertIsNone(match)
+
     def test_create_database_rejects_a_channel_already_used_as_another_databases_destination(self) -> None:
         # Conflict Prevention: create_database's own duplicate-channel
         # check already covers home-channel collisions; this confirms it
@@ -1003,7 +1035,7 @@ class ResolveDatabaseForChannelWithConfiguredDestinationTests(unittest.TestCase)
         )
 
         self.assertFalse(result.success)
-        self.assertIn("already the suggestion destination", result.message)
+        self.assertIn("already has a collection", result.message)
 
 
 class DatabaseCreationRestartSafetyTests(unittest.TestCase):
@@ -1070,6 +1102,33 @@ class DatabaseCreationRestartSafetyTests(unittest.TestCase):
         tv_resolution = second_process.resolve_database_for_channel(100, 201)
         self.assertEqual(movies_resolution.database.name, "Movies")
         self.assertEqual(tv_resolution.database.name, "TV Shows")
+
+    def test_a_moved_databases_old_home_channel_stays_unresolvable_after_restart(self) -> None:
+        # Context Resolution Audit: the fix must not merely be an
+        # in-memory quirk of the process that performed the move -- a
+        # fresh process reading the same persisted files must reach the
+        # identical conclusion.
+        configuration_repository = SuggestionDatabaseConfigurationRepository(
+            self.root / "suggestion_database_configurations.json"
+        )
+        first_process = self._new_service()
+        moved = first_process.create_database("Movies", guild_id=100, channel_id=200)
+        first_process.create_database("TV Shows", guild_id=100, channel_id=201)
+        configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=100,
+                database_id=moved.database.database_id,
+                display_name="Movies",
+                channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=777),
+            )
+        )
+
+        second_process = self._new_service()
+        old_channel_resolution = second_process.resolve_database_for_channel(100, 200, configuration_repository)
+        new_channel_resolution = second_process.resolve_database_for_channel(100, 777, configuration_repository)
+
+        self.assertIsNone(old_channel_resolution.database)
+        self.assertEqual(new_channel_resolution.database.name, "Movies")
 
 
 class ReloadFromRepositoryTests(unittest.TestCase):

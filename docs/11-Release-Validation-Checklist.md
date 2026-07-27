@@ -446,6 +446,20 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 3.4b2 Context Resolution Audit: commands stop resolving a moved collection's old location
+
+- **Objective:** Confirm the bug fix -- a collection moved into its own thread must no longer resolve from wherever it used to be, and the new destination must resolve immediately, for every context-sensitive command.
+- **Preconditions:** Two collections in the same server (so the "exactly one collection" convenience fallback can't mask a failure); collection A moved via Test 3.4b, from its original location to a new thread.
+- **Steps:**
+  1. From collection A's *original* (pre-move) location, run `/add`, `/list`, `/vote start`, and `/stats type:Collection`; confirm none of them resolve to collection A there anymore (each should show its usual ambiguous/no-match picker or message, since collection B still exists too).
+  2. From collection A's *new* thread, run the same four commands; confirm all four resolve to collection A immediately, with no extra step.
+  3. Restart the bot, then repeat step 2.
+  4. Run `/database list` and `/config` -> Manage Collections; confirm both show collection A's *current* (post-move) channel, not its original one.
+  5. Create a brand-new collection C using collection A's *original*, now-freed location as its destination; confirm this succeeds (the old location is genuinely free for reuse, not permanently reserved).
+- **Expected Result:** Exactly one location resolves to collection A at any given time -- its current destination -- both before and after a restart; `/database list`/`/config` never show a stale channel; a freed-up former destination can be reused by a different collection.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 3.4c `/database manage`
 
 - **Objective:** Confirm the guided management workflow correctly reuses the existing move, edit, backup, restore, reset, and remove logic without duplicating it.
@@ -903,6 +917,83 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/watch-party schedule` for that suggestion directly, as in Test 6.1.
 - **Expected Result:** Scheduling succeeds exactly as before. Since this path collects no duration, confirm the watch party is **not** completed automatically at any point -- it must be marked Watched by hand via `/edit_suggestion` if it actually happens.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 6.13 Discord Scheduled Event creation and defaults
+
+- **Objective:** Confirm the **Schedule Watch Party** modal now also creates a real Discord Scheduled Event, with correct defaults, and that a Location field is the only new thing it asks for.
+- **Preconditions:** WASH's bot role has the Manage Events permission (Installation Guide Section 6).
+- **Steps:**
+  1. On a results announcement, click **Schedule Watch Party**; confirm the modal now has four fields: watch date & time, event duration, Location, and the optional description override.
+  2. Fill in a Location (e.g. "Discord Voice Chat") and submit.
+  3. In Discord, open the server's Events tab and find the newly created event.
+- **Expected Result:** The event's title is `🎬 Watch Party: <Title> (<Year>)`; its description includes the IMDb summary (when known), the IMDb link, and "Hosted by WASH"; its start time matches what was entered; its end time matches start + the entered duration; its location matches what was typed; it is an External-type event (not tied to a voice channel). WASH's own confirmation includes a link to this event.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 6.14 Discord Event tracking and duplicate prevention
+
+- **Objective:** Confirm the created event is linked to WASH's watch party record, and that a duplicate can't be created through any path.
+- **Preconditions:** Test 6.13 passed.
+- **Steps:**
+  1. Re-open the same results announcement; confirm the button reads **Watch Party Scheduled** (disabled).
+  2. Run `/watch-party schedule` for the same suggestion; confirm WASH reports the existing schedule rather than creating a second watch party or a second Discord Event.
+- **Expected Result:** Exactly one Discord Scheduled Event and one WASH watch party exist for this suggestion.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 6.15 Event synchronization: editing in Discord
+
+- **Objective:** Confirm editing the linked Discord Event's time directly in Discord updates WASH's own record.
+- **Preconditions:** Test 6.13 passed.
+- **Steps:**
+  1. In Discord, edit the event's start time (and/or duration) directly.
+  2. Run `/watch-party status` or re-check the watch party's scheduled time in WASH.
+- **Expected Result:** WASH's record reflects the new time/duration within moments, and the watch-party reminder/completion jobs are rescheduled to match (no duplicate jobs).
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 6.16 Event synchronization: cancelling or deleting in Discord
+
+- **Objective:** Confirm cancelling (or deleting) the linked Discord Event directly in Discord cancels the WASH watch party too.
+- **Preconditions:** Test 6.13 passed (use a fresh watch party per sub-case if testing both).
+- **Steps:**
+  1. Cancel the event directly in Discord (its own "Cancel Event" action); confirm WASH's watch party becomes Cancelled and a cancellation announcement posts.
+  2. Separately, on another watch party, delete the event directly in Discord; confirm the same result.
+- **Expected Result:** Both actions leave WASH's watch party Cancelled, with its reminder/completion jobs removed and a cancellation announcement posted -- identical to running `/watch-party cancel` directly.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 6.17 Automatic completion is not dependent on manually ending the Discord Event
+
+- **Objective:** Confirm WASH's own schedule -- not the Discord Event's status -- is what actually drives automatic completion (Discord does not auto-end an event on its own).
+- **Preconditions:** Test 6.13 passed, scheduled to end within a few minutes.
+- **Steps:**
+  1. Do **not** manually start or end the Discord Event.
+  2. Wait for the watch party's scheduled end time (see Test 6.10).
+- **Expected Result:** The suggestion is still marked Watched automatically, exactly as in Test 6.10, whether or not anyone ever touched the Discord Event's own status.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 6.18 Fallback Behavior: Discord Scheduled Events unavailable
+
+- **Objective:** Confirm a graceful, explicit message when Discord Scheduled Event creation can't succeed, with the WASH-side schedule still intact.
+- **Preconditions:** Temporarily remove WASH's Manage Events permission (server-wide, or via a role override).
+- **Steps:**
+  1. Click **Schedule Watch Party** and submit the modal.
+- **Expected Result:** WASH clearly explains it couldn't create the Discord Event (naming the Manage Events permission) and confirms the watch party is still scheduled in WASH regardless -- reminder and automatic completion still work normally. Restore the permission afterward.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 6.19 WASH-initiated changes are not pushed back to a linked Discord Event
+
+- **Objective:** Confirm the documented one-directional limitation: rescheduling/cancelling via WASH's own commands does not touch an already-linked Discord Event.
+- **Preconditions:** Test 6.13 passed.
+- **Steps:**
+  1. Run `/watch-party reschedule` and select this watch party; give it a new time.
+  2. Check the Discord Event's own start time in Discord.
+- **Expected Result:** WASH's record shows the new time, but the Discord Event itself is unchanged -- matching the documented limitation in [Administration](05-Administration.md)'s Watch Party Lifecycle section.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

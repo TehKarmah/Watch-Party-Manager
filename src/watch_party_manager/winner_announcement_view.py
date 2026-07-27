@@ -130,14 +130,15 @@ class WinnerAnnouncementView(discord.ui.View):
             self.add_item(ChooseWinnerToScheduleButton(vote_round_id, on_choose_winner))
 
 
-OnScheduleWatchPartyModalSubmit = Callable[[discord.Interaction, str, str, str], Awaitable[None]]
+OnScheduleWatchPartyModalSubmit = Callable[[discord.Interaction, str, str, str, str], Awaitable[None]]
 
 
 class ScheduleWatchPartyModal(discord.ui.Modal):
     """Collects only what the guided scheduling flow doesn't already
-    know: watch date & time, event duration, and an optional description
-    override -- never the movie itself (Remove Friction: title, IMDb
-    data, and runtime are already known from the winning suggestion).
+    know: watch date & time, event duration, a location, and an optional
+    description override -- never the movie itself (Remove Friction:
+    title, IMDb data, and runtime are already known from the winning
+    suggestion).
 
     Watch date and time share a single field, reusing WASH's existing
     parse_watch_party_schedule_time() free-text format exactly as
@@ -147,6 +148,17 @@ class ScheduleWatchPartyModal(discord.ui.Modal):
     with the winning suggestion's own runtime when known (still fully
     editable, e.g. to add socializing time) -- see
     default_duration_text.
+
+    Location (Discord Scheduled Events): free text (e.g. "Discord Voice
+    Chat", "someone's living room", a streaming link) used as the created
+    Scheduled Event's External location. Discord's API requires a
+    non-empty location for an External-type event -- this is the one
+    exception to "WASH never asks the administrator to choose a voice
+    channel or location," since the API itself mandates something be
+    supplied. WASH always creates External events rather than offering a
+    voice-channel entity type, keeping this a single free-text field
+    instead of a channel picker (see docs/05-Administration.md's Watch
+    Party Lifecycle section for the full rationale).
     """
 
     def __init__(
@@ -168,6 +180,12 @@ class ScheduleWatchPartyModal(discord.ui.Modal):
             default=default_duration_text or None,
             required=True,
         )
+        self.location_input = discord.ui.TextInput(
+            label="Location",
+            placeholder="e.g. Discord Voice Chat, a streaming link",
+            required=True,
+            max_length=100,
+        )
         self.description_input = discord.ui.TextInput(
             label="Description override (optional)",
             style=discord.TextStyle.paragraph,
@@ -175,11 +193,16 @@ class ScheduleWatchPartyModal(discord.ui.Modal):
         )
         self.add_item(self.when_input)
         self.add_item(self.duration_input)
+        self.add_item(self.location_input)
         self.add_item(self.description_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self._submit_callback(
-            interaction, self.when_input.value, self.duration_input.value, self.description_input.value
+            interaction,
+            self.when_input.value,
+            self.duration_input.value,
+            self.location_input.value,
+            self.description_input.value,
         )
 
 

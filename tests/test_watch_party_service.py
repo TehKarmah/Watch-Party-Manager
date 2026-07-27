@@ -310,6 +310,77 @@ class WatchPartyServiceTests(unittest.TestCase):
 
         self.assertFalse(result.success)
 
+    # --- Discord Scheduled Events: set_discord_event_id / lookup ------------------------
+
+    def test_set_discord_event_id_links_the_watch_party(self) -> None:
+        created = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=1), guild_id=100
+        ).watch_party
+
+        result = self.watch_party_service.set_discord_event_id(created.id, 555)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.watch_party.discord_event_id, 555)
+        self.assertEqual(self.watch_party_service.get_watch_party(created.id).discord_event_id, 555)
+
+    def test_set_discord_event_id_fails_for_a_nonexistent_watch_party(self) -> None:
+        result = self.watch_party_service.set_discord_event_id(999, 555)
+
+        self.assertFalse(result.success)
+
+    def test_get_watch_party_by_discord_event_id_finds_the_linked_watch_party(self) -> None:
+        created = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=1), guild_id=100
+        ).watch_party
+        self.watch_party_service.set_discord_event_id(created.id, 555)
+
+        found = self.watch_party_service.get_watch_party_by_discord_event_id(555)
+
+        self.assertIsNotNone(found)
+        self.assertEqual(found.id, created.id)
+
+    def test_get_watch_party_by_discord_event_id_returns_none_when_unlinked(self) -> None:
+        self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=1), guild_id=100
+        )
+
+        found = self.watch_party_service.get_watch_party_by_discord_event_id(555)
+
+        self.assertIsNone(found)
+
+    # --- Discord Scheduled Events: sync_from_discord_event -------------------------------
+
+    def test_sync_from_discord_event_updates_time_and_duration(self) -> None:
+        created = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id,
+            scheduled_at=utc_now() + timedelta(days=1),
+            guild_id=100,
+            duration_minutes=90,
+        ).watch_party
+        new_time = utc_now() + timedelta(days=2)
+
+        result = self.watch_party_service.sync_from_discord_event(created.id, new_time, 120)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.watch_party.scheduled_at, new_time)
+        self.assertEqual(result.watch_party.duration_minutes, 120)
+
+    def test_sync_from_discord_event_fails_for_a_nonexistent_watch_party(self) -> None:
+        result = self.watch_party_service.sync_from_discord_event(999, utc_now(), 90)
+
+        self.assertFalse(result.success)
+
+    def test_sync_from_discord_event_leaves_a_cancelled_watch_party_alone(self) -> None:
+        created = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=1), guild_id=100
+        ).watch_party
+        self.watch_party_service.cancel_watch_party(created.id)
+
+        result = self.watch_party_service.sync_from_discord_event(created.id, utc_now(), 90)
+
+        self.assertFalse(result.success)
+        self.assertEqual(self.watch_party_service.get_watch_party(created.id).status, WatchPartyStatus.CANCELLED)
+
     # --- Watch Party Lifecycle: rescheduling a COMPLETED watch party (correction) -------
 
     def test_reschedule_reverts_a_completed_watch_party_to_scheduled(self) -> None:

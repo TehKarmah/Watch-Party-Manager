@@ -57,6 +57,13 @@ class WatchParty:
     # field since it's always resolvable through watch_item_id.
     vote_round_id: Optional[int] = None
     description_override: Optional[str] = None
+    # Discord Scheduled Events integration: the native Discord Scheduled
+    # Event created alongside this watch party, when creation succeeded
+    # (see winner-announcement scheduling in bot.py). None when Discord
+    # Scheduled Events couldn't be used (missing permissions, API error,
+    # or a watch party scheduled before this integration existed) --
+    # WASH's own internal schedule remains authoritative either way.
+    discord_event_id: Optional[int] = None
 
     def __post_init__(self) -> None:
         self._validate_id()
@@ -66,6 +73,7 @@ class WatchParty:
         self._validate_timestamps()
         self._validate_duration_minutes()
         self._validate_vote_round_id()
+        self._validate_discord_event_id()
         self.description_override = self._normalize_description(self.description_override)
 
     def _validate_id(self) -> None:
@@ -97,6 +105,10 @@ class WatchParty:
     def _validate_vote_round_id(self) -> None:
         if self.vote_round_id is not None and self.vote_round_id <= 0:
             raise ValueError("vote_round_id must be a positive integer when provided")
+
+    def _validate_discord_event_id(self) -> None:
+        if self.discord_event_id is not None and self.discord_event_id <= 0:
+            raise ValueError("discord_event_id must be a positive integer when provided")
 
     @staticmethod
     def _normalize_description(description: Optional[str]) -> Optional[str]:

@@ -75,6 +75,28 @@ class JsonWatchPartyRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.status, WatchPartyStatus.SCHEDULED)
         self.assertEqual(result.next_id, 2)
 
+    def test_round_trips_a_discord_event_id(self) -> None:
+        watch_party = WatchParty(
+            id=1,
+            watch_item_id=1,
+            scheduled_at=utc_now() + timedelta(days=1),
+            guild_id=1,
+            discord_event_id=123456789,
+        )
+
+        self.repository.save([watch_party], next_id=2)
+        result = self.repository.load()
+
+        self.assertEqual(result.watch_parties[0].discord_event_id, 123456789)
+
+    def test_round_trips_a_watch_party_with_no_discord_event_id(self) -> None:
+        watch_party = WatchParty(id=1, watch_item_id=1, scheduled_at=utc_now() + timedelta(days=1), guild_id=1)
+
+        self.repository.save([watch_party], next_id=2)
+        result = self.repository.load()
+
+        self.assertIsNone(result.watch_parties[0].discord_event_id)
+
     def test_round_trips_a_cancelled_watch_party(self) -> None:
         watch_party = WatchParty(
             id=1,

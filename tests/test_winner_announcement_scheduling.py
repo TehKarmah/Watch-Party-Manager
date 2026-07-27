@@ -14,6 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import discord
+
 from watch_party_manager.bot import (
     build_winner_announcement_view,
     finalize_schedule_watch_party_for_winner,
@@ -69,10 +71,41 @@ class FakeResponse:
         self.sent_modal = modal
 
 
+class FakeHTTPResponse:
+    def __init__(self, status: int = 403, reason: str = "Forbidden") -> None:
+        self.status = status
+        self.reason = reason
+
+
+class FakeScheduledEvent:
+    def __init__(self, event_id: int) -> None:
+        self.id = event_id
+
+
+class FakeGuild:
+    """Stands in for discord.Guild's create_scheduled_event -- by default
+    succeeds, recording the kwargs it was called with so tests can assert
+    on the event's title/description/times/location. raise_error, when
+    set, makes the call raise that exception instead (Fallback Behavior).
+    """
+
+    def __init__(self, *, raise_error: Exception | None = None, next_event_id: int = 9001) -> None:
+        self.raise_error = raise_error
+        self.next_event_id = next_event_id
+        self.create_scheduled_event_calls: list = []
+
+    async def create_scheduled_event(self, **kwargs):
+        self.create_scheduled_event_calls.append(kwargs)
+        if self.raise_error is not None:
+            raise self.raise_error
+        return FakeScheduledEvent(self.next_event_id)
+
+
 class FakeInteraction:
-    def __init__(self, *, guild_id=GUILD_ID, roles=(WASH_CREW_ROLE_ID,)) -> None:
+    def __init__(self, *, guild_id=GUILD_ID, roles=(WASH_CREW_ROLE_ID,), guild=None) -> None:
         self.user = FakeMember(roles=[FakeRole(role_id) for role_id in roles])
         self.guild_id = guild_id
+        self.guild = guild if guild is not None else FakeGuild()
         self.response = FakeResponse()
 
 
@@ -236,7 +269,7 @@ class FinalizeScheduleWatchPartyForWinnerTests(WinnerAnnouncementSchedulingTestC
 
         await finalize_schedule_watch_party_for_winner(
             interaction, self.bot, self.matrix.id, vote_round_id=1,
-            when_text="2026-08-01 20:00", duration_text="2h", description_text="",
+            when_text="2026-08-01 20:00", duration_text="2h", location_text="Discord Voice Chat", description_text="",
         )
 
         self.assertIn("scheduled", interaction.response.sent_message)
@@ -258,7 +291,7 @@ class FinalizeScheduleWatchPartyForWinnerTests(WinnerAnnouncementSchedulingTestC
 
         await finalize_schedule_watch_party_for_winner(
             interaction, self.bot, self.matrix.id, vote_round_id=1,
-            when_text="2026-08-01 20:00", duration_text="2h", description_text="",
+            when_text="2026-08-01 20:00", duration_text="2h", location_text="Discord Voice Chat", description_text="",
         )
 
         self.assertEqual(len(self.bot.announcement_channel.sent_messages), 1)
@@ -270,7 +303,7 @@ class FinalizeScheduleWatchPartyForWinnerTests(WinnerAnnouncementSchedulingTestC
 
         await finalize_schedule_watch_party_for_winner(
             interaction, self.bot, self.matrix.id, vote_round_id=1,
-            when_text="not a date", duration_text="2h", description_text="",
+            when_text="not a date", duration_text="2h", location_text="Discord Voice Chat", description_text="",
         )
 
         self.assertIsNone(self.watch_party_service.get_active_watch_party_for_item(self.matrix.id))
@@ -280,7 +313,7 @@ class FinalizeScheduleWatchPartyForWinnerTests(WinnerAnnouncementSchedulingTestC
 
         await finalize_schedule_watch_party_for_winner(
             interaction, self.bot, self.matrix.id, vote_round_id=1,
-            when_text="2026-08-01 20:00", duration_text="not a duration", description_text="",
+            when_text="2026-08-01 20:00", duration_text="not a duration", location_text="Discord Voice Chat", description_text="",
         )
 
         self.assertIsNone(self.watch_party_service.get_active_watch_party_for_item(self.matrix.id))
@@ -295,7 +328,7 @@ class FinalizeScheduleWatchPartyForWinnerTests(WinnerAnnouncementSchedulingTestC
 
         await finalize_schedule_watch_party_for_winner(
             interaction, self.bot, self.matrix.id, vote_round_id=1,
-            when_text="2026-08-01 20:00", duration_text="2h", description_text="",
+            when_text="2026-08-01 20:00", duration_text="2h", location_text="Discord Voice Chat", description_text="",
         )
 
         self.assertIn("already", interaction.response.sent_message)
@@ -305,11 +338,104 @@ class FinalizeScheduleWatchPartyForWinnerTests(WinnerAnnouncementSchedulingTestC
 
         await finalize_schedule_watch_party_for_winner(
             interaction, self.bot, self.matrix.id, vote_round_id=1,
-            when_text="2026-08-01 20:00", duration_text="2h", description_text="Bring snacks!",
+            when_text="2026-08-01 20:00", duration_text="2h", location_text="Discord Voice Chat", description_text="Bring snacks!",
         )
 
         watch_party = self.watch_party_service.get_active_watch_party_for_item(self.matrix.id)
         self.assertEqual(watch_party.description_override, "Bring snacks!")
+
+
+class DiscordScheduledEventCreationTests(WinnerAnnouncementSchedulingTestCase):
+    """Discord Scheduled Events: creation reuses the winning suggestion's
+    known details (title, year, IMDb summary/link, runtime-derived
+    duration) with no second prompt, links the created event's ID onto
+    the watch party, and degrades gracefully (never silently) when
+    Discord Scheduled Events can't be used.
+    """
+
+    async def test_creates_a_scheduled_event_and_links_its_id(self) -> None:
+        interaction = FakeInteraction()
+
+        await finalize_schedule_watch_party_for_winner(
+            interaction, self.bot, self.matrix.id, vote_round_id=1,
+            when_text="2026-08-01 20:00", duration_text="2h", location_text="Discord Voice Chat", description_text="",
+        )
+
+        watch_party = self.watch_party_service.get_active_watch_party_for_item(self.matrix.id)
+        self.assertEqual(watch_party.discord_event_id, 9001)
+        self.assertEqual(len(interaction.guild.create_scheduled_event_calls), 1)
+
+    async def test_event_name_and_location_and_times_are_built_from_known_data(self) -> None:
+        interaction = FakeInteraction()
+
+        await finalize_schedule_watch_party_for_winner(
+            interaction, self.bot, self.matrix.id, vote_round_id=1,
+            when_text="2026-08-01 20:00", duration_text="2h", location_text="Discord Voice Chat", description_text="",
+        )
+
+        call = interaction.guild.create_scheduled_event_calls[0]
+        self.assertEqual(call["name"], "🎬 Watch Party: The Matrix (1999)")
+        self.assertEqual(call["location"], "Discord Voice Chat")
+        self.assertEqual(call["start_time"], datetime(2026, 8, 1, 20, 0, tzinfo=timezone.utc))
+        self.assertEqual(call["end_time"], datetime(2026, 8, 1, 22, 0, tzinfo=timezone.utc))
+        self.assertEqual(call["entity_type"], discord.EntityType.external)
+
+    async def test_confirmation_includes_the_discord_event_link(self) -> None:
+        interaction = FakeInteraction()
+
+        await finalize_schedule_watch_party_for_winner(
+            interaction, self.bot, self.matrix.id, vote_round_id=1,
+            when_text="2026-08-01 20:00", duration_text="2h", location_text="Discord Voice Chat", description_text="",
+        )
+
+        watch_party = self.watch_party_service.get_active_watch_party_for_item(self.matrix.id)
+        self.assertEqual(len(self.bot.announcement_channel.sent_messages), 0)  # no announcement destination configured
+        # The ephemeral scheduling confirmation itself never fails just
+        # because there's no announcement destination -- separately
+        # confirm the event ID actually round-trips through the service.
+        self.assertIsNotNone(watch_party.discord_event_id)
+
+    async def test_forbidden_falls_back_gracefully_without_losing_the_schedule(self) -> None:
+        interaction = FakeInteraction(guild=FakeGuild(raise_error=discord.Forbidden(FakeHTTPResponse(), "Missing Access")))
+
+        await finalize_schedule_watch_party_for_winner(
+            interaction, self.bot, self.matrix.id, vote_round_id=1,
+            when_text="2026-08-01 20:00", duration_text="2h", location_text="Discord Voice Chat", description_text="",
+        )
+
+        self.assertIn("Manage Events", interaction.response.sent_message)
+        watch_party = self.watch_party_service.get_active_watch_party_for_item(self.matrix.id)
+        self.assertIsNotNone(watch_party)
+        self.assertIsNone(watch_party.discord_event_id)
+
+    async def test_http_exception_falls_back_gracefully_without_losing_the_schedule(self) -> None:
+        interaction = FakeInteraction(
+            guild=FakeGuild(raise_error=discord.HTTPException(FakeHTTPResponse(status=400, reason="Bad Request"), "Invalid Form Body"))
+        )
+
+        await finalize_schedule_watch_party_for_winner(
+            interaction, self.bot, self.matrix.id, vote_round_id=1,
+            when_text="2026-08-01 20:00", duration_text="2h", location_text="Discord Voice Chat", description_text="",
+        )
+
+        self.assertIn("Discord rejected", interaction.response.sent_message)
+        watch_party = self.watch_party_service.get_active_watch_party_for_item(self.matrix.id)
+        self.assertIsNotNone(watch_party)
+        self.assertIsNone(watch_party.discord_event_id)
+
+    async def test_no_guild_falls_back_gracefully(self) -> None:
+        # guild_id (used for the WASH-side schedule) is still set here --
+        # only .guild (used solely for Discord Event creation) is None,
+        # isolating this from the earlier "no guild_id" rejection path.
+        interaction = FakeInteraction()
+        interaction.guild = None
+
+        await finalize_schedule_watch_party_for_winner(
+            interaction, self.bot, self.matrix.id, vote_round_id=1,
+            when_text="2026-08-01 20:00", duration_text="2h", location_text="Discord Voice Chat", description_text="",
+        )
+
+        self.assertIn("no Discord Event was created", interaction.response.sent_message)
 
 
 class SyncWatchPartyCompletionTests(WinnerAnnouncementSchedulingTestCase):

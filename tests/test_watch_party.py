@@ -85,7 +85,19 @@ class WatchPartyLifecycleFieldsTests(unittest.TestCase):
         self.assertIsNone(watch_party.duration_minutes)
         self.assertIsNone(watch_party.vote_round_id)
         self.assertIsNone(watch_party.description_override)
+        self.assertIsNone(watch_party.discord_event_id)
         self.assertIsNone(watch_party.ends_at)
+
+    def test_rejects_non_positive_discord_event_id(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchParty(id=1, watch_item_id=1, scheduled_at=utc_now(), guild_id=1, discord_event_id=0)
+
+    def test_accepts_a_valid_discord_event_id(self) -> None:
+        watch_party = WatchParty(
+            id=1, watch_item_id=1, scheduled_at=utc_now(), guild_id=1, discord_event_id=123456789
+        )
+
+        self.assertEqual(watch_party.discord_event_id, 123456789)
 
     def test_ends_at_is_scheduled_at_plus_duration(self) -> None:
         scheduled_at = utc_now()

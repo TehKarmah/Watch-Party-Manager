@@ -157,6 +157,17 @@ class WatchPartyService:
                 return watch_party
         return None
 
+    def get_watch_party_by_discord_event_id(self, discord_event_id: int) -> Optional[WatchParty]:
+        """Find the watch party linked to a given Discord Scheduled Event
+        ID, if any (Discord Scheduled Events: event synchronization uses
+        this to map an incoming discord.py gateway event back to WASH's
+        own record).
+        """
+        for watch_party in self._watch_parties.values():
+            if watch_party.discord_event_id == discord_event_id:
+                return watch_party
+        return None
+
     def get_watch_party(self, watch_party_id: int) -> Optional[WatchParty]:
         """Get a watch party by ID.
 
@@ -247,6 +258,55 @@ class WatchPartyService:
         return WatchPartyResult(
             success=True,
             message=f"Watch party #{watch_party_id} rescheduled.",
+            watch_party=updated,
+        )
+
+    def set_discord_event_id(self, watch_party_id: int, discord_event_id: int) -> WatchPartyResult:
+        """Link a watch party to the Discord Scheduled Event created for
+        it (Discord Scheduled Events: Track Discord Events). Called once,
+        right after the event is successfully created -- a watch party
+        scheduled while Discord Scheduled Events are unavailable (see the
+        Fallback Behavior in bot.py) simply never calls this and keeps
+        discord_event_id unset.
+        """
+        watch_party = self._watch_parties.get(watch_party_id)
+        if watch_party is None:
+            return WatchPartyResult(success=False, message="That watch party doesn't exist.")
+
+        updated = watch_party.with_changes(discord_event_id=discord_event_id)
+        self._watch_parties[watch_party_id] = updated
+        self._save()
+        return WatchPartyResult(
+            success=True,
+            message=f"Watch party #{watch_party_id} linked to Discord event {discord_event_id}.",
+            watch_party=updated,
+        )
+
+    def sync_from_discord_event(
+        self, watch_party_id: int, scheduled_at: datetime, duration_minutes: Optional[int]
+    ) -> WatchPartyResult:
+        """Update a watch party's time/duration to match an edit made
+        directly to its linked Discord Scheduled Event (Discord Scheduled
+        Events: Event Synchronization -- Discord is the source of truth
+        once an event exists; WASH's own record follows it, never the
+        other way around, so the two can never silently diverge).
+
+        A CANCELLED watch party is left alone -- there's nothing to sync
+        once WASH already considers it over.
+        """
+        watch_party = self._watch_parties.get(watch_party_id)
+        if watch_party is None:
+            return WatchPartyResult(success=False, message="That watch party doesn't exist.")
+
+        if watch_party.status == WatchPartyStatus.CANCELLED:
+            return WatchPartyResult(success=False, message="That watch party has been cancelled.")
+
+        updated = watch_party.with_changes(scheduled_at=scheduled_at, duration_minutes=duration_minutes)
+        self._watch_parties[watch_party_id] = updated
+        self._save()
+        return WatchPartyResult(
+            success=True,
+            message=f"Watch party #{watch_party_id} synced from its Discord event.",
             watch_party=updated,
         )
 

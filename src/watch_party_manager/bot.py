@@ -759,6 +759,22 @@ class WatchPartyBot(commands.Bot):
         logger.info("Nominee selector initialized")
         logger.info("Ready")
 
+    async def on_scheduled_event_update(
+        self, before: discord.ScheduledEvent, after: discord.ScheduledEvent
+    ) -> None:
+        """Discord Scheduled Events: Event Synchronization. Delegates to
+        the standalone, bot-free-signature handler so it stays testable
+        without a live Discord connection -- see
+        handle_discord_scheduled_event_update.
+        """
+        await handle_discord_scheduled_event_update(self, before, after)
+
+    async def on_scheduled_event_delete(self, event: discord.ScheduledEvent) -> None:
+        """Discord Scheduled Events: Event Synchronization (deletion --
+        distinct from cancellation, see handle_discord_scheduled_event_delete).
+        """
+        await handle_discord_scheduled_event_delete(self, event)
+
     async def start_bot(self) -> None:
         if not self.token:
             logger.error("DISCORD_TOKEN environment variable is required. Please set it in .env or your environment.")
@@ -3379,6 +3395,7 @@ class DatabaseGroup(discord.app_commands.Group):
             user=interaction.user,
             wash_crew_role_id=self.bot.wash_crew_role_id,
             guild_id=interaction.guild_id,
+            suggestion_database_configuration_repository=self.bot.suggestion_database_configuration_repository,
         )
         await interaction.response.send_message(message, ephemeral=ephemeral)
 
@@ -7416,11 +7433,14 @@ def build_database_list_text(
                 suggestion_service, database, guild, suggestion_database_configuration_repository
             )
         )
+        current_channel_id = suggestion_service.resolve_collection_channel_id(
+            database, suggestion_database_configuration_repository
+        )
         sections.append(
             f"Database ID: {database.database_id}\n"
             f"Name: {display_name}\n"
             f"Status: {status}\n"
-            f"Channel: <#{database.channel_id}>\n"
+            f"Channel: <#{current_channel_id}>\n"
             f"Watch items: {suggestion_count} {item_word}"
         )
     return "\n\n".join(sections)
@@ -8105,6 +8125,7 @@ def perform_database_list(
     user: object,
     wash_crew_role_id: Optional[int],
     guild_id: Optional[int],
+    suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
 ) -> tuple[str, bool]:
     """Core logic for /database_list, kept free of Discord objects except `user`.
 
@@ -8114,6 +8135,13 @@ def perform_database_list(
         wash_crew_role_id: The configured WASH Crew role ID, or None if
             unconfigured.
         guild_id: The Discord guild the command was run in.
+        suggestion_database_configuration_repository: Optional; when
+            supplied, each collection's Channel line reflects its current
+            resolved destination (Context Resolution Audit) rather than
+            always its original home channel. Omitted by callers/tests
+            with no repository in scope, in which case the home channel
+            is shown (unchanged prior behavior for a never-moved
+            collection).
 
     Returns:
         A (message, ephemeral) tuple. Every /database_list response is
@@ -8136,7 +8164,14 @@ def perform_database_list(
     if not databases:
         return "No collections are configured yet.", True
 
-    return build_database_list_text(suggestion_service, databases), True
+    return (
+        build_database_list_text(
+            suggestion_service,
+            databases,
+            suggestion_database_configuration_repository=suggestion_database_configuration_repository,
+        ),
+        True,
+    )
 
 
 def perform_database_remove(
@@ -8519,7 +8554,11 @@ def build_schedule_watch_party_confirmation(
     Lifecycle additions) -- a watch party scheduled without either (e.g.
     via /watch-party schedule, which doesn't collect a duration) simply
     omits those lines, so this stays identical to its pre-lifecycle text
-    for every existing caller.
+    for every existing caller. discord_event_id (Discord Scheduled
+    Events) is likewise optional -- unset when Scheduled Event creation
+    wasn't available (see the Fallback Behavior in
+    finalize_schedule_watch_party_for_winner), in which case this simply
+    omits the Discord Event line rather than showing a broken link.
     """
     title = watch_item.title if watch_item is not None else f"watch item #{watch_party.watch_item_id}"
     lines = [
@@ -8530,7 +8569,113 @@ def build_schedule_watch_party_confirmation(
         lines.append(f"Duration: {format_duration_minutes(watch_party.duration_minutes)}")
     if watch_party.description_override is not None:
         lines.append(watch_party.description_override)
+    if watch_party.discord_event_id is not None:
+        lines.append(f"Discord Event: {build_discord_scheduled_event_url(watch_party)}")
     return "\n".join(lines)
+
+
+# --- Discord Scheduled Events integration ------------------------------------------------------
+#
+# Investigation finding (see deliverables report): discord.py/Discord's
+# API give bots no way to open the native "Create Event" dialog with
+# prefilled fields -- that dialog is client-side only. A bot can only
+# create a Scheduled Event directly through the API
+# (Guild.create_scheduled_event), which is what this integration does;
+# "the closest native-supported workflow" is creating the real event
+# outright, not a pre-filled prompt. WASH always creates an External-type
+# event (never Voice/Stage) so it never has to choose a voice channel on
+# the administrator's behalf -- see ScheduleWatchPartyModal's docstring.
+
+DISCORD_EVENT_DESCRIPTION_MAX_LENGTH = 1000
+DISCORD_EVENT_NAME_MAX_LENGTH = 100
+
+
+def build_discord_scheduled_event_url(watch_party: WatchParty) -> str:
+    """The public URL for a watch party's linked Discord Scheduled Event.
+
+    Matches discord.py's own ScheduledEvent.url property format exactly,
+    built from IDs alone since WASH doesn't always hold a live
+    ScheduledEvent object (e.g. when reporting on an existing schedule
+    from persisted data).
+    """
+    return f"https://discord.com/events/{watch_party.guild_id}/{watch_party.discord_event_id}"
+
+
+def build_scheduled_event_name(watch_item: WatchItem) -> str:
+    """Event Defaults: "🎬 Watch Party: <Movie Title>", e.g. "🎬 Watch
+    Party: Oblivion (2013)" -- truncated defensively to Discord's 100-
+    character event name limit (movie titles essentially never hit this,
+    but a raw external string should never be able to cause an
+    HTTPException here).
+    """
+    name = f"🎬 Watch Party: {watch_item.title}"
+    if watch_item.release_year:
+        name += f" ({watch_item.release_year})"
+    if len(name) > DISCORD_EVENT_NAME_MAX_LENGTH:
+        name = name[: DISCORD_EVENT_NAME_MAX_LENGTH - 1] + "…"
+    return name
+
+
+def build_scheduled_event_description(watch_item: WatchItem) -> str:
+    """Event Defaults: IMDb summary, then the IMDb link, then "Hosted by
+    WASH" -- each part included only when actually available, mirroring
+    build_suggestion_confirmation_embed's own "only what's known" style.
+    Truncated defensively to Discord's 1,000-character description limit.
+    """
+    imdb_url = watch_item.metadata_ids.get(MetadataProvider.IMDB)
+    parts: List[str] = []
+    if watch_item.description:
+        parts.append(watch_item.description)
+    if imdb_url:
+        parts.append(imdb_url)
+    parts.append("Hosted by WASH")
+    description = "\n\n".join(parts)
+    if len(description) > DISCORD_EVENT_DESCRIPTION_MAX_LENGTH:
+        description = description[: DISCORD_EVENT_DESCRIPTION_MAX_LENGTH - 1] + "…"
+    return description
+
+
+async def create_discord_scheduled_event_for_watch_party(
+    guild: Optional[discord.Guild],
+    watch_item: WatchItem,
+    scheduled_at: datetime,
+    duration_minutes: int,
+    location: str,
+) -> Tuple[Optional[int], Optional[str]]:
+    """Create the native Discord Scheduled Event for a newly scheduled
+    watch party.
+
+    Returns (discord_event_id, error_message) -- exactly one is not
+    None. Fallback Behavior: never raises. A missing guild, missing
+    "Manage Events" permission (discord.Forbidden), or any other API
+    rejection (discord.HTTPException) all come back as a clear,
+    human-readable error_message instead of silently failing or crashing
+    the scheduling flow that already succeeded on WASH's side.
+    """
+    if guild is None:
+        return None, "This can only be used in a Discord server, so no Discord Event was created."
+
+    try:
+        scheduled_event = await guild.create_scheduled_event(
+            name=build_scheduled_event_name(watch_item),
+            description=build_scheduled_event_description(watch_item),
+            start_time=scheduled_at,
+            end_time=scheduled_at + timedelta(minutes=duration_minutes),
+            entity_type=discord.EntityType.external,
+            privacy_level=discord.PrivacyLevel.guild_only,
+            location=location,
+        )
+        return scheduled_event.id, None
+    except discord.Forbidden:
+        return None, (
+            "WASH doesn't have permission to create Discord Scheduled Events here "
+            '(needs the "Manage Events" permission). The watch party is still scheduled in WASH -- '
+            "ask a server admin to grant that permission, or create the Discord event manually."
+        )
+    except discord.HTTPException as exc:
+        return None, (
+            f"Discord rejected the Scheduled Event ({exc}). The watch party is still scheduled in WASH."
+        )
 
 
 # --- Watch Party Lifecycle: winner-announcement scheduling button -----------------------------
@@ -8648,10 +8793,21 @@ async def handle_schedule_watch_party_button(
     )
 
     async def on_modal_submit(
-        modal_interaction: discord.Interaction, when_text: str, duration_text: str, description_text: str
+        modal_interaction: discord.Interaction,
+        when_text: str,
+        duration_text: str,
+        location_text: str,
+        description_text: str,
     ) -> None:
         await finalize_schedule_watch_party_for_winner(
-            modal_interaction, bot, suggestion_id, vote_round_id, when_text, duration_text, description_text
+            modal_interaction,
+            bot,
+            suggestion_id,
+            vote_round_id,
+            when_text,
+            duration_text,
+            location_text,
+            description_text,
         )
 
     await interaction.response.send_modal(
@@ -8666,11 +8822,15 @@ async def finalize_schedule_watch_party_for_winner(
     vote_round_id: int,
     when_text: str,
     duration_text: str,
+    location_text: str,
     description_text: str,
 ) -> None:
     """Parse the modal's input and schedule the watch party, reusing
     WatchPartyService.schedule_watch_party() directly -- no second
-    scheduling implementation.
+    scheduling implementation. Also creates the native Discord Scheduled
+    Event and links it (Track Discord Events), falling back gracefully
+    (Fallback Behavior) if Discord Scheduled Events aren't available
+    rather than failing the whole scheduling flow.
     """
     try:
         scheduled_at = parse_watch_party_schedule_time(when_text)
@@ -8714,20 +8874,37 @@ async def finalize_schedule_watch_party_for_winner(
         return
 
     watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
-    await interaction.response.send_message(
-        f'"{watch_item.title if watch_item is not None else "Watch party"}" scheduled.', ephemeral=True
-    )
+    watch_party = result.watch_party
+
+    # Discord Scheduled Events: create the native event now that WASH's
+    # own record exists. A failure here never rolls back the scheduling
+    # above -- WASH's internal schedule (reminder + automatic completion)
+    # remains the reliable fallback either way (see Fallback Behavior).
+    event_error: Optional[str] = None
+    if watch_item is not None:
+        discord_event_id, event_error = await create_discord_scheduled_event_for_watch_party(
+            interaction.guild, watch_item, scheduled_at, duration_minutes, location_text
+        )
+        if discord_event_id is not None:
+            link_result = bot.watch_party_service.set_discord_event_id(watch_party.id, discord_event_id)
+            if link_result.success:
+                watch_party = link_result.watch_party
+
+    confirmation = f'"{watch_item.title if watch_item is not None else "Watch party"}" scheduled.'
+    if event_error is not None:
+        confirmation += f"\n\n⚠ {event_error}"
+    await interaction.response.send_message(confirmation, ephemeral=True)
 
     await schedule_watch_party_reminder(
         bot.scheduler_host.scheduler_service,
-        result.watch_party,
+        watch_party,
         guild_id,
         guild_configuration_repository=bot.guild_configuration_repository,
     )
-    await schedule_watch_party_completion(bot.scheduler_host.scheduler_service, result.watch_party, guild_id)
+    await schedule_watch_party_completion(bot.scheduler_host.scheduler_service, watch_party, guild_id)
 
     await post_watch_party_announcement(bot, announcement_channel_id, build_schedule_watch_party_confirmation(
-        result.watch_party, watch_item
+        watch_party, watch_item
     ))
     await sync_winner_announcement_button(bot, vote_round_id)
 
@@ -8801,6 +8978,124 @@ async def sync_watch_party_completion(bot: "WatchPartyBot", result: WatchPartyCo
     await post_watch_party_announcement(
         bot, result.watch_party.channel_id, f'"{title}" has been watched! Hope you enjoyed the watch party.'
     )
+
+
+# --- Discord Scheduled Events: event synchronization -------------------------------------------
+#
+# One-directional (Discord -> WASH): these react to changes made directly
+# to the Discord Scheduled Event (via the Discord client or another
+# tool), keeping WASH's own record from silently diverging. A change
+# made through WASH's own commands (/watch-party reschedule, /watch-party
+# cancel) is not pushed back to the Discord event -- a documented
+# limitation (see deliverables report), not an oversight: goal 5 asks
+# WASH to "watch for" Discord's changes, not to become a second place
+# that pushes writes to Discord's event.
+#
+# Automatic Completion finding: Discord does not itself transition a
+# Scheduled Event from scheduled to completed as its end_time passes --
+# that requires an explicit start()/end() (via the client's "End Event"
+# button, or the API). Since that can't be relied on to always happen,
+# WASH's own end_time-based completion job (see
+# scheduler/watch_party_completion_job_handler.py, unchanged by this
+# integration) remains the primary, reliable completion mechanism.
+# on_scheduled_event_update below is the secondary path: if the event IS
+# manually ended (or cancelled) in Discord, WASH reacts immediately
+# rather than waiting for its own job -- whichever happens first wins,
+# safely, since WatchPartyService.mark_completed()/cancel_watch_party()
+# are both idempotent guards.
+
+
+async def _cancel_watch_party_from_discord_event(bot: "WatchPartyBot", watch_party: WatchParty) -> None:
+    """Shared by both on_scheduled_event_update (status -> canceled) and
+    on_scheduled_event_delete: mirrors handle_cancel_watch_party_completion's
+    own cancellation side effects exactly (reminder/completion jobs
+    removed, cancellation announcement posted) so a watch party cancelled
+    directly in Discord ends up in the identical state as one cancelled
+    through /watch-party cancel.
+    """
+    result = bot.watch_party_service.cancel_watch_party(watch_party.id)
+    if not result.success:
+        return
+
+    scheduler_service = bot.scheduler_host.scheduler_service
+    await cancel_watch_party_reminder(scheduler_service, watch_party.id)
+    await cancel_watch_party_completion(scheduler_service, watch_party.id)
+
+    watch_item = bot.suggestion_service.get_suggestion(watch_party.watch_item_id)
+    title = watch_item.title if watch_item is not None else f"watch item #{watch_party.watch_item_id}"
+    await post_watch_party_announcement(
+        bot, watch_party.channel_id, f'The watch party for "{title}" has been cancelled.'
+    )
+
+
+async def handle_discord_scheduled_event_update(
+    bot: "WatchPartyBot", before: "discord.ScheduledEvent", after: "discord.ScheduledEvent"
+) -> None:
+    """Event Synchronization: react to a Discord Scheduled Event being
+    edited, cancelled, or ended. A no-op for any event WASH doesn't
+    recognize (not linked to a watch party) or for one WASH already
+    considers over (CANCELLED) -- there's nothing left to sync.
+    """
+    watch_party = bot.watch_party_service.get_watch_party_by_discord_event_id(after.id)
+    if watch_party is None or watch_party.status == WatchPartyStatus.CANCELLED:
+        return
+
+    if after.status is discord.EventStatus.completed:
+        if watch_party.status == WatchPartyStatus.COMPLETED:
+            return
+        completion_result = bot.watch_party_completion_service.complete_watch_party(watch_party.id)
+        if completion_result is None:
+            return
+        scheduler_service = bot.scheduler_host.scheduler_service
+        await cancel_watch_party_completion(scheduler_service, watch_party.id)
+        await sync_watch_party_completion(bot, completion_result)
+        return
+
+    if after.status is discord.EventStatus.canceled:
+        await _cancel_watch_party_from_discord_event(bot, watch_party)
+        return
+
+    if after.status is not discord.EventStatus.scheduled:
+        # active, or any future status discord.py adds -- nothing in
+        # WASH's own model distinguishes "active" from "scheduled", so
+        # there's nothing to sync until it's completed or cancelled.
+        return
+
+    # Still scheduled -- sync a start-time/duration edit made in Discord.
+    if after.start_time == watch_party.scheduled_at and after.end_time == watch_party.ends_at:
+        return
+
+    new_duration_minutes = watch_party.duration_minutes
+    if after.end_time is not None:
+        new_duration_minutes = max(1, round((after.end_time - after.start_time).total_seconds() / 60))
+
+    sync_result = bot.watch_party_service.sync_from_discord_event(
+        watch_party.id, after.start_time, new_duration_minutes
+    )
+    if not sync_result.success:
+        return
+
+    scheduler_service = bot.scheduler_host.scheduler_service
+    await reschedule_watch_party_reminder(
+        scheduler_service,
+        sync_result.watch_party,
+        watch_party.guild_id,
+        guild_configuration_repository=bot.guild_configuration_repository,
+    )
+    await reschedule_watch_party_completion(scheduler_service, sync_result.watch_party, watch_party.guild_id)
+
+
+async def handle_discord_scheduled_event_delete(bot: "WatchPartyBot", event: "discord.ScheduledEvent") -> None:
+    """Event Synchronization: react to a Discord Scheduled Event being
+    deleted outright (distinct from being cancelled -- see
+    discord.ScheduledEvent.delete() vs .cancel()). Treated identically to
+    a cancellation from WASH's perspective: either way, the event is
+    gone and the watch party it was tracking never happened.
+    """
+    watch_party = bot.watch_party_service.get_watch_party_by_discord_event_id(event.id)
+    if watch_party is None or watch_party.status == WatchPartyStatus.CANCELLED:
+        return
+    await _cancel_watch_party_from_discord_event(bot, watch_party)
 
 
 def build_watch_party_select_options(

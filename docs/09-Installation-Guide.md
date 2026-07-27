@@ -156,6 +156,7 @@ WASH is invited using the OAuth2 URL Generator described in Section 9. When you 
 - Attach Files (used by `/backup`, `/database backup`, and `/import` to send/receive `.zip` files)
 - Read Message History (used to edit WASH's own suggestion, vote, and confirmation posts)
 - Use External Emojis (optional, cosmetic only)
+- Manage Events (used to create the Discord Scheduled Event behind the Watch Party Lifecycle's **Schedule Watch Party** button -- optional in the sense that WASH degrades gracefully without it, but the watch party then exists only inside WASH, with no native Discord Event to show)
 
 WASH does not need Manage Messages, Manage Channels, Manage Roles, Administrator, or any moderation permission. It never moderates members or deletes other users' messages.
 
@@ -302,6 +303,7 @@ If a step fails, check Section 14 before assuming something is broken.
 | Pasting an IMDb link into `/add` says lookup isn't configured | `OMDB_API_KEY` is unset. | Follow Section 8, or continue using plain titles -- this is optional. |
 | `/stats server`'s member count looks too low | The Server Members Intent isn't enabled (see Section 6's note). | Enable it in the Developer Portal if you want that one figure to be accurate; otherwise it's safe to ignore. |
 | WASH can't post in a channel | Missing View Channel/Send Messages/Embed Links permission in that specific channel (server-wide invite permissions don't override channel-level overwrites). | Check that channel's permission overwrites for WASH's role. |
+| **Schedule Watch Party** shows a warning about Discord Events instead of a link to one | WASH's invite is missing the Manage Events permission. | Re-invite WASH with Manage Events (Section 6), or grant it to WASH's role directly. The watch party itself is still scheduled in WASH either way -- see [Administration](05-Administration.md)'s Watch Party Lifecycle section. |
 | Changes made via `/restore`, `/database restore`, `/database reset`, `/factory_reset`, or `/import` don't seem to take effect | Several repositories cache their data in memory at startup. | Restart WASH after any of these commands -- see [Administration](05-Administration.md)'s "Backup & Recovery" section for the full explanation. |
 | `python -m pip install -e .` fails | Python version below 3.12, or the virtual environment isn't active. | Confirm `python --version` reports 3.12+ and your prompt shows `(.venv)`. |
 

@@ -106,6 +106,7 @@ class JsonWatchPartyRepository:
             "duration_minutes": watch_party.duration_minutes,
             "vote_round_id": watch_party.vote_round_id,
             "description_override": watch_party.description_override,
+            "discord_event_id": watch_party.discord_event_id,
         }
 
     @staticmethod
@@ -121,4 +122,5 @@ class JsonWatchPartyRepository:
             duration_minutes=entry.get("duration_minutes"),
             vote_round_id=entry.get("vote_round_id"),
             description_override=entry.get("description_override"),
+            discord_event_id=entry.get("discord_event_id"),
         )

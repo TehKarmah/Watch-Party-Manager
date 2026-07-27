@@ -117,26 +117,28 @@ class ScheduleWatchPartyModalTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(modal.description_input.required)
 
-    def test_when_and_duration_inputs_are_required(self) -> None:
+    def test_when_and_duration_and_location_inputs_are_required(self) -> None:
         modal = ScheduleWatchPartyModal(_noop)
 
         self.assertTrue(modal.when_input.required)
         self.assertTrue(modal.duration_input.required)
+        self.assertTrue(modal.location_input.required)
 
-    async def test_submit_forwards_all_three_fields(self) -> None:
+    async def test_submit_forwards_all_four_fields(self) -> None:
         received = []
 
-        async def on_submit(interaction, when_text, duration_text, description_text) -> None:
-            received.append((when_text, duration_text, description_text))
+        async def on_submit(interaction, when_text, duration_text, location_text, description_text) -> None:
+            received.append((when_text, duration_text, location_text, description_text))
 
         modal = ScheduleWatchPartyModal(on_submit)
         modal.when_input._value = "2026-08-01 20:00"
         modal.duration_input._value = "2h"
+        modal.location_input._value = "Discord Voice Chat"
         modal.description_input._value = "Bring snacks"
 
         await modal.on_submit(interaction=None)
 
-        self.assertEqual(received, [("2026-08-01 20:00", "2h", "Bring snacks")])
+        self.assertEqual(received, [("2026-08-01 20:00", "2h", "Discord Voice Chat", "Bring snacks")])
 
 
 if __name__ == "__main__":
