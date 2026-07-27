@@ -32,11 +32,12 @@ class FilterItemsByStatusTests(unittest.TestCase):
     def _item(self, status: WatchItemStatus) -> WatchItem:
         return WatchItem(title="Alien", media_type=MediaType.MOVIE, status=status)
 
-    def test_available_excludes_retired_and_watched(self) -> None:
+    def test_available_excludes_retired_vote_winner_and_watched(self) -> None:
         items = [
             self._item(WatchItemStatus.SUGGESTED),
             self._item(WatchItemStatus.ARCHIVED),
             self._item(WatchItemStatus.VOTE_WINNER),
+            self._item(WatchItemStatus.WATCHED),
         ]
         result = filter_items_by_status(items, SuggestionListStatusFilter.AVAILABLE)
         self.assertEqual(1, len(result))
@@ -48,20 +49,32 @@ class FilterItemsByStatusTests(unittest.TestCase):
         self.assertEqual(1, len(result))
         self.assertEqual(WatchItemStatus.ARCHIVED, result[0].status)
 
-    def test_watched_only_shows_watched(self) -> None:
+    def test_vote_winner_only_shows_vote_winner(self) -> None:
         items = [self._item(WatchItemStatus.SUGGESTED), self._item(WatchItemStatus.VOTE_WINNER)]
         result = filter_items_by_status(items, SuggestionListStatusFilter.VOTE_WINNER)
         self.assertEqual(1, len(result))
         self.assertEqual(WatchItemStatus.VOTE_WINNER, result[0].status)
 
+    def test_watched_only_shows_watched(self) -> None:
+        items = [self._item(WatchItemStatus.VOTE_WINNER), self._item(WatchItemStatus.WATCHED)]
+        result = filter_items_by_status(items, SuggestionListStatusFilter.WATCHED)
+        self.assertEqual(1, len(result))
+        self.assertEqual(WatchItemStatus.WATCHED, result[0].status)
+
     def test_watched_and_retired_are_never_combined(self) -> None:
-        items = [self._item(WatchItemStatus.ARCHIVED), self._item(WatchItemStatus.VOTE_WINNER)]
+        items = [
+            self._item(WatchItemStatus.ARCHIVED),
+            self._item(WatchItemStatus.VOTE_WINNER),
+            self._item(WatchItemStatus.WATCHED),
+        ]
         self.assertEqual(1, len(filter_items_by_status(items, SuggestionListStatusFilter.VOTE_WINNER)))
+        self.assertEqual(1, len(filter_items_by_status(items, SuggestionListStatusFilter.WATCHED)))
         self.assertEqual(1, len(filter_items_by_status(items, SuggestionListStatusFilter.RETIRED)))
 
-    def test_only_three_modes_exist(self) -> None:
+    def test_four_modes_exist(self) -> None:
         self.assertEqual(
-            {"available", "vote_winner", "retired"}, {member.value for member in SuggestionListStatusFilter}
+            {"available", "vote_winner", "watched", "retired"},
+            {member.value for member in SuggestionListStatusFilter},
         )
 
 

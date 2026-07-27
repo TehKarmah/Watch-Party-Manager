@@ -100,14 +100,15 @@ Reactivating always reuses the existing record's stable ID and full history (rej
 
 ### Suggestion status model
 
-Every suggestion shows one of four statuses, both in `/list` and on its own public confirmation post's Status field:
+Every suggestion shows one of five statuses, both in `/list` and on its own public confirmation post's Status field:
 
 - 🟢 **Available** -- eligible for future voting.
 - 🟡 **Rotation Cooldown** -- already presented in the database's current rotation; automatically returns to Available the moment a fresh rotation begins. This is computed at display time, not a separately stored value, so there is no manual "clear cooldown" step.
-- 🟣 **Vote Winner** -- won a voting round. This replaces the older, never-actually-produced "Watched" status: WASH knows a suggestion won a vote, not that the group actually watched it.
+- 🟣 **Vote Winner** -- won a voting round; a watch party has not (yet, or ever) been marked complete for it.
+- 🔵 **Watched** -- WASH has automatically confirmed the group watched it, via the Watch Party Lifecycle (see Section 6). This is a genuine, separately persisted status, not merely computed from Vote Winner.
 - 🔴 **Retired** -- archived, whether by `/remove`, an "I WILL NOT WATCH" rejection threshold, or WASH Crew directly setting it via `/edit_suggestion`.
 
-WASH Crew may always override a suggestion's status directly through `/edit_suggestion`'s Change Status action (Available, Vote Winner, or Retired -- Rotation Cooldown is never a directly settable option, since it's computed). Whenever a suggestion's status changes, its existing public confirmation post is edited in place to reflect the new status -- it is never recreated.
+WASH Crew may always override a suggestion's status directly through `/edit_suggestion`'s Change Status action (Available, Vote Winner, Watched, or Retired -- Rotation Cooldown is never a directly settable option, since it's computed). Whenever a suggestion's status changes, its existing public confirmation post is edited in place to reflect the new status -- it is never recreated.
 
 Database selection follows the same automatic-then-selector pattern used elsewhere: the current channel's configured database is used automatically; if none matches and the server has exactly one active database, that one is used; if several exist, WASH shows a picker. Each entry is a terse, at-a-glance line -- title and release year exactly once (`50 First Dates (2004)`, never `50 First Dates (2004) (2004)`), followed by `| [Original Suggestion](link)` when the original public post is known, or nothing after the title when it isn't. The reference number, status label, and IMDb link intentionally do not appear on this default view. Long lists page with Previous/Next buttons rather than being cut off or capped; both the initial response and every page suppress Discord's automatic link-preview embeds.
 
@@ -121,7 +122,7 @@ Older suggestions saved before public confirmation posts existed (or whose post 
 
 `/edit_suggestion reference:<text>` is WASH Crew only. `reference` is matched the same way `/remove` matches (reference number or exact title). It shows a read-only summary (title, release year, collection, status, IMDb link if any) alongside three actions:
 
-- **Change Status** -- a dropdown of the three settable statuses (Available, Vote Winner, Retired; see "Suggestion status model" above). The suggestion's public confirmation post is updated in place once changed.
+- **Change Status** -- a dropdown of the four settable statuses (Available, Vote Winner, Watched, Retired; see "Suggestion status model" above). The suggestion's public confirmation post is updated in place once changed. Changing a Watched suggestion back to Vote Winner is also the correction workflow for a watch party WASH automatically marked complete in error: it removes that suggestion's most recently recorded watch date in the same action (see Section 6).
 - **Move to Another Collection** -- a dropdown of this server's collections, so it's never necessary to type a raw ID. The destination must exist, be active, and belong to the same server. The same duplicate check `/add` uses runs again against the destination collection (excluding the suggestion's own record) -- a definite duplicate blocks the move, a possible one requires confirmation ("Move Anyway"). Moving preserves the suggestion's status, stable ID, journey, and history unchanged; only its collection (and an internal "last updated" timestamp) changes.
 - **Cancel** -- makes no changes.
 
@@ -184,7 +185,6 @@ A rotation also completes early -- before every assigned suggestion has reached 
 ### Known limitations: candidate selection
 
 - **Retirement's originating rotation is usually unset.** The retirement record's rotation reference is only populated when rejection happens through the `/reject` command; the suggestion post's own "I WILL NOT WATCH" button (the primary way members reject a suggestion) doesn't yet carry rotation context through to it, so `retired_from_rotation_id` is `None` in the common case. The field itself is still recorded and available for a future milestone to populate more completely.
-- **WASH still doesn't know when a group actually watches its winner.** A voting round's winner(s) are marked Vote Winner automatically (see "Suggestion status model" above) -- the same lifecycle point a rotation completes through -- but that only records that a vote was won, not that the watch party actually happened. Confirming an actual viewing is left to a future watch-history milestone.
 - **Likes, cooldowns, genre/runtime/franchise weighting, and statistics are not implemented.** The weighting architecture (`CompositeWeighting`/`WeightingFactor` in `services/candidate_selection_strategy.py`) exists specifically so a future milestone can add these without redesigning Soft Rotation or the selection pipeline, but no such factor exists yet beyond "has this been presented before."
 
 ## 5. Voting Operations
@@ -211,7 +211,42 @@ Automatic expiration, closing, and winner announcements are fully implemented, d
 
 Every path confirms with both a human-readable date/time and a Discord relative timestamp (e.g. "Saturday, August 1, 2026 8:00 PM (in 9 days)"), and reschedules the round's close/reminder jobs exactly as before. Every deadline is still stored and scheduled internally as UTC.
 
-## 6. Diagnostics and Integrity
+## 6. Watch Party Lifecycle
+
+WASH manages the complete flow from a vote's winner to a confirmed Watched suggestion automatically, reusing the same scheduling foundation `/watch-party schedule` (below) has always used -- there is no second, parallel scheduling implementation.
+
+### Scheduling from a vote's results
+
+When a voting round closes with a single winner, its results post gains a **Schedule Watch Party** button (WASH Crew only). It already knows the collection, the winning suggestion, and every IMDb-derived detail (title, year, runtime) -- clicking it opens a short modal asking only for what WASH doesn't already know: watch date/time, event duration (pre-filled from the winning title's runtime when known), and an optional description override.
+
+If the round produced a tie, the button instead reads **Choose Winner to Schedule**; selecting it shows a picker of the tied titles, then opens the same modal for whichever one is chosen.
+
+Once scheduled, the button is replaced with a disabled **Watch Party Scheduled** state on that results post. A suggestion can never be scheduled twice this way -- if a non-cancelled watch party already exists for it, WASH shows that existing schedule instead of creating a second one (checked both before the modal opens and again immediately before saving, to close the race between the two).
+
+### Announcement destination
+
+A separate **Watch Party Announcement Destination** setting (configured via `/config`, alongside Home Channel and the Watched Movie Destination -- but distinct from both, and from any collection's suggestion thread) controls where scheduled/reminder/completion/cancellation announcements post. It defaults to WASH's Home Channel and, like Home Channel, can never be a thread.
+
+### Automatic completion
+
+A watch party scheduled with a known duration is completed automatically once it reaches its scheduled end time, with no confirmation prompt -- WASH assumes the event happened. Completion marks the suggestion Watched, records the watch date, updates the suggestion's public post and statistics, updates watched history, and posts a completion announcement to the configured destination.
+
+### Corrections
+
+Sometimes a scheduled watch party doesn't actually happen. Rather than a dedicated "undo" screen, this reuses two existing workflows:
+
+- `/edit_suggestion` -> Change Status -> **Vote Winner** (from a Watched suggestion) also removes that suggestion's most recently recorded watch date in the same action.
+- `/watch-party reschedule` also lists watch parties WASH has already marked Watched, not only ones still Scheduled; rescheduling one reverts its status back to Scheduled.
+
+### `/watch-party schedule`, going forward
+
+`/watch-party schedule` -- the pre-existing, manual scheduling command -- is unchanged and still fully available. It remains the right tool for a one-off or special event scheduled outside a normal vote (e.g. an ad-hoc rewatch, or a title that never went through voting). It does not currently collect a duration, so watch parties scheduled this way are **not** completed automatically; mark them Watched by hand via `/edit_suggestion` once they've happened. **Recommendation:** keep it available, unhidden, for exactly that manual/special-event case -- do not deprecate or hide it, since the automatic winner-driven flow above only covers suggestions that won a vote.
+
+### Known limitation
+
+The **Schedule Watch Party** / **Choose Winner to Schedule** button works correctly for the lifetime of the running bot process (Discord's interactive-component dispatch tracks it automatically once posted), but it is not yet registered for restart-persistence the way voting buttons and watch-party reminder jobs are. If the bot restarts before a winner's button is clicked, that button goes stale; the watch party can still be scheduled manually via `/watch-party schedule` in the meantime.
+
+## 7. Diagnostics and Integrity
 
 `/diagnostics` no longer exists as a separate command -- its information was consolidated into `/about`, WASH's single status and information dashboard. Everyone gets WASH's identity and documentation links; WASH Crew additionally see:
 
@@ -221,7 +256,7 @@ Every path confirms with both a human-readable date/time and a Discord relative 
 
 WASH also runs integrity checks against persisted data and writes operational information through the logging system. Review console and log output when startup reports an issue.
 
-## 7. Data Storage
+## 8. Data Storage
 
 The current development build stores application data in JSON repositories for:
 
@@ -233,7 +268,7 @@ Historical voting rounds are retained. Direct JSON editing is not recommended be
 
 Before manual maintenance, stop the bot and make a copy of the data files.
 
-## 8. Current Maintenance Procedure
+## 9. Current Maintenance Procedure
 
 1. Confirm the full automated test suite passes before deployment.
 2. Stop the running bot.
@@ -244,9 +279,9 @@ Before manual maintenance, stop the bot and make a copy of the data files.
 7. Run `/about` as a WASH Crew member to confirm Health, Configuration, and Runtime all look correct.
 8. Smoke-test any commands changed in the release.
 
-Automatic backups run on the schedule configured via the Setup Wizard or `/config` (see Section 9); manual `/backup` remains available at any time regardless of that setting. Import from another WASH instance is implemented via `/import`; that other instance's own `/backup` output is the "export" side of the exchange, so there is no separate export command.
+Automatic backups run on the schedule configured via the Setup Wizard or `/config` (see Section 10); manual `/backup` remains available at any time regardless of that setting. Import from another WASH instance is implemented via `/import`; that other instance's own `/backup` output is the "export" side of the exchange, so there is no separate export command.
 
-## 9. Backup & Recovery
+## 10. Backup & Recovery
 
 WASH Crew can create, validate, and restore backups directly from Discord. Every backup is a checksummed `.zip` containing a `manifest.json` plus the relevant JSON data files.
 
@@ -350,7 +385,7 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 | "Restore failed after the safety backup succeeded" | The safety backup was made, but copying the backup's files onto live data failed partway through. | The safety backup archive is intact and named in the error message; use `/restore` again with it if needed. |
 | No suggestions appear after a successful restore/reset/import | A bot restart is required for the running process's in-memory cache to reflect the change (see "Restart requirement" above). | Data on disk is already correct; only the live bot's view of it is stale. |
 
-## 10. Statistics & Reporting
+## 11. Statistics & Reporting
 
 `/stats [type] [public] [suggestion]` exposes read-only statistics derived entirely from existing historical data -- nothing is cached or incrementally counted; every value is recalculated from the suggestion, voting, rotation, and watch-party repositories each time the command runs.
 
@@ -373,14 +408,15 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 
 Member and suggestion statistics that depend on "who submitted this" or "when was this created" (suggestions submitted/watched/retired/winning per member; a suggestion's created date and days-until-first-nomination) rely on two fields -- `journey.original_suggester` and `journey.suggestion_date` -- that are recorded for the first time by this milestone, exclusively at the moment `/add` creates a brand-new suggestion. They are never modified afterward (not by reactivation, editing, or a database move) and are never backfilled onto suggestions that already existed. A suggestion added before this feature shipped simply has no recorded submitter or creation date, and its Suggestion statistics report those fields as unavailable rather than guessing; it's also excluded from every member's submission-based counts. Votes-cast-based statistics are unaffected, since `VoteRecord.discord_user_id` has always been recorded.
 
-## 11. Planned Post-v1.0 Administration
+## 12. Planned Post-v1.0 Administration
 
-Guided setup (`/setup`, rerunnable), rotation administration, and statistics/reporting are implemented -- see the sections above. Planned post-v1.0 enhancements include:
+Guided setup (`/setup`, rerunnable), rotation administration, statistics/reporting, and the Watch Party Lifecycle (Section 6) are implemented -- see the sections above. Planned post-v1.0 enhancements include:
 
 - Existing, newly created, or deferred watch-history destinations
 - Event-series administration (the richer recurring-schedule/Discord Event model `docs/04-Data-Model.md` describes; scheduled watch parties today are a simpler, single-occurrence foundation -- see `domain/watch_party.py`)
-- Scheduling and Discord Event publishing
-- Historical corrections and retroactive watch-history entry
+- Discord Event (native Discord scheduled-event) publishing, in addition to WASH's own watch-party record
+- Retroactive/backdated watch-history entry for a watch party that was never scheduled through WASH at all
+- Restart-persistence for the winner-announcement's Schedule Watch Party button (see Section 6's "Known limitation")
 - Health and maintenance reporting
 
 Until those features are implemented, `project_state.md` is authoritative about what administrators can use safely.

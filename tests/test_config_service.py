@@ -357,6 +357,84 @@ class HomeChannelSectionTests(ConfigServiceTestCase):
         self.assertTrue(any(line.startswith("Watch Party Home Channel: Invalid") for line in lines))
 
 
+class WatchPartyAnnouncementDestinationSectionTests(ConfigServiceTestCase):
+    """Watch Party Lifecycle: a configurable destination for scheduled/
+    reminder/completion/cancellation announcements, separate from Home
+    Channel, a collection's suggestion thread, and the Watched Movie
+    Destination. None means "use the Home Channel" (the default).
+    """
+
+    def test_channel_is_selected(self) -> None:
+        self._seed_completed_setup()
+        result = self.service.set_watch_party_announcement_destination(
+            GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild()
+        )
+        self.assertTrue(result.success)
+        self.assertEqual(
+            self.guild_configuration_repository.get(GUILD_ID).channels.announcements_channel_id,
+            DESTINATION_CHANNEL_ID,
+        )
+
+    def test_missing_resource_is_rejected(self):
+        self._seed_completed_setup()
+        guild = FakeGuild(channel_ids=set())
+        result = self.service.set_watch_party_announcement_destination(GUILD_ID, 555, guild)
+        self.assertFalse(result.success)
+
+    def test_insufficient_bot_permissions_is_rejected(self):
+        self._seed_completed_setup()
+        guild = FakeGuild(
+            channel_ids={DESTINATION_CHANNEL_ID},
+            channel_permissions={DESTINATION_CHANNEL_ID: FakePermissions(send_messages=False)},
+        )
+        result = self.service.set_watch_party_announcement_destination(GUILD_ID, DESTINATION_CHANNEL_ID, guild)
+        self.assertFalse(result.success)
+
+    def test_can_be_cleared_back_to_using_the_home_channel(self):
+        self._seed_completed_setup()
+        self.service.set_watch_party_announcement_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+
+        result = self.service.clear_watch_party_announcement_destination(GUILD_ID)
+
+        self.assertTrue(result.success)
+        self.assertIsNone(
+            self.guild_configuration_repository.get(GUILD_ID).channels.announcements_channel_id
+        )
+
+    def test_resolve_returns_the_explicit_override_when_set(self) -> None:
+        self._seed_completed_setup(channels=GuildChannelsConfig(home_channel_id=111))
+        self.service.set_watch_party_announcement_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+
+        resolved = self.service.resolve_watch_party_announcement_destination(GUILD_ID)
+
+        self.assertEqual(resolved, DESTINATION_CHANNEL_ID)
+
+    def test_resolve_falls_back_to_the_home_channel(self) -> None:
+        self._seed_completed_setup(channels=GuildChannelsConfig(home_channel_id=111))
+
+        resolved = self.service.resolve_watch_party_announcement_destination(GUILD_ID)
+
+        self.assertEqual(resolved, 111)
+
+    def test_resolve_returns_none_when_neither_is_configured(self) -> None:
+        self._seed_completed_setup()
+
+        self.assertIsNone(self.service.resolve_watch_party_announcement_destination(GUILD_ID))
+
+    def test_summary_reports_using_home_channel_when_unset(self):
+        self._seed_completed_setup()
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertIn("Watch Party Announcement Destination: Configured (using Home Channel)", lines)
+
+    def test_summary_reports_configured_when_set(self):
+        self._seed_completed_setup()
+        self.service.set_watch_party_announcement_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertIn(
+            f"Watch Party Announcement Destination: Configured (<#{DESTINATION_CHANNEL_ID}>)", lines
+        )
+
+
 class ManageDatabasesSectionTests(ConfigServiceTestCase):
     """Contextual Database Resolution / Collections refinement: replaces
     the old "Active Suggestion Database" model. Each collection owns its

@@ -1316,6 +1316,54 @@ class SuggestionServiceJourneyMethodsTests(unittest.TestCase):
         self.assertEqual(journey.last_won_date, date(2026, 7, 1))
         self.assertEqual(journey.voting_appearances, 2)
 
+    # --- record_watch (Watch Party Lifecycle) --------------------------------------
+
+    def test_record_watch_marks_the_item_watched_and_records_the_date(self) -> None:
+        updated = self.suggestion_service.record_watch(self.matrix.id, date(2026, 7, 9))
+
+        self.assertTrue(updated)
+        watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(watch_item.status, WatchItemStatus.WATCHED)
+        self.assertEqual(watch_item.journey.watch_dates, (date(2026, 7, 9),))
+
+    def test_record_watch_returns_false_for_an_unknown_id(self) -> None:
+        self.assertFalse(self.suggestion_service.record_watch(999, date(2026, 7, 9)))
+
+    def test_record_watch_does_not_override_an_archived_status(self) -> None:
+        self.suggestion_service.archive_suggestion(self.matrix.id)
+
+        self.suggestion_service.record_watch(self.matrix.id, date(2026, 7, 9))
+
+        watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(watch_item.status, WatchItemStatus.ARCHIVED)
+        self.assertEqual(watch_item.journey.watch_dates, (date(2026, 7, 9),))
+
+    def test_record_watch_persists(self) -> None:
+        self.suggestion_service.record_watch(self.matrix.id, date(2026, 7, 9))
+
+        root = Path(self._temp_dir.name)
+        reloaded_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.assertEqual(reloaded_service.get_suggestion(self.matrix.id).status, WatchItemStatus.WATCHED)
+
+    # --- remove_last_watch_date (Watch Party Lifecycle correction) -----------------
+
+    def test_remove_last_watch_date_removes_it(self) -> None:
+        self.suggestion_service.record_watch(self.matrix.id, date(2026, 7, 9))
+
+        removed = self.suggestion_service.remove_last_watch_date(self.matrix.id)
+
+        self.assertTrue(removed)
+        self.assertEqual(self.suggestion_service.get_suggestion(self.matrix.id).journey.watch_dates, ())
+
+    def test_remove_last_watch_date_returns_false_for_an_unknown_id(self) -> None:
+        self.assertFalse(self.suggestion_service.remove_last_watch_date(999))
+
+    def test_remove_last_watch_date_returns_false_when_there_is_nothing_to_remove(self) -> None:
+        self.assertFalse(self.suggestion_service.remove_last_watch_date(self.matrix.id))
+
 
 class RejectSuggestionTests(unittest.TestCase):
     """FR-022: the "I will not watch" rejection workflow."""
@@ -1484,6 +1532,16 @@ class RejectSuggestionTests(unittest.TestCase):
         journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
         self.assertEqual(journey.rejected_by_discord_user_ids, (1, 2))
 
+    def test_watched_suggestions_reject_additional_rejections(self) -> None:
+        # Watch Party Lifecycle: "I will not watch" makes no sense for
+        # something already watched.
+        self.suggestion_service.set_suggestion_status(self.matrix.id, WatchItemStatus.WATCHED)
+
+        result = self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+
+        self.assertFalse(result.success)
+        self.assertIn("already been watched", result.message)
+
     # --- FR-033B: the retired lifecycle -------------------------------------------
 
     def test_reaching_the_threshold_records_a_retirement(self) -> None:
@@ -1609,6 +1667,27 @@ class GetSuggestionsForDatabaseArchivingTests(unittest.TestCase):
         items = self.suggestion_service.get_suggestions_for_database(self.database.database_id)
 
         self.assertEqual(len(items), 2)
+
+    def test_watched_suggestions_are_excluded_by_default(self) -> None:
+        # Watch Party Lifecycle: a Watched suggestion has left the active
+        # pool for good, exactly like an archived one.
+        self.suggestion_service.set_suggestion_status(self.matrix.id, WatchItemStatus.WATCHED)
+
+        items = self.suggestion_service.get_suggestions_for_database(self.database.database_id)
+
+        titles = {item.title for item in items}
+        self.assertNotIn("The Matrix", titles)
+        self.assertIn("Inception", titles)
+
+    def test_include_archived_true_also_returns_watched_suggestions(self) -> None:
+        self.suggestion_service.set_suggestion_status(self.matrix.id, WatchItemStatus.WATCHED)
+
+        items = self.suggestion_service.get_suggestions_for_database(
+            self.database.database_id, include_archived=True
+        )
+
+        titles = {item.title for item in items}
+        self.assertIn("The Matrix", titles)
 
 
 class ArchiveAndReactivateSuggestionTests(unittest.TestCase):

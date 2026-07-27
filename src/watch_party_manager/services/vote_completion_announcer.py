@@ -23,7 +23,7 @@ now-redundant jobs before calling this module).
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Protocol
+from typing import Any, Callable, List, Optional, Protocol
 
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.watch_item import WatchItem
@@ -129,6 +129,8 @@ async def finalize_vote_completion(
     suggestion_service: SuggestionLookup,
     messenger: DiscordChannelMessenger,
     result: VoteCompletionResult,
+    *,
+    build_results_view: Optional[Callable[[VoteCompletionResult], Optional[Any]]] = None,
 ) -> None:
     """Present a just-completed voting round: update the original post,
     disable its buttons, and post the single canonical results announcement.
@@ -163,6 +165,15 @@ async def finalize_vote_completion(
         suggestion_service: Used to resolve candidates and winner(s) to their WatchItems.
         messenger: Used to resolve the round's channel and send/edit messages.
         result: The just-completed round's outcome.
+        build_results_view: Optional factory returning a Discord view to
+            attach to the results announcement, or None to attach
+            nothing. Defaults to None so existing callers/tests keep
+            working unchanged. bot.py uses this to attach the Watch Party
+            Lifecycle's Schedule Watch Party/Choose Winner to Schedule/
+            Watch Party Scheduled button -- kept as an injected callback
+            (never built directly here) since this module must not
+            depend on bot.py or discord.ui view construction, only on the
+            duck-typed DiscordChannelMessenger it already uses.
     """
     vote_round = result.vote_round
 
@@ -207,9 +218,18 @@ async def finalize_vote_completion(
         collection_name,
     )
     embeds = build_vote_results_embeds(winning_items, result.standings)
+    results_view = build_results_view(result) if build_results_view is not None else None
+    # view= is only passed when there's an actual view to attach --
+    # existing DiscordChannelMessenger fakes/tests never needed to know
+    # about it before this parameter existed, and omitting it when unused
+    # keeps them working unchanged rather than requiring every one to
+    # accept a view=None kwarg it never does anything with.
+    send_kwargs: dict = {"content": announcement_text, "embeds": embeds}
+    if results_view is not None:
+        send_kwargs["view"] = results_view
 
     try:
-        sent_message = await channel.send(content=announcement_text, embeds=embeds)
+        sent_message = await channel.send(**send_kwargs)
     except Exception:
         logger.exception("Could not send the results announcement for voting round %s", vote_round.id)
         return

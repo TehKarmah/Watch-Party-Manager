@@ -452,7 +452,7 @@ class StatisticsService:
         return MemberStatistics(
             discord_user_id=discord_user_id,
             suggestions_submitted=len(submitted),
-            suggestions_watched=sum(1 for item in submitted if item.status == WatchItemStatus.VOTE_WINNER),
+            suggestions_watched=sum(1 for item in submitted if item.status == WatchItemStatus.WATCHED),
             suggestions_retired=sum(1 for item in submitted if item.journey.retired_at is not None),
             winning_suggestions=sum(1 for item in submitted if item.journey.times_won > 0),
             votes_cast=rounds_voted_in,
@@ -521,10 +521,13 @@ class StatisticsService:
             database_id=database_id,
             database_name=database.name,
             active_suggestions=sum(
-                1 for item in items if item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.VOTE_WINNER)
+                1
+                for item in items
+                if item.status
+                not in (WatchItemStatus.ARCHIVED, WatchItemStatus.VOTE_WINNER, WatchItemStatus.WATCHED)
             ),
             archived_suggestions=len(archived),
-            watched_suggestions=sum(1 for item in items if item.status == WatchItemStatus.VOTE_WINNER),
+            watched_suggestions=sum(1 for item in items if item.status == WatchItemStatus.WATCHED),
             retired_suggestions=sum(1 for item in archived if item.journey.retired_at is not None),
             rotation=self.rotation_statistics(database_id),
         )
@@ -544,7 +547,7 @@ class StatisticsService:
         active_suggestions = 0
 
         for item in watch_items:
-            if item.status == WatchItemStatus.VOTE_WINNER:
+            if item.status in (WatchItemStatus.VOTE_WINNER, WatchItemStatus.WATCHED):
                 watched_items += 1
                 continue
 

@@ -32,9 +32,14 @@ OnStatusSelected = Callable[[discord.Interaction, WatchItemStatus], Awaitable[No
 # The only statuses WASH Crew may set directly. Rotation Cooldown is
 # deliberately absent -- it's a computed display state (see
 # services/suggestion_display_status.py), never something to assign.
+# WATCHED is included so a Watch Party Lifecycle correction ("that
+# scheduled watch party didn't actually happen") can be made right here,
+# by selecting Vote Winner while the suggestion's current status is
+# Watched -- no separate correction screen needed.
 _ASSIGNABLE_STATUSES: tuple[WatchItemStatus, ...] = (
     WatchItemStatus.SUGGESTED,
     WatchItemStatus.VOTE_WINNER,
+    WatchItemStatus.WATCHED,
     WatchItemStatus.ARCHIVED,
 )
 
@@ -125,6 +130,8 @@ class ChangeStatusSelectView(discord.ui.View):
 def _status_to_display(status: WatchItemStatus) -> SuggestionDisplayStatus:
     if status is WatchItemStatus.ARCHIVED:
         return SuggestionDisplayStatus.RETIRED
+    if status is WatchItemStatus.WATCHED:
+        return SuggestionDisplayStatus.WATCHED
     if status is WatchItemStatus.VOTE_WINNER:
         return SuggestionDisplayStatus.VOTE_WINNER
     return SuggestionDisplayStatus.AVAILABLE

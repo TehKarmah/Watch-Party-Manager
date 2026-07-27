@@ -203,6 +203,128 @@ class WatchPartyServiceTests(unittest.TestCase):
         )
         self.assertEqual(reloaded.get_watch_party(created.id).status, WatchPartyStatus.CANCELLED)
 
+    # --- Watch Party Lifecycle: duration/vote_round_id/description_override ------------
+
+    def test_schedule_accepts_duration_vote_round_and_description(self) -> None:
+        result = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id,
+            scheduled_at=utc_now() + timedelta(days=1),
+            guild_id=100,
+            duration_minutes=136,
+            vote_round_id=7,
+            description_override="Bring popcorn!",
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.watch_party.duration_minutes, 136)
+        self.assertEqual(result.watch_party.vote_round_id, 7)
+        self.assertEqual(result.watch_party.description_override, "Bring popcorn!")
+
+    def test_schedule_persists_lifecycle_fields(self) -> None:
+        self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id,
+            scheduled_at=utc_now() + timedelta(days=1),
+            guild_id=100,
+            duration_minutes=90,
+            vote_round_id=3,
+        )
+
+        reloaded = WatchPartyService(
+            self.suggestion_service,
+            repository=JsonWatchPartyRepository(Path(self._temp_dir.name) / "watch_parties.json"),
+        )
+        reloaded_party = reloaded.get_watch_party(1)
+        self.assertEqual(reloaded_party.duration_minutes, 90)
+        self.assertEqual(reloaded_party.vote_round_id, 3)
+
+    # --- Watch Party Lifecycle: duplicate-scheduling prevention -------------------------
+
+    def test_get_active_watch_party_for_item_finds_a_scheduled_one(self) -> None:
+        created = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=1), guild_id=100
+        ).watch_party
+
+        found = self.watch_party_service.get_active_watch_party_for_item(self.matrix.id)
+
+        self.assertEqual(found.id, created.id)
+
+    def test_get_active_watch_party_for_item_returns_none_when_nothing_scheduled(self) -> None:
+        self.assertIsNone(self.watch_party_service.get_active_watch_party_for_item(self.matrix.id))
+
+    def test_get_active_watch_party_for_item_ignores_cancelled_ones(self) -> None:
+        created = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() + timedelta(days=1), guild_id=100
+        ).watch_party
+        self.watch_party_service.cancel_watch_party(created.id)
+
+        self.assertIsNone(self.watch_party_service.get_active_watch_party_for_item(self.matrix.id))
+
+    def test_get_active_watch_party_for_item_includes_completed_ones(self) -> None:
+        created = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id,
+            scheduled_at=utc_now() - timedelta(hours=3),
+            guild_id=100,
+            duration_minutes=60,
+        ).watch_party
+        self.watch_party_service.mark_completed(created.id)
+
+        found = self.watch_party_service.get_active_watch_party_for_item(self.matrix.id)
+
+        self.assertIsNotNone(found)
+        self.assertEqual(found.status, WatchPartyStatus.COMPLETED)
+
+    # --- Watch Party Lifecycle: mark_completed ------------------------------------------
+
+    def test_mark_completed_transitions_a_scheduled_watch_party(self) -> None:
+        created = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() - timedelta(hours=1), guild_id=100
+        ).watch_party
+
+        result = self.watch_party_service.mark_completed(created.id)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.watch_party.status, WatchPartyStatus.COMPLETED)
+
+    def test_mark_completed_fails_for_a_nonexistent_watch_party(self) -> None:
+        result = self.watch_party_service.mark_completed(999)
+
+        self.assertFalse(result.success)
+
+    def test_mark_completed_is_idempotent(self) -> None:
+        created = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() - timedelta(hours=1), guild_id=100
+        ).watch_party
+        self.watch_party_service.mark_completed(created.id)
+
+        result = self.watch_party_service.mark_completed(created.id)
+
+        self.assertFalse(result.success)
+
+    def test_mark_completed_fails_for_a_cancelled_watch_party(self) -> None:
+        created = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() - timedelta(hours=1), guild_id=100
+        ).watch_party
+        self.watch_party_service.cancel_watch_party(created.id)
+
+        result = self.watch_party_service.mark_completed(created.id)
+
+        self.assertFalse(result.success)
+
+    # --- Watch Party Lifecycle: rescheduling a COMPLETED watch party (correction) -------
+
+    def test_reschedule_reverts_a_completed_watch_party_to_scheduled(self) -> None:
+        created = self.watch_party_service.schedule_watch_party(
+            watch_item_id=self.matrix.id, scheduled_at=utc_now() - timedelta(hours=1), guild_id=100
+        ).watch_party
+        self.watch_party_service.mark_completed(created.id)
+        new_time = utc_now() + timedelta(days=3)
+
+        result = self.watch_party_service.reschedule_watch_party(created.id, new_time)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.watch_party.status, WatchPartyStatus.SCHEDULED)
+        self.assertEqual(result.watch_party.scheduled_at, new_time)
+
 
 if __name__ == "__main__":
     unittest.main()

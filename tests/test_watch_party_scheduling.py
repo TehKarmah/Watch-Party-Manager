@@ -26,12 +26,18 @@ from watch_party_manager.persistence.guild_configuration_repository import (
 from watch_party_manager.scheduler.scheduled_job import JobResult, JobStatus, ScheduledJob
 from watch_party_manager.scheduler.scheduler_service import SchedulerService
 from watch_party_manager.scheduler.watch_party_scheduling import (
+    WATCH_PARTY_COMPLETION_JOB_TYPE,
     WATCH_PARTY_REMINDER_JOB_TYPE,
+    build_watch_party_completion_job,
     build_watch_party_reminder_job,
+    cancel_watch_party_completion,
     cancel_watch_party_reminder,
+    reschedule_watch_party_completion,
     reschedule_watch_party_reminder,
     resolve_watch_party_reminder_settings,
+    schedule_watch_party_completion,
     schedule_watch_party_reminder,
+    watch_party_completion_logical_key,
     watch_party_reminder_logical_key,
 )
 
@@ -97,11 +103,20 @@ class MemorySchedulerRepository:
 
 
 def make_watch_party(
-    watch_party_id: int = 1, scheduled_at: datetime | None = None, guild_id: int = 100
+    watch_party_id: int = 1,
+    scheduled_at: datetime | None = None,
+    guild_id: int = 100,
+    duration_minutes: int | None = None,
 ) -> WatchParty:
     if scheduled_at is None:
         scheduled_at = datetime.now(timezone.utc) + timedelta(days=1)
-    return WatchParty(id=watch_party_id, watch_item_id=1, scheduled_at=scheduled_at, guild_id=guild_id)
+    return WatchParty(
+        id=watch_party_id,
+        watch_item_id=1,
+        scheduled_at=scheduled_at,
+        guild_id=guild_id,
+        duration_minutes=duration_minutes,
+    )
 
 
 class LogicalKeyTests(unittest.TestCase):
@@ -349,6 +364,127 @@ class CancelWatchPartyReminderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_none_when_no_scheduler_service_is_given(self) -> None:
         cancelled = await cancel_watch_party_reminder(None, watch_party_id=7)
+
+        self.assertIsNone(cancelled)
+
+
+# --- Watch Party Lifecycle: automatic-completion job scheduling ---------------------------
+
+
+class BuildWatchPartyCompletionJobTests(unittest.TestCase):
+    def test_builds_a_completion_job_with_the_correct_type_and_key(self) -> None:
+        watch_party = make_watch_party(watch_party_id=7, duration_minutes=90)
+
+        job = build_watch_party_completion_job(watch_party, guild_id=100)
+
+        self.assertIsNotNone(job)
+        self.assertEqual(job.job_type, WATCH_PARTY_COMPLETION_JOB_TYPE)
+        self.assertEqual(job.logical_key, watch_party_completion_logical_key(7))
+        self.assertEqual(job.payload, {"watch_party_id": 7})
+
+    def test_run_at_is_the_watch_partys_end_time(self) -> None:
+        scheduled_at = datetime.now(timezone.utc) + timedelta(days=1)
+        watch_party = make_watch_party(scheduled_at=scheduled_at, duration_minutes=90)
+
+        job = build_watch_party_completion_job(watch_party, guild_id=100)
+
+        self.assertEqual(job.run_at, scheduled_at + timedelta(minutes=90))
+
+    def test_returns_none_when_no_duration_is_known(self) -> None:
+        watch_party = make_watch_party(duration_minutes=None)
+
+        job = build_watch_party_completion_job(watch_party, guild_id=100)
+
+        self.assertIsNone(job)
+
+
+class ScheduleWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.repository = MemorySchedulerRepository()
+        self.scheduler_service = SchedulerService(self.repository)
+
+    async def test_schedules_a_completion_job_for_a_new_watch_party(self) -> None:
+        watch_party = make_watch_party(watch_party_id=7, duration_minutes=90)
+
+        job = await schedule_watch_party_completion(self.scheduler_service, watch_party, guild_id=100)
+
+        self.assertIsNotNone(job)
+        self.assertEqual(job.job_type, WATCH_PARTY_COMPLETION_JOB_TYPE)
+        self.assertEqual(len(self.repository.jobs), 1)
+
+    async def test_returns_none_when_no_scheduler_service_is_given(self) -> None:
+        watch_party = make_watch_party(duration_minutes=90)
+
+        job = await schedule_watch_party_completion(None, watch_party, guild_id=100)
+
+        self.assertIsNone(job)
+
+    async def test_returns_none_and_schedules_nothing_when_duration_is_unknown(self) -> None:
+        watch_party = make_watch_party(duration_minutes=None)
+
+        job = await schedule_watch_party_completion(self.scheduler_service, watch_party, guild_id=100)
+
+        self.assertIsNone(job)
+        self.assertEqual(len(self.repository.jobs), 0)
+
+    async def test_calling_schedule_twice_does_not_create_duplicate_jobs(self) -> None:
+        watch_party = make_watch_party(watch_party_id=7, duration_minutes=90)
+
+        await schedule_watch_party_completion(self.scheduler_service, watch_party, guild_id=100)
+        await schedule_watch_party_completion(self.scheduler_service, watch_party, guild_id=100)
+
+        self.assertEqual(len(self.repository.jobs), 1)
+
+
+class RescheduleWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.repository = MemorySchedulerRepository()
+        self.scheduler_service = SchedulerService(self.repository)
+
+    async def test_cancels_the_old_job_and_schedules_a_new_one(self) -> None:
+        original = make_watch_party(
+            watch_party_id=7, scheduled_at=datetime.now(timezone.utc) + timedelta(days=1), duration_minutes=90
+        )
+        original_job = await schedule_watch_party_completion(self.scheduler_service, original, guild_id=100)
+
+        rescheduled = original.with_changes(scheduled_at=datetime.now(timezone.utc) + timedelta(days=5))
+        new_job = await reschedule_watch_party_completion(self.scheduler_service, rescheduled, guild_id=100)
+
+        self.assertNotEqual(original_job.job_id, new_job.job_id)
+        self.assertEqual(self.repository.jobs[original_job.job_id].status, JobStatus.CANCELLED)
+        self.assertEqual(len([j for j in self.repository.jobs.values() if j.status == JobStatus.PENDING]), 1)
+
+    async def test_reschedule_still_works_when_no_completion_job_was_previously_scheduled(self) -> None:
+        watch_party = make_watch_party(watch_party_id=7, duration_minutes=90)
+
+        job = await reschedule_watch_party_completion(self.scheduler_service, watch_party, guild_id=100)
+
+        self.assertIsNotNone(job)
+        self.assertEqual(len(self.repository.jobs), 1)
+
+
+class CancelWatchPartyCompletionTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.repository = MemorySchedulerRepository()
+        self.scheduler_service = SchedulerService(self.repository)
+
+    async def test_cancels_the_active_completion_job(self) -> None:
+        watch_party = make_watch_party(watch_party_id=7, duration_minutes=90)
+        scheduled_job = await schedule_watch_party_completion(self.scheduler_service, watch_party, guild_id=100)
+
+        cancelled = await cancel_watch_party_completion(self.scheduler_service, watch_party.id)
+
+        self.assertIsNotNone(cancelled)
+        self.assertEqual(cancelled.job_id, scheduled_job.job_id)
+        self.assertEqual(self.repository.jobs[scheduled_job.job_id].status, JobStatus.CANCELLED)
+
+    async def test_no_active_job_is_a_safe_no_op(self) -> None:
+        cancelled = await cancel_watch_party_completion(self.scheduler_service, watch_party_id=999)
+
+        self.assertIsNone(cancelled)
+
+    async def test_returns_none_when_no_scheduler_service_is_given(self) -> None:
+        cancelled = await cancel_watch_party_completion(None, watch_party_id=7)
 
         self.assertIsNone(cancelled)
 

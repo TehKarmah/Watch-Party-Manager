@@ -65,6 +65,11 @@ class CategorizeWatchItemTests(unittest.TestCase):
             DuplicateMatchCategory.VOTE_WINNER, categorize_watch_item(self._item(WatchItemStatus.VOTE_WINNER))
         )
 
+    def test_watched_status_categorized_as_watched(self) -> None:
+        self.assertEqual(
+            DuplicateMatchCategory.WATCHED, categorize_watch_item(self._item(WatchItemStatus.WATCHED))
+        )
+
     def test_archived_with_rejections_categorized_as_archived_rejected(self) -> None:
         item = self._item(WatchItemStatus.ARCHIVED, rejected_ids=(1, 2))
         self.assertEqual(DuplicateMatchCategory.ARCHIVED_REJECTED, categorize_watch_item(item))

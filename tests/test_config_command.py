@@ -837,6 +837,75 @@ class HomeChannelSectionTests(ConfigCommandTestCase):
         self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id)
 
 
+class WatchPartyAnnouncementDestinationSectionTests(ConfigCommandTestCase):
+    """Watch Party Lifecycle goal 4: a dedicated Announcement Destination
+    section, separate from Home Channel/suggestion threads/Watched
+    Movie Destination, offering Use Home Channel (the default), Use
+    Existing Channel, and Create New Channel -- never a thread.
+    """
+
+    async def test_section_shows_home_existing_create_and_back(self) -> None:
+        from watch_party_manager.config_view import ConfigWatchPartyAnnouncementDestinationSectionView
+
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(
+            interaction, self.bot, GUILD_ID, ConfigSection.WATCH_PARTY_ANNOUNCEMENT_DESTINATION, edit=False
+        )
+
+        self.assertIsInstance(interaction.response.sent_view, ConfigWatchPartyAnnouncementDestinationSectionView)
+        self.assertEqual(
+            [button.custom_id for button in interaction.response.sent_view.children],
+            [
+                "wpm_config_announcement_destination_use_home_channel",
+                "wpm_setup_destination_existing_channel",
+                "wpm_setup_destination_create_channel",
+                "wpm_config_back_to_menu",
+            ],
+        )
+
+    async def test_use_home_channel_clears_any_explicit_override(self) -> None:
+        self._seed_completed_setup(channels=GuildChannelsConfig(announcements_channel_id=DESTINATION_CHANNEL_ID))
+        interaction = FakeInteraction()
+        await send_config_section(
+            interaction, self.bot, GUILD_ID, ConfigSection.WATCH_PARTY_ANNOUNCEMENT_DESTINATION, edit=False
+        )
+        use_home_button = next(
+            b for b in interaction.response.sent_view.children
+            if b.custom_id == "wpm_config_announcement_destination_use_home_channel"
+        )
+
+        click_interaction = FakeInteraction()
+        await use_home_button.callback(interaction=click_interaction)
+
+        self.assertIn("Home Channel", click_interaction.response.edited_content)
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID).channels.announcements_channel_id)
+
+    async def test_selecting_an_existing_channel_saves_it_as_the_override(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+        await send_config_section(
+            interaction, self.bot, GUILD_ID, ConfigSection.WATCH_PARTY_ANNOUNCEMENT_DESTINATION, edit=False
+        )
+        existing_button = next(
+            b for b in interaction.response.sent_view.children
+            if b.custom_id == "wpm_setup_destination_existing_channel"
+        )
+
+        destination_interaction = FakeInteraction()
+        await existing_button.callback(interaction=destination_interaction)
+        select = destination_interaction.response.edited_view.children[0]
+        select._values = [_FakeChannelValue(DESTINATION_CHANNEL_ID)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+
+        self.assertEqual(
+            self.guild_configuration_repository.get(GUILD_ID).channels.announcements_channel_id,
+            DESTINATION_CHANNEL_ID,
+        )
+
+
 class GuildWideWatchDestinationSectionTests(ConfigCommandTestCase):
     """Design refinement: a guild-wide default watched-movie destination,
     distinct from -- and overridden by -- any per-collection setting

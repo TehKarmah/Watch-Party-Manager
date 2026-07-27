@@ -267,7 +267,7 @@ Every setting the wizard can set (including candidate-selection mode) can also b
 
 Everything the setup wizard collects is stored per-server and can be changed afterward without re-running the whole wizard:
 
-- `/config` opens the same settings in a menu, section by section, for quick individual changes.
+- `/config` opens the same settings in a menu, section by section, for quick individual changes -- plus a few settings the wizard doesn't ask about at all, such as the Watch Party Announcement Destination (where scheduled/reminder/completion/cancellation watch party announcements post; defaults to the Home Channel).
 - `/database add` and `/database list` create and list additional suggestion databases beyond the one created during setup -- or run `/database manage` for a single guided menu that walks through every action (move, edit, back up, restore, reset, or remove) for a chosen collection. Direct shortcuts (`/database move`, `/database backup`, `/database restore`, `/database reset`, `/database remove`) remain available for experienced administrators.
 - `/watch_party` (WASH Crew only) manages membership directly: list, approve/deny pending requests, manually add or remove members, and search a member's history.
 

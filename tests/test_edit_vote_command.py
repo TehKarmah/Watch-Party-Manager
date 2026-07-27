@@ -99,7 +99,7 @@ class FakeChannel:
         self._message = message
         self._next_message_id = 9000
 
-    async def send(self, content=None, *, embeds=None):
+    async def send(self, content=None, *, embeds=None, view=None):
         self.sent_messages.append(content)
         self.sent_embeds.append(embeds or [])
         self._next_message_id += 1
@@ -114,9 +114,20 @@ class FakeSentMessage:
         self.id = message_id
 
 
+class FakeWatchPartyService:
+    """Minimal stand-in: no watch party has ever been scheduled for
+    anything in these tests, so the winner-announcement button always
+    renders in its "not yet scheduled" state.
+    """
+
+    def get_active_watch_party_for_item(self, watch_item_id: int):
+        return None
+
+
 class FakeBot:
     def __init__(self, channel: FakeChannel) -> None:
         self._channel = channel
+        self.watch_party_service = FakeWatchPartyService()
 
     def get_channel(self, channel_id):
         return self._channel

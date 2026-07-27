@@ -324,6 +324,48 @@ class SuggestionService:
         self._save()
         return True
 
+    def record_watch(self, suggestion_id: int, watch_date) -> bool:
+        """Record that a suggestion's scheduled watch party actually
+        happened (Watch Party Lifecycle: automatic completion).
+
+        Marks the suggestion Watched -- unless a WASH Crew member has
+        already archived/retired it in the meantime, mirroring
+        record_vote_win's same precedence rule -- and appends watch_date
+        to its journey, which every existing watch-history statistic
+        already reads (see StatisticsService.suggestion_statistics()).
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return False
+        watch_item.journey.record_watch_date(watch_date)
+        if watch_item.status is not WatchItemStatus.ARCHIVED:
+            watch_item.status = WatchItemStatus.WATCHED
+        self._save()
+        return True
+
+    def remove_last_watch_date(self, suggestion_id: int) -> bool:
+        """Undo the most recently recorded watch date (Watch Party
+        Lifecycle correction: a scheduled watch party's automatic
+        completion turned out to be wrong).
+
+        Deliberately does not touch watch_item.status -- reverting the
+        status itself (typically back to VOTE_WINNER) is a separate,
+        explicit choice made through set_suggestion_status(), so a
+        correction can remove the erroneous watch date without silently
+        also deciding what the status should become.
+
+        Returns:
+            True if a watch date was removed. False if the suggestion
+            doesn't exist or had no watch date to remove.
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return False
+        removed = watch_item.journey.remove_last_watch_date()
+        if removed:
+            self._save()
+        return removed
+
     def record_rotation_presentation(self, suggestion_id: int, rotation_id: int) -> bool:
         """Record that a suggestion was presented within a rotation, then persist.
 
@@ -383,6 +425,12 @@ class SuggestionService:
             return SuggestionResult(
                 success=False,
                 message="That suggestion has already been archived and can no longer be rejected.",
+            )
+
+        if watch_item.status == WatchItemStatus.WATCHED:
+            return SuggestionResult(
+                success=False,
+                message="That suggestion has already been watched and can no longer be rejected.",
             )
 
         if not watch_item.journey.record_rejection(discord_user_id):
@@ -510,9 +558,12 @@ class SuggestionService:
         to specific member-facing events -- a rejection threshold, a
         re-suggestion -- and enforce their own preconditions), this is an
         unconditional administrative override: WASH Crew may always move
-        a suggestion directly to any of the three persisted statuses.
-        Rotation Cooldown is never a valid value here -- it's a computed
-        display state, not something to assign (see
+        a suggestion directly to any of the four persisted statuses --
+        including WATCHED, so a Watch Party Lifecycle correction ("that
+        scheduled watch party didn't actually happen") can revert one back
+        to VOTE_WINNER through this exact same mechanism. Rotation
+        Cooldown is never a valid value here -- it's a computed display
+        state, not something to assign (see
         services/suggestion_display_status.py).
         """
         watch_item = self.get_suggestion(suggestion_id)
@@ -531,15 +582,21 @@ class SuggestionService:
     ) -> list[WatchItem]:
         """Return suggestions belonging to one database, in insertion order.
 
-        Archived suggestions (see reject_suggestion) are excluded by
-        default, since they've been removed from the active suggestion
-        pool -- pass include_archived=True for administrative views that
-        still need to see them (e.g. the WASH Crew /list view).
+        Archived and Watched suggestions are excluded by default, since
+        both have left the active suggestion pool for good (Watched:
+        Watch Party Lifecycle -- once a suggestion's scheduled watch
+        party actually completes, it's done, exactly like an archived
+        suggestion, and should stop being reassigned into fresh
+        rotations) -- pass include_archived=True for administrative views
+        that still need to see them (e.g. the WASH Crew /list view). The
+        parameter name is unchanged (not include_archived_or_watched) to
+        avoid rippling every existing call site for what's conceptually
+        the same "show me everything, not just the active pool" toggle.
         """
         items = [item for item in self._suggestions.values() if item.database_id == database_id]
         if include_archived:
             return items
-        return [item for item in items if item.status != WatchItemStatus.ARCHIVED]
+        return [item for item in items if item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.WATCHED)]
 
     def clear_suggestions(self) -> None:
         """Clear all suggestions. Used for testing or bot reset."""

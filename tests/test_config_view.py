@@ -23,6 +23,7 @@ from watch_party_manager.config_view import (
     ConfigRoleSectionView,
     ConfigSuggestionDestinationSectionView,
     ConfigWatchDestinationSectionView,
+    ConfigWatchPartyAnnouncementDestinationSectionView,
 )
 from watch_party_manager.domain.guild_configuration import JoinMode
 
@@ -244,6 +245,31 @@ class ConfigHomeChannelSectionViewTests(unittest.IsolatedAsyncioTestCase):
         clear_button = next(b for b in view.children if b.custom_id == "wpm_config_home_channel_clear")
         await clear_button.callback(interaction=object())
         self.assertEqual(calls, ["clear"])
+
+
+class ConfigWatchPartyAnnouncementDestinationSectionViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_use_home_existing_create_and_back(self) -> None:
+        view = ConfigWatchPartyAnnouncementDestinationSectionView(_noop, _noop, _noop, _noop)
+        self.assertEqual(
+            [(button.label, button.custom_id) for button in view.children],
+            [
+                ("Use Home Channel (Recommended)", "wpm_config_announcement_destination_use_home_channel"),
+                ("Use Existing Channel", "wpm_setup_destination_existing_channel"),
+                ("Create New Channel (Recommended)", "wpm_setup_destination_create_channel"),
+                ("Back to Menu", "wpm_config_back_to_menu"),
+            ],
+        )
+
+    async def test_use_home_channel_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_use_home_channel(interaction) -> None:
+            calls.append("use_home_channel")
+
+        view = ConfigWatchPartyAnnouncementDestinationSectionView(on_use_home_channel, _noop, _noop, _noop)
+        await view.children[0].callback(interaction=object())
+
+        self.assertEqual(calls, ["use_home_channel"])
 
 
 class ConfigSuggestionDestinationSectionViewTests(unittest.IsolatedAsyncioTestCase):
