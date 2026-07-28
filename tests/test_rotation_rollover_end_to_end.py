@@ -86,12 +86,21 @@ class FakeSentMessage:
         self.id = message_id
 
 
+class FakeFollowup:
+    def __init__(self) -> None:
+        self.sent_messages: list[tuple] = []
+
+    async def send(self, content=None, *, ephemeral=False, view=None) -> None:
+        self.sent_messages.append((content, ephemeral, view))
+
+
 class FakeInteraction:
     def __init__(self, user_id: int, guild_id=GUILD_ID, channel_id=CHANNEL_ID) -> None:
         self.user = FakeMember(user_id, roles=[FakeRole(WASH_CREW_ROLE_ID)])
         self.guild_id = guild_id
         self.channel_id = channel_id
         self.response = FakeResponse()
+        self.followup = FakeFollowup()
         self._original_response = FakeSentMessage(message_id=9999)
 
     async def original_response(self):

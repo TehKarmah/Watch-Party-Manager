@@ -217,8 +217,8 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
         message = interaction.response.sent_message
         self.assertIn("Total Watch Items: 4", message)
-        self.assertIn("Active: 2 (Available + Rotation Cooldown)", message)
-        self.assertIn("Eligible Next Round: 1", message)
+        self.assertIn("Active Watch Items: 2 (Eligible for Voting + Rotation Cooldown)", message)
+        self.assertIn("Eligible for Voting: 1", message)
         self.assertIn("Rotation Cooldown: 1", message)
         self.assertIn("Vote Winners: 1", message)
         self.assertIn("Retired: 1", message)
@@ -312,6 +312,40 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
         self.assertIn("1 of 2 active items have been presented", interaction.response.sent_message)
 
+    async def test_rotation_progress_line_shows_the_collections_own_rotation_number(self) -> None:
+        # UI Polish (Rotation Information): Rotation.id is a single
+        # counter shared across every collection in the server, not a
+        # per-collection sequence -- the report must show this
+        # collection's own 1st/2nd/... rotation number, not a raw,
+        # potentially-large global id.
+        item_a = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
+        self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id)
+        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
+        self.bot.rotation_service.record_presentation(self.database.database_id, [item_a.id])
+        self.bot.rotation_service.begin_next_rotation(self.database.database_id)
+        interaction = FakeInteraction()
+
+        await handle_database_health(interaction, self.bot)
+
+        self.assertIn("Rotation 2 Progress:", interaction.response.sent_message)
+
+    async def test_rotation_number_is_scoped_per_collection_not_global(self) -> None:
+        # A second collection's rotations must not shift the first
+        # collection's own numbering.
+        other = self.suggestion_service.create_database(
+            "TV Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID + 1
+        ).database
+        self.suggestion_service.suggest("Breaking Bad", database_id=other.database_id)
+        self.bot.rotation_service.get_or_start_rotation(other.database_id)  # a rotation for the OTHER collection first
+
+        self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
+        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
+        interaction = FakeInteraction()
+
+        await handle_database_health(interaction, self.bot)
+
+        self.assertIn("Rotation 1 Progress:", interaction.response.sent_message)
+
 
 class MultipleCollectionsAndRestartTests(DatabaseHealthCommandTestCase):
     async def test_two_collections_report_independently(self) -> None:
@@ -349,7 +383,7 @@ class MultipleCollectionsAndRestartTests(DatabaseHealthCommandTestCase):
         await handle_database_health(interaction, restarted_bot)
 
         self.assertIn("Rotation Cooldown: 1", interaction.response.sent_message)
-        self.assertIn("Eligible Next Round: 0", interaction.response.sent_message)
+        self.assertIn("Eligible for Voting: 0", interaction.response.sent_message)
 
 
 if __name__ == "__main__":

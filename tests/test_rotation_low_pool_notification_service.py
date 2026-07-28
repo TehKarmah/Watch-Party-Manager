@@ -93,6 +93,21 @@ class RotationLowPoolNotificationServiceTestCase(unittest.TestCase):
         self.assertTrue(result.success)
         return result.watch_item
 
+    def _seed_pool(self, total: int, presented: int) -> None:
+        """Create `total` suggestions and mark the first `presented` of
+        them as presented within a freshly started rotation, leaving
+        `total - presented` Eligible and `presented` on Rotation Cooldown
+        -- Active stays `total` either way (UI Polish: Rotation &
+        Collection Health's finalized threshold is evaluated against
+        Active Watch Items, so tests need a large-enough Active pool to
+        avoid the small-collection suppression rule while still driving
+        Eligible below the threshold).
+        """
+        items = [self._add(f"Title {index}") for index in range(total)]
+        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        if presented:
+            self.rotation_service.record_presentation(DATABASE_ID, [item.id for item in items[:presented]])
+
     def _save_guild_configuration(self, **overrides) -> GuildConfiguration:
         fields = {
             "guild_id": GUILD_ID,
@@ -172,8 +187,10 @@ class EnabledDisabledTests(RotationLowPoolNotificationServiceTestCase):
                 notifications=SuggestionDatabaseNotificationOverridesConfig(low_suggestion_pool_alerts=True),
             )
         )
-        self._add("Alien")
-        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self._seed_pool(total=10, presented=5)
+        # 10 active, default candidate_count 3 -> threshold max(1, 6) = 6;
+        # 5 eligible < 6, and 10 active is comfortably above the
+        # threshold, so this isn't suppressed as "too small to matter".
 
         decision = self._evaluate()
 
@@ -181,12 +198,18 @@ class EnabledDisabledTests(RotationLowPoolNotificationServiceTestCase):
 
 
 class ThresholdTests(RotationLowPoolNotificationServiceTestCase):
-    def test_default_threshold_is_two_configured_voting_rounds(self) -> None:
+    """UI Polish (Rotation & Collection Health): the finalized automatic
+    default is max(10% of Active Watch Items, two configured voting
+    rounds) -- see resolve_default_low_pool_threshold. An explicit
+    database/guild threshold override still wins over it when set.
+    """
+
+    def test_default_threshold_is_two_configured_voting_rounds_when_it_is_the_larger_term(self) -> None:
         self._save_guild_configuration(voting_defaults=VotingDefaultsConfig(candidate_count=4))
-        for title in ("Alien", "The Matrix", "Inception", "Arrival", "Amelie", "Up", "Coco", "Alien 2"):
-            self._add(title)
-        self.rotation_service.get_or_start_rotation(DATABASE_ID)
-        # 8 eligible, threshold = 2 * 4 = 8 -- right at the boundary, not below it.
+        # 20 active, 10% = 2, rounds = 2 * 4 = 8 -- rounds is larger, so
+        # the floor (8) is the effective threshold. 8 eligible sits right
+        # at that boundary, not below it.
+        self._seed_pool(total=20, presented=12)
 
         decision = self._evaluate()
 
@@ -194,12 +217,22 @@ class ThresholdTests(RotationLowPoolNotificationServiceTestCase):
 
     def test_fires_once_the_pool_drops_below_the_default_threshold(self) -> None:
         self._save_guild_configuration(voting_defaults=VotingDefaultsConfig(candidate_count=3))
-        for title in ("Alien", "The Matrix", "Inception", "Arrival", "Amelie"):
-            self._add(title)
-        self.rotation_service.get_or_start_rotation(DATABASE_ID)
-        # 5 eligible, threshold = 2 * 3 = 6 -- strictly fewer than the
-        # threshold ("fewer eligible suggestions than two normal voting
-        # rounds"), so this fires.
+        # 10 active, 10% = 1, rounds = 2 * 3 = 6 -- rounds is the
+        # effective threshold. 5 eligible is strictly fewer than 6, and
+        # 10 active is well above the threshold, so this fires.
+        self._seed_pool(total=10, presented=5)
+
+        decision = self._evaluate()
+
+        self.assertTrue(decision.should_send)
+
+    def test_percentage_term_governs_for_a_large_collection(self) -> None:
+        self._save_guild_configuration(voting_defaults=VotingDefaultsConfig(candidate_count=2))
+        # 100 active, 10% = 10, rounds = 2 * 2 = 4 -- the percentage term
+        # (10) is now the larger, effective threshold, well above the
+        # flat rounds-based floor. 8 eligible < 10 fires; the collection
+        # is large enough that the rounds floor alone would have missed this.
+        self._seed_pool(total=100, presented=92)
 
         decision = self._evaluate()
 
@@ -215,7 +248,7 @@ class ThresholdTests(RotationLowPoolNotificationServiceTestCase):
         self._add("The Matrix")
         self.rotation_service.get_or_start_rotation(DATABASE_ID)
         # 2 eligible > explicit threshold of 1 -- would have fired under
-        # the automatic default (2 * 3 = 6), but the explicit override wins.
+        # the automatic default, but the explicit override wins.
 
         decision = self._evaluate()
 
@@ -235,21 +268,75 @@ class ThresholdTests(RotationLowPoolNotificationServiceTestCase):
                 notifications=SuggestionDatabaseNotificationOverridesConfig(low_suggestion_pool_threshold=5),
             )
         )
-        self._add("Alien")
-        self._add("The Matrix")
-        self.rotation_service.get_or_start_rotation(DATABASE_ID)
-        # 2 eligible <= the database's own threshold of 5.
+        # 10 active (comfortably above the database's own threshold of
+        # 5, so not suppressed), 4 eligible < 5.
+        self._seed_pool(total=10, presented=6)
 
         decision = self._evaluate()
 
         self.assertTrue(decision.should_send)
 
 
+class SuppressionTests(RotationLowPoolNotificationServiceTestCase):
+    """UI Polish (Rotation & Collection Health): suppress the warning
+    entirely for very small collections where the threshold isn't
+    meaningful -- when the whole Active pool is already at or below the
+    computed threshold, Eligible (never more than Active) would be below
+    it on every rotation forever, so warning provides nothing new.
+    """
+
+    def test_never_fires_when_active_is_at_or_below_the_threshold(self) -> None:
+        self._save_guild_configuration(voting_defaults=VotingDefaultsConfig(candidate_count=3))
+        # 4 active total, default threshold max(1, 6) = 6 -- the entire
+        # collection is smaller than its own threshold.
+        self._seed_pool(total=4, presented=3)
+
+        decision = self._evaluate()
+
+        self.assertFalse(decision.should_send)
+
+    def test_never_fires_for_a_collection_exactly_at_the_threshold(self) -> None:
+        self._save_guild_configuration(voting_defaults=VotingDefaultsConfig(candidate_count=3))
+        # 6 active total, exactly equal to the default threshold (6) --
+        # suppressed ("at or below"), not just "below".
+        self._seed_pool(total=6, presented=5)
+
+        decision = self._evaluate()
+
+        self.assertFalse(decision.should_send)
+
+    def test_fires_once_active_grows_past_the_threshold(self) -> None:
+        self._save_guild_configuration(voting_defaults=VotingDefaultsConfig(candidate_count=3))
+        # One more active item than the suppressed case above (7 vs 6)
+        # is enough for the same relative shortfall to become meaningful
+        # and fire.
+        self._seed_pool(total=7, presented=6)
+
+        decision = self._evaluate()
+
+        self.assertTrue(decision.should_send)
+
+    def test_suppression_applies_even_with_an_explicit_threshold_override(self) -> None:
+        # An administrator's explicit threshold of 5 is still subject to
+        # suppression if the collection is smaller than that override --
+        # a custom threshold doesn't make a tiny collection's warning any
+        # more meaningful.
+        self._save_guild_configuration(
+            notifications=NotificationsConfig(
+                administrative=AdministrativeNotificationsConfig(low_suggestion_pool_threshold=5)
+            )
+        )
+        self._seed_pool(total=4, presented=3)
+
+        decision = self._evaluate()
+
+        self.assertFalse(decision.should_send)
+
+
 class DestinationTests(RotationLowPoolNotificationServiceTestCase):
     def test_defaults_to_the_admin_channel(self) -> None:
         self._save_guild_configuration()
-        self._add("Alien")
-        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self._seed_pool(total=10, presented=5)
 
         decision = self._evaluate()
 
@@ -263,8 +350,7 @@ class DestinationTests(RotationLowPoolNotificationServiceTestCase):
                 )
             )
         )
-        self._add("Alien")
-        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self._seed_pool(total=10, presented=5)
 
         decision = self._evaluate()
 
@@ -272,8 +358,7 @@ class DestinationTests(RotationLowPoolNotificationServiceTestCase):
 
     def test_never_sends_when_the_configured_destination_channel_is_unset(self) -> None:
         self._save_guild_configuration(channels=GuildChannelsConfig(admin_channel_id=None))
-        self._add("Alien")
-        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self._seed_pool(total=10, presented=5)
 
         decision = self._evaluate()
 
@@ -301,8 +386,7 @@ class BootstrapAndDedupTests(RotationLowPoolNotificationServiceTestCase):
 
     def test_does_not_resend_for_the_same_rotation(self) -> None:
         self._save_guild_configuration()
-        self._add("Alien")
-        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self._seed_pool(total=10, presented=5)
         first = self._evaluate()
         self.assertTrue(first.should_send)
         self.rotation_service.record_low_pool_notification_sent(DATABASE_ID, first.rotation_id)
@@ -313,12 +397,16 @@ class BootstrapAndDedupTests(RotationLowPoolNotificationServiceTestCase):
 
     def test_resends_after_a_new_rotation_begins(self) -> None:
         self._save_guild_configuration()
-        self._add("Alien")
-        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self._seed_pool(total=10, presented=5)
         first = self._evaluate()
         self.rotation_service.record_low_pool_notification_sent(DATABASE_ID, first.rotation_id)
 
         self.rotation_service.begin_next_rotation(DATABASE_ID)
+        # A fresh rotation reassigns every eligible suggestion, so all 10
+        # are eligible again with nothing presented yet -- re-present 5
+        # to reproduce the same low-pool condition under the new rotation.
+        remaining_items = self.suggestion_service.get_suggestions_for_database(DATABASE_ID)
+        self.rotation_service.record_presentation(DATABASE_ID, [item.id for item in remaining_items[:5]])
         second = self._evaluate()
 
         self.assertTrue(second.should_send)
@@ -329,13 +417,12 @@ class MessageContentTests(RotationLowPoolNotificationServiceTestCase):
     def test_message_includes_eligible_count_and_candidate_count(self) -> None:
         self._save_guild_configuration(voting_defaults=VotingDefaultsConfig(candidate_count=3))
         self.suggestion_service.create_database("Movies", guild_id=GUILD_ID, channel_id=555)
-        self._add("Alien")
-        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self._seed_pool(total=10, presented=5)
 
         decision = self._evaluate()
 
         self.assertTrue(decision.should_send)
-        self.assertIn("Eligible remaining: 1", decision.message)
+        self.assertIn("Eligible remaining: 5", decision.message)
         self.assertIn("Configured candidate count: 3", decision.message)
         self.assertIn("Movies", decision.message)
 

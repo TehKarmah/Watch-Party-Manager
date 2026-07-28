@@ -26,6 +26,7 @@ is its own cross-cutting concern.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
@@ -41,10 +42,29 @@ from watch_party_manager.services.collection_eligibility_service import Collecti
 from watch_party_manager.services.rotation_service import RotationService
 
 DEFAULT_LOW_POOL_NOTIFICATION_ENABLED = True
-# "Fewer eligible suggestions than two normal voting rounds" -- computed
-# dynamically against the guild's current candidate_count (see
-# _resolve_threshold), not a fixed number.
+# The finalized automatic default (UI Polish: Rotation & Collection
+# Health): the larger of 10% of the collection's Active Watch Items
+# (Eligible for Voting + Rotation Cooldown -- Vote Winners and Retired
+# are never counted) or two full configured voting rounds. The
+# percentage term scales the threshold with collection size for large
+# collections; the rounds term is a sane floor for small ones -- see
+# resolve_default_low_pool_threshold.
 DEFAULT_LOW_POOL_NOTIFICATION_ROUNDS = 2
+DEFAULT_LOW_POOL_NOTIFICATION_PERCENTAGE = 0.10
+
+
+def resolve_default_low_pool_threshold(active_count: int, candidate_count: int) -> int:
+    """max(10% of Active Watch Items, two full configured voting rounds).
+
+    The percentage term is rounded up (never down) -- a threshold that's
+    slightly too low would silently under-warn, which is worse than
+    warning one suggestion early. Only ever used when no explicit
+    database/guild threshold override is saved (see
+    resolve_low_pool_threshold).
+    """
+    percentage_threshold = math.ceil(active_count * DEFAULT_LOW_POOL_NOTIFICATION_PERCENTAGE)
+    rounds_threshold = DEFAULT_LOW_POOL_NOTIFICATION_ROUNDS * candidate_count
+    return max(percentage_threshold, rounds_threshold)
 
 
 class GuildConfigurationSource(Protocol):
@@ -63,13 +83,14 @@ def resolve_low_pool_threshold(
     guild_configuration: Optional[GuildConfiguration],
     database_configuration: Optional[SuggestionDatabaseConfiguration],
     candidate_count: int,
+    active_count: int,
 ) -> int:
     """The eligible-suggestion threshold below which the pool is
     considered low: a database override, else a guild override, else
-    the automatic default (two configured voting rounds). Shared between
-    RotationLowPoolNotificationService's own trigger check and /database
-    health's "Low Pool Status" line, so the two can never disagree about
-    what "low" means for a given collection.
+    the automatic default (resolve_default_low_pool_threshold). Shared
+    between RotationLowPoolNotificationService's own trigger check and
+    /database health's "Low Pool Status" line, so the two can never
+    disagree about what "low" means for a given collection.
     """
     if database_configuration is not None and database_configuration.notifications.low_suggestion_pool_threshold is not None:
         return database_configuration.notifications.low_suggestion_pool_threshold
@@ -78,7 +99,7 @@ def resolve_low_pool_threshold(
         and guild_configuration.notifications.administrative.low_suggestion_pool_threshold is not None
     ):
         return guild_configuration.notifications.administrative.low_suggestion_pool_threshold
-    return DEFAULT_LOW_POOL_NOTIFICATION_ROUNDS * candidate_count
+    return resolve_default_low_pool_threshold(active_count, candidate_count)
 
 
 @dataclass(frozen=True)
@@ -131,13 +152,23 @@ class RotationLowPoolNotificationService:
             return RotationLowPoolNotificationDecision(should_send=False)
 
         candidate_count = self._resolve_candidate_count(guild_configuration)
-        threshold = self._resolve_threshold(guild_configuration, database_configuration, candidate_count)
 
         eligibility = self._eligibility_service.peek(database_id, candidate_selection_mode)
         eligible_count = len(eligibility.eligible)
-        # Strictly "fewer than" the threshold (goal wording: "fewer
-        # eligible suggestions than two normal voting rounds") -- a pool
-        # sitting exactly at the threshold is not yet low.
+        active_count = len(eligibility.active)
+        threshold = self._resolve_threshold(guild_configuration, database_configuration, candidate_count, active_count)
+
+        # Suppress entirely for very small collections where the
+        # threshold isn't meaningful: if the whole Active pool is
+        # already at or below the threshold, Eligible (which can never
+        # exceed Active) would be below it too on every single rotation
+        # forever, with nothing new to report each time -- exactly the
+        # repeated, uninformative warning this milestone asks to avoid.
+        if active_count <= threshold:
+            return RotationLowPoolNotificationDecision(should_send=False)
+
+        # Strictly "fewer than" the threshold -- a pool sitting exactly
+        # at the threshold is not yet low.
         if eligible_count >= threshold:
             return RotationLowPoolNotificationDecision(should_send=False)
 
@@ -197,8 +228,9 @@ class RotationLowPoolNotificationService:
         guild_configuration: Optional[GuildConfiguration],
         database_configuration: Optional[SuggestionDatabaseConfiguration],
         candidate_count: int,
+        active_count: int,
     ) -> int:
-        return resolve_low_pool_threshold(guild_configuration, database_configuration, candidate_count)
+        return resolve_low_pool_threshold(guild_configuration, database_configuration, candidate_count, active_count)
 
     @staticmethod
     def _resolve_destination_channel_id(guild_configuration: Optional[GuildConfiguration]) -> Optional[int]:

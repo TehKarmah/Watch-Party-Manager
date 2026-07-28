@@ -737,8 +737,24 @@ class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
         self.assertEqual(0, len(self.admin_channel.sent))
         self.assertIsNone(self.bot.rotation_service.get_open_rotation(self.database.database_id))
 
-    async def test_low_pool_notification_fires_once_per_rotation(self) -> None:
+    def _seed_low_pool_condition(self) -> None:
+        """9 pre-existing suggestions, 5 already presented -- large
+        enough (Active Watch Items) that the finalized threshold
+        (max(10% Active, 2 configured voting rounds)) isn't suppressed
+        as "too small to be meaningful", while still leaving Eligible
+        below it.
+        """
+        for index in range(9):
+            self.suggestion_service.suggest(f"Movie {index}", database_id=self.database.database_id)
         self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
+        presented_ids = [
+            item.id
+            for item in self.suggestion_service.get_suggestions_for_database(self.database.database_id)[:5]
+        ]
+        self.bot.rotation_service.record_presentation(self.database.database_id, presented_ids)
+
+    async def test_low_pool_notification_fires_once_per_rotation(self) -> None:
+        self._seed_low_pool_condition()
 
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
         self.assertEqual(1, len(self.admin_channel.sent))
@@ -751,11 +767,18 @@ class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
         self.assertEqual(1, len(self.admin_channel.sent))
 
     async def test_low_pool_notification_resets_after_a_new_rotation(self) -> None:
-        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
+        self._seed_low_pool_condition()
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
         self.assertEqual(1, len(self.admin_channel.sent))
 
         self.bot.rotation_service.begin_next_rotation(self.database.database_id)
+        # A fresh rotation returns every suggestion to Eligible -- recreate
+        # the same low-pool condition under the new rotation too.
+        all_items = self.suggestion_service.get_suggestions_for_database(self.database.database_id)
+        self.bot.rotation_service.record_presentation(
+            self.database.database_id, [item.id for item in all_items[:6]]
+        )
+
         await handle_add_suggestion(FakeInteraction(), self.bot, "The Matrix", None, 1999)
 
         self.assertEqual(2, len(self.admin_channel.sent))

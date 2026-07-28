@@ -51,6 +51,7 @@ from watch_party_manager.domain.suggestion_database_configuration import (
     CandidateSelectionMode,
     SuggestionAdmissionMode,
 )
+from watch_party_manager.domain.rotation import Rotation
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_party import WatchParty, WatchPartyStatus
 from watch_party_manager.logger_config import configure_logging
@@ -4006,12 +4007,14 @@ async def handle_start_vote_completion(
         target_database_id = pre_resolution.database.database_id if pre_resolution.database is not None else None
 
     previously_cooled_down_ids: set[int] = set()
+    rotation_before: Optional[Rotation] = None
     if target_database_id is not None and rotation_service is not None:
         previously_cooled_down_ids = {
             item.id
             for item in suggestion_service.get_suggestions_for_database(target_database_id)
             if item.id is not None and rotation_service.is_in_rotation_cooldown(item)
         }
+        rotation_before = rotation_service.get_open_rotation(target_database_id)
 
     message, ephemeral = perform_start_vote(
         vote_service=vote_service,
@@ -4040,6 +4043,15 @@ async def handle_start_vote_completion(
     # refresh any affected posts regardless of `ephemeral` below.
     if previously_cooled_down_ids and bot is not None:
         await sync_rotation_rollover_status_embeds(bot, target_database_id, previously_cooled_down_ids)
+
+    rotation_after: Optional[Rotation] = (
+        rotation_service.get_open_rotation(target_database_id)
+        if target_database_id is not None and rotation_service is not None
+        else None
+    )
+    rollover_occurred = (
+        rotation_before is not None and rotation_after is not None and rotation_before.id != rotation_after.id
+    )
 
     # Rotation & Collection Health goal 2/6: a successful vote start is
     # exactly when eligibility was just freshly recomputed (a rollover
@@ -4100,6 +4112,20 @@ async def handle_start_vote_completion(
     vote_service.attach_message_reference(
         vote_round.id, interaction.guild_id, interaction.channel_id, sent_message.id
     )
+
+    # Rotation Refresh Notification: told only to whoever ran /vote start
+    # (a follow-up ephemeral message), never added to the public voting
+    # post itself -- every voter seeing "Starting Rotation 4" on the vote
+    # they're about to participate in would be clutter, not useful
+    # information for them.
+    if rollover_occurred and rotation_after is not None and rotation_service is not None:
+        await interaction.followup.send(
+            build_rotation_refresh_notification(
+                resolve_rotation_number(rotation_service, target_database_id, rotation_after)
+            ),
+            ephemeral=True,
+        )
+
     logger.info(
         "User %s started voting round %s with %s nominee(s) in database %s "
         "(guild %s, channel %s)",
@@ -7190,6 +7216,33 @@ def resolve_customize_vote_default_candidate_selection(
     return resolve_candidate_selection_mode(bot, guild_id, resolution.database.database_id)
 
 
+def resolve_rotation_number(rotation_service: RotationService, database_id: int, rotation: Rotation) -> int:
+    """The 1-based "Rotation N" number shown to users for `rotation`.
+
+    Rotation.id is a single counter shared across every collection in
+    the server (see RotationService._next_id), not a per-collection
+    sequence -- showing it directly would read as "Rotation 47" for a
+    brand-new collection's very first rotation. This instead counts
+    `rotation`'s position within *this* collection's own rotation
+    history (RotationService.list_rotations, oldest first), so a
+    collection's rotations are always numbered 1, 2, 3, ...
+    """
+    for index, candidate in enumerate(rotation_service.list_rotations(database_id), start=1):
+        if candidate.id == rotation.id:
+            return index
+    return len(rotation_service.list_rotations(database_id))
+
+
+def build_rotation_refresh_notification(rotation_number: int) -> str:
+    """UI Polish (Rotation & Collection Health): a short, informational
+    (not warning-toned) note that a completed rotation was automatically
+    refreshed -- shown alongside /vote start and /list whenever their
+    own rollover-before-reporting resolve() actually rolled a rotation
+    forward (CollectionEligibility.rollover_occurred).
+    """
+    return f"All eligible watch items have now been presented.\n\nStarting Rotation {rotation_number}."
+
+
 async def send_suggestion_list(
     interaction: discord.Interaction,
     bot: "WatchPartyBot",
@@ -7225,13 +7278,28 @@ async def send_suggestion_list(
     )
     filter_label = SUGGESTION_LIST_STATUS_FILTER_LABELS[status_filter]
 
+    # Rotation Refresh Notification: /list's own resolve() may have just
+    # rolled a completed rotation forward (see CollectionEligibility.
+    # rollover_occurred) -- surface that plainly rather than leaving a
+    # member to wonder why Rotation Cooldown suddenly emptied out.
+    rollover_notice = ""
+    if eligibility.rollover_occurred:
+        rotation = bot.rotation_service.get_open_rotation(database.database_id)
+        if rotation is not None:
+            rollover_notice = (
+                build_rotation_refresh_notification(
+                    resolve_rotation_number(bot.rotation_service, database.database_id, rotation)
+                )
+                + "\n\n"
+            )
+
     async def on_switch_collection(switch_interaction: discord.Interaction) -> None:
         await show_list_switch_collection_picker(switch_interaction, bot, status_filter, public)
 
     switch_view_addition = await build_switch_collection_options(bot, database.guild_id) is not None
 
     if not entries:
-        content = f'"{display_name}" has no watch items matching {filter_label}.'
+        content = f'{rollover_notice}"{display_name}" has no watch items matching {filter_label}.'
         view = discord.ui.View(timeout=180)
         if switch_view_addition:
             view.add_item(SwitchCollectionButton(on_switch_collection))
@@ -7244,7 +7312,7 @@ async def send_suggestion_list(
             )
         return
 
-    header = f"**{display_name} -- {filter_label} ({len(entries)})**"
+    header = f"{rollover_notice}**{display_name} -- {filter_label} ({len(entries)})**"
     if status_filter is SuggestionListStatusFilter.ACTIVE:
         # A short summary before the mixed Eligible/Rotation Cooldown
         # list, e.g. "🟢 Eligible for Voting: 2\n🟡 Rotation Cooldown: 6".
@@ -7360,10 +7428,9 @@ def build_collection_health_report(bot: "WatchPartyBot", database: SuggestionDat
         database.guild_id, database.database_id
     )
     candidate_count = resolve_configured_candidate_count(bot, database.guild_id)
-    threshold = resolve_low_pool_threshold(guild_configuration, database_configuration, candidate_count)
-
     eligible_count = len(eligibility.eligible)
     active_count = len(eligibility.active)
+    threshold = resolve_low_pool_threshold(guild_configuration, database_configuration, candidate_count, active_count)
 
     if eligible_count >= candidate_count:
         next_vote = NextVoteStatus.READY
@@ -7385,27 +7452,40 @@ def build_collection_health_report(bot: "WatchPartyBot", database: SuggestionDat
         )
     )
 
+    # UI Polish (Rotation & Collection Health): the current rotation
+    # number is exposed here -- an administrator already looking at
+    # collection health is exactly the audience who benefits from it --
+    # rather than on every voting-related embed (Infinite Pool has no
+    # rotation to number at all, and a database with no rotation started
+    # yet has none to show either).
     if mode is CandidateSelectionMode.INFINITE_POOL:
-        rotation_progress_line = "Current Rotation Progress: N/A (Pure Random selection has no rotation)"
+        rotation_progress_line = "Rotation Progress: N/A (Pure Random selection has no rotation)"
     else:
         rotation = bot.rotation_service.get_open_rotation(database.database_id)
         if rotation is None:
-            rotation_progress_line = "Current Rotation Progress: No rotation started yet"
+            rotation_progress_line = "Rotation Progress: No rotation started yet"
         else:
             progress = bot.rotation_service.progress_for_rotation(rotation)
+            rotation_number = resolve_rotation_number(bot.rotation_service, database.database_id, rotation)
             rotation_progress_line = (
-                f"Current Rotation Progress: {progress.presented} of {progress.total} "
+                f"Rotation {rotation_number} Progress: {progress.presented} of {progress.total} "
                 f"active items have been presented ({progress.completion_percentage:.0f}%)"
             )
 
+    # Formatting Polish: Eligible for Voting and Rotation Cooldown are
+    # indented under Active Watch Items so the reconciliation identity
+    # (Active = Eligible for Voting + Rotation Cooldown) reads directly
+    # from the layout, not just the parenthetical -- purely presentational,
+    # the underlying numbers are unchanged.
     return "\n".join(
         [
             f"**Collection Health -- {display_name}**",
             "",
             f"Total Watch Items: {eligibility.total}",
-            f"Active: {active_count} (Available + Rotation Cooldown)",
-            f"Eligible Next Round: {eligible_count}",
-            f"Rotation Cooldown: {len(eligibility.rotation_cooldown)}",
+            "",
+            f"Active Watch Items: {active_count} (Eligible for Voting + Rotation Cooldown)",
+            f"    Eligible for Voting: {eligible_count}",
+            f"    Rotation Cooldown: {len(eligibility.rotation_cooldown)}",
             f"Vote Winners: {len(eligibility.vote_winners)}",
             f"Retired: {len(eligibility.retired)}",
             "",
