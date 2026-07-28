@@ -32,7 +32,11 @@ class GuildConfigurationTests(unittest.TestCase):
         self.assertTrue(config.watch_history.allow_repeat_watches)
         self.assertEqual(config.notifications.vote.reminder_minutes_before_close, 24 * 60)
         self.assertEqual(config.notifications.watch.reminder_hours_before_watch, 1)
-        self.assertEqual(config.notifications.administrative.low_suggestion_pool_threshold, 10)
+        # Rotation & Collection Health Audit: None means "automatic" --
+        # fewer eligible suggestions than two configured voting rounds,
+        # resolved dynamically against candidate_count rather than a
+        # fixed stored number (see AdministrativeNotificationsConfig).
+        self.assertIsNone(config.notifications.administrative.low_suggestion_pool_threshold)
 
     def test_trims_names(self):
         config = GuildConfiguration(guild_id=1, guild_name="  Guild  ")

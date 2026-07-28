@@ -531,6 +531,46 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
             reloaded.voting_overrides.extra_fields.get("a_future_voting_field"), "keep me too"
         )
 
+    def test_the_retired_low_pool_reminder_destination_and_interval_fields_load_without_error(self) -> None:
+        # Rotation & Collection Health: low_suggestion_pool_destination_channel_id
+        # and low_suggestion_pool_minimum_interval_hours (the old interval-based
+        # Low Pool Reminder's per-database overrides) were removed -- neither has
+        # an equivalent in the new, once-per-rotation/guild-destination design.
+        # A configuration saved before this change must still load cleanly; its
+        # values are preserved verbatim in extra_fields rather than raising.
+        now_iso = utc_now().isoformat()
+        entry_with_retired_fields = json.dumps(
+            {
+                "guilds": {
+                    "100": {
+                        "databases": {
+                            "1": {
+                                "schema_version": 1,
+                                "guild_id": 100,
+                                "database_id": 1,
+                                "display_name": "Movies",
+                                "created_at": now_iso,
+                                "updated_at": now_iso,
+                                "notifications": {
+                                    "low_suggestion_pool_alerts": True,
+                                    "low_suggestion_pool_destination_channel_id": 555,
+                                    "low_suggestion_pool_minimum_interval_hours": 6,
+                                },
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(entry_with_retired_fields, encoding="utf-8")
+
+        loaded = self.repository.get(100, 1)
+
+        self.assertTrue(loaded.notifications.low_suggestion_pool_alerts)
+        self.assertEqual(loaded.notifications.extra_fields.get("low_suggestion_pool_destination_channel_id"), 555)
+        self.assertEqual(loaded.notifications.extra_fields.get("low_suggestion_pool_minimum_interval_hours"), 6)
+
     # --- Human-readable JSON -------------------------------------------------------
 
     def test_json_is_nested_by_guild_id_then_database_id(self) -> None:

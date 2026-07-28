@@ -31,6 +31,7 @@ from watch_party_manager.domain.guild_configuration import (
     GuildConfiguration,
     GuildVoteVisibility,
     JoinMode,
+    RotationLowPoolNotificationDestination,
     VotingDefaultsConfig,
 )
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
@@ -71,6 +72,7 @@ class ConfigSection(str, Enum):
     VOTING_DEFAULTS = "voting_defaults"
     REMINDER_DEFAULTS = "reminder_defaults"
     BACKUP_DEFAULTS = "backup_defaults"
+    ROTATION_LOW_POOL_NOTIFICATION = "rotation_low_pool_notification"
 
 
 CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
@@ -80,7 +82,7 @@ CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
     ConfigSection.ADMIN_CHANNEL,
     # Polish batch: given its own top-level, prominently-labeled section
     # and summary line (previously it had neither) -- every collection's
-    # suggestion/watched-movie thread is created as a sibling under it,
+    # suggestion/archive thread is created as a sibling under it,
     # so an administrator needs to see its status at a glance, not
     # discover it only indirectly via a failed Create New Thread.
     ConfigSection.HOME_CHANNEL,
@@ -89,6 +91,7 @@ CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
     ConfigSection.VOTING_DEFAULTS,
     ConfigSection.REMINDER_DEFAULTS,
     ConfigSection.BACKUP_DEFAULTS,
+    ConfigSection.ROTATION_LOW_POOL_NOTIFICATION,
 )
 
 CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
@@ -98,10 +101,11 @@ CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
     ConfigSection.ADMIN_CHANNEL: "Admin Channel",
     ConfigSection.HOME_CHANNEL: "Watch Party Home Channel",
     ConfigSection.MANAGE_COLLECTIONS: "Manage Collections",
-    ConfigSection.WATCH_DESTINATION: "Watched Movie Destination (Default)",
+    ConfigSection.WATCH_DESTINATION: "Watched Item Archive (Default)",
     ConfigSection.VOTING_DEFAULTS: "Voting Defaults",
     ConfigSection.REMINDER_DEFAULTS: "Reminder Defaults",
     ConfigSection.BACKUP_DEFAULTS: "Backup Defaults",
+    ConfigSection.ROTATION_LOW_POOL_NOTIFICATION: "Rotation Low-Pool Notification",
 }
 
 
@@ -202,13 +206,13 @@ class ConfigService:
 
         watch_destination_channel_id = configuration.channels.watch_history_channel_id
         if watch_destination_channel_id is None:
-            lines.append("Watched Movie Destination (Default): Not configured")
+            lines.append("Watched Item Archive (Default): Not configured")
         elif validate_channel_usable(watch_destination_channel_id, guild):
             lines.append(
-                f"Watched Movie Destination (Default): Invalid (<#{watch_destination_channel_id}> no longer usable)"
+                f"Watched Item Archive (Default): Invalid (<#{watch_destination_channel_id}> no longer usable)"
             )
         else:
-            lines.append(f"Watched Movie Destination (Default): Configured (<#{watch_destination_channel_id}>)")
+            lines.append(f"Watched Item Archive (Default): Configured (<#{watch_destination_channel_id}>)")
 
         voting_defaults = configuration.voting_defaults
         lines.append(
@@ -239,13 +243,33 @@ class ConfigService:
                     f"Backup Defaults: Configured (Automatic Backups: Every {interval} {day_word}, keep {retention})"
                 )
 
+        admin = configuration.notifications.administrative
+        if not (configuration.feature_flags.low_suggestion_pool_alerts and admin.low_suggestion_pool):
+            lines.append("Rotation Low-Pool Notification: Configured (Disabled)")
+        else:
+            threshold = (
+                admin.low_suggestion_pool_threshold
+                if admin.low_suggestion_pool_threshold is not None
+                else 2 * voting_defaults.candidate_count
+            )
+            threshold_note = "auto" if admin.low_suggestion_pool_threshold is None else "custom"
+            destination_label = (
+                "Watch Party Home Channel"
+                if admin.low_suggestion_pool_destination is RotationLowPoolNotificationDestination.HOME_CHANNEL
+                else "Admin Channel"
+            )
+            lines.append(
+                f"Rotation Low-Pool Notification: Configured (Enabled, threshold {threshold} [{threshold_note}], "
+                f"destination: {destination_label})"
+            )
+
         return lines
 
     def resolve_effective_watch_destination(self, guild_id: int, database_id: int) -> Optional[int]:
-        """The channel where a collection's watched-movie history should
+        """The channel where a collection's Watched Item Archive should
         post: its own override if set, otherwise the guild-wide default
-        (Watched Movie Destination (Default) section), otherwise None
-        (nothing posted). Unlike a suggestion destination, this may
+        (Watched Item Archive (Default) section), otherwise None
+        (nothing archived). Unlike a suggestion destination, this may
         legitimately be None, and the same channel may be shared by any
         number of collections and/or the guild default -- never checked
         for conflicts.
@@ -364,7 +388,7 @@ class ConfigService:
             updated,
         )
 
-    # --- Watched Movie Destination (guild-wide default) -----------------------------------
+    # --- Watched Item Archive (guild-wide default) -----------------------------------
 
     def set_guild_watch_destination(self, guild_id: int, channel_id: int, guild: GuildLookup) -> ConfigUpdateResult:
         configuration = self.get_configuration(guild_id)
@@ -377,7 +401,7 @@ class ConfigService:
 
         updated = replace(configuration, channels=replace(configuration.channels, watch_history_channel_id=channel_id))
         self._guild_configuration_repository.save(updated)
-        return ConfigUpdateResult(True, f"Default watched movie destination updated to <#{channel_id}>.", updated)
+        return ConfigUpdateResult(True, f"Default Watched Item Archive updated to <#{channel_id}>.", updated)
 
     def clear_guild_watch_destination(self, guild_id: int) -> ConfigUpdateResult:
         configuration = self.get_configuration(guild_id)
@@ -386,7 +410,7 @@ class ConfigService:
 
         updated = replace(configuration, channels=replace(configuration.channels, watch_history_channel_id=None))
         self._guild_configuration_repository.save(updated)
-        return ConfigUpdateResult(True, "Default watched movie destination cleared.", updated)
+        return ConfigUpdateResult(True, "Default Watched Item Archive cleared.", updated)
 
     # --- Manage Collections ------------------------------------------------------------
     #
@@ -398,7 +422,7 @@ class ConfigService:
     # settings. No collection is ever "the" active one. Every collection
     # always has exactly one suggestion destination -- it can be changed,
     # but never cleared (see set_database_suggestion_destination); a
-    # watched-movie destination remains optional and may be shared freely
+    # Watched Item Archive remains optional and may be shared freely
     # (see resolve_effective_watch_destination above).
 
     def _get_database_for_guild(self, guild_id: int, database_id: int) -> Optional[SuggestionDatabase]:
@@ -478,7 +502,7 @@ class ConfigService:
 
         self._save_database_channel(guild_id, database, channel_id, field_name="watch_history_channel_id")
         return ConfigUpdateResult(
-            True, f"Watched movie destination updated to <#{channel_id}>.", self.get_configuration(guild_id)
+            True, f"Watched Item Archive updated to <#{channel_id}>.", self.get_configuration(guild_id)
         )
 
     def clear_database_watch_destination(self, guild_id: int, database_id: int) -> ConfigUpdateResult:
@@ -488,7 +512,7 @@ class ConfigService:
 
         self._save_database_channel(guild_id, database, None, field_name="watch_history_channel_id")
         return ConfigUpdateResult(
-            True, "Watched movie destination cleared.", self.get_configuration(guild_id)
+            True, "Watched Item Archive cleared.", self.get_configuration(guild_id)
         )
 
     def set_database_candidate_selection(
@@ -611,3 +635,85 @@ class ConfigService:
         )
         self._guild_configuration_repository.save(updated)
         return ConfigUpdateResult(True, "Backup defaults updated: Automatic Backups: Disabled.", updated)
+
+    # --- Rotation Low-Pool Notification ----------------------------------------------
+
+    def set_rotation_low_pool_notification_enabled(self, guild_id: int, enabled: bool) -> ConfigUpdateResult:
+        configuration = self.get_configuration(guild_id)
+        if configuration is None:
+            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
+
+        updated = replace(
+            configuration,
+            notifications=replace(
+                configuration.notifications,
+                administrative=replace(
+                    configuration.notifications.administrative,
+                    low_suggestion_pool=enabled,
+                ),
+            ),
+        )
+        self._guild_configuration_repository.save(updated)
+        message = (
+            "Rotation Low-Pool Notification updated: Enabled."
+            if enabled
+            else "Rotation Low-Pool Notification updated: Disabled."
+        )
+        return ConfigUpdateResult(True, message, updated)
+
+    def set_rotation_low_pool_notification_threshold(
+        self, guild_id: int, threshold: Optional[int]
+    ) -> ConfigUpdateResult:
+        """threshold=None restores the dynamic default (fewer eligible
+        suggestions than two configured voting rounds)."""
+        configuration = self.get_configuration(guild_id)
+        if configuration is None:
+            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
+
+        if threshold is not None and not (1 <= threshold <= 1000):
+            return ConfigUpdateResult(False, "Threshold must be between 1 and 1000, or left blank for automatic.")
+
+        updated = replace(
+            configuration,
+            notifications=replace(
+                configuration.notifications,
+                administrative=replace(
+                    configuration.notifications.administrative,
+                    low_suggestion_pool_threshold=threshold,
+                ),
+            ),
+        )
+        self._guild_configuration_repository.save(updated)
+        message = (
+            f"Rotation Low-Pool Notification updated: threshold set to {threshold}."
+            if threshold is not None
+            else "Rotation Low-Pool Notification updated: threshold reset to automatic (two voting rounds)."
+        )
+        return ConfigUpdateResult(True, message, updated)
+
+    def set_rotation_low_pool_notification_destination(
+        self, guild_id: int, destination: RotationLowPoolNotificationDestination
+    ) -> ConfigUpdateResult:
+        configuration = self.get_configuration(guild_id)
+        if configuration is None:
+            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
+
+        updated = replace(
+            configuration,
+            notifications=replace(
+                configuration.notifications,
+                administrative=replace(
+                    configuration.notifications.administrative,
+                    low_suggestion_pool_destination=destination,
+                ),
+            ),
+        )
+        self._guild_configuration_repository.save(updated)
+        destination_label = (
+            "Watch Party Home Channel"
+            if destination is RotationLowPoolNotificationDestination.HOME_CHANNEL
+            else "Admin Channel"
+        )
+        return ConfigUpdateResult(
+            True, f"Rotation Low-Pool Notification updated: destination set to {destination_label}.", updated
+        )

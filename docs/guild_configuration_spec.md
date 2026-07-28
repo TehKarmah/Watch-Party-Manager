@@ -58,7 +58,7 @@ channels:
   watch_history_channel_id: null
 ```
 
-All four channels are optional. When no announcements channel is configured, WASH may use the current interaction channel where appropriate. When no log channel is configured, noncritical Discord logging is suppressed; critical failures still go to application logs. `admin_channel_id` is a dedicated channel for Approval-Required membership requests, deliberately separate from `log_channel_id`'s general administrative logging. `watch_history_channel_id` is the guild-wide default destination for watched-movie history; a collection's own configured watch destination overrides it when set, and unlike a suggestion destination, this channel may be shared across any number of collections.
+All four channels are optional. When no announcements channel is configured, WASH may use the current interaction channel where appropriate. When no log channel is configured, noncritical Discord logging is suppressed; critical failures still go to application logs. `admin_channel_id` is a dedicated channel for Approval-Required membership requests, deliberately separate from `log_channel_id`'s general administrative logging. `watch_history_channel_id` is the guild-wide default destination for the Watched Item Archive (which stores Vote Winners and Retired items together with links back to their suggestion and voting history, not general discussion); a collection's own configured archive destination overrides it when set, and unlike a suggestion destination, this channel may be shared across any number of collections.
 
 ## Voting Defaults
 

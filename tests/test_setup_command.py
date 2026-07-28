@@ -1349,9 +1349,10 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
         return interaction
 
-    async def test_body_explains_history_and_discussion_and_mentions_thread_creation(self) -> None:
+    async def test_body_explains_the_archive_purpose_and_mentions_thread_creation(self) -> None:
         interaction = await self._render_step()
-        self.assertIn("history and discussion", interaction.response.sent_message)
+        self.assertIn("archive completed watch items", interaction.response.sent_message)
+        self.assertIn("Vote Winners and Retired items", interaction.response.sent_message)
         self.assertIn("create a new thread", interaction.response.sent_message)
 
     async def test_shows_back_and_save_for_later(self) -> None:
@@ -1382,14 +1383,14 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await create_thread_button.callback(interaction=create_interaction)
         name_modal = create_interaction.response.sent_modal
-        self.assertEqual(name_modal.name_input.default, "Watched Movies")
-        name_modal.name_input._value = "Watched Movies"
+        self.assertEqual(name_modal.name_input.default, "Watched Item Archive")
+        name_modal.name_input._value = "Watched Item Archive"
 
         submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await name_modal.on_submit(interaction=submit_interaction)
 
         self.assertEqual(
-            fake_home_channel.created_with, ("Watched Movies", __import__("discord").ChannelType.public_thread)
+            fake_home_channel.created_with, ("Watched Item Archive", __import__("discord").ChannelType.public_thread)
         )
         self.assertIn("Step 7 of 10", submit_interaction.response.edited_content)
         persisted = self.wizard_repository.get(GUILD_ID)
@@ -1403,7 +1404,7 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(failing_channel))
         await create_thread_button.callback(interaction=create_interaction)
         name_modal = create_interaction.response.sent_modal
-        name_modal.name_input._value = "Watched Movies"
+        name_modal.name_input._value = "Watched Item Archive"
 
         submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(failing_channel))
         await name_modal.on_submit(interaction=submit_interaction)
@@ -1851,7 +1852,7 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await create_thread_button.callback(interaction=create_interaction)
         name_modal = create_interaction.response.sent_modal
-        name_modal.name_input._value = "Watched Movies"
+        name_modal.name_input._value = "Watched Item Archive"
 
         submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await name_modal.on_submit(interaction=submit_interaction)
@@ -1861,7 +1862,7 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         # sibling, never nested under the suggestion thread itself.
         self.assertEqual(
             fake_home_channel.created_with,
-            ("Watched Movies", __import__("discord").ChannelType.public_thread),
+            ("Watched Item Archive", __import__("discord").ChannelType.public_thread),
         )
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertEqual(persisted.draft.watch_destination_channel_id, 707)

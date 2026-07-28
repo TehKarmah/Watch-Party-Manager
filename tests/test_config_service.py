@@ -148,13 +148,13 @@ class MainSummaryTests(ConfigServiceTestCase):
     def test_watch_destination_default_reports_not_configured_when_unset(self) -> None:
         self._seed_completed_setup()
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn("Watched Movie Destination (Default): Not configured", lines)
+        self.assertIn("Watched Item Archive (Default): Not configured", lines)
 
     def test_watch_destination_default_reports_configured_when_set(self) -> None:
         self._seed_completed_setup()
         self.service.set_guild_watch_destination(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn(f"Watched Movie Destination (Default): Configured (<#{DESTINATION_CHANNEL_ID}>)", lines)
+        self.assertIn(f"Watched Item Archive (Default): Configured (<#{DESTINATION_CHANNEL_ID}>)", lines)
 
     def test_invalid_role_no_longer_existing_is_reported_as_invalid(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=999999)

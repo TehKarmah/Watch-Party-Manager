@@ -75,6 +75,21 @@ class ConfigMainMenuViewTests(unittest.IsolatedAsyncioTestCase):
         await select.callback(interaction=object())
         self.assertEqual(calls, ["backup_defaults"])
 
+    async def test_descriptions_apply_only_to_the_matching_option(self) -> None:
+        view = ConfigMainMenuView(
+            [("wash_crew_role", "WASH Crew Role"), ("voting_defaults", "Voting Defaults")],
+            _noop,
+            descriptions={"voting_defaults": "Visible/Blind explained here"},
+        )
+        select = view.children[0]
+        options_by_value = {option.value: option for option in select.options}
+        self.assertIsNone(options_by_value["wash_crew_role"].description)
+        self.assertEqual(options_by_value["voting_defaults"].description, "Visible/Blind explained here")
+
+    async def test_no_descriptions_leaves_every_option_undescribed(self) -> None:
+        view = ConfigMainMenuView([("wash_crew_role", "WASH Crew Role")], _noop)
+        self.assertIsNone(view.children[0].options[0].description)
+
 
 class ConfigRoleSectionViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_has_a_role_select_and_back_to_menu(self) -> None:
@@ -192,7 +207,7 @@ class ConfigWatchDestinationSectionViewTests(unittest.IsolatedAsyncioTestCase):
         view = ConfigWatchDestinationSectionView(_noop, _noop, _noop)
         self.assertEqual(len(view.children), 3)
         self.assertEqual(view.children[0].custom_id, "wpm_config_watch_destination_channel_select")
-        self.assertEqual(view.children[1].label, "Clear Destination")
+        self.assertEqual(view.children[1].label, "Clear Archive")
         self.assertEqual(view.children[2].label, "Back to Menu")
 
     async def test_clear_button_triggers_its_callback(self) -> None:

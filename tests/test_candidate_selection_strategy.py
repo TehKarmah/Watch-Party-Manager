@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from datetime import date
+
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
@@ -140,6 +142,21 @@ class SoftRotationStrategyTests(CandidateSelectionStrategyTestCase):
 
         self.assertGreater(strategy.weight_for(refreshed), 0.0)
 
+    def test_candidate_pool_excludes_a_vote_winner(self) -> None:
+        # Rotation & Collection Health Audit bug fix: a Vote Winner must
+        # never be selectable again in any mode, including Soft Rotation
+        # (which otherwise excludes nothing) -- get_suggestions_for_
+        # database's own default only ever excludes Archived, so this
+        # exclusion must be explicit here.
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.suggestion_service.record_vote_win(item_a.id, date.today())
+        strategy = SoftRotationStrategy(rotation_service=self.rotation_service, suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
+
+        self.assertEqual(pool_ids, {item_b.id})
+
     def test_candidate_pool_ignores_a_requested_count_and_never_rolls_over(self) -> None:
         """Soft Rotation never excludes anything, so there is nothing for
         a requested vote size to roll over -- passing requested_count
@@ -165,6 +182,16 @@ class InfinitePoolStrategyTests(CandidateSelectionStrategyTestCase):
         pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
 
         self.assertEqual(pool_ids, {item_a.id, item_b.id})
+
+    def test_candidate_pool_excludes_a_vote_winner(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.suggestion_service.record_vote_win(item_a.id, date.today())
+        strategy = InfinitePoolStrategy(suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
+
+        self.assertEqual(pool_ids, {item_b.id})
 
     def test_weight_for_is_always_neutral(self) -> None:
         item = self._add("Alien")

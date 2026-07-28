@@ -22,7 +22,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - Check exactly one of Pass/Fail per test. A test you could not run at all (missing prerequisite, environment issue) should be marked **Fail** with the reason in Notes -- do not leave it blank.
 - "WASH Crew" and "Watch Party member" below refer to whichever Discord roles your test server has configured for those purposes (see Section 2).
 - Where a step says "confirm the exact wording," minor phrasing drift is not itself a failure -- flag it in Notes as a documentation/consistency item rather than blocking the release on it, unless the message is actually misleading or wrong.
-- Run `python -m unittest discover -s tests -v` (baseline: 3075 tests, 0 failures) before starting manual validation, and again before final sign-off. This checklist verifies real-world behavior the automated suite cannot (Discord UI rendering, actual message delivery, a real bot process restarting) -- it does not replace the automated suite.
+- Run `python -m unittest discover -s tests -v` (baseline: 3151 tests, 0 failures) before starting manual validation, and again before final sign-off. This checklist verifies real-world behavior the automated suite cannot (Discord UI rendering, actual message delivery, a real bot process restarting) -- it does not replace the automated suite.
 
 ---
 
@@ -203,7 +203,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 2.4b Home Channel
 
-- **Objective:** Confirm WASH's home channel can be created fresh or pointed at an existing channel, and that every collection's suggestion thread (and, by default, the watched-movie destination thread) is created inside it.
+- **Objective:** Confirm WASH's home channel can be created fresh or pointed at an existing channel, and that every collection's suggestion thread (and, by default, the Watched Item Archive thread) is created inside it.
 - **Preconditions:** Test 2.4 passed.
 - **Steps:**
   1. Reach the Home Channel step; confirm it offers **Create New Channel (Recommended)** and **Use Existing Channel**.
@@ -238,36 +238,38 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 2.6 Watched Movie Destination
+### 2.6 Watched Item Archive
 
-- **Objective:** Confirm the watched-movie destination step accepts an existing channel/thread, can create a new thread as a sibling under the home channel, or can be skipped.
+- **Objective:** Confirm the Watched Item Archive step accepts an existing channel/thread, can create a new thread as a sibling under the home channel, or can be skipped, and that its wording clearly describes archiving completed watch items rather than general discussion.
 - **Preconditions:** Test 2.5 passed.
 - **Steps:**
-  1. Select an existing destination channel or thread, or click **Skip for Now**.
-  2. Separately, repeat and instead choose **Create New Thread**; confirm the name prompt defaults to "Watched Movies" and the new thread is created as a sibling under the home channel (never nested under a suggestion thread).
-- **Expected Result:** Every choice advances the wizard and is reflected correctly on the Review step.
+  1. Reach the step; confirm the body text explains WASH archives completed watch items (Vote Winners and Retired items) together with links back to their suggestion and voting history -- not that it's a discussion or general history channel.
+  2. Select an existing destination channel or thread, or click **Skip for Now**.
+  3. Separately, repeat and instead choose **Create New Thread**; confirm the name prompt defaults to "Watched Item Archive" and the new thread is created as a sibling under the home channel (never nested under a suggestion thread).
+- **Expected Result:** Every choice advances the wizard and is reflected correctly on the Review step ("Watched Item Archive: Configured/Skipped/Incomplete").
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 2.6b Server-wide default Watched Movie Destination (`/config`)
+### 2.6b Server-wide default Watched Item Archive (`/config`)
 
-- **Objective:** Confirm `/config`'s Watched Movie Destination (Default) section sets a server-wide fallback, and that a collection's own override takes precedence when both are set.
+- **Objective:** Confirm `/config`'s Watched Item Archive (Default) section sets a server-wide fallback, and that a collection's own override takes precedence when both are set.
 - **Preconditions:** Setup completed; at least one collection exists.
 - **Steps:**
-  1. Run `/config` -> **Watched Movie Destination (Default)**; set it to a channel, or clear it.
-  2. Run `/config` -> **Manage Collections** -> a collection -> its Watched Movie Destination; confirm the screen shows both "This collection's own override" and "Currently effective" values.
+  1. Run `/config` -> **Watched Item Archive (Default)**; set it to a channel, or clear it.
+  2. Run `/config` -> **Manage Collections** -> a collection -> its Watched Item Archive; confirm the screen shows both "This collection's own override" and "Currently effective" values.
   3. With no per-collection override set, confirm "Currently effective" matches the server default from step 1.
   4. Set a per-collection override to a different channel; confirm "Currently effective" now shows the override, not the server default.
   5. Clear the per-collection override; confirm "Currently effective" falls back to the server default again.
-- **Expected Result:** The server-wide default may be unset (None) or shared across any number of collections -- unlike a suggestion destination, watched destinations are never checked for conflicts. A collection's own override, when set, always wins over the server default.
+- **Expected Result:** The server-wide default may be unset (None) or shared across any number of collections -- unlike a suggestion destination, Watched Item Archive destinations are never checked for conflicts. A collection's own override, when set, always wins over the server default.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
 ### 2.7 Voting Defaults: candidate count, duration, visibility
 
-- **Objective:** Confirm the Voting Defaults modal accepts and validates all four fields.
+- **Objective:** Confirm the Voting Defaults modal accepts and validates all four fields, and that the step explains what Visible/Blind actually mean.
 - **Preconditions:** Reached the Voting Defaults step.
 - **Steps:**
+  0. Before opening the modal, confirm the step's body text explains: "Visible -- everyone can see vote totals while voting is active. Blind -- results stay hidden until voting closes."
   1. Open the modal (**Set Voting Defaults**); confirm the duration field's helper text reads "e.g. 10m, 1h, 1d, or 1w" and the field is pre-filled `1d` (not "1 day") on a brand-new server.
   2. Enter a candidate count (try an in-range value, e.g. `4`).
   3. Enter a duration using WASH's shared duration syntax (try `4h`, then separately `3d`, then `3 days` -- confirm all are accepted and mean what you'd expect). Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
@@ -277,14 +279,15 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 2.8 Candidate selection mode
+### 2.8 Candidate selection mode and its help text
 
-- **Objective:** Confirm all three candidate-selection modes are selectable by friendly name or raw value.
-- **Preconditions:** Test 2.7 in progress (same modal).
+- **Objective:** Confirm all three candidate-selection modes are selectable from the dropdown, each with a plain-language description, and that **Balanced Random** is the pre-filled default.
+- **Preconditions:** Reached the Voting Defaults step (before pressing **Set Voting Defaults**).
 - **Steps:**
-  1. Enter `Balanced Random` (or `rotation_pool`) in the candidate-selection field; confirm it's accepted.
-  2. Repeat later with `Soft Rotation`/`soft_rotation` and `Pure Random`/`infinite_pool`.
-- **Expected Result:** All three friendly labels and all three raw values are accepted; **Balanced Random** is the pre-filled default.
+  1. Open the candidate-selection dropdown; confirm it lists exactly **Balanced Random (Recommended)**, **Soft Rotation**, and **Pure Random**, with **Balanced Random (Recommended)** preselected.
+  2. Confirm each option shows a short description beneath its label: Balanced Random -- "Prioritizes suggestions that have appeared in fewer recent votes, giving every one a fair chance."; Soft Rotation -- "Prefers new suggestions; previously shown ones stay eligible, just at a lower chance."; Pure Random -- "Chooses completely at random from eligible suggestions, with no preference or exclusion."
+  3. Select each mode in turn, press **Set Voting Defaults**, and confirm the modal opens (candidate count/duration/visibility only -- candidate selection is not one of its fields).
+- **Expected Result:** All three modes are selectable from the dropdown with the exact descriptions above; the chosen mode is saved correctly regardless of which one was picked.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -331,7 +334,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Compare every listed value against what was actually selected in Tests 2.2-2.10.
   3. Click **Back** once, confirm it returns to the immediately preceding step.
   4. Return to Review and click **Save**.
-- **Expected Result:** Every section (roles, join mode, admin channel, home channel, suggestion database, watched-movie destination, voting defaults including candidate selection, reminders, backup) is shown accurately, using natural-language duration (e.g. "4 hours" or "3 days", never "72 hours"). The Automatic Backups line reads "Automatic Backups: Disabled" if you chose Disable in Test 2.10b, or "Automatic Backups: Every N day(s), keep M" (matching the configured interval/retention) if you chose Enable. Save marks setup complete and shows a final completion summary matching the same values, including the same Automatic Backups line.
+- **Expected Result:** Every section (roles, join mode, admin channel, home channel, suggestion database, Watched Item Archive, voting defaults including candidate selection, reminders, backup) is shown accurately, using natural-language duration (e.g. "4 hours" or "3 days", never "72 hours"). The Automatic Backups line reads "Automatic Backups: Disabled" if you chose Disable in Test 2.10b, or "Automatic Backups: Every N day(s), keep M" (matching the configured interval/retention) if you chose Enable. Save marks setup complete and shows a final completion summary matching the same values, including the same Automatic Backups line.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -355,7 +358,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** Section 2 completed.
 - **Steps:**
   1. Run `/config` as WASH Crew.
-- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Manage Collections, Watched Movie Destination (Default), Voting Defaults, Reminder Defaults, Backup Defaults) appears, each showing its current status.
+- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Manage Collections, Watched Item Archive (Default), Voting Defaults, Reminder Defaults, Backup Defaults) appears, each showing its current status.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -379,6 +382,17 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Change the duration in `/config` (e.g. to `12h`).
   3. Run `/vote start` -> **Use Defaults** and confirm the new duration is what's actually used (see Test 5.2).
 - **Expected Result:** The value changed in `/config` is the value `/vote start` actually applies -- no separate/stale value anywhere.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 3.3a `/config`'s main menu explains Visible/Blind
+
+- **Objective:** Confirm the Voting Defaults entry in `/config`'s main menu dropdown explains visibility, since its modal opens directly with no intro screen to show the fuller explanation on.
+- **Preconditions:** Setup completed.
+- **Steps:**
+  1. Run `/config`; open the section dropdown without selecting anything yet.
+  2. Find the **Voting Defaults** entry and read its description text.
+- **Expected Result:** The description reads "Visible: totals shown live. Blind: hidden until voting closes." (or equivalent); no other menu entry shows this description.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -480,6 +494,22 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 3.4e `/database health` (Rotation & Collection Health)
+
+- **Objective:** Confirm `/database health` reports an accurate, reconciled eligibility breakdown for a collection, resolves its collection the same way `/list` does, and never itself changes rotation state.
+- **Preconditions:** A Balanced Random (Rotation Pool) collection with a mix of Eligible, Rotation Cooldown, Vote Winner, and Retired suggestions (run a vote round or two, and retire at least one suggestion, if needed); a second collection in the same server.
+- **Steps:**
+  1. From inside the collection's own thread, run `/database health`; confirm it resolves to that collection automatically with no picker.
+  2. Confirm the report shows: Collection Name, Total Watch Items, Active, Eligible Next Round, Rotation Cooldown, Vote Winners, Retired, Current Rotation Progress (e.g. "N of M active items have been presented"), Configured Candidate Count, a **Next Vote** status, and a **Low Pool Status**.
+  3. Confirm the numbers reconcile: Active = Eligible Next Round + Rotation Cooldown, and Total = Active + Vote Winners + Retired.
+  4. Click **Switch Collection** and confirm it shows the report for the other collection instead, in place.
+  5. Run `/database health` from a channel not tied to either collection; confirm WASH shows a picker instead of guessing.
+  6. Immediately after, run `/list` and separately `/vote start` against the same collection; confirm the Eligible/Available count and Rotation Cooldown count reported by `/database health` match exactly what `/list` shows and what `/vote start` actually nominates from.
+  7. Run `/database health` again right after step 6; confirm nothing about the collection's rotation state changed as a result of having checked health (no rollover was triggered merely by running this command).
+- **Expected Result:** `/database health` never disagrees with `/list`/`/vote start`'s own eligibility count; its collection selection matches `/list`'s (auto-resolve in thread, Switch Collection button, picker when ambiguous); checking health is always side-effect-free -- it never bootstraps or advances a rotation.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 3.5 Contextual resolution with multiple databases configured
 
 - **Objective:** Confirm behavior is well-defined when more than one suggestion database exists -- WASH resolves the database from context (channel/thread), never from a server-wide "active" pointer.
@@ -571,6 +601,19 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 4.7b `/list status:Rotation Cooldown`, thread auto-resolve, and Switch Collection
+
+- **Objective:** Confirm the Rotation Cooldown filter, `/list`'s thread-context auto-resolve, and its Switch Collection button all work, and that Available/Rotation Cooldown never disagree with `/vote start`.
+- **Preconditions:** A Balanced Random collection with at least one completed vote round (so some suggestions are on Rotation Cooldown and some remain Available); a second collection in the same server.
+- **Steps:**
+  1. Run `/list status:Rotation Cooldown`; confirm it shows exactly the suggestions presented in the current rotation but not yet a Vote Winner or Retired.
+  2. From inside the collection's own thread, run `/list` with no other context; confirm it automatically uses that collection with no picker.
+  3. Click **Switch Collection**; confirm it shows the other collection's list in place, without re-running the command.
+  4. Run `/list status:Available` and separately start `/vote start`; confirm the Available count and the actual nominee pool never disagree -- including that if the current rotation can't otherwise supply the configured candidate count, `/list` itself automatically rolls over the rotation the same way `/vote start` would, before showing anything.
+- **Expected Result:** Rotation Cooldown lists exactly the expected suggestions; thread auto-resolve and Switch Collection both work as described; Available always matches what `/vote start` would actually nominate from, including matching automatic-rollover behavior.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 4.8 `/list public:true` is WASH Crew only
 
 - **Objective:** Confirm only WASH Crew can post the list publicly.
@@ -621,14 +664,19 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.12 Low Pool Reminder
+### 4.12 Rotation Low-Pool Notification
 
-- **Objective:** Confirm WASH warns when a database's available-suggestion count runs low.
-- **Preconditions:** A database whose active suggestion count is at or just above the configured threshold (default 10).
+- **Objective:** Confirm WASH proactively notifies WASH Crew when a collection's eligible pool runs low, fires only once per rotation, resets after a rollover, and respects its configured Enabled/Threshold/Destination settings.
+- **Preconditions:** A Balanced Random collection whose eligible-suggestion count can be driven below its configured threshold (default: fewer than two configured voting rounds); Rotation Low-Pool Notification enabled via `/config` (Test 3.2), with a known destination (Admin Channel by default).
 - **Steps:**
-  1. `/add` suggestions (or `/remove` existing ones) until the count crosses the threshold.
-  2. Observe the database's suggestion channel (or its separately configured reminder destination) after the triggering `/add`.
-- **Expected Result:** A reminder posts naming the remaining count, current rotation completion percentage, and a nudge to use `/add`; it does not repeat more than once per the configured minimum interval regardless of further additions/removals in that window.
+  1. Reduce the collection's eligible count below the configured threshold (e.g. `/vote start` a few rounds, or `/remove` suggestions), then run `/vote start` again.
+  2. Observe the configured destination (Admin Channel by default, or the Watch Party Home Channel if switched via `/config`) for a notification naming the collection, the remaining eligible count, the configured candidate count, and a nudge to use `/add`.
+  3. Run `/vote start` again without anything else changing; confirm the notification does **not** repeat for the same rotation.
+  4. Trigger a rotation rollover (e.g. via Test 5.5b's scenario) and drop the pool below the threshold again; confirm the notification fires again for the new rotation.
+  5. Via `/config`, disable the notification; repeat step 1's conditions; confirm nothing is posted.
+  6. Re-enable it and switch its destination to the Watch Party Home Channel; confirm the next notification posts there instead of the Admin Channel.
+  7. On a Pure Random (`infinite_pool`) collection, drive its eligible count arbitrarily low; confirm no notification is ever sent (Pure Random has no rotation to key the once-per-rotation dedup on).
+- **Expected Result:** The notification fires only when the eligible count is genuinely below the threshold, at most once per rotation, and resets naturally once a fresh rotation begins; Enabled/Disabled and Destination are both respected; Pure Random collections never receive it.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -654,6 +702,20 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/vote start` -> **Use Defaults**.
 - **Expected Result:** A round opens using the configured candidate count, duration, and visibility -- not hardcoded values. The public voting post is WASH's standard embed (yellow accent, no branding) showing visibility, duration/end time, and clean candidate titles (no leading number).
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 5.1b `/vote start` -- Customize This Vote's Candidate Selection Mode override
+
+- **Objective:** Confirm Customize This Vote can override the target collection's Candidate Selection Mode for one round only, without changing the collection's own saved setting, and that the same mode descriptions and visibility explanation from Setup/`/config` appear here too.
+- **Preconditions:** A Balanced Random (Rotation Pool) collection with several eligible suggestions.
+- **Steps:**
+  1. Run `/vote start` -> **Customize This Vote**; confirm a dropdown appears (Candidate Selection Mode) with the same three options and descriptions as Test 2.8, preselected to the collection's actual configured mode (Balanced Random, from this test's precondition), plus a **Continue to Vote Settings** button.
+  2. Confirm the message body also explains Visible/Blind (same wording as Test 2.7).
+  3. Select **Pure Random**, then press **Continue to Vote Settings**; confirm the familiar candidate count/duration/visibility/reminder modal opens (no candidate-selection field in it).
+  4. Submit the modal; confirm the round is created successfully.
+  5. Run `/config` -> **Manage Collections** -> this collection -> **Candidate Selection**; confirm it still shows **Balanced Random**, unchanged by the override just used.
+- **Expected Result:** The override applies to that one round's nominee selection only; the collection's own configured Candidate Selection Mode is never modified by Customize This Vote.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

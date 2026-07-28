@@ -24,6 +24,23 @@ SUGGESTION_SELECTION_VIEW_TIMEOUT_SECONDS = 120
 
 OnDatabaseSelected = Callable[[discord.Interaction, int], Awaitable[None]]
 OnRemovalMatchSelected = Callable[[discord.Interaction, int], Awaitable[None]]
+OnSwitchCollectionClicked = Callable[[discord.Interaction], Awaitable[None]]
+
+
+class SwitchCollectionButton(discord.ui.Button):
+    """Rotation & Collection Health goal 4: even when /list already
+    auto-resolved a collection from thread context, offer a way to
+    switch to a different one instead of being stuck with the guess.
+    """
+
+    def __init__(self, on_click: OnSwitchCollectionClicked) -> None:
+        super().__init__(
+            label="Switch Collection", style=discord.ButtonStyle.secondary, custom_id="wpm_list_switch_collection"
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
 
 
 class ListDatabaseSelect(discord.ui.Select):

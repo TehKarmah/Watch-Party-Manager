@@ -22,6 +22,7 @@ import discord
 from watch_party_manager.domain.guild_configuration import JoinMode
 from watch_party_manager.domain.suggestion_database_configuration import (
     CANDIDATE_SELECTION_DISPLAY_LABELS,
+    CANDIDATE_SELECTION_HELP_TEXT,
     CandidateSelectionMode,
 )
 
@@ -656,7 +657,7 @@ class AdminChannelStepView(SetupWizardStepView):
 # --- Home Channel -----------------------------------------------------------------------------
 #
 # WASH's "home": the parent channel every collection's suggestion thread
-# (and, by default, the watched-movie destination thread) is created
+# (and, by default, the Watched Item Archive thread) is created
 # under, so collections read as siblings under one recognizable channel
 # rather than being scattered across the server as top-level channels.
 # No skip option -- every collection needs somewhere to create its
@@ -703,7 +704,7 @@ class HomeChannelNameModal(discord.ui.Modal):
         await self._submit_callback(interaction, self.name_input.value)
 
 
-# --- Watched Movie Destination -------------------------------------------------------------
+# --- Watched Item Archive -------------------------------------------------------------
 
 
 class SkipWatchDestinationButton(discord.ui.Button):
@@ -727,7 +728,7 @@ class CreateNewThreadButton(discord.ui.Button):
 
 
 class CreateThreadNameModal(discord.ui.Modal):
-    """Watched Movie Destination step: name the new thread, created as a
+    """Watched Item Archive step: name the new thread, created as a
     sibling under WASH's home channel (never nested under another
     thread -- Discord doesn't support that regardless).
     """
@@ -745,7 +746,7 @@ class CreateThreadNameModal(discord.ui.Modal):
 
 
 class WatchDestinationStepView(SetupWizardStepView):
-    """Watched Movie Destination step: choose an existing channel or
+    """Watched Item Archive step: choose an existing channel or
     thread, create a new thread, or skip for now.
     """
 
@@ -870,6 +871,7 @@ class CandidateSelectionSelectComponent(discord.ui.Select):
             discord.SelectOption(
                 label=_CANDIDATE_SELECTION_SELECT_LABELS[mode],
                 value=mode.value,
+                description=CANDIDATE_SELECTION_HELP_TEXT[mode],
                 default=mode is default,
             )
             for mode in (

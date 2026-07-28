@@ -29,7 +29,7 @@ class JsonRotationRepositoryTests(unittest.TestCase):
 
         self.assertEqual(result.rotations, [])
         self.assertEqual(result.next_rotation_id, 1)
-        self.assertEqual(result.low_pool_reminder_last_sent_at, {})
+        self.assertEqual(result.low_pool_notified_rotation_ids, {})
 
     def test_save_then_load_round_trips_a_rotation(self) -> None:
         rotation = Rotation(
@@ -61,13 +61,28 @@ class JsonRotationRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.rotations[0].status, RotationStatus.COMPLETED)
         self.assertIsNotNone(loaded.rotations[0].completed_at)
 
-    def test_save_then_load_round_trips_the_low_pool_reminder_timestamp(self) -> None:
-        sent_at = utc_now()
-        self.repository.save([], 1, {10: sent_at})
+    def test_save_then_load_round_trips_the_low_pool_notified_rotation_id(self) -> None:
+        self.repository.save([], 1, {10: 5})
 
         loaded = self.repository.load()
 
-        self.assertEqual(loaded.low_pool_reminder_last_sent_at[10], sent_at)
+        self.assertEqual(loaded.low_pool_notified_rotation_ids[10], 5)
+
+    def test_loading_a_file_with_the_old_timestamp_based_key_ignores_it_gracefully(self) -> None:
+        # Backward-compatible loading: a rotations.json saved before the
+        # Rotation & Collection Health Audit has
+        # low_pool_reminder_last_sent_at, not low_pool_notified_rotation_ids
+        # -- it must load as "nothing notified yet" rather than erroring.
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(
+            '{"next_rotation_id": 1, "rotations": [], '
+            '"low_pool_reminder_last_sent_at": {"10": "2026-01-01T00:00:00+00:00"}}',
+            encoding="utf-8",
+        )
+
+        loaded = self.repository.load()
+
+        self.assertEqual(loaded.low_pool_notified_rotation_ids, {})
 
     def test_save_creates_parent_directories(self) -> None:
         nested_path = Path(self._temp_dir.name) / "nested" / "rotations.json"

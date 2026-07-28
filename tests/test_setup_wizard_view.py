@@ -316,13 +316,13 @@ class CreateThreadNameModalTests(unittest.IsolatedAsyncioTestCase):
             calls.append(name)
 
         modal = CreateThreadNameModal(on_submit)
-        modal.name_input._value = "Watched Movies"
+        modal.name_input._value = "Watched Item Archive"
         await modal.on_submit(interaction=object())
-        self.assertEqual(calls, ["Watched Movies"])
+        self.assertEqual(calls, ["Watched Item Archive"])
 
     async def test_default_prefills_the_name_field(self) -> None:
-        modal = CreateThreadNameModal(_noop, default="Watched Movies")
-        self.assertEqual(modal.name_input.default, "Watched Movies")
+        modal = CreateThreadNameModal(_noop, default="Watched Item Archive")
+        self.assertEqual(modal.name_input.default, "Watched Item Archive")
 
 
 class HomeChannelChoiceViewTests(unittest.IsolatedAsyncioTestCase):

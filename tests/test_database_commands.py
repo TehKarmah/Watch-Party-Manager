@@ -145,11 +145,11 @@ class DatabaseCommandTests(unittest.TestCase):
         self.assertIn("Database ID: 1\n", message)
         self.assertIn("Name: Sunday Watch Party\n", message)
         self.assertIn("Status: Active\n", message)
-        self.assertIn(f"Channel: <#{CHANNEL_ID}>\n", message)
+        self.assertIn(f"Destination: <#{CHANNEL_ID}>\n", message)
         self.assertIn("Watch items: 1 watch item", message)
 
     def test_database_list_channel_line_reflects_a_move(self) -> None:
-        # Context Resolution Audit: /database list's Channel line must
+        # Context Resolution Audit: /database list's Destination line must
         # show a collection's *current* destination after /database move,
         # not its stale original home channel -- otherwise it would
         # contradict the resolution WASH actually uses for /add etc.
@@ -176,8 +176,8 @@ class DatabaseCommandTests(unittest.TestCase):
             suggestion_database_configuration_repository=configuration_repository,
         )
 
-        self.assertIn(f"Channel: <#{OTHER_CHANNEL_ID}>\n", message)
-        self.assertNotIn(f"Channel: <#{CHANNEL_ID}>\n", message)
+        self.assertIn(f"Destination: <#{OTHER_CHANNEL_ID}>\n", message)
+        self.assertNotIn(f"Destination: <#{CHANNEL_ID}>\n", message)
 
     def test_database_list_only_shows_databases_for_the_current_guild(self) -> None:
         self.suggestion_service.create_database("Sunday Watch Party", guild_id=GUILD_ID, channel_id=CHANNEL_ID)

@@ -94,8 +94,8 @@ class ValidateChannelUsableTests(unittest.TestCase):
 
     def test_resource_label_is_used_in_the_message(self) -> None:
         guild = FakeGuild(channels={})
-        error = validate_channel_usable(400, guild, resource_label="watched-movie destination")
-        self.assertIn("watched-movie destination", error)
+        error = validate_channel_usable(400, guild, resource_label="Watched Item Archive")
+        self.assertIn("Watched Item Archive", error)
 
 
 if __name__ == "__main__":

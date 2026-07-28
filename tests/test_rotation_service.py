@@ -470,16 +470,30 @@ class CandidateEligibilityTests(RotationServiceTestCase):
         self.assertFalse(self.rotation_service.is_candidate_eligible(unassigned_item, DATABASE_ID))
 
 
-class LowPoolReminderTimestampTests(RotationServiceTestCase):
-    def test_no_reminder_has_been_sent_initially(self) -> None:
-        self.assertIsNone(self.rotation_service.last_low_pool_reminder_sent_at(DATABASE_ID))
+class LowPoolNotificationDedupTests(RotationServiceTestCase):
+    def test_no_notification_has_been_sent_initially(self) -> None:
+        self.assertFalse(self.rotation_service.has_sent_low_pool_notification(DATABASE_ID, 1))
 
-    def test_recording_a_reminder_persists_it(self) -> None:
-        sent_at = datetime.now(timezone.utc)
+    def test_recording_a_notification_persists_it(self) -> None:
+        rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)
 
-        self.rotation_service.record_low_pool_reminder_sent(DATABASE_ID, sent_at)
+        self.rotation_service.record_low_pool_notification_sent(DATABASE_ID, rotation.id)
 
-        self.assertEqual(self.rotation_service.last_low_pool_reminder_sent_at(DATABASE_ID), sent_at)
+        self.assertTrue(self.rotation_service.has_sent_low_pool_notification(DATABASE_ID, rotation.id))
+
+    def test_a_different_rotation_id_is_not_considered_notified(self) -> None:
+        rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self.rotation_service.record_low_pool_notification_sent(DATABASE_ID, rotation.id)
+
+        self.assertFalse(self.rotation_service.has_sent_low_pool_notification(DATABASE_ID, rotation.id + 999))
+
+    def test_a_fresh_rotation_naturally_resets_the_dedup(self) -> None:
+        first_rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self.rotation_service.record_low_pool_notification_sent(DATABASE_ID, first_rotation.id)
+
+        second_rotation = self.rotation_service.begin_next_rotation(DATABASE_ID)
+
+        self.assertFalse(self.rotation_service.has_sent_low_pool_notification(DATABASE_ID, second_rotation.id))
 
 
 class RotationPersistenceTests(RotationServiceTestCase):
@@ -487,15 +501,14 @@ class RotationPersistenceTests(RotationServiceTestCase):
         item = self._add("Alien")
         rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)
         self.rotation_service.record_presentation(DATABASE_ID, [item.id])
-        sent_at = datetime.now(timezone.utc)
-        self.rotation_service.record_low_pool_reminder_sent(DATABASE_ID, sent_at)
+        self.rotation_service.record_low_pool_notification_sent(DATABASE_ID, rotation.id)
 
         restarted_service = RotationService(self.suggestion_service, repository=self.rotation_repository)
 
         reloaded = restarted_service.get_open_rotation(DATABASE_ID)
         self.assertEqual(reloaded.id, rotation.id)
         self.assertEqual(reloaded.assigned_suggestion_ids, rotation.assigned_suggestion_ids)
-        self.assertEqual(restarted_service.last_low_pool_reminder_sent_at(DATABASE_ID), sent_at)
+        self.assertTrue(restarted_service.has_sent_low_pool_notification(DATABASE_ID, rotation.id))
 
     def test_rotation_data_is_a_plain_json_file_under_data_for_backup_compatibility(self) -> None:
         # BackupService sweeps every *.json file under data/ generically

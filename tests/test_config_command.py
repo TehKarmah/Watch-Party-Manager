@@ -328,6 +328,22 @@ class MainMenuTests(ConfigCommandTestCase):
         self.assertIn("WASH Crew Role", select_interaction.response.edited_content)
         self.assertIsInstance(select_interaction.response.edited_view, ConfigRoleSectionView)
 
+    async def test_voting_defaults_option_explains_visibility(self) -> None:
+        # UI Polish (Visibility Help): since Voting Defaults opens its
+        # modal directly with no intro screen, the Visible/Blind
+        # explanation lives on this menu option's description instead.
+        self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
+        interaction = FakeInteraction()
+
+        await send_config_main_menu(interaction, self.bot, GUILD_ID, edit=False)
+
+        view: ConfigMainMenuView = interaction.response.sent_view
+        select = view.children[0]
+        options_by_value = {option.value: option for option in select.options}
+        self.assertIsNotNone(options_by_value["voting_defaults"].description)
+        self.assertIn("Blind", options_by_value["voting_defaults"].description)
+        self.assertIsNone(options_by_value["wash_crew_role"].description)
+
 
 class SectionRenderingTests(ConfigCommandTestCase):
     async def test_watch_party_role_section_shows_the_role_picker(self) -> None:
@@ -571,7 +587,7 @@ class SectionRenderingTests(ConfigCommandTestCase):
         select_interaction = FakeInteraction()
         await select.callback(interaction=select_interaction)
 
-        self.assertIn("Watched movie destination updated", select_interaction.response.edited_content)
+        self.assertIn("Watched Item Archive updated", select_interaction.response.edited_content)
         database_configuration = self.suggestion_database_configuration_repository.get(
             GUILD_ID, database_result.database.database_id
         )
@@ -838,7 +854,7 @@ class HomeChannelSectionTests(ConfigCommandTestCase):
 
 
 class GuildWideWatchDestinationSectionTests(ConfigCommandTestCase):
-    """Design refinement: a guild-wide default watched-movie destination,
+    """Design refinement: a guild-wide default Watched Item Archive,
     distinct from -- and overridden by -- any per-collection setting
     inside Manage Collections.
     """
@@ -859,7 +875,7 @@ class GuildWideWatchDestinationSectionTests(ConfigCommandTestCase):
         select_interaction = FakeInteraction()
         await select.callback(interaction=select_interaction)
 
-        self.assertIn("Default watched movie destination updated", select_interaction.response.edited_content)
+        self.assertIn("Default Watched Item Archive updated", select_interaction.response.edited_content)
         self.assertEqual(
             self.guild_configuration_repository.get(GUILD_ID).channels.watch_history_channel_id, DESTINATION_CHANNEL_ID
         )
@@ -873,7 +889,7 @@ class GuildWideWatchDestinationSectionTests(ConfigCommandTestCase):
         clear_interaction = FakeInteraction()
         await clear_button.callback(interaction=clear_interaction)
 
-        self.assertIn("Default watched movie destination cleared", clear_interaction.response.edited_content)
+        self.assertIn("Default Watched Item Archive cleared", clear_interaction.response.edited_content)
 
     async def test_a_collections_own_override_wins_over_the_guild_default(self) -> None:
         self._seed_completed_setup()

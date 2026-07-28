@@ -451,12 +451,6 @@ class SuggestionDatabaseConfigurationRepository:
                     {
                         "low_suggestion_pool_alerts": c.notifications.low_suggestion_pool_alerts,
                         "low_suggestion_pool_threshold": c.notifications.low_suggestion_pool_threshold,
-                        "low_suggestion_pool_destination_channel_id": (
-                            c.notifications.low_suggestion_pool_destination_channel_id
-                        ),
-                        "low_suggestion_pool_minimum_interval_hours": (
-                            c.notifications.low_suggestion_pool_minimum_interval_hours
-                        ),
                     },
                 ),
                 "permissions": cls._merge(
@@ -598,19 +592,11 @@ class SuggestionDatabaseConfigurationRepository:
             notifications=SuggestionDatabaseNotificationOverridesConfig(
                 low_suggestion_pool_alerts=notifications.get("low_suggestion_pool_alerts"),
                 low_suggestion_pool_threshold=notifications.get("low_suggestion_pool_threshold"),
-                low_suggestion_pool_destination_channel_id=notifications.get(
-                    "low_suggestion_pool_destination_channel_id"
-                ),
-                low_suggestion_pool_minimum_interval_hours=notifications.get(
-                    "low_suggestion_pool_minimum_interval_hours", 24
-                ),
                 extra_fields=cls._split_known(
                     notifications,
                     {
                         "low_suggestion_pool_alerts",
                         "low_suggestion_pool_threshold",
-                        "low_suggestion_pool_destination_channel_id",
-                        "low_suggestion_pool_minimum_interval_hours",
                     },
                 ),
             ),

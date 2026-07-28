@@ -21,6 +21,7 @@ from watch_party_manager.domain.guild_configuration import (
     JoinMode,
     MigrationConfig,
     NotificationsConfig,
+    RotationLowPoolNotificationDestination,
     TieBehavior,
     VoteNotificationsConfig,
     VotingDefaultsConfig,
@@ -267,6 +268,7 @@ class GuildConfigurationRepository:
                 "administrative": cls._merge(c.notifications.administrative.extra_fields, {
                     "low_suggestion_pool": c.notifications.administrative.low_suggestion_pool,
                     "low_suggestion_pool_threshold": c.notifications.administrative.low_suggestion_pool_threshold,
+                    "low_suggestion_pool_destination": c.notifications.administrative.low_suggestion_pool_destination.value,
                     "backup_completed": c.notifications.administrative.backup_completed,
                     "backup_failed": c.notifications.administrative.backup_failed,
                     "restore_completed": c.notifications.administrative.restore_completed,
@@ -376,10 +378,19 @@ class GuildConfigurationRepository:
                 ),
                 administrative=AdministrativeNotificationsConfig(
                     low_suggestion_pool=admin_notice.get("low_suggestion_pool", True),
-                    low_suggestion_pool_threshold=admin_notice.get("low_suggestion_pool_threshold", 10),
+                    # None (never explicitly saved) resolves to the new
+                    # dynamic "two voting rounds" default at read time;
+                    # an explicit stored value (e.g. the old flat 10
+                    # every pre-Audit guild config already has) is
+                    # preserved as an override -- see
+                    # AdministrativeNotificationsConfig's docstring.
+                    low_suggestion_pool_threshold=admin_notice.get("low_suggestion_pool_threshold"),
+                    low_suggestion_pool_destination=RotationLowPoolNotificationDestination(
+                        admin_notice.get("low_suggestion_pool_destination", "admin_channel")
+                    ),
                     backup_completed=admin_notice.get("backup_completed", True), backup_failed=admin_notice.get("backup_failed", True),
                     restore_completed=admin_notice.get("restore_completed", True), restore_failed=admin_notice.get("restore_failed", True),
-                    extra_fields=cls._split_known(admin_notice, {"low_suggestion_pool", "low_suggestion_pool_threshold", "backup_completed", "backup_failed", "restore_completed", "restore_failed"}),
+                    extra_fields=cls._split_known(admin_notice, {"low_suggestion_pool", "low_suggestion_pool_threshold", "low_suggestion_pool_destination", "backup_completed", "backup_failed", "restore_completed", "restore_failed"}),
                 ),
                 extra_fields=cls._split_known(notifications, {"vote", "watch", "administrative"}),
             ),

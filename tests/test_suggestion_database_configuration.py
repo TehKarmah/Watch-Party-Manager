@@ -337,30 +337,6 @@ class SuggestionDatabaseNotificationOverridesConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             SuggestionDatabaseNotificationOverridesConfig(low_suggestion_pool_threshold=0)
 
-    def test_low_pool_reminder_defaults(self) -> None:
-        # FR-033B Section 7: destination defaults to None (falls back to
-        # the database's suggestion channel at send time) and the minimum
-        # reminder interval defaults to 24 hours.
-        notifications = SuggestionDatabaseNotificationOverridesConfig()
-
-        self.assertIsNone(notifications.low_suggestion_pool_destination_channel_id)
-        self.assertEqual(notifications.low_suggestion_pool_minimum_interval_hours, 24)
-
-    def test_low_pool_reminder_accepts_an_explicit_override(self) -> None:
-        notifications = SuggestionDatabaseNotificationOverridesConfig(
-            low_suggestion_pool_destination_channel_id=555, low_suggestion_pool_minimum_interval_hours=6
-        )
-        self.assertEqual(notifications.low_suggestion_pool_destination_channel_id, 555)
-        self.assertEqual(notifications.low_suggestion_pool_minimum_interval_hours, 6)
-
-    def test_rejects_a_non_positive_destination_channel_id(self) -> None:
-        with self.assertRaises(ValueError):
-            SuggestionDatabaseNotificationOverridesConfig(low_suggestion_pool_destination_channel_id=0)
-
-    def test_rejects_a_non_positive_minimum_interval_hours(self) -> None:
-        with self.assertRaises(ValueError):
-            SuggestionDatabaseNotificationOverridesConfig(low_suggestion_pool_minimum_interval_hours=0)
-
 
 class SuggestionDatabasePermissionsConfigTests(unittest.TestCase):
     def test_defaults_to_no_moderators_and_guild_role_enabled(self) -> None:

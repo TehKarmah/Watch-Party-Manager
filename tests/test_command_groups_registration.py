@@ -82,7 +82,7 @@ class DatabaseGroupRegistrationTests(unittest.IsolatedAsyncioTestCase):
         group = DatabaseGroup(MinimalFakeBot())
         self.assertEqual(
             {command.name for command in group.commands},
-            {"add", "manage", "list", "move", "backup", "restore", "remove", "reset"},
+            {"add", "manage", "list", "health", "move", "backup", "restore", "remove", "reset"},
         )
 
     async def test_manage_delegates_to_handle_database_manage(self) -> None:

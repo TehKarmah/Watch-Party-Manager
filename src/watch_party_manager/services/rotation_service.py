@@ -73,8 +73,8 @@ class RotationService:
         load_result = self._repository.load()
         self._rotations: Dict[int, Rotation] = {rotation.id: rotation for rotation in load_result.rotations}
         self._next_id = load_result.next_rotation_id
-        self._low_pool_reminder_last_sent_at: Dict[int, datetime] = dict(
-            load_result.low_pool_reminder_last_sent_at
+        self._low_pool_notified_rotation_ids: Dict[int, int] = dict(
+            load_result.low_pool_notified_rotation_ids
         )
 
     # --- Lifecycle -----------------------------------------------------------------
@@ -378,18 +378,24 @@ class RotationService:
         )
         return potential_pending > current_pending
 
-    # --- Low Pool Reminder interval tracking (FR-033B Section 7) --------------------------
+    # --- Rotation Low-Pool notification dedup (Rotation & Collection Health) --------------
+    #
+    # "Notify once per rotation, reset after rollover" is tracked by
+    # recording which rotation_id a notification was already sent for --
+    # a fresh rotation naturally has a different id, so there is no
+    # explicit "reset" step, mirroring is_in_rotation_cooldown's own
+    # rotation-id-keyed approach to the same problem.
 
-    def last_low_pool_reminder_sent_at(self, database_id: int) -> Optional[datetime]:
-        return self._low_pool_reminder_last_sent_at.get(database_id)
+    def has_sent_low_pool_notification(self, database_id: int, rotation_id: int) -> bool:
+        return self._low_pool_notified_rotation_ids.get(database_id) == rotation_id
 
-    def record_low_pool_reminder_sent(self, database_id: int, sent_at: datetime) -> None:
-        self._low_pool_reminder_last_sent_at[database_id] = sent_at
+    def record_low_pool_notification_sent(self, database_id: int, rotation_id: int) -> None:
+        self._low_pool_notified_rotation_ids[database_id] = rotation_id
         self._save()
 
     # --- Persistence ----------------------------------------------------------------------
 
     def _save(self) -> None:
         self._repository.save(
-            list(self._rotations.values()), self._next_id, dict(self._low_pool_reminder_last_sent_at)
+            list(self._rotations.values()), self._next_id, dict(self._low_pool_notified_rotation_ids)
         )

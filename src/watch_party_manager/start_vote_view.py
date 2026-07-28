@@ -13,8 +13,12 @@ from typing import Awaitable, Callable, Optional
 
 import discord
 
+from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+from watch_party_manager.setup_wizard_view import CandidateSelectionSelectComponent
+
 OnUseDefaults = Callable[[discord.Interaction], Awaitable[None]]
 OnCustomizeChosen = Callable[[discord.Interaction], Awaitable[None]]
+OnCustomizeCandidateSelectionContinue = Callable[[discord.Interaction, CandidateSelectionMode], Awaitable[None]]
 OnCustomizeSubmit = Callable[
     [discord.Interaction, Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]],
     Awaitable[None],
@@ -83,6 +87,47 @@ class StartVoteChoiceView(discord.ui.View):
         super().__init__(timeout=START_VOTE_CHOICE_TIMEOUT_SECONDS)
         self.add_item(UseDefaultsButton(on_use_defaults))
         self.add_item(CustomizeVoteButton(on_customize))
+
+
+class ContinueToVoteSettingsButton(discord.ui.Button):
+    """Opens the Customize This Vote modal, carrying forward whichever
+    candidate selection mode is currently selected in the dropdown above it.
+    """
+
+    def __init__(self, on_click: OnCustomizeCandidateSelectionContinue, select: CandidateSelectionSelectComponent) -> None:
+        super().__init__(
+            label="Continue to Vote Settings",
+            style=discord.ButtonStyle.primary,
+            custom_id="wpm_start_vote_customize_candidate_selection_continue",
+        )
+        self._callback = on_click
+        self._select = select
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._callback(interaction, self._select.selected)
+
+
+class CustomizeVoteCandidateSelectionView(discord.ui.View):
+    """Customize This Vote, step one: optionally override this collection's
+    configured Candidate Selection Mode for this one round only -- nothing
+    chosen here is ever saved back to the collection's own configuration
+    (see bot.py's handle_customize_vote_submit). Reuses
+    CandidateSelectionSelectComponent unchanged, so its option labels,
+    help text, and persisted values can never drift from the Setup
+    Wizard's or /config's own dropdown.
+
+    A separate step from CustomizeVoteModal because Discord modals cannot
+    contain Select menus -- the same reason the Setup Wizard's Voting
+    Defaults step is a dropdown-then-modal flow rather than one screen.
+    """
+
+    def __init__(
+        self, on_continue: OnCustomizeCandidateSelectionContinue, *, default_candidate_selection: CandidateSelectionMode
+    ) -> None:
+        super().__init__(timeout=START_VOTE_CHOICE_TIMEOUT_SECONDS)
+        self.candidate_selection_select = CandidateSelectionSelectComponent(default=default_candidate_selection)
+        self.add_item(self.candidate_selection_select)
+        self.add_item(ContinueToVoteSettingsButton(on_continue, self.candidate_selection_select))
 
 
 class CustomizeVoteModal(discord.ui.Modal):

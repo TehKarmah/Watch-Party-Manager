@@ -435,7 +435,7 @@ class AdminChannelStepTests(SetupWizardServiceTestCase):
 
 class HomeChannelStepTests(SetupWizardServiceTestCase):
     """Requirement 4: WASH's home channel -- the parent every collection's
-    suggestion thread (and, by default, the watched-movie destination
+    suggestion thread (and, by default, the Watched Item Archive
     thread) is created under. No skip option: always required.
     """
 
@@ -652,7 +652,7 @@ class CompletionTests(SetupWizardServiceTestCase):
         state = self.service.skip_watch_destination(state)
 
         lines = self.service.build_review_lines(state)
-        self.assertIn("Watched Movie Destination: Skipped", lines)
+        self.assertIn("Watched Item Archive: Skipped", lines)
 
     def test_partial_configuration_is_not_persisted_after_validation_failure(self):
         state = self._complete_state()

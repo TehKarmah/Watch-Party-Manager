@@ -33,10 +33,25 @@ from watch_party_manager.persistence.suggestion_database_configuration_repositor
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
+from watch_party_manager.services.collection_eligibility_service import CollectionEligibilityService
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
+from watch_party_manager.services.rotation_low_pool_notification_service import (
+    RotationLowPoolNotificationService,
+)
 from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import VoteService
+
+
+class FakeGuildConfigurationRepository:
+    """Always reports "no guild configuration saved" -- the Rotation
+    Low-Pool notification then has no Admin/Home Channel to resolve, so
+    it never fires; these tests are about rollover mechanics, not the
+    notification itself (see test_rotation_low_pool_notification_service.py)."""
+
+    def get(self, guild_id: int):
+        return None
+
 
 GUILD_ID = 100
 CHANNEL_ID = 200
@@ -103,13 +118,23 @@ class FakeConfirmationChannel:
 
 
 class FakeBot:
-    """The subset of WatchPartyBot sync_suggestion_status_embed needs."""
+    """The subset of WatchPartyBot sync_suggestion_status_embed (and now
+    maybe_send_low_pool_notification) needs."""
 
-    def __init__(self, suggestion_service, rotation_service, channel) -> None:
+    def __init__(self, suggestion_service, rotation_service, channel, configuration_repository=None) -> None:
         self.suggestion_service = suggestion_service
-        self.suggestion_database_configuration_repository = None
+        self.suggestion_database_configuration_repository = configuration_repository
         self.rotation_service = rotation_service
         self.permission_service = None
+        self.guild_configuration_repository = FakeGuildConfigurationRepository()
+        self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, rotation_service)
+        self.rotation_low_pool_notification_service = RotationLowPoolNotificationService(
+            self.collection_eligibility_service,
+            rotation_service,
+            self.guild_configuration_repository,
+            configuration_repository,
+            suggestion_service,
+        )
         self._channel = channel
 
     def get_channel(self, channel_id):
@@ -188,7 +213,7 @@ class RotationRolloverEndToEndTests(unittest.IsolatedAsyncioTestCase):
             )
             messages[item.id] = FakeConfirmationMessage(message_id=message_id)
         channel = FakeConfirmationChannel(*messages.values())
-        bot = FakeBot(self.suggestion_service, self.rotation_service, channel)
+        bot = FakeBot(self.suggestion_service, self.rotation_service, channel, self.configuration_repository)
 
         second_interaction = await self._start_vote(nominee_count=2, bot=bot)
 
@@ -229,7 +254,7 @@ class RotationRolloverEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 item.id, GUILD_ID, CHANNEL_ID, messages[item.id].id
             )
         channel = FakeConfirmationChannel(*messages.values())
-        bot = FakeBot(self.suggestion_service, self.rotation_service, channel)
+        bot = FakeBot(self.suggestion_service, self.rotation_service, channel, self.configuration_repository)
 
         interaction = await self._start_vote(nominee_count=2, bot=bot)
 

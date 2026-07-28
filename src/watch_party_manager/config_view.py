@@ -47,6 +47,7 @@ OnConfigSectionChosen = Callable[[discord.Interaction, str], Awaitable[None]]
 OnBackToMenu = Callable[[discord.Interaction], Awaitable[None]]
 OnConfigRetry = Callable[[discord.Interaction], Awaitable[None]]
 OnConfigVotingDefaultsSubmit = Callable[[discord.Interaction, str, str, str], Awaitable[None]]
+OnConfigRetryModalSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnConfigVotingDefaultsConfigure = Callable[[discord.Interaction, CandidateSelectionMode], Awaitable[None]]
 OnConfigReminderDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 OnConfigBackupDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
@@ -71,8 +72,18 @@ class BackToMenuButton(discord.ui.Button):
 class ConfigSectionSelect(discord.ui.Select):
     """The main menu's "choose a section to edit" dropdown."""
 
-    def __init__(self, section_options: List[Tuple[str, str]], on_select: OnConfigSectionChosen) -> None:
-        options = [discord.SelectOption(label=label, value=value) for value, label in section_options]
+    def __init__(
+        self,
+        section_options: List[Tuple[str, str]],
+        on_select: OnConfigSectionChosen,
+        *,
+        descriptions: Optional[dict[str, str]] = None,
+    ) -> None:
+        descriptions = descriptions or {}
+        options = [
+            discord.SelectOption(label=label, value=value, description=descriptions.get(value))
+            for value, label in section_options
+        ]
         super().__init__(placeholder="Choose a section to edit...", options=options, custom_id="wpm_config_section_select")
         self._on_select = on_select
 
@@ -83,9 +94,15 @@ class ConfigSectionSelect(discord.ui.Select):
 class ConfigMainMenuView(discord.ui.View):
     """The main /config screen: a configuration summary plus a section picker."""
 
-    def __init__(self, section_options: List[Tuple[str, str]], on_select: OnConfigSectionChosen) -> None:
+    def __init__(
+        self,
+        section_options: List[Tuple[str, str]],
+        on_select: OnConfigSectionChosen,
+        *,
+        descriptions: Optional[dict[str, str]] = None,
+    ) -> None:
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
-        self.add_item(ConfigSectionSelect(section_options, on_select))
+        self.add_item(ConfigSectionSelect(section_options, on_select, descriptions=descriptions))
 
 
 # --- WASH Crew Role / Watch Party Role (generic role picker) ----------------------------
@@ -234,7 +251,7 @@ class DatabaseSettingSelect(discord.ui.Select):
     def __init__(self, on_select: OnDatabaseSettingChosen) -> None:
         options = [
             discord.SelectOption(label="Suggestion Post Destination", value=DATABASE_SETTING_SUGGESTION_DESTINATION),
-            discord.SelectOption(label="Watched Movie Destination", value=DATABASE_SETTING_WATCH_DESTINATION),
+            discord.SelectOption(label="Watched Item Archive", value=DATABASE_SETTING_WATCH_DESTINATION),
             discord.SelectOption(label="Candidate Selection", value=DATABASE_SETTING_CANDIDATE_SELECTION),
         ]
         super().__init__(
@@ -319,12 +336,12 @@ class ConfigSuggestionDestinationSectionView(discord.ui.View):
         self.add_item(BackToMenuButton(on_back))
 
 
-# --- Watched Movie Destination -------------------------------------------------------------
+# --- Watched Item Archive -------------------------------------------------------------
 
 
 class ConfigSkipDestinationButton(discord.ui.Button):
     def __init__(self, on_click: OnConfigSkip) -> None:
-        super().__init__(label="Clear Destination", style=discord.ButtonStyle.secondary, custom_id="wpm_config_destination_clear")
+        super().__init__(label="Clear Archive", style=discord.ButtonStyle.secondary, custom_id="wpm_config_destination_clear")
         self._on_click = on_click
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -351,7 +368,7 @@ class ConfigWatchDestinationSectionView(discord.ui.View):
 # --- Home Channel ----------------------------------------------------------------------------
 #
 # The channel every collection's suggestion thread (and, by default, the
-# watched-movie destination thread) is created as a sibling under (see
+# Watched Item Archive thread) is created as a sibling under (see
 # GuildChannelsConfig.home_channel_id). Reuses setup_wizard_view.py's
 # CreateNewChannelButton/UseExistingChannelButton -- the exact same
 # "create vs. use existing" buttons /setup's own Home Channel step
@@ -486,4 +503,104 @@ class ConfigBackupDefaultsChoiceView(discord.ui.View):
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
         self.add_item(ConfigEnableAutomaticBackupsButton(on_enable))
         self.add_item(ConfigDisableAutomaticBackupsButton(on_disable))
+        self.add_item(BackToMenuButton(on_back))
+
+
+# --- Rotation Low-Pool Notification (Rotation & Collection Health) ------------------------
+
+
+class RotationLowPoolThresholdModal(discord.ui.Modal):
+    """A single field: the eligible-suggestion threshold that triggers
+    the notification, or blank to restore the automatic default (fewer
+    eligible suggestions than two configured voting rounds)."""
+
+    def __init__(self, on_submit: OnConfigRetryModalSubmit, *, default: str = "") -> None:
+        super().__init__(title="Rotation Low-Pool Threshold")
+        self._submit_callback = on_submit
+        self.threshold_input = discord.ui.TextInput(
+            label="Threshold (blank = automatic)", default=default or None, required=False
+        )
+        self.add_item(self.threshold_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self._submit_callback(interaction, self.threshold_input.value)
+
+
+class ConfigEnableLowPoolNotificationButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigRetry) -> None:
+        super().__init__(label="Enable", style=discord.ButtonStyle.primary, custom_id="wpm_config_low_pool_enable")
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigDisableLowPoolNotificationButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigRetry) -> None:
+        super().__init__(label="Disable", style=discord.ButtonStyle.secondary, custom_id="wpm_config_low_pool_disable")
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigSetLowPoolThresholdButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigRetry) -> None:
+        super().__init__(
+            label="Set Threshold...", style=discord.ButtonStyle.secondary, custom_id="wpm_config_low_pool_threshold"
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigLowPoolUseAdminChannelButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigRetry) -> None:
+        super().__init__(
+            label="Use Admin Channel (Recommended)",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_config_low_pool_admin_channel",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigLowPoolUseHomeChannelButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigRetry) -> None:
+        super().__init__(
+            label="Use Watch Party Home Channel",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_config_low_pool_home_channel",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigRotationLowPoolNotificationView(discord.ui.View):
+    """/config's Rotation Low-Pool Notification section: Enable/Disable,
+    Set Threshold (a modal; blank restores the automatic default), and
+    the notification's destination (Admin Channel, the default, or the
+    Watch Party Home Channel -- never a collection's suggestion thread).
+    """
+
+    def __init__(
+        self,
+        on_enable: OnConfigRetry,
+        on_disable: OnConfigRetry,
+        on_set_threshold: OnConfigRetry,
+        on_use_admin_channel: OnConfigRetry,
+        on_use_home_channel: OnConfigRetry,
+        on_back: OnBackToMenu,
+    ) -> None:
+        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
+        self.add_item(ConfigEnableLowPoolNotificationButton(on_enable))
+        self.add_item(ConfigDisableLowPoolNotificationButton(on_disable))
+        self.add_item(ConfigSetLowPoolThresholdButton(on_set_threshold))
+        self.add_item(ConfigLowPoolUseAdminChannelButton(on_use_admin_channel))
+        self.add_item(ConfigLowPoolUseHomeChannelButton(on_use_home_channel))
         self.add_item(BackToMenuButton(on_back))

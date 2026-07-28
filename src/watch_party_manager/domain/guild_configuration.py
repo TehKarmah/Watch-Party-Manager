@@ -20,8 +20,38 @@ class GuildVoteVisibility(str, Enum):
     VISIBLE = "visible"
 
 
+# UI Polish: a single, plain-language explanation of the two visibility
+# modes, shown everywhere a WASH Crew member is asked to choose or
+# confirm one -- the Setup Wizard's and /config's Voting Defaults
+# screens, /vote start's Customize This Vote, and the Expanded
+# Help/Administration docs -- so the choice never has to be inferred
+# from the bare word "Blind"/"Visible" alone. Kept here, next to the
+# enum itself, as the one source of truth for this wording.
+VISIBILITY_HELP_TEXT = (
+    "**Visible** -- everyone can see vote totals while voting is active. "
+    "**Blind** -- results stay hidden until voting closes."
+)
+
+# The same explanation, trimmed to fit Discord's 100-character
+# SelectOption description limit -- used where VISIBILITY_HELP_TEXT
+# itself would be too long (e.g. /config's main menu option for Voting
+# Defaults, which has no other room for explanatory body text before
+# its modal opens).
+VISIBILITY_HELP_TEXT_SHORT = "Visible: totals shown live. Blind: hidden until voting closes."
+
+
 class TieBehavior(str, Enum):
     ALL_WINNERS = "all_winners"
+
+
+class RotationLowPoolNotificationDestination(str, Enum):
+    """Where the Rotation Low-Pool notification (Rotation & Collection
+    Health) posts -- never a collection's suggestion thread (that option
+    is deliberately not offered; see the notification service's module
+    docstring)."""
+
+    ADMIN_CHANNEL = "admin_channel"
+    HOME_CHANNEL = "home_channel"
 
 
 def _validate_optional_snowflake(value: Optional[int], field_name: str) -> None:
@@ -171,8 +201,26 @@ class WatchNotificationsConfig:
 
 @dataclass(slots=True)
 class AdministrativeNotificationsConfig:
+    """low_suggestion_pool/low_suggestion_pool_threshold/
+    low_suggestion_pool_destination together configure the Rotation
+    Low-Pool notification (Rotation & Collection Health), which replaced
+    the older, interval-based Low Pool Reminder.
+
+    low_suggestion_pool_threshold defaults to None ("auto": fewer
+    eligible suggestions than two configured voting rounds, computed
+    dynamically against the guild's current candidate_count rather than
+    a fixed number, since candidate_count is itself configurable). A
+    guild configuration saved before this milestone already has a
+    concrete threshold (the old flat default was 10) -- that explicit
+    value is preserved and used as-is; only a guild that has never set
+    this at all gets the new dynamic default.
+    """
+
     low_suggestion_pool: bool = True
-    low_suggestion_pool_threshold: int = 10
+    low_suggestion_pool_threshold: Optional[int] = None
+    low_suggestion_pool_destination: RotationLowPoolNotificationDestination = (
+        RotationLowPoolNotificationDestination.ADMIN_CHANNEL
+    )
     backup_completed: bool = True
     backup_failed: bool = True
     restore_completed: bool = True
@@ -180,7 +228,11 @@ class AdministrativeNotificationsConfig:
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
-        _validate_positive_int(self.low_suggestion_pool_threshold, "low_suggestion_pool_threshold", 1, 1000)
+        if self.low_suggestion_pool_threshold is not None:
+            _validate_positive_int(self.low_suggestion_pool_threshold, "low_suggestion_pool_threshold", 1, 1000)
+        self.low_suggestion_pool_destination = _coerce_enum(  # type: ignore[assignment]
+            self.low_suggestion_pool_destination, RotationLowPoolNotificationDestination, "low_suggestion_pool_destination"
+        )
         _validate_extra_fields(self.extra_fields)
 
 

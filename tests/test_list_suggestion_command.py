@@ -16,10 +16,21 @@ from watch_party_manager.bot import (
     filter_items_by_status,
     handle_list_suggestions,
 )
+from watch_party_manager.domain.suggestion_database_configuration import (
+    CandidateSelectionMode,
+    SuggestionDatabaseConfiguration,
+    SuggestionRulesConfig,
+)
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
+from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
+from watch_party_manager.persistence.suggestion_database_configuration_repository import (
+    SuggestionDatabaseConfigurationRepository,
+)
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
+from watch_party_manager.services.collection_eligibility_service import CollectionEligibilityService
 from watch_party_manager.services.permission_service import PermissionService
+from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
 
 GUILD_ID = 100
@@ -29,18 +40,16 @@ WATCH_PARTY_MEMBER_ROLE_ID = 555
 
 
 class FilterItemsByStatusTests(unittest.TestCase):
+    """AVAILABLE/ROTATION_COOLDOWN are deliberately not exercised here --
+    Rotation & Collection Health Audit: they require rotation state
+    (CollectionEligibilityService), not a bare status check, so
+    filter_items_by_status no longer handles them at all (see
+    send_suggestion_list, and ListFilteringAndPaginationTests for
+    AVAILABLE's actual, eligibility-driven behavior end to end).
+    """
+
     def _item(self, status: WatchItemStatus) -> WatchItem:
         return WatchItem(title="Alien", media_type=MediaType.MOVIE, status=status)
-
-    def test_available_excludes_retired_and_watched(self) -> None:
-        items = [
-            self._item(WatchItemStatus.SUGGESTED),
-            self._item(WatchItemStatus.ARCHIVED),
-            self._item(WatchItemStatus.VOTE_WINNER),
-        ]
-        result = filter_items_by_status(items, SuggestionListStatusFilter.AVAILABLE)
-        self.assertEqual(1, len(result))
-        self.assertEqual(WatchItemStatus.SUGGESTED, result[0].status)
 
     def test_retired_only_shows_archived_items(self) -> None:
         items = [self._item(WatchItemStatus.SUGGESTED), self._item(WatchItemStatus.ARCHIVED)]
@@ -59,9 +68,10 @@ class FilterItemsByStatusTests(unittest.TestCase):
         self.assertEqual(1, len(filter_items_by_status(items, SuggestionListStatusFilter.VOTE_WINNER)))
         self.assertEqual(1, len(filter_items_by_status(items, SuggestionListStatusFilter.RETIRED)))
 
-    def test_only_three_modes_exist(self) -> None:
+    def test_only_four_modes_exist(self) -> None:
         self.assertEqual(
-            {"available", "vote_winner", "retired"}, {member.value for member in SuggestionListStatusFilter}
+            {"available", "rotation_cooldown", "vote_winner", "retired"},
+            {member.value for member in SuggestionListStatusFilter},
         )
 
 
@@ -132,12 +142,18 @@ class FakeResponse:
         self.sent_ephemeral = None
         self.sent_view = None
         self.sent_suppress_embeds = None
+        self.edited_content = None
+        self.edited_view = None
 
     async def send_message(self, content, ephemeral=False, view=None, suppress_embeds=False) -> None:
         self.sent_message = content
         self.sent_ephemeral = ephemeral
         self.sent_view = view
         self.sent_suppress_embeds = suppress_embeds
+
+    async def edit_message(self, content=None, view=None) -> None:
+        self.edited_content = content
+        self.edited_view = view
 
 
 class FakeInteraction:
@@ -149,14 +165,27 @@ class FakeInteraction:
         self.response = FakeResponse()
 
 
+class FakeGuildConfigurationRepository:
+    """Always reports "no guild configuration saved" -- callers fall back
+    to their documented defaults (e.g. DEFAULT_VOTE_CANDIDATE_COUNT)."""
+
+    def get(self, guild_id: int):
+        return None
+
+
 class FakeBot:
-    def __init__(self, suggestion_service, wash_crew_role_id=WASH_CREW_ROLE_ID) -> None:
+    def __init__(
+        self, suggestion_service, wash_crew_role_id=WASH_CREW_ROLE_ID, rotation_repository=None
+    ) -> None:
         self.suggestion_service = suggestion_service
         self.permission_service = PermissionService(
             watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=wash_crew_role_id
         )
         self.wash_crew_role_id = wash_crew_role_id
         self.suggestion_database_configuration_repository = None
+        self.guild_configuration_repository = FakeGuildConfigurationRepository()
+        self.rotation_service = RotationService(suggestion_service, repository=rotation_repository)
+        self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, self.rotation_service)
 
 
 class HandleListSuggestionsTestCase(unittest.IsolatedAsyncioTestCase):
@@ -167,7 +196,11 @@ class HandleListSuggestionsTestCase(unittest.IsolatedAsyncioTestCase):
             repository=JsonSuggestionRepository(root / "suggestions.json"),
             database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
         )
-        self.bot = FakeBot(self.suggestion_service)
+        self.configuration_repository = SuggestionDatabaseConfigurationRepository(
+            root / "suggestion_database_configurations.json"
+        )
+        self.bot = FakeBot(self.suggestion_service, rotation_repository=JsonRotationRepository(root / "rotations.json"))
+        self.bot.suggestion_database_configuration_repository = self.configuration_repository
 
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
@@ -425,6 +458,133 @@ class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
         await handle_list_suggestions(interaction, self.bot, "available", False)
 
         self.assertLessEqual(len(interaction.response.sent_message), 2000)
+
+
+class ListEligibilityParityTests(HandleListSuggestionsTestCase):
+    """Rotation & Collection Health goal 4: /list's Available/Rotation
+    Cooldown buckets must be resolved through the same authoritative
+    CollectionEligibilityService /vote start uses -- never disagree.
+    """
+
+    async def test_a_presented_item_moves_from_available_to_rotation_cooldown(self) -> None:
+        # 4 total suggestions, 1 presented -- 3 remain pending, exactly
+        # satisfying the default candidate count (3), so this must NOT
+        # trigger a rollover (which would re-include the presented item)
+        # -- see test_list_rolls_over_the_same_way_vote_start_would for
+        # that scenario instead.
+        database = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        item_a = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
+        self.suggestion_service.suggest("The Matrix", database_id=database.database_id)
+        self.suggestion_service.suggest("Inception", database_id=database.database_id)
+        self.suggestion_service.suggest("Arrival", database_id=database.database_id)
+        self.bot.rotation_service.get_or_start_rotation(database.database_id)
+        self.bot.rotation_service.record_presentation(database.database_id, [item_a.id])
+
+        available_interaction = FakeInteraction()
+        await handle_list_suggestions(available_interaction, self.bot, "available", False)
+        cooldown_interaction = FakeInteraction()
+        await handle_list_suggestions(cooldown_interaction, self.bot, "rotation_cooldown", False)
+
+        self.assertIn("The Matrix", available_interaction.response.sent_message)
+        self.assertNotIn("Alien", available_interaction.response.sent_message)
+        self.assertIn("Alien", cooldown_interaction.response.sent_message)
+        self.assertNotIn("The Matrix", cooldown_interaction.response.sent_message)
+
+    async def test_rotation_cooldown_is_always_empty_for_infinite_pool(self) -> None:
+        database = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        self.configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=GUILD_ID,
+                database_id=database.database_id,
+                display_name="Movie Night",
+                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.INFINITE_POOL),
+            )
+        )
+        item = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
+        self.bot.rotation_service.record_presentation(database.database_id, [item.id])
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "rotation_cooldown", False)
+
+        self.assertIn("no rotation cooldown watch items", interaction.response.sent_message)
+
+    async def test_list_rolls_over_the_same_way_vote_start_would(self) -> None:
+        # The exact Rotation & Collection Health scenario: a rotation with
+        # some, but not enough, pending suggestions to satisfy the
+        # configured candidate count. /list must show the post-rollover
+        # set, not the stale one, exactly like /vote start would.
+        database = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        item_a = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
+        self.suggestion_service.suggest("The Matrix", database_id=database.database_id)
+        self.suggestion_service.suggest("Inception", database_id=database.database_id)
+        self.bot.rotation_service.get_or_start_rotation(database.database_id)
+        self.bot.rotation_service.record_presentation(database.database_id, [item_a.id])
+        # Only 2 of 3 remain pending -- fewer than the default candidate
+        # count of 3, so /list must trigger the same rollover /vote start
+        # would and show all 3 again as Available.
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "available", False)
+
+        message = interaction.response.sent_message
+        self.assertIn("Alien", message)
+        self.assertIn("The Matrix", message)
+        self.assertIn("Inception", message)
+
+
+class ListSwitchCollectionTests(HandleListSuggestionsTestCase):
+    async def test_switch_collection_button_appears_with_multiple_databases(self) -> None:
+        self.suggestion_service.create_database("Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID)
+        self.suggestion_service.create_database("TV Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID + 1)
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "available", False)
+
+        self.assertIsNotNone(interaction.response.sent_view)
+        custom_ids = [item.custom_id for item in interaction.response.sent_view.children]
+        self.assertIn("wpm_list_switch_collection", custom_ids)
+
+    async def test_switch_collection_button_absent_with_only_one_database(self) -> None:
+        self.suggestion_service.create_database("Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID)
+        self.suggestion_service.suggest("Alien", database_id=1)
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "available", False)
+
+        if interaction.response.sent_view is not None:
+            custom_ids = [item.custom_id for item in interaction.response.sent_view.children]
+            self.assertNotIn("wpm_list_switch_collection", custom_ids)
+
+    async def test_switching_shows_the_other_collections_list(self) -> None:
+        first = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        second = self.suggestion_service.create_database(
+            "TV Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID + 1
+        ).database
+        self.suggestion_service.suggest("Alien", database_id=first.database_id)
+        self.suggestion_service.suggest("Breaking Bad", database_id=second.database_id)
+        interaction = FakeInteraction()
+        await handle_list_suggestions(interaction, self.bot, "available", False)
+        switch_button = next(
+            item for item in interaction.response.sent_view.children
+            if item.custom_id == "wpm_list_switch_collection"
+        )
+
+        switch_interaction = FakeInteraction()
+        await switch_button.callback(interaction=switch_interaction)
+        select = switch_interaction.response.edited_view.children[0]
+        select._values = [str(second.database_id)]
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+
+        self.assertIn("Breaking Bad", select_interaction.response.edited_content)
 
 
 if __name__ == "__main__":

@@ -73,6 +73,29 @@ CANDIDATE_SELECTION_DISPLAY_LABELS: dict[CandidateSelectionMode, str] = {
     CandidateSelectionMode.INFINITE_POOL: "Pure Random",
 }
 
+# UI Polish: a one-sentence, plain-language explanation for each mode,
+# shown everywhere a WASH Crew member is asked to choose one (the
+# Setup Wizard's and /vote start Customize This Vote's dropdown option
+# descriptions, /config's Candidate Selection screen, and the Expanded
+# Help/Administration docs) so nobody has to already understand the
+# underlying rotation algorithm to make an informed choice. Kept here,
+# next to CANDIDATE_SELECTION_DISPLAY_LABELS, for the same single-
+# source-of-truth reason. Each string is deliberately <=100 characters
+# so it also fits verbatim in a Discord SelectOption's description
+# field (Discord's own hard limit), rather than needing a separate,
+# longer variant that could drift out of sync with this one.
+CANDIDATE_SELECTION_HELP_TEXT: dict[CandidateSelectionMode, str] = {
+    CandidateSelectionMode.ROTATION_POOL: (
+        "Prioritizes suggestions that have appeared in fewer recent votes, giving every one a fair chance."
+    ),
+    CandidateSelectionMode.SOFT_ROTATION: (
+        "Prefers new suggestions; previously shown ones stay eligible, just at a lower chance."
+    ),
+    CandidateSelectionMode.INFINITE_POOL: (
+        "Chooses completely at random from eligible suggestions, with no preference or exclusion."
+    ),
+}
+
 
 class SuggestionAdmissionMode(str, Enum):
     """When a newly created (or reactivated) suggestion joins a rotation.
@@ -216,26 +239,30 @@ class SuggestionDatabaseArchiveConfig:
 
 @dataclass(slots=True)
 class SuggestionDatabaseNotificationOverridesConfig:
-    """Per-database notification overrides, including the Low Pool Reminder
-    (FR-033B Section 7).
+    """Per-database notification overrides for the Rotation Low-Pool
+    Notification (Rotation & Collection Health; formerly the interval-based
+    Low Pool Reminder, FR-033B Section 7).
 
     low_suggestion_pool_alerts/low_suggestion_pool_threshold default to
     None, meaning "inherit Guild Configuration"
     (AdministrativeNotificationsConfig.low_suggestion_pool /
-    low_suggestion_pool_threshold, both enabled/10 by default -- matching
-    this milestone's documented default). destination_channel_id and
-    minimum_interval_hours have no guild-level equivalent to inherit, so
-    they take concrete defaults directly: a None destination falls back
-    to the database's configured suggestion channel (see
-    SuggestionDatabaseChannelsConfig.suggestion_channel_id) at send time.
-    Member-level notification preferences are explicitly out of scope --
-    this section only ever holds database-wide settings.
+    low_suggestion_pool_threshold) -- the guild-level Destination
+    (Admin Channel or Watch Party Home Channel) has no per-database
+    override, since the new notification deliberately never posts to a
+    collection's own suggestion thread. The old destination_channel_id and
+    minimum_interval_hours fields (a raw per-database channel override and
+    a resend-interval, respectively) had no equivalent in the new,
+    once-per-rotation/guild-destination design and were removed; a
+    configuration file saved before this change that still has those keys
+    loads without error -- their values are preserved verbatim in
+    extra_fields (never interpreted, never re-validated) rather than
+    causing a load failure. Member-level notification preferences are
+    explicitly out of scope -- this section only ever holds database-wide
+    settings.
     """
 
     low_suggestion_pool_alerts: Optional[bool] = None
     low_suggestion_pool_threshold: Optional[int] = None
-    low_suggestion_pool_destination_channel_id: Optional[int] = None
-    low_suggestion_pool_minimum_interval_hours: int = 24
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
@@ -243,12 +270,6 @@ class SuggestionDatabaseNotificationOverridesConfig:
             _validate_positive_int(
                 self.low_suggestion_pool_threshold, "low_suggestion_pool_threshold", 1, 1000
             )
-        _validate_optional_snowflake(
-            self.low_suggestion_pool_destination_channel_id, "low_suggestion_pool_destination_channel_id"
-        )
-        _validate_positive_int(
-            self.low_suggestion_pool_minimum_interval_hours, "low_suggestion_pool_minimum_interval_hours", 1, 720
-        )
         _validate_extra_fields(self.extra_fields)
 
 

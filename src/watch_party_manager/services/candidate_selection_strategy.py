@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Protocol, Sequence, runtime_checkable
 
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
-from watch_party_manager.domain.watch_item import WatchItem
+from watch_party_manager.domain.watch_item import WatchItem, WatchItemStatus
 from watch_party_manager.services.rotation_service import RotationService
 
 # Soft Rotation's weight for a suggestion already presented at least once.
@@ -149,8 +149,15 @@ class SoftRotationStrategy:
         # requested_count is intentionally unused: Soft Rotation never
         # excludes anything (see class docstring), so there is nothing
         # for a requested vote size to roll over -- preserves this
-        # mode's existing behavior unchanged.
-        return list(self.suggestion_source.get_suggestions_for_database(database_id))
+        # mode's existing behavior unchanged. Rotation & Collection
+        # Health Audit: a Vote Winner must never be selectable again in
+        # any mode, so it's excluded here explicitly -- get_suggestions_
+        # for_database's own default only ever excludes Archived.
+        return [
+            item
+            for item in self.suggestion_source.get_suggestions_for_database(database_id)
+            if item.status is not WatchItemStatus.VOTE_WINNER
+        ]
 
     def weight_for(self, watch_item: WatchItem) -> float:
         return self.weighting.weight(watch_item)
@@ -169,8 +176,15 @@ class InfinitePoolStrategy:
         # requested_count is intentionally unused: Infinite Pool has no
         # rotation concept at all (see class docstring), so there is
         # nothing to roll over -- preserves this mode's existing
-        # behavior unchanged.
-        return list(self.suggestion_source.get_suggestions_for_database(database_id))
+        # behavior unchanged. Rotation & Collection Health Audit: a Vote
+        # Winner must never be selectable again in any mode, so it's
+        # excluded here explicitly -- see SoftRotationStrategy's
+        # identical fix for the full rationale.
+        return [
+            item
+            for item in self.suggestion_source.get_suggestions_for_database(database_id)
+            if item.status is not WatchItemStatus.VOTE_WINNER
+        ]
 
     def weight_for(self, watch_item: WatchItem) -> float:
         return NEUTRAL_WEIGHT

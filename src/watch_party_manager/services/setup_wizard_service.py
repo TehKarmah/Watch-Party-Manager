@@ -283,7 +283,7 @@ class SetupWizardService:
 
     def set_home_channel(self, state: SetupWizardState, channel_id: int) -> SetupWizardState:
         """Record WASH's "home" channel -- the parent every collection's
-        suggestion thread (and, by default, the watched-movie destination
+        suggestion thread (and, by default, the Watched Item Archive
         thread) is created under. Unlike Admin Channel/Watch Destination,
         this step has no skip option: every collection needs somewhere to
         create its thread, so a home channel is always required.
@@ -395,11 +395,11 @@ class SetupWizardService:
             lines.append("Collection: Incomplete")
 
         if draft.watch_destination_skipped:
-            lines.append("Watched Movie Destination: Skipped")
+            lines.append("Watched Item Archive: Skipped")
         elif draft.watch_destination_channel_id is not None:
-            lines.append(f"Watched Movie Destination: Configured (<#{draft.watch_destination_channel_id}>)")
+            lines.append(f"Watched Item Archive: Configured (<#{draft.watch_destination_channel_id}>)")
         else:
-            lines.append("Watched Movie Destination: Incomplete")
+            lines.append("Watched Item Archive: Incomplete")
 
         if draft.voting_candidate_count is not None:
             candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[draft.voting_candidate_selection]

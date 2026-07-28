@@ -14,6 +14,7 @@ from watch_party_manager.bot import (
     extract_year_from_title_suffix,
     handle_add_suggestion,
 )
+from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, GuildConfiguration
 from watch_party_manager.domain.suggestion_database_configuration import (
     SuggestionAdmissionMode,
     SuggestionDatabaseChannelsConfig,
@@ -27,9 +28,10 @@ from watch_party_manager.persistence.suggestion_database_configuration_repositor
 from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
+from watch_party_manager.services.collection_eligibility_service import CollectionEligibilityService
 from watch_party_manager.services.duplicate_detection_service import find_duplicates
-from watch_party_manager.services.low_pool_reminder_service import LowPoolReminderService
 from watch_party_manager.services.permission_service import PermissionService
+from watch_party_manager.services.rotation_low_pool_notification_service import RotationLowPoolNotificationService
 from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_service import SuggestionService
@@ -153,11 +155,19 @@ class FakeInteraction:
 
 
 class FakeGuildConfigurationRepository:
-    """Always reports "no guild configuration saved" -- LowPoolReminderService
-    falls back to its documented defaults in that case."""
+    """Reports "no guild configuration saved" by default -- Rotation
+    LowPoolNotificationService's destination resolution then has no
+    Admin/Home Channel to resolve, so it never fires (see
+    RotationLowPoolNotificationService._resolve_destination_channel_id).
+    A caller with an actual GuildConfiguration to report (e.g. one with
+    an Admin Channel configured) may pass it in.
+    """
+
+    def __init__(self, configuration=None) -> None:
+        self._configuration = configuration
 
     def get(self, guild_id: int):
-        return None
+        return self._configuration
 
 
 class FakeBot:
@@ -167,6 +177,7 @@ class FakeBot:
         configuration_repository,
         wash_crew_role_id=WASH_CREW_ROLE_ID,
         rotation_repository=None,
+        guild_configuration_repository=None,
     ) -> None:
         self.suggestion_service = suggestion_service
         self.suggestion_input_service = SuggestionInputService()
@@ -176,8 +187,14 @@ class FakeBot:
         )
         self.wash_crew_role_id = wash_crew_role_id
         self.rotation_service = RotationService(suggestion_service, repository=rotation_repository)
-        self.low_pool_reminder_service = LowPoolReminderService(
-            self.rotation_service, FakeGuildConfigurationRepository(), configuration_repository
+        self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, self.rotation_service)
+        self.guild_configuration_repository = guild_configuration_repository or FakeGuildConfigurationRepository()
+        self.rotation_low_pool_notification_service = RotationLowPoolNotificationService(
+            self.collection_eligibility_service,
+            self.rotation_service,
+            self.guild_configuration_repository,
+            configuration_repository,
+            suggestion_service,
         )
         self._channels = {}
 
@@ -299,11 +316,14 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
         await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
 
         self.assertTrue(interaction.response.sent_ephemeral)
-        # 2, not 1: the confirmation post, plus the FR-033B Low Pool
-        # Reminder (a pool of 1 is below the default threshold of 10),
-        # sent to the same channel since no separate reminder destination
-        # is configured -- see maybe_send_low_pool_reminder.
-        self.assertEqual(2, len(self.confirmation_channel.sent))
+        # Just the confirmation post: the Rotation Low-Pool notification
+        # (Rotation & Collection Health) posts to the guild's configured
+        # Admin/Home Channel, never a collection's own suggestion channel
+        # -- and no guild configuration is saved in this test class, so
+        # it has no destination to resolve and never fires. See
+        # AdmissionModeAndLowPoolReminderTests for the notification
+        # actually firing.
+        self.assertEqual(1, len(self.confirmation_channel.sent))
 
     async def test_active_duplicate_is_blocked(self) -> None:
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
@@ -313,10 +333,10 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
 
         self.assertIn("already in this collection", second_interaction.response.sent_message)
         self.assertIn("Reference #", second_interaction.response.sent_message)
-        # 2 (confirmation + low pool reminder from the first, successful
-        # add), not 3: the second, blocked call never reaches
-        # finish_add_or_reactivate at all.
-        self.assertEqual(2, len(self.confirmation_channel.sent))
+        # 1 (confirmation from the first, successful add only): the
+        # second, blocked call never reaches finish_add_or_reactivate at
+        # all.
+        self.assertEqual(1, len(self.confirmation_channel.sent))
 
     async def test_possible_duplicate_blocks_regular_member(self) -> None:
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
@@ -401,11 +421,12 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
         confirm_interaction = FakeInteraction(user=self._crew_member())
         await crew_interaction.response.sent_view.children[0].callback(confirm_interaction)
 
-        # 2 (confirmation + low pool reminder from the first add), not 3:
-        # the reactivation edits the existing post rather than sending a
-        # new one, and its own low-pool-reminder check is suppressed by
-        # the minimum interval (the first reminder was just sent).
-        self.assertEqual(2, len(self.confirmation_channel.sent))
+        # Just 1: the reactivation edits the existing post rather than
+        # sending a new one (no guild configuration is saved in this
+        # test class, so the Rotation Low-Pool notification has no
+        # destination to resolve and never fires -- see
+        # AdmissionModeAndLowPoolReminderTests for it actually firing).
+        self.assertEqual(1, len(self.confirmation_channel.sent))
 
 
 class AddWithThreadDestinationTests(HandleAddSuggestionTestCase):
@@ -540,8 +561,15 @@ class AddWithInaccessibleDestinationTests(HandleAddSuggestionTestCase):
 
 
 class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
-    """FR-033B: Section 5 admission modes and Section 7's Low Pool Reminder,
-    exercised through the real /add flow."""
+    """FR-033B Section 5's admission modes, plus the Rotation Low-Pool
+    notification (Rotation & Collection Health), exercised through the
+    real /add flow. This is the one class in this file with an Admin
+    Channel configured, so the notification can actually fire -- every
+    other class's FakeGuildConfigurationRepository reports no guild
+    configuration at all, so it never does (see AddWithDestinationTests).
+    """
+
+    ADMIN_CHANNEL_ID = 888
 
     def setUp(self) -> None:
         super().setUp()
@@ -553,8 +581,22 @@ class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
                 channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=777),
             )
         )
+        guild_configuration = GuildConfiguration(
+            guild_id=GUILD_ID,
+            guild_name="Test Guild",
+            channels=GuildChannelsConfig(admin_channel_id=self.ADMIN_CHANNEL_ID),
+        )
+        rotation_path = Path(self._temp_dir.name) / "rotations.json"
+        self.bot = FakeBot(
+            self.suggestion_service,
+            self.configuration_repository,
+            rotation_repository=JsonRotationRepository(rotation_path),
+            guild_configuration_repository=FakeGuildConfigurationRepository(guild_configuration),
+        )
         self.confirmation_channel = FakeChannel(777)
+        self.admin_channel = FakeChannel(self.ADMIN_CHANNEL_ID)
         self.bot.register_channel(self.confirmation_channel)
+        self.bot.register_channel(self.admin_channel)
 
     def _set_admission_mode(self, mode: SuggestionAdmissionMode) -> None:
         existing = self.configuration_repository.get(GUILD_ID, self.database.database_id)
@@ -580,21 +622,37 @@ class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
         rotation = self.bot.rotation_service.get_open_rotation(self.database.database_id)
         self.assertIn(item.id, rotation.assigned_suggestion_ids)
 
-    async def test_low_pool_reminder_interval_suppresses_a_second_reminder(self) -> None:
+    async def test_low_pool_notification_never_bootstraps_a_rotation(self) -> None:
+        # No rotation exists yet (no vote has ever run) -- the
+        # notification must never create one merely to check pool size,
+        # so it simply doesn't fire yet.
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
-        self.assertEqual(2, len(self.confirmation_channel.sent))  # confirmation + reminder
+
+        self.assertEqual(0, len(self.admin_channel.sent))
+        self.assertIsNone(self.bot.rotation_service.get_open_rotation(self.database.database_id))
+
+    async def test_low_pool_notification_fires_once_per_rotation(self) -> None:
+        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
+
+        await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
+        self.assertEqual(1, len(self.admin_channel.sent))
+        self.assertIn("Rotation Low-Pool", self.admin_channel.sent[0][0])
 
         await handle_add_suggestion(FakeInteraction(), self.bot, "The Matrix", None, 1999)
 
-        # 3, not 4: the second add's confirmation post is sent, but its
-        # own low-pool-reminder check is suppressed by the minimum
-        # interval (the first reminder was just sent).
-        self.assertEqual(3, len(self.confirmation_channel.sent))
+        # Still just 1: the same rotation was already notified for, even
+        # though the pool is still below threshold.
+        self.assertEqual(1, len(self.admin_channel.sent))
 
-    async def test_low_pool_reminder_timestamp_is_recorded(self) -> None:
+    async def test_low_pool_notification_resets_after_a_new_rotation(self) -> None:
+        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
+        self.assertEqual(1, len(self.admin_channel.sent))
 
-        self.assertIsNotNone(self.bot.rotation_service.last_low_pool_reminder_sent_at(self.database.database_id))
+        self.bot.rotation_service.begin_next_rotation(self.database.database_id)
+        await handle_add_suggestion(FakeInteraction(), self.bot, "The Matrix", None, 1999)
+
+        self.assertEqual(2, len(self.admin_channel.sent))
 
 
 if __name__ == "__main__":
