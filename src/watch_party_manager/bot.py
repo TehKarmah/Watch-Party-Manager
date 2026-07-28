@@ -22,7 +22,6 @@ from watch_party_manager.domain.vote import (
     MAX_VOTE_CHANGES,
     MAX_VOTE_CANDIDATE_COUNT,
     MAX_VOTE_DURATION_MINUTES,
-    MIN_CANDIDATES_FOR_A_ROUND,
     MIN_VOTE_CANDIDATE_COUNT,
     MIN_VOTE_DURATION_MINUTES,
     VoteRecord,
@@ -1258,44 +1257,47 @@ def build_vote_status_text(
 def build_insufficient_candidates_message(
     collection_display_name: Optional[str],
     eligible_count: int,
-    requested_count: int = MIN_CANDIDATES_FOR_A_ROUND,
+    requested_count: int,
     *,
     rollover_occurred: bool = False,
 ) -> str:
-    """Build /start_vote's "not enough eligible suggestions" message.
+    """Build /vote start's "not enough eligible watch items" message.
 
-    Names the collection, the actual eligible count, and the required
-    candidate count, rather than a generic "at least 2 eligible
-    suggestions are needed" -- a WASH Crew member seeing 7 available
-    watch items in /list needs to know why /start_vote disagrees (see the
-    release-blocking bug this diagnoses: a corrupted/stale rotation
-    snapshot could make /start_vote see far fewer eligible suggestions
-    than /list reports). collection_display_name is None for the
-    no-database-context fallback pool, which has no single collection to name.
+    UI Polish (Vote Creation Validation): names the collection, the
+    actual eligible count, and the requested candidate count -- a WASH
+    Crew member seeing 7 available watch items in /list needs to know
+    why /vote start disagrees. requested_count is always the same
+    resolved candidate count perform_start_vote actually validated
+    against and would have passed to nominee selection (never a
+    separate, lower minimum) -- see the eligible_count < requested_count
+    check this message is built from. collection_display_name is None
+    for the no-database-context fallback pool, which has no single
+    collection to name.
 
     Args:
         collection_display_name: The collection's display name (already
             emoji-formatted via format_collection_display), or None.
-        eligible_count: The actual number of eligible suggestions found,
-            from the same authoritative source /start_vote uses to select
+        eligible_count: The actual number of eligible watch items found,
+            from the same authoritative source /vote start uses to select
             nominees (see NomineeSelectionService.eligible_candidate_count).
         requested_count: The candidate count this vote actually asked
-            for. Defaults to MIN_CANDIDATES_FOR_A_ROUND, preserving the
-            original wording for callers with no specific vote size in
-            mind (e.g. the no-database-context fallback pool).
+            for -- the same resolved value used for eligibility
+            resolution and nominee selection alike.
         rollover_occurred: Rotation rollover fix -- whether a rotation
             rollover was attempted before this message was built (see
             RotationService.resolve_rotation_for_requested_count). Only
-            mentioned when True: a collection whose rotation was never
-            close to exhausted shouldn't be told a rollover happened when
-            it didn't.
+            mentioned when True: a rollover already happened and still
+            wasn't enough, so simply retrying won't help without adding
+            suggestions or reducing the candidate count.
     """
-    subject = f'"{collection_display_name}"' if collection_display_name else "This server"
-    count_word = "suggestion" if eligible_count == 1 else "suggestions"
-    rollover_clause = " after starting a new rotation" if rollover_occurred else ""
+    collection_clause = f' for "{collection_display_name}"' if collection_display_name else ""
+    is_are = "is" if eligible_count == 1 else "are"
+    rollover_clause = ", even after automatically starting a new rotation" if rollover_occurred else ""
     return (
-        f"{subject} contains {eligible_count if eligible_count else 'no'} eligible {count_word}{rollover_clause}.\n"
-        f"This vote requires at least {requested_count} candidates."
+        f"Not enough eligible watch items to start this vote{collection_clause}.\n\n"
+        f"This vote requires {requested_count} candidates, but only {eligible_count} {is_are} "
+        f"currently available{rollover_clause}.\n\n"
+        "Add more suggestions, reduce the candidate count, or review your Vote Winners and Retired items."
     )
 
 
@@ -1486,7 +1488,16 @@ def perform_start_vote(
         rollover_occurred = (
             rotation_before is not None and rotation_after is not None and rotation_before.id != rotation_after.id
         )
-        if eligible_count < MIN_CANDIDATES_FOR_A_ROUND:
+        # Vote Creation Validation: compare against the actual resolved
+        # candidate count for this request (`count` -- the same value
+        # just passed to eligible_candidate_count above, and about to be
+        # passed to select_nominees below), never a fixed, lower minimum.
+        # select_nominees silently returns fewer than `count` nominees
+        # when the pool is smaller than requested rather than raising, so
+        # this check is the only place that catches "fewer eligible
+        # watch items than this vote actually asked for" before a round
+        # is created with an unrequested, silently-shrunk candidate list.
+        if eligible_count < count:
             collection_display_name = format_collection_display(resolution.database.name)
             return (
                 build_insufficient_candidates_message(
@@ -1499,15 +1510,14 @@ def perform_start_vote(
         )
     else:
         # No database context (or no selection service configured): fall
-        # back to a simple, non-database-scoped pool, same low-pool rule
-        # applied below.
+        # back to a simple, non-database-scoped pool. Same rule as above
+        # -- compare against the actual resolved candidate count, not a
+        # fixed minimum, so this fallback path can never silently create
+        # a round smaller than what was requested either.
         available = suggestion_service.get_suggestions()
-        if len(available) < MIN_CANDIDATES_FOR_A_ROUND:
-            return build_insufficient_candidates_message(None, len(available)), True
-        if len(available) >= count:
-            candidates = available[:count]
-        else:
-            candidates = available
+        if len(available) < count:
+            return build_insufficient_candidates_message(None, len(available), count), True
+        candidates = available[:count]
 
     closes_at = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     result = vote_service.create_round(

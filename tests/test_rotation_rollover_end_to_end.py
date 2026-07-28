@@ -26,6 +26,7 @@ from watch_party_manager.domain.suggestion_database_configuration import (
     SuggestionDatabaseConfiguration,
     SuggestionRulesConfig,
 )
+from watch_party_manager.domain.watch_item import WatchItemStatus
 from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
@@ -283,6 +284,32 @@ class RotationRolloverEndToEndTests(unittest.IsolatedAsyncioTestCase):
         second_interaction = await self._start_vote(nominee_count=2, bot=None)
 
         self.assertFalse(second_interaction.response.sent_ephemeral, msg=second_interaction.response.sent_message)
+
+    async def test_vote_is_blocked_when_rollover_still_leaves_too_few_eligible_items(self) -> None:
+        # Vote Creation Validation: rollover must be tried before
+        # reporting failure (see the other tests in this file), but a
+        # collection genuinely too small for the requested candidate
+        # count must still be blocked afterward, not silently rounded
+        # down. "Brazil" is retired so the collection can never supply
+        # more than 2 eligible watch items, no matter how many times its
+        # rotation rolls over.
+        self.suggestion_service.set_suggestion_status(self.items["Brazil"].id, WatchItemStatus.ARCHIVED)
+        first_interaction = await self._start_vote(nominee_count=2)
+        self.assertFalse(first_interaction.response.sent_ephemeral, msg=first_interaction.response.sent_message)
+        first_round = self.vote_service.get_open_round()
+        self.vote_service.close_round(first_round.id)
+
+        # Both remaining eligible items are now on Rotation Cooldown from
+        # the closed round, so this request must trigger a rollover --
+        # but even a fresh rotation can only ever offer 2, never the 3
+        # requested here.
+        second_interaction = await self._start_vote(nominee_count=3)
+
+        self.assertTrue(second_interaction.response.sent_ephemeral)
+        self.assertIn("requires 3 candidates", second_interaction.response.sent_message)
+        self.assertIn("only 2 are currently available", second_interaction.response.sent_message)
+        self.assertIn("even after automatically starting a new rotation", second_interaction.response.sent_message)
+        self.assertIsNone(self.vote_service.get_open_round())
 
 
 if __name__ == "__main__":

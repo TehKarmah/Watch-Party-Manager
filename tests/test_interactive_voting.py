@@ -560,6 +560,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
         ).database.database_id
         self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
         self.suggestion_service.suggest("Inception", database_id=self.database_id)
+        self.suggestion_service.suggest("The Dark Knight", database_id=self.database_id)
         self.suggestion_service.suggest("Enter the Dragon", database_id=other_database_id)
 
         message, ephemeral = perform_start_vote(
@@ -576,7 +577,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(ephemeral)
         vote_round = self.vote_service.get_open_round()
-        self.assertEqual(len(vote_round.candidate_suggestion_ids), 2)
+        self.assertEqual(len(vote_round.candidate_suggestion_ids), 3)
 
         titles_by_id = {item.id: item.title for item in self.suggestion_service.get_suggestions()}
         nominee_titles = {titles_by_id[nid] for nid in vote_round.candidate_suggestion_ids}
@@ -591,8 +592,10 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
         ).database.database_id
         self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
         self.suggestion_service.suggest("Inception", database_id=self.database_id)
+        self.suggestion_service.suggest("The Dark Knight", database_id=self.database_id)
         self.suggestion_service.suggest("Enter the Dragon", database_id=other_database_id)
         self.suggestion_service.suggest("Kung Fu Hustle", database_id=other_database_id)
+        self.suggestion_service.suggest("Ip Man", database_id=other_database_id)
         first_message, first_ephemeral = perform_start_vote(
             vote_service=self.vote_service,
             suggestion_service=self.suggestion_service,
@@ -629,6 +632,7 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
     def test_starting_a_second_vote_for_the_same_collection_is_still_blocked(self) -> None:
         self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
         self.suggestion_service.suggest("Inception", database_id=self.database_id)
+        self.suggestion_service.suggest("The Dark Knight", database_id=self.database_id)
         perform_start_vote(
             vote_service=self.vote_service,
             suggestion_service=self.suggestion_service,
@@ -656,7 +660,10 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ephemeral)
         self.assertIn("already open", message)
 
-    def test_low_pool_uses_every_eligible_suggestion_instead_of_rejecting(self) -> None:
+    def test_low_pool_is_rejected_instead_of_silently_shrinking_the_round(self) -> None:
+        # Vote Creation Validation: a vote that asks for 5 candidates but
+        # only has 2 eligible watch items must be blocked, not silently
+        # started with fewer candidates than requested.
         self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
         self.suggestion_service.suggest("Inception", database_id=self.database_id)
 
@@ -673,9 +680,10 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
             channel_id=200,
         )
 
-        self.assertFalse(ephemeral)
-        vote_round = self.vote_service.get_open_round()
-        self.assertEqual(len(vote_round.candidate_suggestion_ids), 2)
+        self.assertTrue(ephemeral)
+        self.assertIn("requires 5 candidates", message)
+        self.assertIn("only 2 are currently available", message)
+        self.assertIsNone(self.vote_service.get_open_round())
 
     def test_insufficient_suggestions_is_rejected(self) -> None:
         self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
@@ -695,7 +703,8 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ephemeral)
         # No nominee_count was given, so the message reports the
         # server's actual configured default (3), not a hardcoded floor.
-        self.assertIn("requires at least 3 candidates", message)
+        self.assertIn("requires 3 candidates", message)
+        self.assertIn("only 1 is currently available", message)
         self.assertIsNone(self.vote_service.get_open_round())
 
     def test_selected_nominees_persist_correctly(self) -> None:

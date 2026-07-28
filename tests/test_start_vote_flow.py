@@ -222,7 +222,8 @@ class UseDefaultsTests(StartVoteFlowTestCase):
         self.assertTrue(interaction.response.sent_ephemeral)
         # No nominee_count was given, so the message reports the
         # configured default (3), not a hardcoded floor.
-        self.assertIn("requires at least 3 candidates", interaction.response.sent_message)
+        self.assertIn("requires 3 candidates", interaction.response.sent_message)
+        self.assertIn("only 1 is currently available", interaction.response.sent_message)
         self.assertIsNone(empty_vote_service.get_open_round())
 
 
@@ -538,6 +539,32 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
         # configured mode rather than silently using something else.
         self.assertIsNotNone(self.rotation_service.get_open_rotation(self.database_id))
 
+    async def test_override_still_blocks_when_eligible_items_are_insufficient(self) -> None:
+        # Vote Creation Validation: a Candidate Selection Mode override
+        # changes *how* nominees are chosen, never *how many* are
+        # required -- validation must still compare against the actual
+        # resolved candidate count even when an override is in effect.
+        interaction = self._interaction()
+        await handle_customize_vote_submit(
+            interaction,
+            self.vote_service,
+            self.suggestion_service,
+            self.nominee_selection_service,
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            default_nominee_count=self.default_nominee_count,
+            nominee_count_text="10",
+            duration_text=None,
+            visibility_text=None,
+            rotation_service=self.rotation_service,
+            suggestion_database_configuration_repository=self.configuration_repository,
+            candidate_selection_override=CandidateSelectionMode.INFINITE_POOL,
+        )
+
+        self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertIn("requires 10 candidates", interaction.response.sent_message)
+        self.assertIn("only 5 are currently available", interaction.response.sent_message)
+        self.assertIsNone(self.vote_service.get_open_round())
+
     async def test_use_defaults_never_applies_an_override(self) -> None:
         await handle_start_vote_use_defaults(
             self._interaction(),
@@ -552,6 +579,70 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
 
         self.assertIsNotNone(self.vote_service.get_open_round())
         self.assertIsNotNone(self.rotation_service.get_open_rotation(self.database_id))
+
+
+class CandidateCountResolutionConsistencyTests(StartVoteFlowTestCase):
+    """Vote Creation Validation: the same resolved candidate count must be
+    used both to check eligibility and to actually select nominees --
+    never a separate, lower minimum for one than the other.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.rotation_service = RotationService(
+            self.suggestion_service, repository=JsonRotationRepository(Path(self._temp_dir.name) / "rotations.json")
+        )
+        self.configuration_repository = SuggestionDatabaseConfigurationRepository(
+            Path(self._temp_dir.name) / "suggestion_database_configurations.json"
+        )
+        self.eligibility_requested_counts: list[int] = []
+        self.selection_counts: list[int] = []
+        real_eligible_candidate_count = self.nominee_selection_service.eligible_candidate_count
+        real_select_nominees = self.nominee_selection_service.select_nominees
+
+        def recording_eligible_candidate_count(database_id, strategy=None, *, requested_count=None):
+            self.eligibility_requested_counts.append(requested_count)
+            return real_eligible_candidate_count(database_id, strategy, requested_count=requested_count)
+
+        def recording_select_nominees(database_id, count, rng=None, strategy=None):
+            self.selection_counts.append(count)
+            return real_select_nominees(database_id, count, rng, strategy=strategy)
+
+        self.nominee_selection_service.eligible_candidate_count = recording_eligible_candidate_count
+        self.nominee_selection_service.select_nominees = recording_select_nominees
+
+    async def test_use_defaults_resolves_the_same_count_for_eligibility_and_selection(self) -> None:
+        await handle_start_vote_use_defaults(
+            self._interaction(),
+            self.vote_service,
+            self.suggestion_service,
+            self.nominee_selection_service,
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            default_nominee_count=self.default_nominee_count,
+            rotation_service=self.rotation_service,
+            suggestion_database_configuration_repository=self.configuration_repository,
+        )
+
+        self.assertEqual(self.eligibility_requested_counts, [self.default_nominee_count])
+        self.assertEqual(self.selection_counts, [self.default_nominee_count])
+
+    async def test_customized_vote_resolves_the_same_count_for_eligibility_and_selection(self) -> None:
+        await handle_customize_vote_submit(
+            self._interaction(),
+            self.vote_service,
+            self.suggestion_service,
+            self.nominee_selection_service,
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            default_nominee_count=self.default_nominee_count,
+            nominee_count_text="4",
+            duration_text=None,
+            visibility_text=None,
+            rotation_service=self.rotation_service,
+            suggestion_database_configuration_repository=self.configuration_repository,
+        )
+
+        self.assertEqual(self.eligibility_requested_counts, [4])
+        self.assertEqual(self.selection_counts, [4])
 
 
 class ResolveCustomizeVoteDefaultCandidateSelectionTests(StartVoteFlowTestCase):

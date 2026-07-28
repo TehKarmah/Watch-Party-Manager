@@ -232,13 +232,18 @@ class VoteCommandTests(unittest.TestCase):
         self.assertEqual(self.vote_service.get_open_round().visibility, VoteVisibility.VISIBLE)
 
     def test_fewer_than_default_nominee_count_is_rejected(self) -> None:
+        # Vote Creation Validation: the message must name the actual
+        # resolved candidate count for this request (the configured
+        # default, 3) -- not a fixed, lower minimum (2) -- since that's
+        # the number this vote genuinely couldn't be satisfied with.
         self.suggestion_service.remove_suggestion("Inception")
         self.suggestion_service.remove_suggestion("Arrival")
 
         message, ephemeral = self._start_vote()
 
         self.assertTrue(ephemeral)
-        self.assertIn("requires at least 2 candidates", message)
+        self.assertIn("requires 3 candidates", message)
+        self.assertIn("only 1 is currently available", message)
         self.assertIsNone(self.vote_service.get_open_round())
 
     def test_open_round_already_exists_is_rejected(self) -> None:
