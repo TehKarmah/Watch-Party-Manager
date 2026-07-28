@@ -94,13 +94,34 @@ An active-item match blocks with "🔴 That title is already in this collection.
 
 Reactivating always reuses the existing record's stable ID and full history (rejections, watch dates, vote appearances) rather than creating a second entry -- nothing is ever silently overwritten.
 
+**Vote Winner match view.** A Vote Winner match is shown differently from every other category: instead of a single line with a raw, unclickable IMDb URL, it shows its own block --
+
+```text
+Reference #0002
+🏆 Vote Winner
+Won: July 28, 2026
+Original Suggestion
+IMDb
+```
+
+-- with **Original Suggestion** linking back to the item's original public post and **IMDb** linking to its IMDb page, both as clickable Discord links. The `Won:` line and each link are shown only when the underlying data exists: a legacy Vote Winner with no recorded win date omits the `Won:` line, and a Vote Winner with no original post or no IMDb link simply omits that line too, rather than showing a placeholder. Every other matched category (active, archived-rejected, archived some other way) keeps the original single-line format unchanged.
+
 **Confirmation posts.** The command's own acknowledgment is always ephemeral. If the target database has a suggestion channel configured, WASH posts (or, for a reactivation, updates) a public confirmation there showing the title, release year, canonical IMDb link, and reference number. If no suggestion channel is configured, the suggestion is still saved and the ephemeral reply explains that no public post was made. If posting fails (permissions, deleted channel, etc.), the suggestion is still preserved and the ephemeral reply explains the failure.
 
 ### Listing suggestions
 
-`/list [status] [public]` is available to every Watch Party member. `status` selects **Available** (default), **Rotation Cooldown**, **Vote Winner**, or **Retired**. Only WASH Crew may set `public:true` to post the list in the channel; everyone else always sees it privately, including Vote Winner and Retired.
+`/list [status] [public]` is available to every Watch Party member. `status` selects **Active Watch Items** (default), **Eligible for Voting**, **Rotation Cooldown**, **Vote Winners**, **Retired**, or **All Watch Items**. Only WASH Crew may set `public:true` to post the list in the channel; everyone else always sees it privately, including Vote Winners and Retired.
 
-Available and Rotation Cooldown are both resolved through `CollectionEligibilityService` -- the same authoritative eligibility calculation `/vote start` uses (see "Candidate selection and rotation management" below) -- so `/list` can never disagree with what starting a vote would actually see. If the current rotation can't otherwise supply the guild's configured candidate count, `/list` triggers the exact same automatic rollover `/vote start` would, before it reports anything back; a member checking `/list` never has to separately discover that a rollover was needed. When run inside a collection's own thread, `/list` automatically uses that collection; a **Switch Collection** button (shown whenever more than one collection exists) lets a member view a different one without re-running the command with different context.
+Active Watch Items = Eligible for Voting + Rotation Cooldown -- Vote Winners and Retired are terminal statuses and are never part of Active. Active's own view shows a short summary before the mixed list, e.g.:
+
+```text
+🟢 Eligible for Voting: 2
+🟡 Rotation Cooldown: 6
+```
+
+All Watch Items shows every status at once, for a full-collection view.
+
+Eligible for Voting, Rotation Cooldown, Active Watch Items, and All Watch Items are all resolved through `CollectionEligibilityService` -- the same authoritative eligibility calculation `/vote start` uses (see "Candidate selection and rotation management" below) -- so `/list` can never disagree with what starting a vote would actually see. If the current rotation can't otherwise supply the guild's configured candidate count, `/list` triggers the exact same automatic rollover `/vote start` would, before it reports anything back; a member checking `/list` never has to separately discover that a rollover was needed. Vote Winners and Retired are terminal, rotation-unaffected buckets, so checking either of those two filters alone never bootstraps or advances a rotation. When run inside a collection's own thread, `/list` automatically uses that collection; a **Switch Collection** button (shown whenever more than one collection exists) lets a member view a different one without re-running the command with different context.
 
 ### Suggestion status model
 
@@ -108,12 +129,12 @@ Every suggestion shows one of four statuses, both in `/list` and on its own publ
 
 - 🟢 **Available** -- eligible for future voting.
 - 🟡 **Rotation Cooldown** -- already presented in the database's current rotation; automatically returns to Available the moment a fresh rotation begins. This is computed at display time, not a separately stored value, so there is no manual "clear cooldown" step.
-- 🟣 **Vote Winner** -- won a voting round. This replaces the older, never-actually-produced "Watched" status: WASH knows a suggestion won a vote, not that the group actually watched it.
-- 🔴 **Retired** -- archived, whether by `/remove`, an "I WILL NOT WATCH" rejection threshold, or WASH Crew directly setting it via `/edit_suggestion`.
+- 🏆 **Vote Winner** -- won a voting round. This replaces the older, never-actually-produced "Watched" status: WASH knows a suggestion won a vote, not that the group actually watched it. Whenever a Vote Winner is displayed with a recorded win date, an additional `Won: <Month D, YYYY>` line appears right below it (date only, never a time) -- the actual date `/vote start`'s vote completion recorded. A Vote Winner from before this milestone, with no recorded win date, simply omits that line rather than showing a placeholder.
+- 🗄️ **Retired** -- archived, whether by `/remove`, an "I WILL NOT WATCH" rejection threshold, or WASH Crew directly setting it via `/edit_suggestion`.
 
 WASH Crew may always override a suggestion's status directly through `/edit_suggestion`'s Change Status action (Available, Vote Winner, or Retired -- Rotation Cooldown is never a directly settable option, since it's computed). Whenever a suggestion's status changes, its existing public confirmation post is edited in place to reflect the new status -- it is never recreated.
 
-Database selection follows the same automatic-then-selector pattern used elsewhere: the current channel's configured database is used automatically; if none matches and the server has exactly one active database, that one is used; if several exist, WASH shows a picker. Each entry is a terse, at-a-glance line -- title and release year exactly once (`50 First Dates (2004)`, never `50 First Dates (2004) (2004)`), followed by `| [Original Suggestion](link)` when the original public post is known, or nothing after the title when it isn't. The reference number, status label, and IMDb link intentionally do not appear on this default view. Long lists page with Previous/Next buttons rather than being cut off or capped; both the initial response and every page suppress Discord's automatic link-preview embeds.
+Database selection follows the same automatic-then-selector pattern used elsewhere: the current channel's configured database is used automatically; if none matches and the server has exactly one active database, that one is used; if several exist, WASH shows a picker. Each entry leads with its status emoji, followed by title and release year exactly once (`🟢 50 First Dates (2004)`, never `50 First Dates (2004) (2004)`), then `| [Original Suggestion](link)` when the original public post is known, or nothing after the title when it isn't. A Vote Winner entry additionally shows its `Won: <date>` line right below, when recorded. The reference number and IMDb link intentionally do not appear on this default view. Long lists page with Previous/Next buttons rather than being cut off or capped; both the initial response and every page suppress Discord's automatic link-preview embeds.
 
 Older suggestions saved before public confirmation posts existed (or whose post failed at the time) have no original-post link to show and never will -- WASH has no reliable way to locate a Discord message after the fact without inventing a URL or risking a duplicate public post, so `/repair_suggestions` (WASH Crew-only; repairs legacy IMDb-link titles and a few known malformed records) does not attempt to recover it.
 

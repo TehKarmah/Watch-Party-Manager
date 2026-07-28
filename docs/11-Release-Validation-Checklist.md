@@ -22,7 +22,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - Check exactly one of Pass/Fail per test. A test you could not run at all (missing prerequisite, environment issue) should be marked **Fail** with the reason in Notes -- do not leave it blank.
 - "WASH Crew" and "Watch Party member" below refer to whichever Discord roles your test server has configured for those purposes (see Section 2).
 - Where a step says "confirm the exact wording," minor phrasing drift is not itself a failure -- flag it in Notes as a documentation/consistency item rather than blocking the release on it, unless the message is actually misleading or wrong.
-- Run `python -m unittest discover -s tests -v` (baseline: 3151 tests, 0 failures) before starting manual validation, and again before final sign-off. This checklist verifies real-world behavior the automated suite cannot (Discord UI rendering, actual message delivery, a real bot process restarting) -- it does not replace the automated suite.
+- Run `python -m unittest discover -s tests -v` (baseline: 3198 tests, 0 failures) before starting manual validation, and again before final sign-off. This checklist verifies real-world behavior the automated suite cannot (Discord UI rendering, actual message delivery, a real bot process restarting) -- it does not replace the automated suite.
 
 ---
 
@@ -504,7 +504,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   3. Confirm the numbers reconcile: Active = Eligible Next Round + Rotation Cooldown, and Total = Active + Vote Winners + Retired.
   4. Click **Switch Collection** and confirm it shows the report for the other collection instead, in place.
   5. Run `/database health` from a channel not tied to either collection; confirm WASH shows a picker instead of guessing.
-  6. Immediately after, run `/list` and separately `/vote start` against the same collection; confirm the Eligible/Available count and Rotation Cooldown count reported by `/database health` match exactly what `/list` shows and what `/vote start` actually nominates from.
+  6. Immediately after, run `/list status:Eligible for Voting` and separately `/vote start` against the same collection; confirm the eligible count and Rotation Cooldown count reported by `/database health` match exactly what `/list` shows and what `/vote start` actually nominates from.
   7. Run `/database health` again right after step 6; confirm nothing about the collection's rotation state changed as a result of having checked health (no rollover was triggered merely by running this command).
 - **Expected Result:** `/database health` never disagrees with `/list`/`/vote start`'s own eligibility count; its collection selection matches `/list`'s (auto-resolve in thread, Switch Collection button, picker when ambiguous); checking health is always side-effect-free -- it never bootstraps or advances a rotation.
 - **Result:** [ ] Pass [ ] Fail
@@ -557,6 +557,17 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 4.3b Vote Winner duplicate/reactivation view
+
+- **Objective:** Confirm a duplicate match against an existing Vote Winner shows the richer Reference/status/links block (UI Polish: Watch Item Status Presentation), not the old single-line raw-IMDb-URL format.
+- **Preconditions:** A suggestion that has won a vote (with a resolved IMDb link and a known original public post); WASH Crew role.
+- **Steps:**
+  1. As WASH Crew, `/add` the exact same title/year as the Vote Winner.
+  2. Inspect the shown block.
+- **Expected Result:** The block reads, in order: `Reference #NNNN`, `🏆 Vote Winner`, `Won: <Month D, YYYY>` (only if a win date was recorded -- a legacy Vote Winner with none simply omits this line), a clickable **Original Suggestion** link (only if the original post is known), and a clickable **IMDb** link (only if resolved) -- never a raw, unclickable IMDb URL inline. Confirming reactivates the same existing record (same reference/ID), exactly as before.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 4.4 Suggestion confirmation post
 
 - **Objective:** Confirm the public confirmation embed posts correctly and matches WASH's visual style.
@@ -580,37 +591,59 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.6 `/list` -- Available
+### 4.6 `/list` -- Active Watch Items (default)
 
-- **Objective:** Confirm the default list view is correct and clean.
-- **Preconditions:** At least two active suggestions, at least one with a known original-post link.
+- **Objective:** Confirm the default list view mixes Eligible and Rotation Cooldown items with a summary line and per-item status emoji.
+- **Preconditions:** A Balanced Random collection with at least one completed vote round, so some suggestions are Eligible and some are on Rotation Cooldown; at least one entry with a known original-post link.
 - **Steps:**
-  1. Run `/list` (default `status:Available`).
-- **Expected Result:** Ephemeral by default. Each entry shows the title and year exactly once (never doubled, e.g. not `(2004) (2004)`), followed by `| [Original Suggestion](link)` only when a post link exists. No reference number, status, or IMDb link appears. No embed/link-preview card is shown. Long lists page with Previous/Next.
+  1. Run `/list` (default `status:Active Watch Items`).
+- **Expected Result:** Ephemeral by default. A summary line appears before the list, e.g. "🟢 Eligible for Voting: 2" then "🟡 Rotation Cooldown: 6", using the actual counts. Every entry leads with its status emoji (🟢 or 🟡), followed by the title and year exactly once (never doubled, e.g. not `(2004) (2004)`), then `| [Original Suggestion](link)` only when a post link exists. No reference number or IMDb link appears. No embed/link-preview card is shown. Long lists page with Previous/Next.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.7 `/list` -- Vote Winner and Retired
+### 4.6b `/list` -- Eligible for Voting and All Watch Items
 
-- **Objective:** Confirm the other two status filters work.
-- **Preconditions:** At least one retired suggestion (reject one below the retirement threshold in Test 4.10 first, if none exist yet) and at least one completed vote (a suggestion should now be Vote Winner).
+- **Objective:** Confirm the Eligible for Voting filter shows only the eligible subset, and All Watch Items shows every status together.
+- **Preconditions:** Same collection as Test 4.6, plus at least one Vote Winner and one Retired suggestion.
 - **Steps:**
-  1. Run `/list status:Retired`.
-  2. Run `/list status:Vote Winner`.
-- **Expected Result:** Retired shows retired/archived items. Vote Winner shows the suggestion(s) that have won a voting round -- their public confirmation post's Status field should also read "🟣 Vote Winner".
+  1. Run `/list status:Eligible for Voting`; confirm it shows only 🟢 entries (no Rotation Cooldown, Vote Winner, or Retired items).
+  2. Run `/list status:All Watch Items`; confirm it shows every suggestion regardless of status, each with its own correct emoji.
+- **Expected Result:** Eligible for Voting is a strict subset of Active Watch Items (Test 4.6); All Watch Items is the only filter that includes every status at once.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 4.7 `/list` -- Vote Winners and Retired
+
+- **Objective:** Confirm the other two status filters work, use their new icons, and that a Vote Winner's win date is shown.
+- **Preconditions:** At least one retired suggestion (reject one below the retirement threshold in Test 4.10 first, if none exist yet) and at least one completed vote (a suggestion should now be a Vote Winner).
+- **Steps:**
+  1. Run `/list status:Retired`; confirm each entry leads with 🗄️.
+  2. Run `/list status:Vote Winners`; confirm each entry leads with 🏆, followed on the next line by `Won: <Month D, YYYY>` (date only, no time) using the actual date the vote completed.
+- **Expected Result:** Retired shows retired/archived items with the 🗄️ icon. Vote Winners shows the suggestion(s) that have won a voting round with the 🏆 icon and their win date; their public confirmation post's Status field should also read "🏆 Vote Winner" followed by the same `Won:` line.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 4.7a Legacy Vote Winner with no recorded win date
+
+- **Objective:** Confirm a Vote Winner recorded before win dates existed degrades gracefully.
+- **Preconditions:** A suggestion manually set to Vote Winner via `/edit_suggestion`'s Change Status action (which does not record a win date), rather than through an actual completed vote.
+- **Steps:**
+  1. Run `/list status:Vote Winners` and separately `/edit_suggestion` against that suggestion.
+- **Expected Result:** Both views show 🏆 Vote Winner with no `Won:` line at all -- never a blank date, a placeholder, or an error.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
 ### 4.7b `/list status:Rotation Cooldown`, thread auto-resolve, and Switch Collection
 
-- **Objective:** Confirm the Rotation Cooldown filter, `/list`'s thread-context auto-resolve, and its Switch Collection button all work, and that Available/Rotation Cooldown never disagree with `/vote start`.
-- **Preconditions:** A Balanced Random collection with at least one completed vote round (so some suggestions are on Rotation Cooldown and some remain Available); a second collection in the same server.
+- **Objective:** Confirm the Rotation Cooldown filter, `/list`'s thread-context auto-resolve, and its Switch Collection button all work, and that Eligible for Voting/Rotation Cooldown never disagree with `/vote start`.
+- **Preconditions:** A Balanced Random collection with at least one completed vote round (so some suggestions are on Rotation Cooldown and some remain Eligible); a second collection in the same server.
 - **Steps:**
-  1. Run `/list status:Rotation Cooldown`; confirm it shows exactly the suggestions presented in the current rotation but not yet a Vote Winner or Retired.
+  1. Run `/list status:Rotation Cooldown`; confirm it shows exactly the suggestions presented in the current rotation but not yet a Vote Winner or Retired, each leading with 🟡.
   2. From inside the collection's own thread, run `/list` with no other context; confirm it automatically uses that collection with no picker.
   3. Click **Switch Collection**; confirm it shows the other collection's list in place, without re-running the command.
-  4. Run `/list status:Available` and separately start `/vote start`; confirm the Available count and the actual nominee pool never disagree -- including that if the current rotation can't otherwise supply the configured candidate count, `/list` itself automatically rolls over the rotation the same way `/vote start` would, before showing anything.
-- **Expected Result:** Rotation Cooldown lists exactly the expected suggestions; thread auto-resolve and Switch Collection both work as described; Available always matches what `/vote start` would actually nominate from, including matching automatic-rollover behavior.
+  4. Run `/list status:Eligible for Voting` and separately start `/vote start`; confirm the eligible count and the actual nominee pool never disagree -- including that if the current rotation can't otherwise supply the configured candidate count, `/list` itself automatically rolls over the rotation the same way `/vote start` would, before showing anything.
+  5. Run `/list status:Vote Winners` (or `Retired`) on a collection that has never had a vote; confirm this never creates rotation state (checking a terminal-status filter alone must never bootstrap a rotation).
+- **Expected Result:** Rotation Cooldown lists exactly the expected suggestions; thread auto-resolve and Switch Collection both work as described; Eligible for Voting always matches what `/vote start` would actually nominate from, including matching automatic-rollover behavior; Vote Winners/Retired never trigger a rollover or bootstrap.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -655,8 +688,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm WASH Crew administrative status-changing/moving/removal works, including the duplicate re-check on a collection move.
 - **Preconditions:** WASH Crew role; at least one suggestion; at least two collections in the server.
 - **Steps:**
-  1. Run `/edit_suggestion`; confirm it shows a read-only summary (title, year, collection, status, IMDb link) plus Change Status, Move to Another Collection, and Cancel -- no title/release year/IMDb link fields to type into.
-  2. Choose Change Status; confirm the dropdown offers only Available, Vote Winner, and Retired (never Rotation Cooldown); pick one and confirm the suggestion's status updates and its public confirmation post's Status field updates in place.
+  1. Run `/edit_suggestion`; confirm it shows a read-only summary (title, year, collection, status, IMDb link) plus Change Status, Move to Another Collection, and Cancel -- no title/release year/IMDb link fields to type into. If the suggestion is currently a Vote Winner with a recorded win date, confirm the summary also shows a `Won: <date>` line right below the status.
+  2. Choose Change Status; confirm the dropdown offers only Available, Vote Winner (🏆), and Retired (🗄️) (never Rotation Cooldown); pick one and confirm the suggestion's status updates and its public confirmation post's Status field updates in place.
   3. Choose Move to Another Collection; confirm the duplicate check re-runs against the destination collection, and that the suggestion's status is unchanged after the move.
   4. Choose Cancel; confirm nothing changes.
   5. Run `/remove` with a reference number, then again with an exact title; confirm both resolve correctly and archive (not delete) the record.

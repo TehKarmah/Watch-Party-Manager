@@ -8,8 +8,11 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
+from datetime import date
+
 from watch_party_manager.bot import (
     AddSuggestionOutcomeKind,
+    build_duplicate_match_line,
     decide_add_suggestion_outcome,
     extract_year_from_title_suffix,
     handle_add_suggestion,
@@ -20,7 +23,7 @@ from watch_party_manager.domain.suggestion_database_configuration import (
     SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
 )
-from watch_party_manager.domain.watch_item import MediaType, WatchItem, WatchItemStatus
+from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
@@ -120,6 +123,109 @@ class DecideAddSuggestionOutcomeTests(unittest.TestCase):
         decision = decide_add_suggestion_outcome(result, is_crew=True)
 
         self.assertEqual(AddSuggestionOutcomeKind.NEEDS_CREW_POSSIBLE_CONFIRM, decision.kind)
+
+    def test_watched_match_message_uses_the_vote_winner_block(self) -> None:
+        # UI Polish (Duplicate/Reactivation View): a Vote Winner match's
+        # message uses the richer Reference/status/links block, not the
+        # old single-line "Reference | Title | imdb_url | status" format.
+        result = self._matches(status=WatchItemStatus.VOTE_WINNER)
+
+        decision = decide_add_suggestion_outcome(result, is_crew=True)
+
+        self.assertIn("🏆 Vote Winner", decision.message)
+        self.assertIn(f"Reference #{1:04d}", decision.message)
+
+
+class BuildDuplicateMatchLineTests(unittest.TestCase):
+    """UI Polish (Duplicate/Reactivation View): a Vote Winner match gets
+    Reference, its 🏆 Vote Winner status (with win date, when recorded),
+    and Original Suggestion/IMDb as clickable links, replacing the old
+    single-line, raw-IMDb-URL format. Every other category is unchanged.
+    """
+
+    def _match(self, category, **item_kwargs):
+        from watch_party_manager.services.duplicate_detection_service import DuplicateMatch, DuplicateMatchCategory, DuplicateMatchKind
+
+        item = WatchItem(title="Zombieland", media_type=MediaType.MOVIE, id=2, release_year=2009, **item_kwargs)
+        return DuplicateMatch(watch_item=item, category=category, kind=DuplicateMatchKind.TITLE_AND_YEAR)
+
+    def test_active_match_keeps_the_original_single_line_format(self) -> None:
+        from watch_party_manager.services.duplicate_detection_service import DuplicateMatchCategory
+
+        match = self._match(
+            DuplicateMatchCategory.ACTIVE,
+            status=WatchItemStatus.SUGGESTED,
+            metadata_ids={MetadataProvider.IMDB: "https://www.imdb.com/title/tt1234567/"},
+        )
+        line = build_duplicate_match_line(match)
+        self.assertEqual(
+            "Reference #0002 | Zombieland | https://www.imdb.com/title/tt1234567/ | status: Suggested", line
+        )
+
+    def test_archived_other_match_keeps_the_original_single_line_format(self) -> None:
+        from watch_party_manager.services.duplicate_detection_service import DuplicateMatchCategory
+
+        match = self._match(DuplicateMatchCategory.ARCHIVED_OTHER, status=WatchItemStatus.ARCHIVED)
+        line = build_duplicate_match_line(match)
+        self.assertEqual("Reference #0002 | Zombieland | status: Archived", line)
+
+    def test_vote_winner_match_uses_the_new_block(self) -> None:
+        from watch_party_manager.services.duplicate_detection_service import DuplicateMatchCategory
+
+        match = self._match(
+            DuplicateMatchCategory.VOTE_WINNER,
+            status=WatchItemStatus.VOTE_WINNER,
+            journey=WatchItemJourney(last_won_date=date(2026, 7, 28)),
+            guild_id=1,
+            channel_id=2,
+            message_id=3,
+            metadata_ids={MetadataProvider.IMDB: "https://www.imdb.com/title/tt1234567/"},
+        )
+        line = build_duplicate_match_line(match)
+        self.assertEqual(
+            "Reference #0002\n"
+            "🏆 Vote Winner\n"
+            "Won: July 28, 2026\n"
+            "[Original Suggestion](https://discord.com/channels/1/2/3)\n"
+            "[IMDb](https://www.imdb.com/title/tt1234567/)",
+            line,
+        )
+
+    def test_vote_winner_match_never_shows_the_raw_imdb_url_inline(self) -> None:
+        from watch_party_manager.services.duplicate_detection_service import DuplicateMatchCategory
+
+        match = self._match(
+            DuplicateMatchCategory.VOTE_WINNER,
+            status=WatchItemStatus.VOTE_WINNER,
+            metadata_ids={MetadataProvider.IMDB: "https://www.imdb.com/title/tt1234567/"},
+        )
+        line = build_duplicate_match_line(match)
+        self.assertNotIn("https://www.imdb.com/title/tt1234567/ |", line)
+        self.assertIn("[IMDb](https://www.imdb.com/title/tt1234567/)", line)
+
+    def test_legacy_vote_winner_without_a_won_date_omits_the_won_line(self) -> None:
+        from watch_party_manager.services.duplicate_detection_service import DuplicateMatchCategory
+
+        match = self._match(DuplicateMatchCategory.VOTE_WINNER, status=WatchItemStatus.VOTE_WINNER)
+        line = build_duplicate_match_line(match)
+        self.assertNotIn("Won", line)
+
+    def test_vote_winner_without_an_original_post_omits_that_line(self) -> None:
+        from watch_party_manager.services.duplicate_detection_service import DuplicateMatchCategory
+
+        match = self._match(DuplicateMatchCategory.VOTE_WINNER, status=WatchItemStatus.VOTE_WINNER)
+        line = build_duplicate_match_line(match)
+        self.assertNotIn("Original Suggestion", line)
+
+    def test_vote_winner_without_an_imdb_link_omits_that_line(self) -> None:
+        from watch_party_manager.services.duplicate_detection_service import DuplicateMatchCategory
+
+        match = self._match(
+            DuplicateMatchCategory.VOTE_WINNER, status=WatchItemStatus.VOTE_WINNER, guild_id=1, channel_id=2, message_id=3
+        )
+        line = build_duplicate_match_line(match)
+        self.assertNotIn("IMDb", line)
+        self.assertIn("Original Suggestion", line)
 
 
 class FakeRole:

@@ -47,15 +47,15 @@ Where configuration options exist, this document describes the intended behavior
 Every Watch Item shows one of four statuses:
 
 ```text
-🟢 Available  ──▶  🟡 Rotation Cooldown  ──▶  🟣 Vote Winner
+🟢 Available  ──▶  🟡 Rotation Cooldown  ──▶  🏆 Vote Winner
        ▲                    │                       │
        └────────────────────┘                       ▼
-                                              🔴 Retired
+                                              🗄️ Retired
 ```
 
 - **Available** -- eligible for future voting.
 - **Rotation Cooldown** -- already presented in the database's current rotation; computed at display time, not separately stored, so it automatically returns to Available the moment a fresh rotation begins.
-- **Vote Winner** -- won a voting round. WASH knows a suggestion won a vote; it does not yet know the group actually watched it -- confirming an actual viewing is a future watch-history milestone, tracked separately from this status.
+- **Vote Winner** -- won a voting round. WASH knows a suggestion won a vote; it does not yet know the group actually watched it -- confirming an actual viewing is a future watch-history milestone, tracked separately from this status. Whenever displayed, a Vote Winner with a recorded win date also shows a `Won: <Month D, YYYY>` line; a legacy Vote Winner with none omits it gracefully.
 - **Retired** -- archived, whether by `/remove`, an "I WILL NOT WATCH" rejection threshold, or WASH Crew directly setting it via `/edit_suggestion`.
 
 A Watch Item may return to Rotation Cooldown, and from there back to Available, multiple times throughout its lifetime as rotations begin and complete.

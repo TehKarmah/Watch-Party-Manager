@@ -4,13 +4,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from datetime import date
+
 from watch_party_manager.domain.watch_item import MediaType, WatchItem, WatchItemStatus
+from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 from watch_party_manager.services.suggestion_display_status import (
+    SUGGESTION_DISPLAY_STATUS_EMOJI,
     SUGGESTION_DISPLAY_STATUS_LABELS,
     SuggestionDisplayStatus,
     compute_display_status,
     display_status_label,
+    format_display_status_with_won_date,
+    format_won_date,
     resolve_display_status,
+    vote_winner_won_date_line,
 )
 
 
@@ -80,8 +87,67 @@ class DisplayStatusLabelTests(unittest.TestCase):
         self.assertEqual(
             "🟡 Rotation Cooldown", display_status_label(SuggestionDisplayStatus.ROTATION_COOLDOWN)
         )
-        self.assertEqual("🟣 Vote Winner", display_status_label(SuggestionDisplayStatus.VOTE_WINNER))
-        self.assertEqual("🔴 Retired", display_status_label(SuggestionDisplayStatus.RETIRED))
+        self.assertEqual("🏆 Vote Winner", display_status_label(SuggestionDisplayStatus.VOTE_WINNER))
+        self.assertEqual("🗄️ Retired", display_status_label(SuggestionDisplayStatus.RETIRED))
+
+    def test_every_status_has_a_bare_emoji(self) -> None:
+        for status in SuggestionDisplayStatus:
+            self.assertIn(status, SUGGESTION_DISPLAY_STATUS_EMOJI)
+
+    def test_bare_emoji_matches_the_label(self) -> None:
+        for status in SuggestionDisplayStatus:
+            self.assertTrue(
+                display_status_label(status).startswith(SUGGESTION_DISPLAY_STATUS_EMOJI[status])
+            )
+
+
+class FormatWonDateTests(unittest.TestCase):
+    def test_formats_month_day_year_with_no_leading_zero(self) -> None:
+        self.assertEqual("July 28, 2026", format_won_date(date(2026, 7, 28)))
+
+    def test_formats_single_digit_day_without_a_leading_zero(self) -> None:
+        self.assertEqual("July 8, 2026", format_won_date(date(2026, 7, 8)))
+
+    def test_never_includes_a_time(self) -> None:
+        rendered = format_won_date(date(2026, 7, 28))
+        self.assertNotIn(":", rendered)
+
+
+class VoteWinnerWonDateLineTests(unittest.TestCase):
+    def test_returns_the_won_line_when_a_date_is_recorded(self) -> None:
+        item = make_item(WatchItemStatus.VOTE_WINNER)
+        item.journey = WatchItemJourney(last_won_date=date(2026, 7, 28))
+
+        self.assertEqual("Won: July 28, 2026", vote_winner_won_date_line(item))
+
+    def test_returns_none_for_a_legacy_winner_with_no_recorded_date(self) -> None:
+        item = make_item(WatchItemStatus.VOTE_WINNER)
+
+        self.assertIsNone(vote_winner_won_date_line(item))
+
+
+class FormatDisplayStatusWithWonDateTests(unittest.TestCase):
+    def test_vote_winner_with_a_date_appends_the_won_line(self) -> None:
+        item = make_item(WatchItemStatus.VOTE_WINNER)
+        item.journey = WatchItemJourney(last_won_date=date(2026, 7, 28))
+
+        result = format_display_status_with_won_date(item, SuggestionDisplayStatus.VOTE_WINNER)
+
+        self.assertEqual("🏆 Vote Winner\nWon: July 28, 2026", result)
+
+    def test_legacy_vote_winner_without_a_date_omits_the_won_line_gracefully(self) -> None:
+        item = make_item(WatchItemStatus.VOTE_WINNER)
+
+        result = format_display_status_with_won_date(item, SuggestionDisplayStatus.VOTE_WINNER)
+
+        self.assertEqual("🏆 Vote Winner", result)
+
+    def test_non_vote_winner_statuses_are_unaffected(self) -> None:
+        item = make_item(WatchItemStatus.ARCHIVED)
+
+        result = format_display_status_with_won_date(item, SuggestionDisplayStatus.RETIRED)
+
+        self.assertEqual("🗄️ Retired", result)
 
 
 if __name__ == "__main__":

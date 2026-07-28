@@ -180,8 +180,12 @@ from watch_party_manager.services.suggestion_service import (
 )
 from watch_party_manager.services.suggestion_repair_service import SuggestionRepairService
 from watch_party_manager.services.suggestion_display_status import (
+    SUGGESTION_DISPLAY_STATUS_EMOJI,
+    SuggestionDisplayStatus,
     display_status_label,
+    format_display_status_with_won_date,
     resolve_display_status,
+    vote_winner_won_date_line,
 )
 from watch_party_manager.services.statistics_service import (
     DatabaseStatistics,
@@ -485,20 +489,22 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="list")
         @discord.app_commands.describe(
-            status="Which watch items to show (defaults to Available).",
+            status="Which watch items to show (defaults to Active Watch Items).",
             public="Post the list publicly instead of showing it only to you (WASH Crew only).",
         )
         @discord.app_commands.choices(
             status=[
-                discord.app_commands.Choice(name="Available (eligible for future voting)", value="available"),
+                discord.app_commands.Choice(name="Active Watch Items (Eligible + Rotation Cooldown)", value="active"),
+                discord.app_commands.Choice(name="Eligible for Voting", value="eligible"),
                 discord.app_commands.Choice(name="Rotation Cooldown", value="rotation_cooldown"),
-                discord.app_commands.Choice(name="Vote Winner", value="vote_winner"),
-                discord.app_commands.Choice(name="Retired (removed from consideration)", value="retired"),
+                discord.app_commands.Choice(name="Vote Winners", value="vote_winner"),
+                discord.app_commands.Choice(name="Retired", value="retired"),
+                discord.app_commands.Choice(name="All Watch Items", value="all"),
             ]
         )
         async def suggestions(
             interaction: discord.Interaction,
-            status: str = "available",
+            status: str = "active",
             public: bool = False,
         ) -> None:
             await handle_list_suggestions(interaction, self, status, public)
@@ -5642,13 +5648,50 @@ class AddSuggestionDecision:
 
 
 def build_duplicate_match_line(match: DuplicateMatch) -> str:
+    """One matched existing item's line/block within an /add duplicate
+    warning.
+
+    UI Polish (Watch Item Status Presentation): a Vote Winner match gets
+    its own richer block -- Reference, the 🏆 Vote Winner status (with
+    its win date, when recorded), and Original Suggestion/IMDb as
+    clickable links -- replacing the old single-line, raw-IMDb-URL
+    format. Every other category (active, archived-rejected,
+    archived-other) keeps that original single-line format unchanged.
+    """
     item = match.watch_item
+    if match.category is DuplicateMatchCategory.VOTE_WINNER:
+        return build_vote_winner_duplicate_match_block(item)
+
     imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
     parts = [f"Reference {item.reference}", item.title]
     if imdb_url:
         parts.append(imdb_url)
     parts.append(f"status: {item.status.value.replace('_', ' ').title()}")
     return " | ".join(parts)
+
+
+def build_vote_winner_duplicate_match_block(item: WatchItem) -> str:
+    """The Vote Winner-specific block /add's duplicate/reactivation view
+    shows: Reference, status (with win date when recorded), then
+    Original Suggestion and IMDb as clickable links -- each line omitted
+    gracefully when its underlying data isn't available (a legacy Vote
+    Winner with no recorded win date, or no original post/IMDb link).
+    """
+    lines = [f"Reference {item.reference}", display_status_label(SuggestionDisplayStatus.VOTE_WINNER)]
+
+    won_line = vote_winner_won_date_line(item)
+    if won_line is not None:
+        lines.append(won_line)
+
+    if item.guild_id is not None and item.channel_id is not None and item.message_id is not None:
+        message_url = f"https://discord.com/channels/{item.guild_id}/{item.channel_id}/{item.message_id}"
+        lines.append(f"[Original Suggestion]({message_url})")
+
+    imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
+    if imdb_url:
+        lines.append(f"[IMDb]({imdb_url})")
+
+    return "\n".join(lines)
 
 
 _ARCHIVE_CATEGORY_LABELS = {
@@ -6895,7 +6938,9 @@ def build_suggestion_confirmation_embed(
     embed.add_field(name="Collection", value=format_collection_display(database_name), inline=True)
     embed.add_field(name="Reference", value=watch_item.reference, inline=True)
     display_status = resolve_display_status(watch_item, rotation_service)
-    embed.add_field(name="Status", value=display_status_label(display_status), inline=True)
+    embed.add_field(
+        name="Status", value=format_display_status_with_won_date(watch_item, display_status), inline=True
+    )
     if watch_item.poster_url:
         embed.set_thumbnail(url=watch_item.poster_url)
     return embed
@@ -6991,54 +7036,113 @@ async def perform_repair_suggestions(
 class SuggestionListStatusFilter(str, Enum):
     """Which suggestions /list should include.
 
-    AVAILABLE (the default) is the pool currently eligible for future
-    voting -- Rotation & Collection Health Audit: this is now resolved
-    through CollectionEligibilityService (the same authoritative
-    calculation /vote start uses), not a bare status check, so it can
-    never disagree with what starting a vote would actually see.
-    ROTATION_COOLDOWN is its own explicit bucket for the items AVAILABLE
-    used to fold in silently (active, but excluded from the next vote
-    for Rotation Pool databases specifically -- always empty for Soft
-    Rotation/Infinite Pool, which have no cooldown concept). VOTE_WINNER
-    and RETIRED are plain status filters, unaffected by rotation.
+    UI Polish (Watch Item Status Presentation): six filters, all
+    resolved through CollectionEligibilityService -- the same
+    authoritative calculation /vote start uses -- so none of them can
+    ever disagree with what starting a vote would actually see. Every
+    bucket below (eligible, rotation_cooldown, vote_winners, retired)
+    is already computed by CollectionEligibility itself; this filter
+    only chooses which of those (already-identical) buckets to show,
+    never recomputes eligibility.
+
+    ACTIVE (the new default) is Eligible + Rotation Cooldown mixed
+    together -- CollectionEligibility.active, unchanged. ELIGIBLE is
+    the pool actually eligible for the next vote (what the old
+    AVAILABLE filter showed). ROTATION_COOLDOWN, VOTE_WINNER, and
+    RETIRED are unchanged, plain-bucket filters. ALL is every watch
+    item in the collection, active or not.
     """
 
-    AVAILABLE = "available"
+    ACTIVE = "active"
+    ELIGIBLE = "eligible"
     ROTATION_COOLDOWN = "rotation_cooldown"
     VOTE_WINNER = "vote_winner"
     RETIRED = "retired"
+    ALL = "all"
 
 
-def filter_items_by_status(items: List[WatchItem], status_filter: SuggestionListStatusFilter) -> List[WatchItem]:
-    """Plain status-based filtering for VOTE_WINNER/RETIRED only.
+SUGGESTION_LIST_STATUS_FILTER_LABELS: dict[SuggestionListStatusFilter, str] = {
+    SuggestionListStatusFilter.ACTIVE: "Active Watch Items",
+    SuggestionListStatusFilter.ELIGIBLE: "Eligible for Voting",
+    SuggestionListStatusFilter.ROTATION_COOLDOWN: "Rotation Cooldown",
+    SuggestionListStatusFilter.VOTE_WINNER: "Vote Winners",
+    SuggestionListStatusFilter.RETIRED: "Retired",
+    SuggestionListStatusFilter.ALL: "All Watch Items",
+}
 
-    AVAILABLE/ROTATION_COOLDOWN are deliberately not handled here --
-    they require rotation state (CollectionEligibilityService), not just
-    each item's own status, so send_suggestion_list resolves those two
-    separately rather than through this function (Rotation & Collection
-    Health Audit: no second, parallel eligibility calculation).
+# Filters whose result depends on the eligible/rotation-cooldown split
+# must use CollectionEligibilityService.resolve() -- including the
+# same automatic rollover-before-reporting /vote start relies on --
+# since they include rotation-sensitive buckets. VOTE_WINNER/RETIRED
+# are terminal statuses, entirely unaffected by rotation state, so
+# they use peek() instead: no reason to ever bootstrap or roll over a
+# rotation just to look at items that have already left it.
+_ROLLOVER_SENSITIVE_LIST_FILTERS = frozenset(
+    {
+        SuggestionListStatusFilter.ACTIVE,
+        SuggestionListStatusFilter.ELIGIBLE,
+        SuggestionListStatusFilter.ROTATION_COOLDOWN,
+        SuggestionListStatusFilter.ALL,
+    }
+)
+
+
+def resolve_suggestion_list_entries(
+    eligibility: "CollectionEligibility", status_filter: SuggestionListStatusFilter
+) -> List[Tuple[WatchItem, SuggestionDisplayStatus]]:
+    """Pick which of CollectionEligibility's already-computed buckets a
+    /list filter shows, paired with each item's display status (known
+    directly from which bucket it came from -- no separate rotation
+    lookup needed per item).
     """
+    if status_filter is SuggestionListStatusFilter.ACTIVE:
+        return [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.eligible] + [
+            (item, SuggestionDisplayStatus.ROTATION_COOLDOWN) for item in eligibility.rotation_cooldown
+        ]
+    if status_filter is SuggestionListStatusFilter.ELIGIBLE:
+        return [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.eligible]
+    if status_filter is SuggestionListStatusFilter.ROTATION_COOLDOWN:
+        return [(item, SuggestionDisplayStatus.ROTATION_COOLDOWN) for item in eligibility.rotation_cooldown]
+    if status_filter is SuggestionListStatusFilter.VOTE_WINNER:
+        return [(item, SuggestionDisplayStatus.VOTE_WINNER) for item in eligibility.vote_winners]
     if status_filter is SuggestionListStatusFilter.RETIRED:
-        return [item for item in items if item.status is WatchItemStatus.ARCHIVED]
-    return [item for item in items if item.status is WatchItemStatus.VOTE_WINNER]
+        return [(item, SuggestionDisplayStatus.RETIRED) for item in eligibility.retired]
+    # ALL
+    return (
+        [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.eligible]
+        + [(item, SuggestionDisplayStatus.ROTATION_COOLDOWN) for item in eligibility.rotation_cooldown]
+        + [(item, SuggestionDisplayStatus.VOTE_WINNER) for item in eligibility.vote_winners]
+        + [(item, SuggestionDisplayStatus.RETIRED) for item in eligibility.retired]
+    )
 
 
-def build_suggestion_entry_line(item: WatchItem) -> str:
-    """Render one /list entry: title, year, and (when available) a clean
-    link back to the original public suggestion post -- nothing else.
+def build_suggestion_entry_line(item: WatchItem, display_status: SuggestionDisplayStatus) -> str:
+    """Render one /list entry: status emoji, title, year, and (when
+    available) a clean link back to the original public suggestion post.
 
-    Deliberately excludes the internal reference number, status label,
-    and IMDb link that the old /list rendering showed: the default view
-    is meant to be a terse, at-a-glance pool of what's available for
-    future voting, not a diagnostic record (Release Polish Priority 2).
+    UI Polish (Watch Item Status Presentation): every entry now leads
+    with its status emoji (🟢/🟡/🏆/🗄️) so Active Watch Items' mixed
+    Eligible/Rotation Cooldown list -- and every other filter -- reads
+    clearly at a glance without needing a separate status column.
+    Deliberately still excludes the internal reference number and IMDb
+    link the old /list rendering also omitted (Release Polish Priority 2)
+    -- only a Vote Winner's win date is added, never a reference or IMDb
+    link, matching this milestone's own scope.
     """
     heading = format_title_with_year(item.title, item.release_year)
+    emoji = SUGGESTION_DISPLAY_STATUS_EMOJI[display_status]
+    line = f"{emoji} {heading}"
 
     if item.guild_id is not None and item.channel_id is not None and item.message_id is not None:
         message_url = f"https://discord.com/channels/{item.guild_id}/{item.channel_id}/{item.message_id}"
-        return f"{heading} | [Original Suggestion]({message_url})"
+        line += f" | [Original Suggestion]({message_url})"
 
-    return heading
+    if display_status is SuggestionDisplayStatus.VOTE_WINNER:
+        won_line = vote_winner_won_date_line(item)
+        if won_line is not None:
+            line += f"\n{won_line}"
+
+    return line
 
 
 def resolve_configured_candidate_count(bot: "WatchPartyBot", guild_id: Optional[int]) -> int:
@@ -7095,42 +7199,39 @@ async def send_suggestion_list(
     *,
     edit: bool = False,
 ) -> None:
-    """Rotation & Collection Health goal 4: AVAILABLE/ROTATION_COOLDOWN
-    are resolved through CollectionEligibilityService -- the same
+    """UI Polish (Watch Item Status Presentation): every filter is
+    resolved through CollectionEligibilityService -- the same
     authoritative calculation, including rollover-before-reporting, that
     /vote start uses -- so /list can never disagree with voting.
     """
-    if status_filter in (SuggestionListStatusFilter.AVAILABLE, SuggestionListStatusFilter.ROTATION_COOLDOWN):
-        mode = resolve_candidate_selection_mode(bot, database.guild_id, database.database_id)
+    mode = resolve_candidate_selection_mode(bot, database.guild_id, database.database_id)
+    if status_filter in _ROLLOVER_SENSITIVE_LIST_FILTERS:
         candidate_count = resolve_configured_candidate_count(bot, database.guild_id)
         eligibility = bot.collection_eligibility_service.resolve(
             database.database_id, mode, requested_count=candidate_count
         )
-        filtered = list(
-            eligibility.eligible
-            if status_filter is SuggestionListStatusFilter.AVAILABLE
-            else eligibility.rotation_cooldown
-        )
     else:
-        items = bot.suggestion_service.get_suggestions_for_database(database.database_id, include_archived=True)
-        filtered = filter_items_by_status(items, status_filter)
+        eligibility = bot.collection_eligibility_service.peek(database.database_id, mode)
+
+    entries = resolve_suggestion_list_entries(eligibility, status_filter)
     # Deterministic ordering: by stable suggestion ID (assignment order),
     # never re-sorted by anything that could change between pages.
-    filtered = sorted(filtered, key=lambda item: item.id or 0)
+    entries = sorted(entries, key=lambda entry: entry[0].id or 0)
 
     display_name = format_collection_display(
         _resolve_collection_name(
             bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
         )
     )
+    filter_label = SUGGESTION_LIST_STATUS_FILTER_LABELS[status_filter]
 
     async def on_switch_collection(switch_interaction: discord.Interaction) -> None:
         await show_list_switch_collection_picker(switch_interaction, bot, status_filter, public)
 
     switch_view_addition = await build_switch_collection_options(bot, database.guild_id) is not None
 
-    if not filtered:
-        content = f'"{display_name}" has no {status_filter.value.replace("_", " ")} watch items.'
+    if not entries:
+        content = f'"{display_name}" has no watch items matching {filter_label}.'
         view = discord.ui.View(timeout=180)
         if switch_view_addition:
             view.add_item(SwitchCollectionButton(on_switch_collection))
@@ -7143,8 +7244,17 @@ async def send_suggestion_list(
             )
         return
 
-    header = f"**{display_name} -- {status_filter.value.title()} Watch Items ({len(filtered)})**"
-    lines = [build_suggestion_entry_line(item) for item in filtered]
+    header = f"**{display_name} -- {filter_label} ({len(entries)})**"
+    if status_filter is SuggestionListStatusFilter.ACTIVE:
+        # A short summary before the mixed Eligible/Rotation Cooldown
+        # list, e.g. "🟢 Eligible for Voting: 2\n🟡 Rotation Cooldown: 6".
+        header += (
+            f"\n{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.AVAILABLE]} "
+            f"Eligible for Voting: {len(eligibility.eligible)}\n"
+            f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.ROTATION_COOLDOWN]} "
+            f"Rotation Cooldown: {len(eligibility.rotation_cooldown)}"
+        )
+    lines = [build_suggestion_entry_line(item, display_status) for item, display_status in entries]
     pages = paginate_lines(header, lines)
 
     requester_id = getattr(interaction.user, "id", None)
@@ -7401,7 +7511,9 @@ async def handle_list_suggestions(
         status_filter = SuggestionListStatusFilter(status)
     except ValueError:
         await interaction.response.send_message(
-            "Choose Available, Rotation Cooldown, Vote Winner, or Retired.", ephemeral=True
+            "Choose Active Watch Items, Eligible for Voting, Rotation Cooldown, Vote Winners, Retired, "
+            "or All Watch Items.",
+            ephemeral=True,
         )
         return
 
@@ -7977,7 +8089,7 @@ def build_edit_suggestion_summary(
     lines = [
         f"{item.reference} {item.title}{year_part}",
         f"Collection: {database_name}",
-        f"Status: {display_status_label(display_status)}",
+        f"Status: {format_display_status_with_won_date(item, display_status)}",
     ]
     if imdb_url:
         lines.append(f"IMDb: {imdb_url}")

@@ -59,13 +59,31 @@ class BuildSuggestionConfirmationEmbedStatusFieldTests(unittest.TestCase):
         embed = build_suggestion_confirmation_embed(
             make_item(status=WatchItemStatus.ARCHIVED), database_name="Movies", suggested_by="<@1>"
         )
-        self.assertEqual("🔴 Retired", self._status_value(embed))
+        self.assertEqual("🗄️ Retired", self._status_value(embed))
 
     def test_vote_winner_shows_vote_winner(self) -> None:
         embed = build_suggestion_confirmation_embed(
             make_item(status=WatchItemStatus.VOTE_WINNER), database_name="Movies", suggested_by="<@1>"
         )
-        self.assertEqual("🟣 Vote Winner", self._status_value(embed))
+        self.assertEqual("🏆 Vote Winner", self._status_value(embed))
+
+    def test_vote_winner_with_a_recorded_date_shows_the_won_line(self) -> None:
+        from datetime import date
+
+        embed = build_suggestion_confirmation_embed(
+            make_item(
+                status=WatchItemStatus.VOTE_WINNER, journey=WatchItemJourney(last_won_date=date(2026, 7, 28))
+            ),
+            database_name="Movies",
+            suggested_by="<@1>",
+        )
+        self.assertEqual("🏆 Vote Winner\nWon: July 28, 2026", self._status_value(embed))
+
+    def test_legacy_vote_winner_without_a_date_omits_the_won_line(self) -> None:
+        embed = build_suggestion_confirmation_embed(
+            make_item(status=WatchItemStatus.VOTE_WINNER), database_name="Movies", suggested_by="<@1>"
+        )
+        self.assertEqual("🏆 Vote Winner", self._status_value(embed))
 
     def test_rotation_cooldown_shown_when_rotation_service_reports_it(self) -> None:
         class FakeRotationService:
@@ -179,7 +197,7 @@ class SyncSuggestionStatusEmbedTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(1, message.edit_calls)
         status_field = next(field for field in message.edited_embed.fields if field.name == "Status")
-        self.assertEqual("🔴 Retired", status_field.value)
+        self.assertEqual("🗄️ Retired", status_field.value)
         # Never recreates the message.
         self.assertEqual([], channel.sent_messages)
 
@@ -267,9 +285,33 @@ class SyncVoteCompletionStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
         await sync_vote_completion_status_embeds(bot, result)
 
         self.assertEqual(1, winner_message.edit_calls)
-        self.assertEqual("🟣 Vote Winner", self._status_of(winner_message.edited_embed))
+        self.assertEqual("🏆 Vote Winner", self._status_of(winner_message.edited_embed))
         self.assertEqual(1, loser_message.edit_calls)
         self.assertEqual("🟡 Rotation Cooldown", self._status_of(loser_message.edited_embed))
+
+    async def test_a_recorded_won_date_is_reflected_in_the_refreshed_embed(self) -> None:
+        from datetime import date
+
+        from watch_party_manager.domain.vote import VoteRound
+
+        winner = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(winner.id, GUILD_ID, CHANNEL_ID, 777)
+        self.rotation_service.record_presentation(self.database.database_id, [winner.id])
+        self.suggestion_service.record_vote_win(winner.id, date(2026, 7, 28))
+
+        winner_message = FakeMessage(message_id=777)
+        channel = FakeChannel(winner_message)
+        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+
+        vote_round = VoteRound(id=1, database_id=self.database.database_id, candidate_suggestion_ids=[winner.id])
+        result = VoteCompletionResult(
+            vote_round=vote_round, winning_suggestion_ids=[winner.id], standings=(), total_votes_cast=1
+        )
+        await sync_vote_completion_status_embeds(bot, result)
+
+        self.assertEqual("🏆 Vote Winner\nWon: July 28, 2026", self._status_of(winner_message.edited_embed))
 
 
 class RotationCooldownAutomaticallyRevertsTests(unittest.TestCase):

@@ -162,6 +162,28 @@ class ResolveAndPresentTests(EditSuggestionTestCase):
         summary = build_edit_suggestion_summary(item_with_imdb, self.suggestion_service)
         self.assertIn("tt0090605", summary)
 
+    async def test_summary_shows_the_won_date_for_a_vote_winner(self) -> None:
+        from datetime import date
+
+        winner = self.suggestion_service.suggest("Zombieland", database_id=self.database.database_id).watch_item
+        self.suggestion_service.record_vote_win(winner.id, date(2026, 7, 28))
+        winner = self.suggestion_service.get_suggestion(winner.id)
+
+        summary = build_edit_suggestion_summary(winner, self.suggestion_service)
+
+        self.assertIn("🏆 Vote Winner", summary)
+        self.assertIn("Won: July 28, 2026", summary)
+
+    async def test_summary_omits_the_won_line_for_a_legacy_vote_winner(self) -> None:
+        winner = self.suggestion_service.suggest("Zombieland", database_id=self.database.database_id).watch_item
+        self.suggestion_service.record_vote_win(winner.id, None)
+        winner = self.suggestion_service.get_suggestion(winner.id)
+
+        summary = build_edit_suggestion_summary(winner, self.suggestion_service)
+
+        self.assertIn("🏆 Vote Winner", summary)
+        self.assertNotIn("Won", summary)
+
 
 class ChangeStatusActionTests(EditSuggestionTestCase):
     async def _open_change_status(self):

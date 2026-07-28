@@ -15,6 +15,7 @@ method's docstring), with no persisted "clear cooldown" step required.
 
 from __future__ import annotations
 
+from datetime import date
 from enum import Enum
 from typing import Optional
 
@@ -30,12 +31,69 @@ class SuggestionDisplayStatus(str, Enum):
     RETIRED = "retired"
 
 
-SUGGESTION_DISPLAY_STATUS_LABELS: dict[SuggestionDisplayStatus, str] = {
-    SuggestionDisplayStatus.AVAILABLE: "🟢 Available",
-    SuggestionDisplayStatus.ROTATION_COOLDOWN: "🟡 Rotation Cooldown",
-    SuggestionDisplayStatus.VOTE_WINNER: "🟣 Vote Winner",
-    SuggestionDisplayStatus.RETIRED: "🔴 Retired",
+# UI Polish (Watch Item Status Presentation): Vote Winner and Retired
+# moved from generic traffic-light colors (🟣/🔴) to icons naming what
+# the status actually means -- a trophy for having won a vote, an
+# archive box for retired -- since 🟣/🔴 carried no inherent meaning
+# beyond "not green/yellow". Available/Rotation Cooldown keep their
+# existing colors unchanged. Kept as its own dict (rather than only
+# inside SUGGESTION_DISPLAY_STATUS_LABELS) so /list's entry lines can
+# prefix a bare emoji without repeating the status word per item.
+SUGGESTION_DISPLAY_STATUS_EMOJI: dict[SuggestionDisplayStatus, str] = {
+    SuggestionDisplayStatus.AVAILABLE: "🟢",
+    SuggestionDisplayStatus.ROTATION_COOLDOWN: "🟡",
+    SuggestionDisplayStatus.VOTE_WINNER: "🏆",
+    SuggestionDisplayStatus.RETIRED: "🗄️",
 }
+
+_SUGGESTION_DISPLAY_STATUS_WORDS: dict[SuggestionDisplayStatus, str] = {
+    SuggestionDisplayStatus.AVAILABLE: "Available",
+    SuggestionDisplayStatus.ROTATION_COOLDOWN: "Rotation Cooldown",
+    SuggestionDisplayStatus.VOTE_WINNER: "Vote Winner",
+    SuggestionDisplayStatus.RETIRED: "Retired",
+}
+
+SUGGESTION_DISPLAY_STATUS_LABELS: dict[SuggestionDisplayStatus, str] = {
+    status: f"{SUGGESTION_DISPLAY_STATUS_EMOJI[status]} {_SUGGESTION_DISPLAY_STATUS_WORDS[status]}"
+    for status in SuggestionDisplayStatus
+}
+
+
+def format_won_date(won_date: date) -> str:
+    """Render a vote-win date as "Month D, YYYY" (e.g. "July 28, 2026") --
+    date only, deliberately never a time (WASH only ever records the
+    date a vote completed, not a time-of-day). Avoids strftime's
+    platform-dependent no-leading-zero-day directives (%-d on
+    POSIX/%#d on Windows) by building the day number directly.
+    """
+    return f"{won_date.strftime('%B')} {won_date.day}, {won_date.year}"
+
+
+def vote_winner_won_date_line(item: WatchItem) -> Optional[str]:
+    """"Won: <date>" for a Vote Winner with a recorded win date, or None.
+
+    Legacy Vote Winners recorded before win dates existed have no
+    journey.last_won_date -- this is the one, shared place that decides
+    to omit the line gracefully rather than showing a blank/placeholder
+    date, reused everywhere a Vote Winner's status is shown.
+    """
+    won_date = item.journey.last_won_date
+    if won_date is None:
+        return None
+    return f"Won: {format_won_date(won_date)}"
+
+
+def format_display_status_with_won_date(item: WatchItem, status: SuggestionDisplayStatus) -> str:
+    """The status label, plus a "Won: <date>" line whenever status is
+    Vote Winner and a win date was recorded -- the one shared building
+    block for every "Status" field/line shown anywhere in WASH (the
+    public confirmation embed, /edit_suggestion's summary, and /list).
+    """
+    label = display_status_label(status)
+    if status is not SuggestionDisplayStatus.VOTE_WINNER:
+        return label
+    won_line = vote_winner_won_date_line(item)
+    return label if won_line is None else f"{label}\n{won_line}"
 
 
 class RotationCooldownLookup:
