@@ -269,10 +269,16 @@ class RotationRolloverEndToEndTests(unittest.IsolatedAsyncioTestCase):
         interaction = await self._start_vote(nominee_count=2, bot=bot)
 
         self.assertFalse(interaction.response.sent_ephemeral)
-        # Nothing was ever on cooldown yet, so no post should have been
-        # touched by the (non-existent) rollover.
+        # Nothing was ever on cooldown yet, so the rollover mechanism
+        # itself must not have touched anything -- but Suggestion Status
+        # Synchronization now syncs every newly-presented candidate's own
+        # post to Rotation Cooldown the moment the round opens (see
+        # sync_vote_start_status_embeds), so exactly the 2 presented
+        # candidates (out of 3 suggestions, with nominee_count=2) get
+        # exactly one edit each; the one not presented gets none.
+        self.assertEqual(2, sum(message.edit_calls for message in messages.values()))
         for message in messages.values():
-            self.assertEqual(0, message.edit_calls)
+            self.assertIn(message.edit_calls, (0, 1))
 
     async def test_missing_bot_still_rolls_over_but_skips_embed_sync(self) -> None:
         await self._start_vote(nominee_count=2)

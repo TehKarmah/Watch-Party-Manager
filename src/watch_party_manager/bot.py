@@ -571,30 +571,7 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="reject")
         async def reject(interaction: discord.Interaction, suggestion_id: int) -> None:
-            message, ephemeral, watch_item = perform_reject_suggestion(
-                suggestion_service=self.suggestion_service,
-                suggestion_database_configuration_repository=self.suggestion_database_configuration_repository,
-                permission_service=self.permission_service,
-                user=interaction.user,
-                guild_id=interaction.guild_id,
-                suggestion_id=suggestion_id,
-            )
-            content = build_rejection_confirmation_text(message, watch_item)
-            view = None
-            if watch_item is not None:
-
-                async def on_undo(undo_interaction: discord.Interaction, undo_suggestion_id: int) -> None:
-                    await handle_undo_rejection(
-                        undo_interaction,
-                        self.suggestion_service,
-                        self.suggestion_database_configuration_repository,
-                        self.permission_service,
-                        self,
-                        undo_suggestion_id,
-                    )
-
-                view = RejectionConfirmationView(watch_item.id, on_undo, requester_id=interaction.user.id)
-            await interaction.response.send_message(content, view=view, ephemeral=ephemeral)
+            await handle_reject_suggestion(interaction, self, suggestion_id)
 
         @self.tree.command(name="unreject")
         async def unreject(interaction: discord.Interaction, suggestion_id: int) -> None:
@@ -4102,6 +4079,8 @@ async def handle_start_vote_completion(
         )
 
     candidates = get_round_candidates(suggestion_service, vote_round)
+    if bot is not None:
+        await sync_vote_start_status_embeds(bot, candidates)
     view = build_voting_view(
         vote_service=vote_service,
         suggestion_service=suggestion_service,
@@ -4579,6 +4558,7 @@ def build_suggestion_view(
     watch_item: WatchItem,
     guild_id: Optional[int],
     permission_service: Optional[PermissionService] = None,
+    bot: Optional["WatchPartyBot"] = None,
 ) -> SuggestionView:
     """Build a suggestion's "I WILL NOT WATCH" view whose button uses the shared toggle handler.
 
@@ -4593,6 +4573,13 @@ def build_suggestion_view(
             documented default threshold if unavailable (see
             resolve_rejection_threshold).
         permission_service: Passed through to the toggle callback.
+        bot: Passed through to the toggle callback so a rejection that
+            crosses the archive threshold can resync this post's own
+            Status field (Suggestion Status Synchronization), not just
+            its button. Optional, matching every other caller here --
+            omitted only in contexts (e.g. direct unit tests) with no
+            bot instance available, where the toggle callback falls back
+            to its previous view-only refresh.
     """
     threshold = resolve_rejection_threshold(
         suggestion_database_configuration_repository, guild_id, watch_item.database_id
@@ -4605,6 +4592,7 @@ def build_suggestion_view(
             suggestion_database_configuration_repository,
             suggestion_id,
             permission_service=permission_service,
+            bot=bot,
         )
 
     return SuggestionView(watch_item, threshold, on_toggle)
@@ -4689,6 +4677,7 @@ async def restore_persistent_suggestion_views(
             watch_item,
             watch_item.guild_id,
             permission_service=permission_service,
+            bot=bot,
         )
 
         if watch_item.channel_id is None:
@@ -5821,6 +5810,7 @@ async def post_suggestion_confirmation(
         watch_item,
         database.guild_id,
         permission_service=bot.permission_service,
+        bot=bot,
     )
 
     try:
@@ -5893,6 +5883,7 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
         watch_item,
         database.guild_id,
         permission_service=bot.permission_service,
+        bot=bot,
     )
 
     try:
@@ -5907,6 +5898,25 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
             watch_item.id,
             exc_info=True,
         )
+
+
+async def sync_vote_start_status_embeds(bot: "WatchPartyBot", candidates: "List[WatchItem]") -> None:
+    """Sync every newly-presented candidate's own confirmation-post Status
+    field the moment a vote round opens (Suggestion Status Synchronization).
+
+    A nominee is already recorded as "presented" -- and so already on
+    Rotation Cooldown internally -- by the time perform_start_vote returns
+    (see RotationService.record_presentation, invoked from within
+    NomineeSelectionService.select_nominees). Without this, a candidate's
+    public post keeps showing whatever status it had when last synced
+    (typically Available) from the moment a round opens until the round
+    later closes and sync_vote_completion_status_embeds finally corrects
+    it -- the same kind of staleness sync_vote_completion_status_embeds
+    and sync_rotation_rollover_status_embeds already fix for the other
+    two directions of this same lifecycle.
+    """
+    for watch_item in candidates:
+        await sync_suggestion_status_embed(bot, watch_item)
 
 
 async def sync_vote_completion_status_embeds(bot: "WatchPartyBot", result: VoteCompletionResult) -> None:
@@ -7269,10 +7279,24 @@ async def send_suggestion_list(
     """
     mode = resolve_candidate_selection_mode(bot, database.guild_id, database.database_id)
     if status_filter in _ROLLOVER_SENSITIVE_LIST_FILTERS:
+        # Vote Creation Validation / Suggestion Status Sync: /list's own
+        # resolve() call below can roll a completed rotation forward just
+        # like /vote start's can (see perform_start_vote's identical
+        # snapshot-before/sync-after pattern) -- snapshot who's on
+        # Rotation Cooldown first so any suggestion a rollover returns to
+        # eligibility gets its own public post refreshed too, not just
+        # this /list response.
+        previously_cooled_down_ids = {
+            item.id
+            for item in bot.suggestion_service.get_suggestions_for_database(database.database_id)
+            if item.id is not None and bot.rotation_service.is_in_rotation_cooldown(item)
+        }
         candidate_count = resolve_configured_candidate_count(bot, database.guild_id)
         eligibility = bot.collection_eligibility_service.resolve(
             database.database_id, mode, requested_count=candidate_count
         )
+        if eligibility.rollover_occurred:
+            await sync_rotation_rollover_status_embeds(bot, database.database_id, previously_cooled_down_ids)
     else:
         eligibility = bot.collection_eligibility_service.peek(database.database_id, mode)
 
@@ -7697,6 +7721,46 @@ def perform_reject_suggestion(
     return result.message, True, result.watch_item
 
 
+async def handle_reject_suggestion(
+    interaction: discord.Interaction, bot: "WatchPartyBot", suggestion_id: int
+) -> None:
+    """Handle /reject: record the rejection via perform_reject_suggestion,
+    then keep the suggestion's own public post in sync.
+
+    Suggestion Status Synchronization: a rejection that crosses the
+    configured threshold archives the suggestion (see
+    SuggestionService.reject_suggestion) -- its own public post must
+    reflect that immediately via sync_suggestion_status_embed, the same
+    mechanism every other status change goes through, not just the next
+    time something unrelated happens to sync it.
+    """
+    message, ephemeral, watch_item = perform_reject_suggestion(
+        suggestion_service=bot.suggestion_service,
+        suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
+        permission_service=bot.permission_service,
+        user=interaction.user,
+        guild_id=interaction.guild_id,
+        suggestion_id=suggestion_id,
+    )
+    content = build_rejection_confirmation_text(message, watch_item)
+    view = None
+    if watch_item is not None:
+        await sync_suggestion_status_embed(bot, watch_item)
+
+        async def on_undo(undo_interaction: discord.Interaction, undo_suggestion_id: int) -> None:
+            await handle_undo_rejection(
+                undo_interaction,
+                bot.suggestion_service,
+                bot.suggestion_database_configuration_repository,
+                bot.permission_service,
+                bot,
+                undo_suggestion_id,
+            )
+
+        view = RejectionConfirmationView(watch_item.id, on_undo, requester_id=interaction.user.id)
+    await interaction.response.send_message(content, view=view, ephemeral=ephemeral)
+
+
 def perform_remove_rejection(
     suggestion_service: SuggestionService,
     permission_service: PermissionService,
@@ -7785,6 +7849,7 @@ async def handle_undo_rejection(
         watch_item,
         watch_item.guild_id,
         permission_service=permission_service,
+        bot=bot,
     )
     try:
         channel = bot.get_channel(watch_item.channel_id)
@@ -7864,14 +7929,16 @@ async def handle_suggestion_rejection_toggle(
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository],
     suggestion_id: int,
     permission_service: Optional[PermissionService] = None,
+    bot: Optional["WatchPartyBot"] = None,
 ) -> None:
     """Handle a click on a suggestion's "I WILL NOT WATCH" button.
 
     Reuses perform_toggle_suggestion_rejection() for all rejection logic,
-    then refreshes the original suggestion message's button so its
-    displayed count/threshold and archived state stay accurate --
-    mirroring handle_nominee_vote's "respond ephemerally, then refresh
-    the original post" pattern. Never posts an additional public message.
+    then refreshes the original suggestion message so its displayed
+    button (count/threshold/archived state) and Status field both stay
+    accurate -- mirroring handle_nominee_vote's "respond ephemerally,
+    then refresh the original post" pattern. Never posts an additional
+    public message.
 
     Args:
         interaction: The button-click interaction.
@@ -7884,6 +7951,14 @@ async def handle_suggestion_rejection_toggle(
             configured; if omitted, the button reports a clear
             "not configured" message rather than allowing the click
             through, matching PermissionService's own fail-closed convention.
+        bot: Used to resync this post's embed (Status field) through the
+            same sync_suggestion_status_embed every other status change
+            goes through (Suggestion Status Synchronization) -- a
+            rejection that crosses the archive threshold changes this
+            suggestion's status, and that post is the one the button
+            lives on. Optional: when omitted (e.g. a caller with no bot
+            instance available), falls back to refreshing only the
+            view, matching this function's previous behavior.
     """
     if permission_service is None:
         await interaction.response.send_message(
@@ -7902,6 +7977,10 @@ async def handle_suggestion_rejection_toggle(
     await interaction.response.send_message(message, ephemeral=ephemeral)
 
     if watch_item is None:
+        return
+
+    if bot is not None:
+        await sync_suggestion_status_embed(bot, watch_item)
         return
 
     view = build_suggestion_view(

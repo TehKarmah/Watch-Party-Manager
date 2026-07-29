@@ -14,9 +14,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import (
     build_suggestion_confirmation_embed,
+    handle_reject_suggestion,
+    handle_suggestion_rejection_toggle,
     sync_rotation_rollover_status_embeds,
     sync_suggestion_status_embed,
     sync_vote_completion_status_embeds,
+    sync_vote_start_status_embeds,
 )
 from watch_party_manager.domain.watch_item import MediaType, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
@@ -24,12 +27,15 @@ from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
+from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_completion_service import VoteCompletionResult
 
 GUILD_ID = 100
 CHANNEL_ID = 200
+WATCH_PARTY_MEMBER_ROLE_ID = 555
+WASH_CREW_ROLE_ID = 999
 
 
 def make_item(*, status=WatchItemStatus.SUGGESTED, database_id=None, channel_id=None, message_id=None, journey=None):
@@ -201,6 +207,53 @@ class SyncSuggestionStatusEmbedTests(unittest.IsolatedAsyncioTestCase):
         # Never recreates the message.
         self.assertEqual([], channel.sent_messages)
 
+    async def test_reactivating_a_vote_winner_syncs_the_post_back_to_available(self) -> None:
+        # Suggestion Status Synchronization, transition 5: Vote Winner ->
+        # Eligible for Voting when a Vote Winner is re-added/restored
+        # (e.g. via /edit_suggestion's Change Status -> Available).
+        watch_item = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(watch_item.id, GUILD_ID, CHANNEL_ID, 555)
+        self.suggestion_service.set_suggestion_status(watch_item.id, WatchItemStatus.VOTE_WINNER)
+
+        message = FakeMessage(message_id=555)
+        channel = FakeChannel(message)
+        bot = FakeBot(self.suggestion_service, channel)
+
+        self.suggestion_service.set_suggestion_status(watch_item.id, WatchItemStatus.SUGGESTED)
+        restored_item = self.suggestion_service.get_suggestion(watch_item.id)
+
+        await sync_suggestion_status_embed(bot, restored_item)
+
+        self.assertEqual(1, message.edit_calls)
+        status_field = next(field for field in message.edited_embed.fields if field.name == "Status")
+        self.assertEqual("🟢 Available", status_field.value)
+
+    async def test_restoring_a_retired_item_syncs_the_post_back_to_available(self) -> None:
+        # Suggestion Status Synchronization, transition 6: Retired ->
+        # Eligible for Voting when a Retired item is restored (e.g. via
+        # /edit_suggestion's Change Status -> Available, or re-adding it
+        # through /add's reactivation flow).
+        watch_item = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(watch_item.id, GUILD_ID, CHANNEL_ID, 555)
+        self.suggestion_service.archive_suggestion(watch_item.id)
+
+        message = FakeMessage(message_id=555)
+        channel = FakeChannel(message)
+        bot = FakeBot(self.suggestion_service, channel)
+
+        self.suggestion_service.reactivate_suggestion(watch_item.id)
+        restored_item = self.suggestion_service.get_suggestion(watch_item.id)
+
+        await sync_suggestion_status_embed(bot, restored_item)
+
+        self.assertEqual(1, message.edit_calls)
+        status_field = next(field for field in message.edited_embed.fields if field.name == "Status")
+        self.assertEqual("🟢 Available", status_field.value)
+
     async def test_no_op_when_no_message_reference_exists(self) -> None:
         watch_item = make_item(database_id=self.database.database_id)
         message = FakeMessage(message_id=1)
@@ -223,6 +276,71 @@ class SyncSuggestionStatusEmbedTests(unittest.IsolatedAsyncioTestCase):
 
         # Must not raise.
         await sync_suggestion_status_embed(bot, watch_item)
+
+
+class SyncVoteStartStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
+    """Suggestion Status Synchronization, transition 1: a candidate
+    presented into a new voting round is already recorded as Rotation
+    Cooldown internally (see RotationService.record_presentation) by the
+    time perform_start_vote returns -- its own public post must reflect
+    that the moment the round opens, not only once the round later closes.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp_dir.cleanup)
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.database = self.suggestion_service.create_database("Movies", GUILD_ID, CHANNEL_ID).database
+        from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
+
+        self.rotation_service = RotationService(
+            self.suggestion_service, repository=JsonRotationRepository(root / "rotations.json")
+        )
+
+    def _status_of(self, embed) -> str:
+        return next(field.value for field in embed.fields if field.name == "Status")
+
+    async def test_every_presented_candidate_is_synced_to_rotation_cooldown(self) -> None:
+        first = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        second = self.suggestion_service.suggest(
+            "Predator", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(first.id, GUILD_ID, CHANNEL_ID, 777)
+        self.suggestion_service.set_confirmation_post_reference(second.id, GUILD_ID, CHANNEL_ID, 778)
+
+        # Mirrors what perform_start_vote's nominee selection already did
+        # (via strategy.on_presented) before this function is called.
+        self.rotation_service.record_presentation(self.database.database_id, [first.id, second.id])
+        presented_first = self.suggestion_service.get_suggestion(first.id)
+        presented_second = self.suggestion_service.get_suggestion(second.id)
+
+        message_first = FakeMessage(message_id=777)
+        message_second = FakeMessage(message_id=778)
+        channel = FakeChannel(message_first, message_second)
+        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+
+        await sync_vote_start_status_embeds(bot, [presented_first, presented_second])
+
+        self.assertEqual(1, message_first.edit_calls)
+        self.assertEqual("🟡 Rotation Cooldown", self._status_of(message_first.edited_embed))
+        self.assertEqual(1, message_second.edit_calls)
+        self.assertEqual("🟡 Rotation Cooldown", self._status_of(message_second.edited_embed))
+
+    async def test_a_candidate_with_no_public_post_is_skipped_without_raising(self) -> None:
+        candidate = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id
+        ).watch_item
+        channel = FakeChannel()
+        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+
+        # Must not raise even though `candidate` has no channel_id/message_id.
+        await sync_vote_start_status_embeds(bot, [candidate])
 
 
 class SyncVoteCompletionStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
@@ -462,6 +580,135 @@ class SyncRotationRolloverStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
 
         # Must not raise.
         await sync_rotation_rollover_status_embeds(bot, self.database.database_id, {item.id})
+
+
+class FakeRole:
+    def __init__(self, role_id: int) -> None:
+        self.id = role_id
+
+
+class FakeMember:
+    def __init__(self, user_id: int, role_ids=()) -> None:
+        self.id = user_id
+        self.roles = [FakeRole(role_id) for role_id in role_ids]
+
+
+class FakeResponse:
+    def __init__(self) -> None:
+        self.sent_message = None
+        self.sent_ephemeral = None
+        self.sent_view = None
+
+    async def send_message(self, content=None, *, ephemeral=False, view=None) -> None:
+        self.sent_message = content
+        self.sent_ephemeral = ephemeral
+        self.sent_view = view
+
+
+class FakeRejectInteraction:
+    def __init__(self, user: FakeMember, guild_id: int = GUILD_ID) -> None:
+        self.user = user
+        self.guild_id = guild_id
+        self.response = FakeResponse()
+
+
+class SuggestionRejectionThresholdEmbedSyncTests(unittest.IsolatedAsyncioTestCase):
+    """Suggestion Status Synchronization, transition 4's two rejection
+    paths: both /reject (handle_reject_suggestion) and the "I WILL NOT
+    WATCH" button (handle_suggestion_rejection_toggle) must resync the
+    suggestion's own public post -- not just its view/button -- when a
+    rejection crosses the configured threshold and archives it.
+    """
+
+    class FakeConfigRepository:
+        class _Config:
+            class suggestion_rules:
+                rejection_threshold = 1
+
+        def get(self, guild_id, database_id):
+            return self._Config()
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp_dir.cleanup)
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.database = self.suggestion_service.create_database("Movies", GUILD_ID, CHANNEL_ID).database
+        self.permission_service = PermissionService(
+            watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=WASH_CREW_ROLE_ID
+        )
+        self.item = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(self.item.id, GUILD_ID, CHANNEL_ID, 555)
+
+    def _status_of(self, embed) -> str:
+        return next(field.value for field in embed.fields if field.name == "Status")
+
+    async def test_reject_command_syncs_the_post_when_the_threshold_archives_it(self) -> None:
+        message = FakeMessage(message_id=555)
+        channel = FakeChannel(message)
+        bot = FakeBot(self.suggestion_service, channel)
+        bot.permission_service = self.permission_service
+        bot.suggestion_database_configuration_repository = self.FakeConfigRepository()
+
+        interaction = FakeRejectInteraction(FakeMember(1, [WATCH_PARTY_MEMBER_ROLE_ID]))
+        await handle_reject_suggestion(interaction, bot, self.item.id)
+
+        self.assertEqual(
+            WatchItemStatus.ARCHIVED, self.suggestion_service.get_suggestion(self.item.id).status
+        )
+        self.assertEqual(1, message.edit_calls)
+        self.assertEqual("🗄️ Retired", self._status_of(message.edited_embed))
+
+    async def test_toggle_button_syncs_the_post_when_the_threshold_archives_it(self) -> None:
+        message = FakeMessage(message_id=555)
+        channel = FakeChannel(message)
+        bot = FakeBot(self.suggestion_service, channel)
+        bot.permission_service = self.permission_service
+
+        interaction = FakeRejectInteraction(FakeMember(1, [WATCH_PARTY_MEMBER_ROLE_ID]))
+        await handle_suggestion_rejection_toggle(
+            interaction,
+            self.suggestion_service,
+            self.FakeConfigRepository(),
+            self.item.id,
+            permission_service=self.permission_service,
+            bot=bot,
+        )
+
+        self.assertEqual(
+            WatchItemStatus.ARCHIVED, self.suggestion_service.get_suggestion(self.item.id).status
+        )
+        self.assertEqual(1, message.edit_calls)
+        self.assertEqual("🗄️ Retired", self._status_of(message.edited_embed))
+
+    async def test_toggle_button_without_a_bot_falls_back_to_view_only_refresh(self) -> None:
+        # Backward-compatible fallback: a caller with no bot instance
+        # (e.g. a direct unit test) still gets the previous view-only
+        # refresh rather than an error.
+        class FakeViewOnlyMessage:
+            def __init__(self) -> None:
+                self.edited_view = "not-edited"
+
+            async def edit(self, view="not-edited") -> None:
+                self.edited_view = view
+
+        interaction = FakeRejectInteraction(FakeMember(1, [WATCH_PARTY_MEMBER_ROLE_ID]))
+        interaction.message = FakeViewOnlyMessage()
+
+        await handle_suggestion_rejection_toggle(
+            interaction,
+            self.suggestion_service,
+            self.FakeConfigRepository(),
+            self.item.id,
+            permission_service=self.permission_service,
+        )
+
+        self.assertNotEqual("not-edited", interaction.message.edited_view)
 
 
 if __name__ == "__main__":

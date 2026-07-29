@@ -697,6 +697,52 @@ class ListEligibilityParityTests(HandleListSuggestionsTestCase):
         self.assertIn("The Matrix", message)
         self.assertIn("Inception", message)
 
+    async def test_rollover_syncs_the_previously_cooled_down_items_public_post(self) -> None:
+        # Suggestion Status Synchronization, transition 2: /list's own
+        # rollover (see test_list_rolls_over_the_same_way_vote_start_would
+        # above) must resync every suggestion it returns to eligibility --
+        # not just report the correct eligibility bucket back to the
+        # member who happened to run /list.
+        class FakeMessage:
+            def __init__(self, message_id: int) -> None:
+                self.id = message_id
+                self.edited_embed = None
+                self.edit_calls = 0
+
+            async def edit(self, *, embed=None, view=None) -> None:
+                self.edited_embed = embed
+                self.edit_calls += 1
+
+        class FakeChannel:
+            def __init__(self, message) -> None:
+                self._message = message
+
+            async def fetch_message(self, message_id):
+                return self._message
+
+        database = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        item_a = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
+        self.suggestion_service.suggest("The Matrix", database_id=database.database_id)
+        self.suggestion_service.suggest("Inception", database_id=database.database_id)
+        self.suggestion_service.set_confirmation_post_reference(item_a.id, GUILD_ID, CHANNEL_ID, 555)
+        self.bot.rotation_service.get_or_start_rotation(database.database_id)
+        self.bot.rotation_service.record_presentation(database.database_id, [item_a.id])
+
+        message = FakeMessage(message_id=555)
+        channel = FakeChannel(message)
+        self.bot.get_channel = lambda channel_id: channel
+
+        # Only 2 of 3 remain pending -- fewer than the default candidate
+        # count of 3, so this triggers the same rollover as the test above.
+        interaction = FakeInteraction()
+        await handle_list_suggestions(interaction, self.bot, "eligible", False)
+
+        self.assertEqual(1, message.edit_calls)
+        status_field = next(field for field in message.edited_embed.fields if field.name == "Status")
+        self.assertEqual("🟢 Available", status_field.value)
+
     async def test_vote_winner_filter_never_bootstraps_a_rotation(self) -> None:
         # VOTE_WINNER/RETIRED are terminal, rotation-unaffected buckets --
         # peek(), not resolve(), so simply checking Vote Winners must
