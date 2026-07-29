@@ -448,7 +448,7 @@ class VoteCommandTests(unittest.TestCase):
         message, ephemeral = perform_vote(self.vote_service, user_id=111, suggestion_id=1)
 
         self.assertTrue(ephemeral)
-        self.assertIn("already used your one vote change", message)
+        self.assertIn("already used your 1 vote change", message)
         # The rejected attempt must not have changed the recorded vote.
         self.assertEqual(self.vote_service.get_open_round().votes[111].suggestion_id, 2)
 
@@ -486,6 +486,20 @@ class VoteCommandTests(unittest.TestCase):
             message,
             "Your vote for The Matrix has been recorded.\n\nStandings:\nThe Matrix — 1 vote",
         )
+
+    def test_confirmation_links_the_candidate_when_its_post_is_known(self) -> None:
+        # UX Polish: the headline candidate name must be linked to its
+        # original suggestion post when known, matching the standings
+        # block shown right below it in the same message.
+        candidate = self.suggestion_service.get_suggestions()[0]
+        self.suggestion_service.set_confirmation_post_reference(candidate.id, 1, 2, 3)
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
+        message, _ = perform_vote(
+            self.vote_service, user_id=111, suggestion_id=1, suggestion_service=self.suggestion_service
+        )
+
+        self.assertIn("Your vote for [The Matrix](https://discord.com/channels/1/2/3) has been recorded.", message)
 
     def test_confirmation_formatting_falls_back_to_suggestion_number_without_a_suggestion_service(self) -> None:
         """No suggestion_service means no candidate to resolve a title from

@@ -135,6 +135,23 @@ class RemoveMatchingTests(HandleRemoveSuggestionTestCase):
         self.assertIsNotNone(interaction.response.sent_view)
         self.assertEqual(2, len(interaction.response.sent_view.children[0].options))
 
+    async def test_selector_option_shows_the_polished_status_label(self) -> None:
+        # UX Polish: the picker's status suffix must use the established
+        # display-status vocabulary ("🟢 Available"), not the raw
+        # internal enum value ("Suggested").
+        other_database = self.suggestion_service.create_database(
+            "Other DB", guild_id=GUILD_ID, channel_id=555
+        ).database
+        self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id)
+        self.suggestion_service.suggest("Alien (1979)", database_id=other_database.database_id)
+        interaction = FakeInteraction()
+
+        await handle_remove_suggestion(interaction, self.bot, "Alien (1979)")
+
+        labels = [option.label for option in interaction.response.sent_view.children[0].options]
+        self.assertTrue(all("🟢 Available" in label for label in labels))
+        self.assertFalse(any("Suggested" in label for label in labels))
+
     async def test_selecting_from_multiple_matches_shows_confirmation(self) -> None:
         other_database = self.suggestion_service.create_database(
             "Other DB", guild_id=GUILD_ID, channel_id=555

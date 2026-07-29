@@ -210,6 +210,24 @@ class HandleDatabaseResetTests(ResetImportCommandTestCase):
         self.assertIn("Movie Night", select_interaction.response.sent_message)
         self.assertIsNotNone(select_interaction.response.sent_view)
 
+    async def test_summary_uses_proper_pluralization_not_a_literal_s_marker(self) -> None:
+        # UX Polish: "2 suggestions", not the literal "2 suggestion(s)".
+        self._seed_database(name="Movie Night")
+        self.bot.suggestion_repository.save(
+            [
+                WatchItem(title="Alien", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID),
+                WatchItem(title="Aliens", media_type=MediaType.MOVIE, database_id=1, guild_id=GUILD_ID),
+            ],
+            next_id=3,
+        )
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_database_reset(interaction, self.bot)
+
+        select_interaction = await _select_database(interaction.response.sent_view)
+
+        self.assertIn("2 suggestions", select_interaction.response.sent_message)
+        self.assertNotIn("suggestion(s)", select_interaction.response.sent_message)
+
     async def test_typing_reset_performs_the_reset(self) -> None:
         self._seed_database(name="Movie Night")
         self.bot.suggestion_repository.save(
@@ -240,7 +258,10 @@ class HandleDatabaseResetTests(ResetImportCommandTestCase):
 
         confirm_interaction = await _submit_modal(view, 0, "RESET")
 
-        self.assertIn("3 suggestion(s) removed", confirm_interaction.response.sent_message)
+        # UX Polish: proper pluralization ("3 suggestions removed"), not
+        # the literal "(s)" marker.
+        self.assertIn("3 suggestions removed", confirm_interaction.response.sent_message)
+        self.assertNotIn("suggestion(s)", confirm_interaction.response.sent_message)
 
     async def test_list_immediately_shows_the_empty_state_after_reset(self) -> None:
         # Regression for the reported bug: /database_reset reported

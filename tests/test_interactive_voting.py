@@ -255,7 +255,7 @@ class HandleNomineeVoteTests(unittest.IsolatedAsyncioTestCase):
         interaction3 = FakeInteraction(user_id=111, message=FakeVotingPostMessage())
         await handle_nominee_vote(interaction3, self.vote_service, self.suggestion_service, suggestion_id=3)
 
-        self.assertIn("already used your one vote change", interaction3.response.sent_message)
+        self.assertIn("already used your 1 vote change", interaction3.response.sent_message)
         self.assertEqual(self.vote_service.get_open_round().votes[111].suggestion_id, 2)
 
     async def test_confirmation_is_always_ephemeral(self) -> None:

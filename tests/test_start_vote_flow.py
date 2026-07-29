@@ -902,6 +902,13 @@ class CustomizeVoteModalTests(unittest.TestCase):
         self.assertIn(modal.reminder_enabled_input, modal.children)
         self.assertIn(modal.reminder_minutes_input, modal.children)
 
+    def test_the_two_reminder_fields_have_distinct_labels(self) -> None:
+        # UX Polish: both reminder fields previously read "Reminder before
+        # close" (one with a "? (yes/no)" suffix), easy to misread when
+        # scanning the modal quickly.
+        modal = CustomizeVoteModal(self._noop)
+        self.assertNotEqual(modal.reminder_enabled_input.label, modal.reminder_minutes_input.label)
+
     def test_placeholders_show_plain_wording_when_no_default_is_supplied(self) -> None:
         modal = CustomizeVoteModal(self._noop)
         self.assertEqual(modal.nominee_count_input.placeholder, "Leave blank to use the configured default")

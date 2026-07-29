@@ -45,7 +45,11 @@ class BotHelperTests(unittest.TestCase):
 
         self.assertIn("**General**", help_text)
         self.assertIn("**Watch Items**", help_text)
-        self.assertIn("**Voting**", help_text)
+        # UX Polish: /vote status was previously registered under its own
+        # bare "Voting" section (a copy-paste miss) instead of being
+        # grouped with /vote start and /vote edit under "WASH Crew: Voting".
+        self.assertIn("**WASH Crew: Voting**", help_text)
+        self.assertNotIn("**Voting**\n", help_text)
         self.assertIn("**WASH Crew: Collections**", help_text)
         self.assertIn("**WASH Crew: Configuration**", help_text)
 

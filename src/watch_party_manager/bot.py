@@ -183,6 +183,7 @@ from watch_party_manager.services.suggestion_repair_service import SuggestionRep
 from watch_party_manager.services.suggestion_display_status import (
     SUGGESTION_DISPLAY_STATUS_EMOJI,
     SuggestionDisplayStatus,
+    compute_display_status,
     display_status_label,
     format_display_status_with_won_date,
     resolve_display_status,
@@ -430,15 +431,15 @@ class WatchPartyBot(commands.Bot):
         self.permission_service.watch_party_member_role_id = watch_party_member_role_id
 
     async def setup_hook(self) -> None:
-        @self.tree.command(name="about")
+        @self.tree.command(name="about", description="Show information about WASH.")
         async def about(interaction: discord.Interaction) -> None:
             await handle_about(interaction, self)
 
-        @self.tree.command(name="join_watch_party")
+        @self.tree.command(name="join_watch_party", description="Join or leave the Watch Party.")
         async def join_watch_party(interaction: discord.Interaction) -> None:
             await handle_join_watch_party(interaction, self)
 
-        @self.tree.command(name="help")
+        @self.tree.command(name="help", description="Show WASH's command reference.")
         async def help_command(interaction: discord.Interaction) -> None:
             show_wash_crew = self.permission_service.is_wash_crew(interaction.user)
             show_watch_party_member = self.permission_service.is_watch_party_member(interaction.user)
@@ -447,7 +448,7 @@ class WatchPartyBot(commands.Bot):
             )
             await send_help_response(interaction, response)
 
-        @self.tree.command(name="stats")
+        @self.tree.command(name="stats", description="Show server, member, suggestion, or rotation statistics.")
         @discord.app_commands.describe(
             type="Which statistics to show (defaults to Server).",
             public="Post the statistics publicly instead of showing them only to you (WASH Crew only, except for your own Member statistics).",
@@ -476,8 +477,10 @@ class WatchPartyBot(commands.Bot):
                 interaction.guild_id,
             )
 
-        @self.tree.command(name="add")
+        @self.tree.command(name="add", description="Suggest a watch item.")
         @discord.app_commands.describe(
+            title="The watch item's title, or an IMDb link to it.",
+            imdb_url="The watch item's IMDb link, if not already given in the title.",
             release_year="The watch item's release year, if known (helps duplicate detection)."
         )
         async def suggest(
@@ -488,7 +491,7 @@ class WatchPartyBot(commands.Bot):
         ) -> None:
             await handle_add_suggestion(interaction, self, title, imdb_url, release_year)
 
-        @self.tree.command(name="list")
+        @self.tree.command(name="list", description="List watch items and their status.")
         @discord.app_commands.describe(
             status="Which watch items to show (defaults to Active Watch Items).",
             public="Post the list publicly instead of showing it only to you (WASH Crew only).",
@@ -510,7 +513,9 @@ class WatchPartyBot(commands.Bot):
         ) -> None:
             await handle_list_suggestions(interaction, self, status, public)
 
-        @self.tree.command(name="repair_suggestions")
+        @self.tree.command(
+            name="repair_suggestions", description="Repair suggestions with malformed or legacy data (WASH Crew only)."
+        )
         async def repair_suggestions(interaction: discord.Interaction) -> None:
             message, ephemeral = await perform_repair_suggestions(
                 repair_service=self.suggestion_repair_service,
@@ -519,7 +524,7 @@ class WatchPartyBot(commands.Bot):
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
 
-        @self.tree.command(name="backup")
+        @self.tree.command(name="backup", description="Back up all of WASH's data (WASH Crew only).")
         async def backup(interaction: discord.Interaction) -> None:
             message, ephemeral, archive_path, display_filename = perform_backup(
                 backup_service=self.backup_service,
@@ -533,7 +538,7 @@ class WatchPartyBot(commands.Bot):
             file = discord.File(archive_path, filename=display_filename)
             await interaction.response.send_message(message, file=file, ephemeral=ephemeral)
 
-        @self.tree.command(name="restore")
+        @self.tree.command(name="restore", description="Restore WASH's data from a backup (WASH Crew only).")
         @discord.app_commands.describe(
             backup_filename="An existing local backup's filename (see /backup's response).",
             backup_file="Upload a backup .zip to restore from instead of selecting a local one.",
@@ -545,36 +550,42 @@ class WatchPartyBot(commands.Bot):
         ) -> None:
             await handle_restore(interaction, self, backup_filename, backup_file)
 
-        @self.tree.command(name="factory_reset")
+        @self.tree.command(
+            name="factory_reset", description="Erase all of WASH's data and start over (WASH Crew only)."
+        )
         async def factory_reset_command(interaction: discord.Interaction) -> None:
             await handle_factory_reset(interaction, self)
 
-        @self.tree.command(name="import")
+        @self.tree.command(name="import", description="Import another WASH instance's backup (WASH Crew only).")
         @discord.app_commands.describe(
             backup_file="Upload a full backup .zip created by another WASH instance's /backup."
         )
         async def import_command(interaction: discord.Interaction, backup_file: discord.Attachment) -> None:
             await handle_import(interaction, self, backup_file)
 
-        @self.tree.command(name="remove")
+        @self.tree.command(name="remove", description="Archive a suggestion (WASH Crew only).")
         @discord.app_commands.describe(
             query="A reference number (e.g. #0007), exact title, or title without its year."
         )
         async def remove_suggestion(interaction: discord.Interaction, query: str) -> None:
             await handle_remove_suggestion(interaction, self, query)
 
-        @self.tree.command(name="edit_suggestion")
+        @self.tree.command(
+            name="edit_suggestion", description="Change a suggestion's status or collection (WASH Crew only)."
+        )
         @discord.app_commands.describe(
             reference="The suggestion's reference number (e.g. #0007) or its current exact title.",
         )
         async def edit_suggestion_command(interaction: discord.Interaction, reference: str) -> None:
             await handle_edit_suggestion(interaction, self, reference)
 
-        @self.tree.command(name="reject")
+        @self.tree.command(name="reject", description="Indicate you will not watch a suggestion.")
+        @discord.app_commands.describe(suggestion_id="The suggestion's numeric ID (shown on its public post).")
         async def reject(interaction: discord.Interaction, suggestion_id: int) -> None:
             await handle_reject_suggestion(interaction, self, suggestion_id)
 
-        @self.tree.command(name="unreject")
+        @self.tree.command(name="unreject", description="Undo your rejection of a suggestion.")
+        @discord.app_commands.describe(suggestion_id="The suggestion's numeric ID (shown on its public post).")
         async def unreject(interaction: discord.Interaction, suggestion_id: int) -> None:
             message, ephemeral = perform_remove_rejection(
                 suggestion_service=self.suggestion_service,
@@ -584,9 +595,20 @@ class WatchPartyBot(commands.Bot):
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
 
-        @self.tree.command(name="setup")
+        @self.tree.command(name="setup", description="Run WASH's first-time setup wizard (WASH Crew only).")
         async def setup(interaction: discord.Interaction) -> None:
-            message, blocked = perform_setup_permission_check(interaction.user, self.wash_crew_role_id)
+            guild_configuration = (
+                self.guild_configuration_repository.get(interaction.guild_id)
+                if interaction.guild_id is not None
+                else None
+            )
+            is_guild_owner = interaction.guild is not None and interaction.user.id == interaction.guild.owner_id
+            message, blocked = perform_setup_permission_check(
+                interaction.user,
+                self.wash_crew_role_id,
+                guild_configuration=guild_configuration,
+                is_guild_owner=is_guild_owner,
+            )
             if blocked:
                 await interaction.response.send_message(message, ephemeral=True)
                 return
@@ -596,7 +618,7 @@ class WatchPartyBot(commands.Bot):
                 await interaction.response.send_message("Setup can only be run inside a server.", ephemeral=True)
                 return
 
-            redirect_message = perform_setup_redirect_check(self.guild_configuration_repository.get(guild_id))
+            redirect_message = perform_setup_redirect_check(guild_configuration)
             if redirect_message is not None:
                 await interaction.response.send_message(redirect_message, ephemeral=True)
                 return
@@ -630,7 +652,7 @@ class WatchPartyBot(commands.Bot):
 
             await send_setup_preparation_screen(interaction, self, state, requester_id=requester_id)
 
-        @self.tree.command(name="config")
+        @self.tree.command(name="config", description="Change WASH's configuration (WASH Crew only).")
         async def config(interaction: discord.Interaction) -> None:
             permission = self.permission_service.require_wash_crew(interaction.user)
             if not permission.allowed:
@@ -1581,20 +1603,40 @@ def parse_optional_bool_field(value: Optional[str]) -> Optional[bool]:
 # --- FR-028: /setup wizard ---------------------------------------------------------------
 
 
-def perform_setup_permission_check(user: object, wash_crew_role_id: Optional[int]) -> tuple[str, bool]:
+def perform_setup_permission_check(
+    user: object,
+    wash_crew_role_id: Optional[int],
+    *,
+    guild_configuration: Optional[GuildConfiguration] = None,
+    is_guild_owner: bool = False,
+) -> tuple[str, bool]:
     """Gate /setup.
 
-    /setup is the one administrative command that must remain usable
-    before a WASH Crew role has been configured -- otherwise nobody could
-    ever complete initial setup to configure that role in the first
-    place. Once a WASH Crew role IS configured, /setup falls back to the
-    same fail-closed rule as every other administrative command, so a
-    completed setup can't be silently redone by an unauthorized member.
+    Bootstrap Setup Permission Fix: wash_crew_role_id here is a bot-wide
+    fallback (see WatchPartyBot.__init__ / WASH_CREW_ROLE_ID) that can be
+    set to a role from a different guild, or one this guild's own setup
+    has simply never associated with WASH yet -- using it to gate a
+    brand-new guild's /setup could lock out everyone, including the
+    person who actually owns the server. So until *this* guild's own
+    configuration has associated a WASH Crew role, only the Discord
+    guild owner may run /setup. Once this guild's configuration has a
+    WASH Crew role, /setup falls back to the exact same fail-closed rule
+    as every other administrative command (guild ownership grants no
+    special access at that point), so a completed setup can't be
+    silently redone by an unauthorized member.
 
     Returns:
         (message, blocked) -- blocked is True if the command should stop
         here and show `message` instead of proceeding.
     """
+    guild_wash_crew_role_configured = (
+        guild_configuration is not None and guild_configuration.wash_crew_role_id is not None
+    )
+    if not guild_wash_crew_role_configured:
+        if is_guild_owner:
+            return "", False
+        return "You need the WASH Crew role to run setup.", True
+
     if wash_crew_role_id is not None and not is_wash_crew_member(user, wash_crew_role_id):
         return "You need the WASH Crew role to run setup.", True
     return "", False
@@ -4333,11 +4375,17 @@ def build_vote_confirmation(
     Returns:
         A confirmation message. Never mentions any other member's vote.
     """
-    candidate_label = (
-        format_title_with_year(watch_item.title, watch_item.release_year)
-        if watch_item is not None
-        else f"suggestion #{vote_record.suggestion_id}"
-    )
+    if watch_item is not None:
+        # UX Polish: linked to the original suggestion post when
+        # available, matching how every candidate title is shown in the
+        # standings block that can appear right below this same message
+        # (see vote_announcement_formatter.py's _format_candidate_title).
+        candidate_label = format_title_with_year(watch_item.title, watch_item.release_year)
+        suggestion_link = build_suggestion_link(watch_item)
+        if suggestion_link:
+            candidate_label = f"[{candidate_label}]({suggestion_link})"
+    else:
+        candidate_label = f"suggestion #{vote_record.suggestion_id}"
     if is_first_vote:
         lines = [f"Your vote for {candidate_label} has been recorded."]
     else:
@@ -5699,7 +5747,8 @@ def build_duplicate_match_line(match: DuplicateMatch) -> str:
     parts = [f"Reference {item.reference}", item.title]
     if imdb_url:
         parts.append(imdb_url)
-    parts.append(f"status: {item.status.value.replace('_', ' ').title()}")
+    display_status = compute_display_status(item, in_rotation_cooldown=False)
+    parts.append(f"status: {display_status_label(display_status)}")
     return " | ".join(parts)
 
 
@@ -5728,7 +5777,7 @@ def build_vote_winner_duplicate_match_block(item: WatchItem) -> str:
 
 
 _ARCHIVE_CATEGORY_LABELS = {
-    DuplicateMatchCategory.ARCHIVED_REJECTED: 'archived after being rejected ("I WILL NOT WATCH")',
+    DuplicateMatchCategory.ARCHIVED_REJECTED: 'been archived after being rejected ("I WILL NOT WATCH")',
     DuplicateMatchCategory.VOTE_WINNER: "already won a vote",
     DuplicateMatchCategory.ARCHIVED_OTHER: "already been archived",
 }
@@ -6148,7 +6197,12 @@ async def handle_add_suggestion(
             async def on_abort(abort_interaction: discord.Interaction) -> None:
                 await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
 
-            view = EditVoteConfirmationView(confirm_label="Reactivate", on_confirm=on_confirm, on_abort=on_abort)
+            view = EditVoteConfirmationView(
+                confirm_label="Reactivate",
+                on_confirm=on_confirm,
+                on_abort=on_abort,
+                confirm_style=discord.ButtonStyle.primary,
+            )
             await target_interaction.response.send_message(decision.message, view=view, ephemeral=True)
             return
 
@@ -6159,7 +6213,12 @@ async def handle_add_suggestion(
         async def on_abort(abort_interaction: discord.Interaction) -> None:
             await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
 
-        view = EditVoteConfirmationView(confirm_label="Add Anyway", on_confirm=on_confirm, on_abort=on_abort)
+        view = EditVoteConfirmationView(
+            confirm_label="Add Anyway",
+            on_confirm=on_confirm,
+            on_abort=on_abort,
+            confirm_style=discord.ButtonStyle.primary,
+        )
         await target_interaction.response.send_message(decision.message, view=view, ephemeral=True)
 
     await resolve_database_then(interaction, bot, guild_id, channel_id, on_resolved)
@@ -6662,7 +6721,7 @@ async def handle_database_restore(
 def build_database_reset_summary_text(summary) -> str:
     return (
         f'**Reset Collection "{summary.database_name}"**\n\n'
-        f"This will permanently remove {summary.suggestion_count} suggestion(s) from this collection.\n"
+        f"This will permanently remove {format_count(summary.suggestion_count, 'suggestion')} from this collection.\n"
         "The collection itself, its configuration, and every other collection will NOT be affected."
     )
 
@@ -8077,7 +8136,6 @@ def build_database_list_text(
     for database in ordered_databases:
         status = "Active" if database.active else "Inactive"
         suggestion_count = suggestion_service.suggestion_count_for_database(database.database_id)
-        item_word = "watch item" if suggestion_count == 1 else "watch items"
         display_name = format_collection_display(
             _resolve_collection_name(
                 suggestion_service, database, guild, suggestion_database_configuration_repository
@@ -8091,7 +8149,7 @@ def build_database_list_text(
             f"Name: {display_name}\n"
             f"Status: {status}\n"
             f"Destination: <#{current_channel_id}>\n"
-            f"Watch items: {suggestion_count} {item_word}"
+            f"Watch items: {suggestion_count}"
         )
     return "\n\n".join(sections)
 
@@ -8186,7 +8244,8 @@ def build_removal_option_label(item: WatchItem, suggestion_service: SuggestionSe
     database = suggestion_service.get_database(item.database_id) if item.database_id is not None else None
     database_name = database.name if database is not None else "Unknown collection"
     year_part = f" ({item.release_year})" if item.release_year else ""
-    status_part = item.status.value.replace("_", " ").title()
+    display_status = compute_display_status(item, in_rotation_cooldown=False)
+    status_part = display_status_label(display_status)
     return f"{item.reference} {item.title}{year_part} -- {database_name} -- {status_part}"
 
 
@@ -8394,7 +8453,10 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
                     await abort_interaction.response.send_message("No changes were made.", ephemeral=True)
 
                 view = EditVoteConfirmationView(
-                    confirm_label="Move Anyway", on_confirm=on_confirm, on_abort=on_abort
+                    confirm_label="Move Anyway",
+                    on_confirm=on_confirm,
+                    on_abort=on_abort,
+                    confirm_style=discord.ButtonStyle.primary,
                 )
                 await select_interaction.response.send_message(message, view=view, ephemeral=True)
                 return
@@ -8675,7 +8737,7 @@ async def handle_database_add(interaction: discord.Interaction, bot: "WatchParty
 
     guild_id = interaction.guild_id
     if guild_id is None:
-        await interaction.response.send_message("This command can only be used in a Discord server.", ephemeral=True)
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
         return
 
     used_type_keys = used_standard_collection_type_keys(
@@ -8796,7 +8858,7 @@ def perform_database_list(
         return "You need the WASH Crew role to view collections.", True
 
     if guild_id is None:
-        return "This command can only be used in a Discord server.", True
+        return "This command can only be used in a server.", True
 
     databases = suggestion_service.list_databases(guild_id)
     if not databases:
@@ -8850,7 +8912,7 @@ def perform_database_remove(
         return "You need the WASH Crew role to remove a collection.", True
 
     if guild_id is None:
-        return "This command can only be used in a Discord server.", True
+        return "This command can only be used in a server.", True
 
     result = suggestion_service.deactivate_database(database_id, guild_id)
     return result.message, True
@@ -9063,7 +9125,14 @@ async def show_database_management_menu(
             await start_database_remove(action_interaction, bot, guild_id, database_id)
 
     async def on_cancel(cancel_interaction: discord.Interaction) -> None:
-        await cancel_interaction.response.edit_message(content="No changes were made.", view=None)
+        # UX Polish: matches every sibling Cancel confirmation's "X
+        # cancelled. No changes were made." pattern (e.g. /database add's
+        # "Collection creation cancelled...", /database move's "Move
+        # cancelled...") -- this was previously the one that dropped the
+        # leading clause naming what was cancelled.
+        await cancel_interaction.response.edit_message(
+            content="Collection management cancelled. No changes were made.", view=None
+        )
 
     view = CollectionManagementMenuView(on_action_chosen, on_cancel)
     await interaction.response.edit_message(
@@ -9252,7 +9321,11 @@ def build_watch_party_status_text(watch_party: WatchParty, watch_item: Optional[
     """
     title = watch_item.title if watch_item is not None else f"Watch item #{watch_party.watch_item_id}"
     lines = [
-        f"Watch Party #{watch_party.id}",
+        # UX Polish: "Watch party #N", matching every other confirmation
+        # that names a specific scheduled watch party by ID (schedule/
+        # reschedule/cancel) -- "Watch Party" (Title Case) is reserved
+        # for the community/role/membership concept elsewhere.
+        f"Watch party #{watch_party.id}",
         f"Watch Item: {title}",
         f"Status: {watch_party.status.value.capitalize()}",
         f"Scheduled for: {format_datetime_for_display(watch_party.scheduled_at)}",
@@ -9308,7 +9381,7 @@ def perform_schedule_watch_party(
         return "You need the WASH Crew role to schedule a watch party.", True, None
 
     if guild_id is None:
-        return "This command can only be used in a Discord server.", True, None
+        return "This command can only be used in a server.", True, None
 
     try:
         scheduled_at = parse_watch_party_schedule_time(when)
@@ -9662,7 +9735,7 @@ def perform_stats(
 ) -> str:
     """Return the /stats response for the current Discord server."""
     if guild_id is None:
-        return "This command can only be used in a Discord server."
+        return "This command can only be used in a server."
     return build_statistics_text(statistics_service.snapshot(guild_id))
 
 

@@ -181,10 +181,11 @@ def reset_suggestion_database(
         )
 
     removed_count = before_count - after_count
+    suggestion_word = "suggestion" if removed_count == 1 else "suggestions"
 
     return DatabaseResetResult(
         True,
-        f'Collection "{database.name}" has been reset: {removed_count} suggestion(s) removed. '
+        f'Collection "{database.name}" has been reset: {removed_count} {suggestion_word} removed. '
         "The collection, its configuration, and other collections were not affected. "
         f"A safety backup was made first: `{safety_backup.name}`.",
         removed_count=removed_count,

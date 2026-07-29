@@ -100,7 +100,7 @@ class StatisticsCommandTests(unittest.TestCase):
 
         message = perform_stats(service, guild_id=None)
 
-        self.assertEqual(message, "This command can only be used in a Discord server.")
+        self.assertEqual(message, "This command can only be used in a server.")
         self.assertEqual(service.guild_ids, [])
 
 

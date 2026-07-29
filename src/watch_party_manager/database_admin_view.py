@@ -46,7 +46,12 @@ _THREAD_CHANNEL_TYPES = [discord.ChannelType.public_thread, discord.ChannelType.
 
 class CancelButton(discord.ui.Button):
     def __init__(self, on_cancel: OnCancel, *, custom_id: str) -> None:
-        super().__init__(label="Cancel", style=discord.ButtonStyle.danger, custom_id=custom_id)
+        # UX Polish: Cancel is a safe no-op, never the destructive
+        # action -- matches the established convention elsewhere (see
+        # type_to_confirm_view.py's CancelDestructiveActionButton and
+        # restore_confirmation_view.py's CancelRestoreButton, both
+        # secondary-styled).
+        super().__init__(label="Cancel", style=discord.ButtonStyle.secondary, custom_id=custom_id)
         self._on_cancel = on_cancel
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -276,12 +281,20 @@ class CollectionManagementMenuView(discord.ui.View):
         )
         self.add_item(
             ManagementActionButton(
-                "reset", on_action_chosen, label="Reset Collection", custom_id="wpm_database_manage_reset"
+                "reset",
+                on_action_chosen,
+                label="Reset Collection",
+                custom_id="wpm_database_manage_reset",
+                style=discord.ButtonStyle.danger,
             )
         )
         self.add_item(
             ManagementActionButton(
-                "remove", on_action_chosen, label="Remove Collection", custom_id="wpm_database_manage_remove"
+                "remove",
+                on_action_chosen,
+                label="Remove Collection",
+                custom_id="wpm_database_manage_remove",
+                style=discord.ButtonStyle.danger,
             )
         )
         self.add_item(CancelButton(on_cancel, custom_id="wpm_database_manage_cancel"))

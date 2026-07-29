@@ -98,7 +98,7 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     CommandHelp(
         "/vote status",
         "View the current voting round.",
-        "Voting",
+        "WASH Crew: Voting",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(

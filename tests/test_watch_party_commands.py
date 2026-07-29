@@ -524,8 +524,10 @@ class PerformWatchPartyStatusTests(WatchPartyCommandTestCase):
 
         message = perform_watch_party_status(self.watch_party_service, self.suggestion_service)
 
-        self.assertIn(f"Watch Party #{sooner.id}", message)
-        self.assertNotIn(f"Watch Party #{later.id}", message)
+        # UX Polish: "Watch party #N" (lowercase "party"), matching every
+        # other confirmation that names a specific scheduled watch party.
+        self.assertIn(f"Watch party #{sooner.id}", message)
+        self.assertNotIn(f"Watch party #{later.id}", message)
 
     def test_ignores_cancelled_watch_parties(self) -> None:
         watch_party = self.watch_party_service.schedule_watch_party(

@@ -314,12 +314,14 @@ class CustomVoteEndTimeModal(discord.ui.Modal):
 
 
 class ConfirmEditVoteActionButton(discord.ui.Button):
-    """Proceeds with the destructive action the member confirmed."""
+    """Proceeds with the action the member confirmed."""
 
-    def __init__(self, label: str, on_click: OnEditVoteConfirmed) -> None:
+    def __init__(
+        self, label: str, on_click: OnEditVoteConfirmed, *, style: discord.ButtonStyle = discord.ButtonStyle.danger
+    ) -> None:
         super().__init__(
             label=label,
-            style=discord.ButtonStyle.danger,
+            style=style,
             custom_id="wpm_edit_vote_confirm",
         )
         self._callback = on_click
@@ -344,12 +346,12 @@ class AbortEditVoteActionButton(discord.ui.Button):
 
 
 class EditVoteConfirmationView(discord.ui.View):
-    """A generic confirm/abort safeguard for /edit_vote's destructive actions.
-
-    Reused for both "End Now" and "Cancel Vote" -- mirrors
+    """A generic confirm/abort safeguard, originally for /edit_vote's
+    destructive actions ("End Now", "Cancel Vote") but also reused
+    elsewhere in the app for any yes/no confirmation prompt -- mirrors
     RestoreConfirmationView's exact confirm/cancel pattern, generalized
-    with a caller-supplied confirm_label so this one class covers both
-    confirmations instead of two near-identical copies.
+    with a caller-supplied confirm_label so this one class covers many
+    near-identical confirmations instead of each inventing its own.
     """
 
     def __init__(
@@ -358,6 +360,7 @@ class EditVoteConfirmationView(discord.ui.View):
         confirm_label: str,
         on_confirm: OnEditVoteConfirmed,
         on_abort: OnEditVoteAborted,
+        confirm_style: discord.ButtonStyle = discord.ButtonStyle.danger,
     ) -> None:
         """Initialize the view.
 
@@ -367,7 +370,15 @@ class EditVoteConfirmationView(discord.ui.View):
                 being confirmed.
             on_confirm: Called when the confirm button is clicked.
             on_abort: Called when "Cancel" is clicked.
+            confirm_style: The confirm button's style. Defaults to
+                danger (red), correct for this view's original
+                destructive-action use -- callers confirming a
+                non-destructive action (e.g. "Add Anyway" past a
+                possible-duplicate warning) should pass
+                discord.ButtonStyle.primary instead, so a merely
+                cautionary confirmation doesn't read as alarming as an
+                irreversible one.
         """
         super().__init__(timeout=EDIT_VOTE_CONFIRMATION_TIMEOUT_SECONDS)
-        self.add_item(ConfirmEditVoteActionButton(confirm_label, on_confirm))
+        self.add_item(ConfirmEditVoteActionButton(confirm_label, on_confirm, style=confirm_style))
         self.add_item(AbortEditVoteActionButton(on_abort))

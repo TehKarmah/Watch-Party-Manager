@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import discord
+
 from watch_party_manager.bot import build_edit_suggestion_summary, handle_edit_suggestion
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItemStatus
 from watch_party_manager.edit_suggestion_view import (
@@ -210,7 +212,9 @@ class ChangeStatusActionTests(EditSuggestionTestCase):
         self.assertEqual(
             WatchItemStatus.VOTE_WINNER, self.suggestion_service.get_suggestion(self.item.id).status
         )
-        self.assertIn("Vote Winner", select_interaction.response.sent_message)
+        # UX Polish: the confirmation uses the established display-status
+        # vocabulary ("🏆 Vote Winner"), not a raw internal enum value.
+        self.assertIn("🏆 Vote Winner", select_interaction.response.sent_message)
 
     async def test_selecting_retired_archives_the_suggestion(self) -> None:
         button_interaction = await self._open_change_status()
@@ -221,6 +225,8 @@ class ChangeStatusActionTests(EditSuggestionTestCase):
         await select.callback(select_interaction)
 
         self.assertEqual(WatchItemStatus.ARCHIVED, self.suggestion_service.get_suggestion(self.item.id).status)
+        self.assertIn("🗄️ Retired", select_interaction.response.sent_message)
+        self.assertNotIn("Archived", select_interaction.response.sent_message)
 
     async def test_selecting_available_restores_suggested(self) -> None:
         self.suggestion_service.archive_suggestion(self.item.id)
@@ -234,6 +240,8 @@ class ChangeStatusActionTests(EditSuggestionTestCase):
         self.assertEqual(
             WatchItemStatus.SUGGESTED, self.suggestion_service.get_suggestion(self.item.id).status
         )
+        self.assertIn("🟢 Available", select_interaction.response.sent_message)
+        self.assertNotIn("Suggested", select_interaction.response.sent_message)
 
     async def test_status_dropdown_never_offers_rotation_cooldown(self) -> None:
         button_interaction = await self._open_change_status()
@@ -362,6 +370,11 @@ class MoveCollectionActionTests(EditSuggestionTestCase):
         self.assertEqual(
             self.database.database_id, self.suggestion_service.get_suggestion(self.item.id).database_id
         )
+        # UX Polish: "Move Anyway" isn't destructive (it just proceeds
+        # past a possible-duplicate warning), so it must not use the
+        # alarming red/danger style reserved for genuinely destructive
+        # confirmations.
+        self.assertEqual(select_interaction.response.sent_view.children[0].style, discord.ButtonStyle.primary)
 
     async def test_confirming_an_identical_title_possible_duplicate_still_hits_the_uniqueness_constraint(
         self,

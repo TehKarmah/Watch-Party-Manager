@@ -88,7 +88,7 @@ class SuggestionInputService:
                 success=False,
                 error_message=(
                     "Use either the title field for the IMDb link or provide the "
-                    "movie title and IMDb link separately, not two different links."
+                    "watch item title and IMDb link separately, not two different links."
                 ),
             )
 

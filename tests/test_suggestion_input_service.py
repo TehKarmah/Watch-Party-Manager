@@ -78,6 +78,9 @@ class SuggestionInputServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result.success)
         self.assertIn("two different links", result.error_message)
+        # UX Polish: "watch item," not the leftover "movie title" wording.
+        self.assertIn("watch item title", result.error_message)
+        self.assertNotIn("movie title", result.error_message)
 
     def test_is_omdb_configured_reflects_the_underlying_imdb_service(self) -> None:
         configured = SuggestionInputService(ImdbMetadataService(api_key="abc123"))

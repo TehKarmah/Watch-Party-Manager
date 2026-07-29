@@ -180,7 +180,7 @@ class PermissionTests(DatabaseAddCommandTestCase):
 
         await handle_database_add(interaction, self.bot)
 
-        self.assertIn("Discord server", interaction.response.sent_message)
+        self.assertIn("This command can only be used in a server.", interaction.response.sent_message)
 
 
 class TypeSelectionTests(DatabaseAddCommandTestCase):

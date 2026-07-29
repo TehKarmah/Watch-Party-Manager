@@ -12,6 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import discord
+
 from watch_party_manager.edit_vote_view import (
     DURATION_DELTA_QUICK_PICKS,
     EDIT_VOTE_CONFIRMATION_TIMEOUT_SECONDS,
@@ -321,6 +323,26 @@ class EditVoteConfirmationViewTests(unittest.IsolatedAsyncioTestCase):
         view = self._view(confirm_label="Cancel Vote")
         self.assertEqual(view.children[0].label, "Cancel Vote")
         self.assertEqual(view.children[0].custom_id, "wpm_edit_vote_confirm")
+
+    async def test_confirm_button_defaults_to_the_danger_style(self) -> None:
+        # This view originated for /edit_vote's own destructive actions
+        # (End Now, Cancel Vote), so danger stays the default even though
+        # the view is now also reused for non-destructive confirmations
+        # elsewhere (see test_confirm_style_can_be_overridden).
+        view = self._view()
+        self.assertEqual(view.children[0].style, discord.ButtonStyle.danger)
+
+    async def test_confirm_style_can_be_overridden(self) -> None:
+        # UX Polish: a caller confirming a non-destructive action (e.g.
+        # /add's "Add Anyway" past a possible-duplicate warning) can ask
+        # for a less alarming style than the destructive-action default.
+        view = EditVoteConfirmationView(
+            confirm_label="Add Anyway",
+            on_confirm=self._noop,
+            on_abort=self._noop,
+            confirm_style=discord.ButtonStyle.primary,
+        )
+        self.assertEqual(view.children[0].style, discord.ButtonStyle.primary)
 
     async def test_abort_button_has_a_stable_label_and_custom_id(self) -> None:
         view = self._view()

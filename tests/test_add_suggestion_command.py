@@ -95,6 +95,9 @@ class DecideAddSuggestionOutcomeTests(unittest.TestCase):
         decision = decide_add_suggestion_outcome(result, is_crew=True)
 
         self.assertEqual(AddSuggestionOutcomeKind.NEEDS_CREW_REACTIVATION_CONFIRM, decision.kind)
+        # UX Polish: grammar fix -- "This title has been archived...",
+        # not the previous "This title has archived..." (missing "been").
+        self.assertIn("This title has been archived after being rejected", decision.message)
 
     def test_watched_match_offers_crew_reactivation(self) -> None:
         result = self._matches(status=WatchItemStatus.VOTE_WINNER)
@@ -158,8 +161,10 @@ class BuildDuplicateMatchLineTests(unittest.TestCase):
             metadata_ids={MetadataProvider.IMDB: "https://www.imdb.com/title/tt1234567/"},
         )
         line = build_duplicate_match_line(match)
+        # UX Polish: the established display-status vocabulary ("🟢
+        # Available"), not the raw internal enum value ("Suggested").
         self.assertEqual(
-            "Reference #0002 | Zombieland | https://www.imdb.com/title/tt1234567/ | status: Suggested", line
+            "Reference #0002 | Zombieland | https://www.imdb.com/title/tt1234567/ | status: 🟢 Available", line
         )
 
     def test_archived_other_match_keeps_the_original_single_line_format(self) -> None:
@@ -167,7 +172,7 @@ class BuildDuplicateMatchLineTests(unittest.TestCase):
 
         match = self._match(DuplicateMatchCategory.ARCHIVED_OTHER, status=WatchItemStatus.ARCHIVED)
         line = build_duplicate_match_line(match)
-        self.assertEqual("Reference #0002 | Zombieland | status: Archived", line)
+        self.assertEqual("Reference #0002 | Zombieland | status: 🗄️ Retired", line)
 
     def test_vote_winner_match_uses_the_new_block(self) -> None:
         from watch_party_manager.services.duplicate_detection_service import DuplicateMatchCategory
@@ -464,6 +469,13 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
         await handle_add_suggestion(crew_interaction, self.bot, "Alien", None, None)
 
         self.assertIsNotNone(crew_interaction.response.sent_view)
+        # UX Polish: "Add Anyway" isn't destructive (it just proceeds
+        # past a possible-duplicate warning), so its confirm button must
+        # not use the same alarming red/danger style /remove's genuinely
+        # destructive confirmation uses.
+        import discord
+
+        self.assertEqual(crew_interaction.response.sent_view.children[0].style, discord.ButtonStyle.primary)
 
     async def test_crew_confirming_possible_duplicate_with_a_distinct_title_creates_a_new_suggestion(self) -> None:
         # "Alien" (1979) already exists. A candidate with the SAME exact
@@ -513,6 +525,12 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
         await handle_add_suggestion(crew_interaction, self.bot, "Alien", None, 1979)
         view = crew_interaction.response.sent_view
         self.assertIsNotNone(view)
+        # UX Polish: "Reactivate" isn't destructive (it restores a
+        # retired watch item), so it must not use the alarming red/
+        # danger style reserved for genuinely destructive confirmations.
+        import discord
+
+        self.assertEqual(view.children[0].style, discord.ButtonStyle.primary)
 
         confirm_interaction = FakeInteraction(user=self._crew_member())
         await view.children[0].callback(confirm_interaction)

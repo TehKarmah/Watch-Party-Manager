@@ -175,7 +175,7 @@ class VoteServiceTests(unittest.TestCase):
 
         result = self.service.cast_vote(discord_user_id=111, suggestion_id=3)
         self.assertFalse(result.success)
-        self.assertIn("already used your one vote change", result.message)
+        self.assertIn("already used your 1 vote change", result.message)
 
         # The rejected change must not have been applied.
         open_round = self.service.get_open_round()

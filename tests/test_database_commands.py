@@ -131,7 +131,10 @@ class DatabaseCommandTests(unittest.TestCase):
             self.suggestion_service, self._wash_crew_member(), WASH_CREW_ROLE_ID, GUILD_ID
         )
 
-        self.assertIn("Watch items: 2 watch items", message)
+        # UX Polish: the "Watch items:" label already says "watch items",
+        # so the count itself no longer repeats the word ("2 watch items").
+        self.assertIn("Watch items: 2", message)
+        self.assertNotIn("Watch items: 2 watch items", message)
 
 
     def test_database_list_uses_readable_multiline_format(self) -> None:
@@ -149,7 +152,8 @@ class DatabaseCommandTests(unittest.TestCase):
         self.assertIn("Name: Sunday Watch Party\n", message)
         self.assertIn("Status: Active\n", message)
         self.assertIn(f"Destination: <#{CHANNEL_ID}>\n", message)
-        self.assertIn("Watch items: 1 watch item", message)
+        self.assertIn("Watch items: 1", message)
+        self.assertNotIn("Watch items: 1 watch item", message)
 
     def test_database_list_channel_line_reflects_a_move(self) -> None:
         # Context Resolution Audit: /database list's Destination line must
@@ -325,7 +329,7 @@ class DatabaseCommandTests(unittest.TestCase):
         )
 
         self.assertTrue(ephemeral)
-        self.assertIn("Discord server", message)
+        self.assertIn("This command can only be used in a server.", message)
 
     def test_database_remove_rejects_use_outside_a_guild(self) -> None:
         created = self.suggestion_service.create_database(
@@ -341,7 +345,7 @@ class DatabaseCommandTests(unittest.TestCase):
         )
 
         self.assertTrue(ephemeral)
-        self.assertIn("Discord server", message)
+        self.assertIn("This command can only be used in a server.", message)
         self.assertTrue(self.suggestion_service.get_database(created.database.database_id).active)
 
 

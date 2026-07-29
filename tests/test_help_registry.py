@@ -109,13 +109,22 @@ class HelpRegistryTests(unittest.TestCase):
                 "WASH Crew: Configuration",
                 "Watch Items",
                 "WASH Crew: Voting",
-                "Voting",
                 "WASH Crew: Collections",
                 "WASH Crew: Maintenance",
                 "Watch Parties",
                 "WASH Crew: Watch Parties",
             ],
         )
+
+    def test_vote_status_is_grouped_with_its_sibling_voting_commands(self) -> None:
+        # UX Polish: /vote status was previously registered under a bare
+        # "Voting" section, a copy-paste miss that split it into its own
+        # section instead of grouping it with /vote start and /vote edit
+        # under "WASH Crew: Voting".
+        sections = command_sections(show_wash_crew=True)
+        voting_section = next(entries for name, entries in sections if name == "WASH Crew: Voting")
+        names = [entry.name for entry in voting_section]
+        self.assertEqual(["/vote start", "/vote status", "/vote edit"], names)
 
     def test_command_text_is_generated_from_registry(self) -> None:
         text = build_command_help_text(show_wash_crew=True)

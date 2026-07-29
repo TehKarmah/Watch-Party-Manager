@@ -199,7 +199,7 @@ class CustomizeVoteModal(discord.ui.Modal):
             placeholder=_blank_default_placeholder(default_reminder_enabled_display),
         )
         self.reminder_minutes_input = discord.ui.TextInput(
-            label="Reminder before close",
+            label="Reminder timing (how long before close)",
             required=False,
             placeholder=(
                 "e.g. 10m, 1h, 1d, or 1w -- blank uses the default"

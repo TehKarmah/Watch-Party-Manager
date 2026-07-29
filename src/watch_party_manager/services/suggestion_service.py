@@ -9,6 +9,7 @@ from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.suggestion_database_configuration import SuggestionDatabaseConfiguration
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
+from watch_party_manager.services.suggestion_display_status import compute_display_status, display_status_label
 
 _TRAILING_YEAR_PATTERN = re.compile(r"\s*\(\d{4}\)\s*$")
 
@@ -521,7 +522,8 @@ class SuggestionService:
 
         watch_item.status = status
         self._save()
-        status_label = status.value.replace("_", " ").title()
+        display_status = compute_display_status(watch_item, in_rotation_cooldown=False)
+        status_label = display_status_label(display_status)
         return SuggestionResult(
             success=True, message=f'"{watch_item.title}" status set to {status_label}.', watch_item=watch_item
         )

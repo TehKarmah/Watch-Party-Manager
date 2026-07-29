@@ -116,12 +116,14 @@ class DestinationChoiceViewTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(create_thread_button.style, discord.ButtonStyle.primary)
 
-    def test_cancel_uses_the_danger_style(self) -> None:
+    def test_cancel_uses_the_secondary_style(self) -> None:
+        # UX Polish: Cancel is a safe no-op, never destructive -- it must
+        # not compete visually with an actually destructive action.
         view = DestinationChoiceView(_noop, _noop, _noop, _noop)
         cancel_button = next(
             button for button in view.children if button.custom_id == "wpm_database_admin_destination_cancel"
         )
-        self.assertEqual(cancel_button.style, discord.ButtonStyle.danger)
+        self.assertEqual(cancel_button.style, discord.ButtonStyle.secondary)
 
     def test_use_current_is_enabled_by_default(self) -> None:
         view = DestinationChoiceView(_noop, _noop, _noop, _noop)
@@ -176,10 +178,32 @@ class CollectionManagementMenuViewTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_cancel_uses_the_danger_style(self) -> None:
+    async def test_cancel_uses_the_secondary_style(self) -> None:
+        # UX Polish: Cancel is a safe no-op -- previously styled danger
+        # (red) even though the genuinely destructive actions beside it
+        # (Reset Collection, Remove Collection) were plain secondary, the
+        # exact inversion of what button styling should signal.
         view = CollectionManagementMenuView(_noop, _noop)
         cancel_button = next(button for button in view.children if button.custom_id == "wpm_database_manage_cancel")
-        self.assertEqual(cancel_button.style, discord.ButtonStyle.danger)
+        self.assertEqual(cancel_button.style, discord.ButtonStyle.secondary)
+
+    async def test_destructive_actions_use_the_danger_style(self) -> None:
+        view = CollectionManagementMenuView(_noop, _noop)
+        reset_button = next(button for button in view.children if button.custom_id == "wpm_database_manage_reset")
+        remove_button = next(button for button in view.children if button.custom_id == "wpm_database_manage_remove")
+        self.assertEqual(reset_button.style, discord.ButtonStyle.danger)
+        self.assertEqual(remove_button.style, discord.ButtonStyle.danger)
+
+    async def test_non_destructive_actions_use_the_secondary_style(self) -> None:
+        view = CollectionManagementMenuView(_noop, _noop)
+        for custom_id in (
+            "wpm_database_manage_move",
+            "wpm_database_manage_edit",
+            "wpm_database_manage_backup",
+            "wpm_database_manage_restore",
+        ):
+            button = next(button for button in view.children if button.custom_id == custom_id)
+            self.assertEqual(button.style, discord.ButtonStyle.secondary)
 
     async def test_choosing_an_action_forwards_its_key(self) -> None:
         received = []

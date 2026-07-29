@@ -481,9 +481,10 @@ class VoteService:
             return VoteResult(success=False, message="You already voted for that suggestion.")
 
         if existing_vote.changes_used >= MAX_VOTE_CHANGES:
+            change_word = "change" if MAX_VOTE_CHANGES == 1 else "changes"
             return VoteResult(
                 success=False,
-                message="You've already used your one vote change for this round.",
+                message=f"You've already used your {MAX_VOTE_CHANGES} vote {change_word} for this round.",
             )
 
         vote_round.votes[discord_user_id] = VoteRecord(

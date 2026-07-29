@@ -317,7 +317,11 @@ class ManagementActionTests(DatabaseManageCommandTestCase):
         action_interaction = FakeInteraction()
         await cancel_button.callback(interaction=action_interaction)
 
-        self.assertIn("No changes", action_interaction.response.edited_content)
+        # UX Polish: matches every sibling Cancel confirmation's "X
+        # cancelled. No changes were made." pattern.
+        self.assertEqual(
+            "Collection management cancelled. No changes were made.", action_interaction.response.edited_content
+        )
         self.assertTrue(self.suggestion_service.get_database(self.database.database_id).active)
 
 
