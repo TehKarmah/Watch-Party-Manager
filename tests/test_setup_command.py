@@ -356,8 +356,74 @@ class BuildSetupCompletionSummaryTests(unittest.TestCase):
         )
         summary = build_setup_completion_summary(config, draft)
         self.assertIn(f"<@&{WASH_CREW_ROLE_ID}>", summary)
-        self.assertIn("Skipped (configure later)", summary)
+        # UX Polish: matches the Review screen's own "Skipped" wording for
+        # this exact field, rather than a differently-worded variant only
+        # used here.
+        self.assertIn("Watched Item Archive: Skipped", summary)
+        self.assertNotIn("Skipped (configure later)", summary)
         self.assertIn("Movies", summary)
+
+    def test_summary_shows_a_friendly_join_mode_label(self):
+        # UX Polish: "Manual", never the raw enum value "manual".
+        config = GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild")
+        config.wash_crew_role_id = WASH_CREW_ROLE_ID
+        config.watch_party_role.role_id = WATCH_PARTY_ROLE_ID
+        config.watch_party_role.join_mode = JoinMode.SELF_SERVICE
+        draft = SetupWizardDraft(suggestion_database_id=1, suggestion_database_name="Movies")
+
+        summary = build_setup_completion_summary(config, draft)
+
+        self.assertIn("join mode: Self-Service", summary)
+        self.assertNotIn("self_service", summary)
+
+    def test_summary_shows_a_capitalized_visibility(self) -> None:
+        # UX Polish: "Visible"/"Blind", matching how visibility is shown
+        # everywhere else in the app (e.g. vote status embeds).
+        config = GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild")
+        config.wash_crew_role_id = WASH_CREW_ROLE_ID
+        draft = SetupWizardDraft(suggestion_database_id=1, suggestion_database_name="Movies")
+
+        summary = build_setup_completion_summary(config, draft)
+
+        self.assertIn("Visible", summary)
+        self.assertNotIn("visible,", summary)
+
+    def test_summary_includes_a_configured_admin_channel(self) -> None:
+        # UX Polish: Admin Channel was previously omitted from this
+        # summary entirely, even when configured during the wizard.
+        config = GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild")
+        config.wash_crew_role_id = WASH_CREW_ROLE_ID
+        draft = SetupWizardDraft(
+            suggestion_database_id=1, suggestion_database_name="Movies", admin_channel_id=777
+        )
+
+        summary = build_setup_completion_summary(config, draft)
+
+        self.assertIn("Admin Channel: <#777>", summary)
+
+    def test_summary_shows_a_skipped_admin_channel(self) -> None:
+        config = GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild")
+        config.wash_crew_role_id = WASH_CREW_ROLE_ID
+        draft = SetupWizardDraft(
+            suggestion_database_id=1, suggestion_database_name="Movies", admin_channel_skipped=True
+        )
+
+        summary = build_setup_completion_summary(config, draft)
+
+        self.assertIn("Admin Channel: Skipped", summary)
+
+    def test_summary_includes_next_steps_guidance(self) -> None:
+        # UX Polish, Goal 6: the administrator should clearly understand
+        # the recommended next steps immediately after setup completes.
+        config = GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild")
+        config.wash_crew_role_id = WASH_CREW_ROLE_ID
+        draft = SetupWizardDraft(suggestion_database_id=1, suggestion_database_name="Movies")
+
+        summary = build_setup_completion_summary(config, draft)
+
+        self.assertIn("**Next Steps**", summary)
+        self.assertIn("/add", summary)
+        self.assertIn("/vote start", summary)
 
 
 class SetupCommandTestCase(unittest.IsolatedAsyncioTestCase):
@@ -491,6 +557,10 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         await cancel_button.callback(interaction=cancel_interaction)
 
         self.assertIn("cancelled", cancel_interaction.response.edited_content)
+        # UX Polish: consistent with every other terminal wizard message
+        # ("WASH Setup Complete", "Setup progress saved.") -- previously
+        # the one plain, un-bolded message in the set.
+        self.assertIn("**Setup has been cancelled.**", cancel_interaction.response.edited_content)
         self.assertIsNone(cancel_interaction.response.edited_view)
         self.assertIsNone(self.wizard_repository.get(GUILD_ID))
 
@@ -1687,7 +1757,7 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
 
         type_view = await self._reach_collection_type_choice()
         import_button = type_view.children[4]
-        self.assertEqual(import_button.label, "Import Existing Database")
+        self.assertEqual(import_button.label, "Import Existing Backup")
 
         import_interaction = FakeInteraction()
         await import_button.callback(interaction=import_interaction)

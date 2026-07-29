@@ -431,7 +431,7 @@ class CollectionTypeChoiceView(SetupWizardStepView):
         self.add_item(CollectionTypeButton(on_custom, label="Custom", custom_id="wpm_setup_database_type_custom"))
         self.add_item(
             CollectionTypeButton(
-                on_import_existing, label="Import Existing Database", custom_id="wpm_setup_database_type_import"
+                on_import_existing, label="Import Existing Backup", custom_id="wpm_setup_database_type_import"
             )
         )
         self.add_item(SetupCancelButton(on_cancel))

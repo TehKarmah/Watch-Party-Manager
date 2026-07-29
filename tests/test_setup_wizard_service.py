@@ -609,6 +609,27 @@ class ValidationTests(SetupWizardServiceTestCase):
         self.assertFalse(result.success)
         self.assertTrue(result.issues)
 
+    def test_a_deleted_watch_destination_channel_names_itself_in_the_error(self):
+        # UX Polish: every other channel/role validation issue names the
+        # specific setting it's about (e.g. "The selected Admin channel no
+        # longer exists.") -- the Watched Item Archive check was
+        # previously the one exception, falling back to the generic
+        # "channel or thread" label instead.
+        database = self._create_database()
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
+        deleted_channel_id = DESTINATION_CHANNEL_ID + 1
+        state = self.service.set_watch_destination(state, deleted_channel_id)
+
+        guild = self._full_guild()
+        issues = self.service.validate(state, guild)
+
+        watch_destination_issues = [
+            issue for issue in issues if issue.step == SetupWizardStep.WATCH_DESTINATION
+        ]
+        self.assertEqual(1, len(watch_destination_issues))
+        self.assertIn("Watched Item Archive", watch_destination_issues[0].message)
+
 
 class CompletionTests(SetupWizardServiceTestCase):
     def _complete_state(self):

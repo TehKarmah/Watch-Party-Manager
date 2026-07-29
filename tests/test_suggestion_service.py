@@ -829,6 +829,11 @@ class SuggestionServiceDatabaseAssociationTests(unittest.TestCase):
         resolution = self.service.resolve_database_for_channel(100, 999)
         self.assertIsNone(resolution.database)
         self.assertIn("create a collection first", resolution.error_message)
+        # UX Polish: `/database_add` (underscore) was removed outright,
+        # with no compatibility alias -- this message must point at the
+        # live command, `/database add`, not the dead one.
+        self.assertIn("`/database add`", resolution.error_message)
+        self.assertNotIn("/database_add", resolution.error_message)
 
     # --- Discord message reference -------------------------------------------
 

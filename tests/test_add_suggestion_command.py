@@ -381,6 +381,10 @@ class AddNoDestinationTests(HandleAddSuggestionTestCase):
         self.assertTrue(interaction.response.sent_ephemeral)
         self.assertIn("added", interaction.response.sent_message.lower())
         self.assertIn("No public confirmation post", interaction.response.sent_message)
+        # UX Polish: this collection-scoped message must say "collection",
+        # the established user-facing term, not the internal "database".
+        self.assertIn("configured for this collection", interaction.response.sent_message)
+        self.assertNotIn("this database", interaction.response.sent_message)
         self.assertEqual(1, len(self.suggestion_service.get_suggestions_for_database(self.database.database_id)))
 
     async def test_add_records_the_submitter_and_creation_date(self) -> None:

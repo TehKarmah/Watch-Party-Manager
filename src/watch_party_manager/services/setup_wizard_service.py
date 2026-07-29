@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from watch_party_manager.domain.guild_configuration import (
+    JOIN_MODE_DISPLAY_LABELS,
     GuildConfiguration,
     GuildVoteVisibility,
     JoinMode,
@@ -368,8 +369,11 @@ class SetupWizardService:
             lines.append("WASH Crew Role: Incomplete")
 
         if draft.watch_party_role_id is not None:
-            join_mode = draft.watch_party_join_mode.value if draft.watch_party_join_mode else "self_service"
-            lines.append(f"Watch Party Role: Configured (<@&{draft.watch_party_role_id}>, join mode: {join_mode})")
+            join_mode = draft.watch_party_join_mode if draft.watch_party_join_mode else JoinMode.SELF_SERVICE
+            join_mode_label = JOIN_MODE_DISPLAY_LABELS[join_mode]
+            lines.append(
+                f"Watch Party Role: Configured (<@&{draft.watch_party_role_id}>, join mode: {join_mode_label})"
+            )
         else:
             lines.append("Watch Party Role: Incomplete")
 
@@ -406,7 +410,7 @@ class SetupWizardService:
             lines.append(
                 "Voting Defaults: Configured "
                 f"({draft.voting_candidate_count} candidates, {format_duration_minutes(draft.voting_duration_minutes)}, "
-                f"{draft.voting_visibility.value}, {candidate_selection_label})"
+                f"{draft.voting_visibility.value.capitalize()}, {candidate_selection_label})"
             )
         else:
             lines.append("Voting Defaults: Incomplete")
@@ -489,7 +493,9 @@ class SetupWizardService:
                 ValidationIssue(SetupWizardStep.SUGGESTION_DATABASE, "The selected collection no longer exists.")
             )
 
-        destination_error = validate_channel_usable(draft.watch_destination_channel_id, guild)
+        destination_error = validate_channel_usable(
+            draft.watch_destination_channel_id, guild, resource_label="Watched Item Archive"
+        )
         if destination_error:
             issues.append(ValidationIssue(SetupWizardStep.WATCH_DESTINATION, destination_error))
 

@@ -30,6 +30,7 @@ from watch_party_manager.domain.vote import (
     VoteVisibility,
 )
 from watch_party_manager.domain.guild_configuration import (
+    JOIN_MODE_DISPLAY_LABELS,
     GuildConfiguration,
     GuildVoteVisibility,
     JoinMode,
@@ -477,7 +478,7 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="add")
         @discord.app_commands.describe(
-            release_year="The movie/show's release year, if known (helps duplicate detection)."
+            release_year="The watch item's release year, if known (helps duplicate detection)."
         )
         async def suggest(
             interaction: discord.Interaction,
@@ -1152,7 +1153,7 @@ def build_low_suggestion_pool_warning(candidate_count: int) -> str:
         return ""
     return (
         "\n\nThe suggestion pool is getting low. "
-        "Add a movie with `/add` followed by a movie title or IMDb link."
+        "Add a watch item with `/add` followed by a title or IMDb link."
     )
 
 
@@ -1613,7 +1614,7 @@ def perform_setup_redirect_check(guild_configuration: Optional[GuildConfiguratio
         None if /setup should proceed as usual.
     """
     if guild_configuration is not None and guild_configuration.setup_completed:
-        return "Setup has already been completed for this server. Use `/config` to review or change settings."
+        return "**Setup has already been completed for this server.** Use `/config` to review or change settings."
     return None
 
 
@@ -1757,17 +1758,19 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
     lines = ["**WASH Setup Complete**", ""]
     lines.append(f"WASH Crew Role: <@&{configuration.wash_crew_role_id}>")
     if configuration.watch_party_role.role_id is not None:
-        lines.append(
-            f"Watch Party Role: <@&{configuration.watch_party_role.role_id}> "
-            f"(join mode: {configuration.watch_party_role.join_mode.value})"
-        )
+        join_mode_label = JOIN_MODE_DISPLAY_LABELS[configuration.watch_party_role.join_mode]
+        lines.append(f"Watch Party Role: <@&{configuration.watch_party_role.role_id}> (join mode: {join_mode_label})")
     else:
         lines.append("Watch Party Role: Not set")
+    if draft.admin_channel_skipped:
+        lines.append("Admin Channel: Skipped")
+    elif draft.admin_channel_id is not None:
+        lines.append(f"Admin Channel: <#{draft.admin_channel_id}>")
     if draft.home_channel_id is not None:
         lines.append(f"Home Channel: <#{draft.home_channel_id}>")
     lines.append(f'Collection: "{draft.suggestion_database_name}" (#{draft.suggestion_database_id})')
     if draft.watch_destination_skipped:
-        lines.append("Watched Item Archive: Skipped (configure later)")
+        lines.append("Watched Item Archive: Skipped")
     elif draft.watch_destination_channel_id is not None:
         lines.append(f"Watched Item Archive: <#{draft.watch_destination_channel_id}>")
     candidate_selection_label = (
@@ -1779,7 +1782,7 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
         "Voting Defaults: "
         f"{configuration.voting_defaults.candidate_count} candidates, "
         f"{format_duration_minutes(configuration.voting_defaults.duration_minutes)}, "
-        f"{configuration.voting_defaults.visibility.value}, "
+        f"{configuration.voting_defaults.visibility.value.capitalize()}, "
         f"candidate selection: {candidate_selection_label}"
     )
     if configuration.notifications.vote.vote_ending_reminder:
@@ -1797,6 +1800,11 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
             lines.append(f"Automatic Backups: Every {interval_days} {day_word}, keep {retention_count}")
     else:
         lines.append("Automatic Backups: Disabled")
+    lines.append("")
+    lines.append("**Next Steps**")
+    lines.append(f'- Add your first watch item to "{draft.suggestion_database_name}" with `/add`.')
+    lines.append("- Once you have a few suggestions, start your first vote with `/vote start`.")
+    lines.append("- Run `/config` any time to change these defaults, or `/help` to see every command.")
     return "\n".join(lines)
 
 
@@ -1839,7 +1847,7 @@ async def send_setup_preparation_screen(
     async def on_cancel(cancel_interaction: discord.Interaction) -> None:
         setup_wizard_service.cancel(guild_id)
         await cancel_interaction.response.edit_message(
-            content="Setup has been cancelled. No configuration was changed.", view=None
+            content="**Setup has been cancelled.** No configuration was changed.", view=None
         )
 
     view = SetupPreparationView(on_begin, on_cancel, requester_id=requester_id)
@@ -1876,7 +1884,7 @@ async def send_setup_wizard_step(
     async def on_cancel(cancel_interaction: discord.Interaction) -> None:
         setup_wizard_service.cancel(guild_id)
         await cancel_interaction.response.edit_message(
-            content="Setup has been cancelled. No configuration was changed.", view=None
+            content="**Setup has been cancelled.** No configuration was changed.", view=None
         )
 
     async def on_back(back_interaction: discord.Interaction) -> None:
@@ -2004,7 +2012,7 @@ async def send_setup_wizard_step(
             ]
             if not databases:
                 await choice_interaction.response.edit_message(
-                    content=body + "\n\nNo collections exist yet in this server. Choose Create New instead.",
+                    content=body + "\n\nNo collections exist in this server yet. Choose Create New instead.",
                     view=SuggestionDatabaseChoiceView(
                         on_select_existing, on_create_new, on_back, on_save_for_later, on_cancel,
                         requester_id=requester_id,
@@ -2254,7 +2262,7 @@ async def send_setup_wizard_step(
         )
         body += (
             "\n\nChoose the server's default candidate selection mode below, then press "
-            "**Set Voting Defaults** to configure the default nominee count, vote duration, and "
+            "**Set Voting Defaults** to configure the default candidate count, vote duration, and "
             "visibility.\n\n"
             f"{VISIBILITY_HELP_TEXT}"
         )
@@ -3425,9 +3433,9 @@ class DatabaseGroup(discord.app_commands.Group):
     @discord.app_commands.command(name="restore", description="Restore a collection backup.")
     @discord.app_commands.describe(
         mode="Merge adds compatible suggestions without touching existing ones. "
-        "Replace overwrites the whole database.",
-        backup_filename="An existing local database backup's filename.",
-        backup_file="Upload a database backup .zip to restore from instead of selecting a local one.",
+        "Replace overwrites the whole collection.",
+        backup_filename="An existing local collection backup's filename.",
+        backup_file="Upload a collection backup .zip to restore from instead of selecting a local one.",
     )
     @discord.app_commands.choices(
         mode=[
@@ -5795,7 +5803,7 @@ async def post_suggestion_confirmation(
     if channel_id is None:
         return (
             False,
-            "No public confirmation post was created because no suggestion channel is configured for this database.",
+            "No public confirmation post was created because no suggestion channel is configured for this collection.",
         )
 
     embed = build_suggestion_confirmation_embed(
@@ -6532,7 +6540,7 @@ async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPa
 
     databases = bot.suggestion_service.list_databases(guild_id)
     if not databases:
-        await interaction.response.send_message("No collections are configured yet.", ephemeral=True)
+        await interaction.response.send_message("No collections exist in this server yet. Create one with `/database add`.", ephemeral=True)
         return
 
     async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
@@ -6738,7 +6746,7 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
 
     databases = bot.suggestion_service.list_databases(guild_id)
     if not databases:
-        await interaction.response.send_message("No collections are configured yet.", ephemeral=True)
+        await interaction.response.send_message("No collections exist in this server yet. Create one with `/database add`.", ephemeral=True)
         return
 
     async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
@@ -8316,7 +8324,7 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
         guild_id = button_interaction.guild_id or item.guild_id
         databases = bot.suggestion_service.list_databases(guild_id) if guild_id is not None else []
         if not databases:
-            await button_interaction.response.send_message("No collections are configured yet.", ephemeral=True)
+            await button_interaction.response.send_message("No collections exist in this server yet. Create one with `/database add`.", ephemeral=True)
             return
 
         async def on_database_selected(select_interaction: discord.Interaction, new_database_id: int) -> None:
@@ -8792,7 +8800,7 @@ def perform_database_list(
 
     databases = suggestion_service.list_databases(guild_id)
     if not databases:
-        return "No collections are configured yet.", True
+        return "No collections exist in this server yet. Create one with `/database add`.", True
 
     return (
         build_database_list_text(
@@ -8894,7 +8902,7 @@ async def handle_database_remove(interaction: discord.Interaction, bot: "WatchPa
 
     databases = bot.suggestion_service.list_databases(guild_id)
     if not databases:
-        await interaction.response.send_message("No collections are configured yet.", ephemeral=True)
+        await interaction.response.send_message("No collections exist in this server yet. Create one with `/database add`.", ephemeral=True)
         return
 
     async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
@@ -8984,7 +8992,7 @@ async def handle_database_move(interaction: discord.Interaction, bot: "WatchPart
 
     databases = bot.suggestion_service.list_databases(guild_id)
     if not databases:
-        await interaction.response.send_message("No collections are configured yet.", ephemeral=True)
+        await interaction.response.send_message("No collections exist in this server yet. Create one with `/database add`.", ephemeral=True)
         return
 
     async def on_database_selected(select_interaction: discord.Interaction, database_id: int) -> None:
@@ -9016,7 +9024,7 @@ async def show_database_management_menu(
     click at all -- Discord doesn't allow attaching a file upload in
     response to a component interaction -- so it points at running
     `/database restore` directly, the same way the Setup Wizard's
-    "Import Existing Database" option points at `/import` for the exact
+    "Import Existing Backup" option points at `/import` for the exact
     same platform reason.
     """
     database = bot.suggestion_service.get_database(database_id)
@@ -9088,7 +9096,7 @@ async def handle_database_manage(interaction: discord.Interaction, bot: "WatchPa
 
     databases = bot.suggestion_service.list_databases(guild_id)
     if not databases:
-        await interaction.response.send_message("No collections are configured yet.", ephemeral=True)
+        await interaction.response.send_message("No collections exist in this server yet. Create one with `/database add`.", ephemeral=True)
         return
 
     async def on_database_selected(select_interaction: discord.Interaction, database_id: int) -> None:
@@ -9239,13 +9247,13 @@ def build_watch_party_status_text(watch_party: WatchParty, watch_item: Optional[
             failing to report status at all.
 
     Returns:
-        Movie title, current status, Discord-formatted scheduled time,
-        and an IMDb link when one is on file.
+        Watch item title, current status, Discord-formatted scheduled
+        time, and an IMDb link when one is on file.
     """
     title = watch_item.title if watch_item is not None else f"Watch item #{watch_party.watch_item_id}"
     lines = [
         f"Watch Party #{watch_party.id}",
-        f"Movie: {title}",
+        f"Watch Item: {title}",
         f"Status: {watch_party.status.value.capitalize()}",
         f"Scheduled for: {format_datetime_for_display(watch_party.scheduled_at)}",
     ]

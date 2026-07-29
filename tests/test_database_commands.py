@@ -68,7 +68,10 @@ class DatabaseCommandTests(unittest.TestCase):
         )
 
         self.assertTrue(ephemeral)
-        self.assertIn("No collections", message)
+        # UX Polish: every "no collections yet" empty state across the
+        # /database subcommands now consistently names the fix (`/database
+        # add`), not just what happened.
+        self.assertEqual("No collections exist in this server yet. Create one with `/database add`.", message)
 
     def test_database_list_with_one_database(self) -> None:
         self.suggestion_service.create_database("Sunday Watch Party", guild_id=GUILD_ID, channel_id=CHANNEL_ID)

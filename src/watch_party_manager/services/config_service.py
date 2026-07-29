@@ -28,6 +28,7 @@ from enum import Enum
 from typing import List, Optional, Tuple
 
 from watch_party_manager.domain.guild_configuration import (
+    JOIN_MODE_DISPLAY_LABELS,
     GuildConfiguration,
     GuildVoteVisibility,
     JoinMode,
@@ -176,7 +177,10 @@ class ConfigService:
         else:
             lines.append(f"Watch Party Role: Configured (<@&{watch_party_role_id}>)")
 
-        lines.append(f"Watch Party Join Mode: Configured ({configuration.watch_party_role.join_mode.value})")
+        lines.append(
+            "Watch Party Join Mode: Configured "
+            f"({JOIN_MODE_DISPLAY_LABELS[configuration.watch_party_role.join_mode]})"
+        )
 
         admin_channel_id = configuration.channels.admin_channel_id
         if admin_channel_id is None:
@@ -218,7 +222,7 @@ class ConfigService:
         lines.append(
             "Voting Defaults: Configured "
             f"({voting_defaults.candidate_count} candidates, {format_duration_minutes(voting_defaults.duration_minutes)}, "
-            f"{voting_defaults.visibility.value})"
+            f"{voting_defaults.visibility.value.capitalize()})"
         )
 
         vote_notifications = configuration.notifications.vote
@@ -333,7 +337,9 @@ class ConfigService:
             watch_party_role=replace(configuration.watch_party_role, join_mode=join_mode),
         )
         self._guild_configuration_repository.save(updated)
-        return ConfigUpdateResult(True, f"Watch Party join mode updated to {join_mode.value}.", updated)
+        return ConfigUpdateResult(
+            True, f"Watch Party join mode updated to {JOIN_MODE_DISPLAY_LABELS[join_mode]}.", updated
+        )
 
     # --- Admin Channel ------------------------------------------------------------
 
@@ -564,7 +570,7 @@ class ConfigService:
         self._guild_configuration_repository.save(updated)
         message = (
             f"Voting defaults updated: {candidate_count} candidates, "
-            f"{format_duration_minutes(duration_minutes)}, {visibility.value.title()}."
+            f"{format_duration_minutes(duration_minutes)}, {visibility.value.capitalize()}."
         )
         return ConfigUpdateResult(True, message, updated)
 

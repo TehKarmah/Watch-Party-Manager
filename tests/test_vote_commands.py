@@ -286,7 +286,7 @@ class VoteCommandTests(unittest.TestCase):
 
         self.assertIn("suggestion pool is getting low", message.lower())
         self.assertIn("`/add`", message)
-        self.assertIn("movie title or IMDb link", message)
+        self.assertIn("title or IMDb link", message)
 
     def test_low_suggestion_pool_warning_is_not_shown_at_ten(self) -> None:
         for index in range(4, 11):

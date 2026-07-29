@@ -248,7 +248,7 @@ class RotationLowPoolNotificationService:
             f"**Rotation Low-Pool Notification** -- {database_name}\n"
             f"Eligible remaining: {eligible_count} {suggestion_word}\n"
             f"Configured candidate count: {candidate_count}\n"
-            "Add more suggestions with `/add` followed by a movie title or IMDb link."
+            "Add more suggestions with `/add` followed by a title or IMDb link."
         )
 
     def _resolve_database_name(self, database_id: int) -> str:

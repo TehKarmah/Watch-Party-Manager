@@ -15,6 +15,20 @@ class JoinMode(str, Enum):
     DISCORD_MANAGED = "discord_managed"
 
 
+# UI Polish: the one shared, human-readable label for each join mode --
+# mirrors CANDIDATE_SELECTION_DISPLAY_LABELS's rationale (see
+# suggestion_database_configuration.py) so every surface that names a
+# join mode (the Setup Wizard's own select options, its Review/
+# Completion summaries, and /config's summary and save confirmation)
+# shows the same wording instead of the raw snake_case enum value.
+JOIN_MODE_DISPLAY_LABELS: dict[JoinMode, str] = {
+    JoinMode.MANUAL: "Manual",
+    JoinMode.SELF_SERVICE: "Self-Service",
+    JoinMode.APPROVAL: "Approval",
+    JoinMode.DISCORD_MANAGED: "Discord-Managed",
+}
+
+
 class GuildVoteVisibility(str, Enum):
     BLIND = "blind"
     VISIBLE = "visible"

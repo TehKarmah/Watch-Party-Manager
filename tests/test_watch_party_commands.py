@@ -444,6 +444,17 @@ class BuildWatchPartyStatusTextTests(unittest.TestCase):
 
         self.assertIn("Watch item #1", text)
 
+    def test_uses_a_consistent_watch_item_field_label(self) -> None:
+        # UX Polish: this function's own unresolvable-item fallback
+        # ("Watch item #1") and its normal field label must agree --
+        # previously the field was labeled "Movie:" even though the
+        # fallback (and every other terminology in the app) says
+        # "Watch item".
+        text = build_watch_party_status_text(self._watch_party(), self._watch_item(title="The Matrix"))
+
+        self.assertIn("Watch Item: The Matrix", text)
+        self.assertNotIn("Movie:", text)
+
 
 class BuildWatchPartySelectOptionsTests(WatchPartyCommandTestCase):
     """Release Polish (Discord-native UX): the shared option builder behind

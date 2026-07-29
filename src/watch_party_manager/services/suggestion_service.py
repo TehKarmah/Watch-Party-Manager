@@ -1183,7 +1183,7 @@ class SuggestionService:
             return DatabaseResolution(ambiguous_candidates=tuple(databases))
 
         return DatabaseResolution(
-            error_message="WASH Crew must create a collection first -- run `/database_add` or `/setup`."
+            error_message="WASH Crew must create a collection first -- run `/database add` or `/setup`."
         )
 
     def _migrate_orphaned_suggestions_to(self, database_id: int) -> None:
