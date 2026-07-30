@@ -111,8 +111,6 @@ class HelpRegistryTests(unittest.TestCase):
                 "WASH Crew: Voting",
                 "WASH Crew: Collections",
                 "WASH Crew: Maintenance",
-                "Watch Parties",
-                "WASH Crew: Watch Parties",
             ],
         )
 
@@ -197,9 +195,9 @@ class HelpRegistryTests(unittest.TestCase):
         member_commands = [entry.name for entry in COMMAND_HELP if entry.audience is HelpAudience.WATCH_PARTY_MEMBER]
         self.assertEqual(sorted(member_commands), ["/add", "/list", "/stats"])
 
-    def test_remove_vote_status_and_watch_party_status_are_wash_crew_only(self) -> None:
+    def test_remove_and_vote_status_are_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        for name in ("/remove", "/vote status", "/watch-party status"):
+        for name in ("/remove", "/vote status"):
             self.assertIs(entries[name].audience, HelpAudience.WASH_CREW)
 
     def test_diagnostics_no_longer_exists_in_the_registry(self) -> None:

@@ -19,7 +19,7 @@ from typing import Awaitable, Callable, List, Optional, Tuple
 
 import discord
 
-from watch_party_manager.domain.guild_configuration import JoinMode
+from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, JoinMode
 from watch_party_manager.domain.suggestion_database_configuration import (
     CANDIDATE_SELECTION_DISPLAY_LABELS,
     CANDIDATE_SELECTION_HELP_TEXT,
@@ -38,8 +38,8 @@ OnThreadNameSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnChannelSelected = Callable[[discord.Interaction, int], Awaitable[None]]
 OnSkip = Callable[[discord.Interaction], Awaitable[None]]
 OnCreateThreadClicked = Callable[[discord.Interaction], Awaitable[None]]
-OnVotingDefaultsSubmit = Callable[[discord.Interaction, str, str, str], Awaitable[None]]
-OnVotingDefaultsConfigure = Callable[[discord.Interaction, CandidateSelectionMode], Awaitable[None]]
+OnVotingDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
+OnVotingDefaultsConfigure = Callable[[discord.Interaction, CandidateSelectionMode, GuildVoteVisibility], Awaitable[None]]
 OnReminderDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 OnBackupDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 OnSave = Callable[[discord.Interaction], Awaitable[None]]
@@ -622,17 +622,47 @@ class SkipAdminChannelButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
+class CreateNewAdminChannelButton(discord.ui.Button):
+    def __init__(self, on_click: OnCreateThreadClicked) -> None:
+        super().__init__(
+            label="Create New Channel", style=discord.ButtonStyle.secondary, custom_id="wpm_setup_admin_channel_create"
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class AdminChannelNameModal(discord.ui.Modal):
+    """Admin Channel step: name the new private channel, pre-filled with
+    the documented default ("WASH Crew") so accepting it requires no typing.
+    """
+
+    def __init__(self, on_submit: OnDatabaseNameSubmit, *, default: str = "WASH Crew") -> None:
+        super().__init__(title="Name the Admin Channel")
+        self._submit_callback = on_submit
+        self.name_input = discord.ui.TextInput(label="Channel name", required=True, default=default)
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self._submit_callback(interaction, self.name_input.value)
+
+
 class AdminChannelStepView(SetupWizardStepView):
     """Admin Channel step: choose where Approval-Required membership
-    requests are posted for WASH Crew, or skip for now.
+    requests are posted for WASH Crew, create a new private channel for
+    it, or skip for now.
 
     Reuses DestinationChannelSelect (generic, already used for the Watch
-    Destination step) rather than a duplicate channel-select component.
+    Destination step) rather than a duplicate channel-select component,
+    and mirrors WatchDestinationStepView's "select existing, create new,
+    or skip" shape.
     """
 
     def __init__(
         self,
         on_select: OnChannelSelected,
+        on_create_new: OnCreateThreadClicked,
         on_skip: OnSkip,
         on_back: OnBack,
         on_save_for_later: OnSaveForLater,
@@ -648,6 +678,7 @@ class AdminChannelStepView(SetupWizardStepView):
                 placeholder="Choose an existing channel or thread",
             )
         )
+        self.add_item(CreateNewAdminChannelButton(on_create_new))
         self.add_item(SkipAdminChannelButton(on_skip))
         self.add_item(SetupBackButton(on_back))
         self.add_item(SetupSaveForLaterButton(on_save_for_later))
@@ -816,22 +847,65 @@ class ModalStepIntroView(SetupWizardStepView):
         self.add_item(SetupCancelButton(on_cancel))
 
 
-class VotingDefaultsModal(discord.ui.Modal):
-    """Default nominee count, duration, and visibility.
+class VisibilitySelectComponent(discord.ui.Select):
+    """Discord Select replacing free-text visibility entry.
 
-    Candidate selection is per-database (Contextual Database Resolution)
-    and is chosen separately, via CandidateSelectionSelectComponent on
-    VotingDefaultsIntroView (/setup, where exactly one database exists
-    so far) or /config's Manage Databases -> a specific database ->
-    Candidate Selection screen -- Discord modals cannot contain Select
-    menus, so it can no longer live here as a free-text field once it
-    became a dropdown.
+    Each option's description carries the Blind vs Visible explanation
+    right where the choice is actually made, rather than as separate
+    body text somewhere else on the page (General Fixed-Option Control
+    Audit: visibility is a small fixed set of choices, so it belongs in
+    a dropdown like Candidate Selection Mode already is). Persists the
+    same GuildVoteVisibility values as before (option value == enum
+    value); only the input mechanism changed.
     """
 
-    def __init__(self, on_submit: OnVotingDefaultsSubmit, *, defaults: Optional[Tuple[str, str, str]] = None) -> None:
+    def __init__(self, *, default: GuildVoteVisibility) -> None:
+        options = [
+            discord.SelectOption(
+                label="Visible",
+                value=GuildVoteVisibility.VISIBLE.value,
+                description="Vote totals are shown live while voting is active.",
+                default=default is GuildVoteVisibility.VISIBLE,
+            ),
+            discord.SelectOption(
+                label="Blind",
+                value=GuildVoteVisibility.BLIND.value,
+                description="Results stay hidden until voting closes.",
+                default=default is GuildVoteVisibility.BLIND,
+            ),
+        ]
+        super().__init__(options=options, custom_id="wpm_voting_defaults_visibility_select")
+        self._default = default
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+
+    @property
+    def selected(self) -> GuildVoteVisibility:
+        """The chosen visibility, or the pre-filled default if never touched."""
+        return GuildVoteVisibility(self.values[0]) if self.values else self._default
+
+
+class VotingDefaultsModal(discord.ui.Modal):
+    """Default nominee count and vote duration only.
+
+    Discord modals accept TextInput components only -- a Select embedded
+    in a modal constructs without error client-side (discord.py doesn't
+    reject it) but Discord's API itself rejects the resulting payload
+    with a 400 "Invalid Form Body" at submission time in a live server,
+    which is why Candidate Selection Mode and Visibility are both
+    collected beforehand, as Selects on VotingDefaultsIntroView, and
+    never live inside this modal. Candidate selection is additionally
+    per-database (Contextual Database Resolution) -- bundling it into
+    this guild-wide modal would reintroduce the "which database does
+    this apply to?" ambiguity that model removes, so it stays a
+    separate step regardless.
+    """
+
+    def __init__(self, on_submit: OnVotingDefaultsSubmit, *, defaults: Optional[Tuple[str, str]] = None) -> None:
         super().__init__(title="Voting Defaults")
         self._submit_callback = on_submit
-        candidate_count_default, duration_default, visibility_default = defaults or ("3", "1d", "visible")
+        candidate_count_default, duration_default = defaults or ("3", "1d")
         self.candidate_count_input = discord.ui.TextInput(
             label="Default candidate count (2-10)", default=candidate_count_default
         )
@@ -840,20 +914,11 @@ class VotingDefaultsModal(discord.ui.Modal):
             default=duration_default,
             placeholder="e.g. 10m, 1h, 1d, or 1w",
         )
-        self.visibility_input = discord.ui.TextInput(
-            label="Default visibility: blind or visible", default=visibility_default
-        )
         self.add_item(self.candidate_count_input)
         self.add_item(self.duration_input)
-        self.add_item(self.visibility_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        await self._submit_callback(
-            interaction,
-            self.candidate_count_input.value,
-            self.duration_input.value,
-            self.visibility_input.value,
-        )
+        await self._submit_callback(interaction, self.candidate_count_input.value, self.duration_input.value)
 
 
 class CandidateSelectionSelectComponent(discord.ui.Select):
@@ -897,9 +962,12 @@ class CandidateSelectionSelectComponent(discord.ui.Select):
 
 
 class VotingDefaultsIntroView(SetupWizardStepView):
-    """Voting Defaults step: choose the candidate selection mode from a
-    dropdown, then press Set Voting Defaults to open the modal for the
-    remaining fields (candidate count, duration, visibility).
+    """Voting Defaults step: choose the candidate selection mode and
+    visibility from two dropdowns, then press Set Voting Defaults to
+    open the modal for the remaining, flexible fields (candidate count,
+    duration). Both fixed-choice values are collected here, together,
+    rather than inside the modal -- Discord's modals accept TextInput
+    components only (see VotingDefaultsModal's own docstring).
     """
 
     def __init__(
@@ -910,11 +978,14 @@ class VotingDefaultsIntroView(SetupWizardStepView):
         on_cancel: OnWizardCancel,
         *,
         default_candidate_selection: CandidateSelectionMode,
+        default_visibility: GuildVoteVisibility,
         requester_id: Optional[int] = None,
     ) -> None:
         super().__init__(requester_id=requester_id)
         self.candidate_selection_select = CandidateSelectionSelectComponent(default=default_candidate_selection)
+        self.visibility_select = VisibilitySelectComponent(default=default_visibility)
         self.add_item(self.candidate_selection_select)
+        self.add_item(self.visibility_select)
         self.add_item(
             ConfigureStepButton(
                 self._handle_configure, label="Set Voting Defaults", custom_id="wpm_setup_voting_defaults_configure"
@@ -926,11 +997,19 @@ class VotingDefaultsIntroView(SetupWizardStepView):
         self._on_configure = on_configure
 
     async def _handle_configure(self, interaction: discord.Interaction) -> None:
-        await self._on_configure(interaction, self.candidate_selection_select.selected)
+        await self._on_configure(interaction, self.candidate_selection_select.selected, self.visibility_select.selected)
 
 
 class ReminderDefaultsModal(discord.ui.Modal):
-    """Step 7: whether a vote-ending reminder is sent, and how long before close."""
+    """Step 7: whether a vote-ending reminder is sent, and how long before close.
+
+    "Enabled?" stays a free-text yes/no field rather than a Select --
+    Discord modals accept TextInput components only (a Select embedded
+    in a modal constructs without error client-side, but Discord's API
+    rejects the resulting payload with a 400 "Invalid Form Body" at
+    submission time in a live server; see VotingDefaultsModal's own
+    docstring for the full explanation).
+    """
 
     def __init__(self, on_submit: OnReminderDefaultsSubmit, *, defaults: Optional[Tuple[str, str]] = None) -> None:
         super().__init__(title="Reminder Defaults")

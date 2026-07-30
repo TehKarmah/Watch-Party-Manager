@@ -325,12 +325,20 @@ class RotationService:
     def _classify(item: Optional[WatchItem], rotation_id: int) -> str:
         """Classify one assigned suggestion for progress/exhaustion purposes.
 
-        Returns one of: "removed", "watched", "retired", "archived",
-        "presented", or "pending" -- pending is the only non-terminal
-        state (see _is_exhausted).
+        Returns one of: "removed", "watched", "confirmed_watched",
+        "retired", "archived", "presented", or "pending" -- pending is
+        the only non-terminal state (see _is_exhausted).
+
+        "watched" here is a legacy label meaning "won a vote" (from
+        before Vote Winner replaced Watched as a concept for v1) --
+        WatchItemStatus.WATCHED (an explicit, later, separate action)
+        gets its own "confirmed_watched" label so it's never conflated
+        with RotationProgress.watched's vote-win count.
         """
         if item is None:
             return "removed"
+        if item.status is WatchItemStatus.WATCHED:
+            return "confirmed_watched"
         if item.status is WatchItemStatus.VOTE_WINNER:
             return "watched"
         if item.status is WatchItemStatus.ARCHIVED:

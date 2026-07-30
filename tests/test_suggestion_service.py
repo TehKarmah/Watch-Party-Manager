@@ -1776,6 +1776,69 @@ class ArchiveAndReactivateSuggestionTests(unittest.TestCase):
         self.assertEqual(1, len(items))
 
 
+class MarkSuggestionWatchedTests(unittest.TestCase):
+    """Watched Button & Archive Workflow: mark_suggestion_watched is the
+    only path to WatchItemStatus.WATCHED -- winning a vote or being
+    retired must never reach it automatically.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.database = self.service.create_database("Movie Night", guild_id=1, channel_id=100).database
+        self.matrix = self.service.suggest("The Matrix", database_id=self.database.database_id).watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_marks_the_item_watched(self) -> None:
+        result = self.service.mark_suggestion_watched(self.matrix.id, date(2026, 7, 28))
+
+        self.assertTrue(result.success)
+        self.assertEqual(WatchItemStatus.WATCHED, self.service.get_suggestion(self.matrix.id).status)
+
+    def test_records_the_watched_date_in_the_journey(self) -> None:
+        self.service.mark_suggestion_watched(self.matrix.id, date(2026, 7, 28))
+
+        item = self.service.get_suggestion(self.matrix.id)
+        self.assertEqual((date(2026, 7, 28),), item.journey.watch_dates)
+
+    def test_reachable_from_vote_winner_status(self) -> None:
+        self.service.record_vote_win(self.matrix.id, date(2026, 7, 1))
+
+        result = self.service.mark_suggestion_watched(self.matrix.id, date(2026, 7, 28))
+
+        self.assertTrue(result.success)
+        self.assertEqual(WatchItemStatus.WATCHED, self.service.get_suggestion(self.matrix.id).status)
+
+    def test_reachable_from_archived_status(self) -> None:
+        self.service.archive_suggestion(self.matrix.id)
+
+        result = self.service.mark_suggestion_watched(self.matrix.id, date(2026, 7, 28))
+
+        self.assertTrue(result.success)
+        self.assertEqual(WatchItemStatus.WATCHED, self.service.get_suggestion(self.matrix.id).status)
+
+    def test_rejects_marking_an_already_watched_item_again(self) -> None:
+        self.service.mark_suggestion_watched(self.matrix.id, date(2026, 7, 28))
+
+        result = self.service.mark_suggestion_watched(self.matrix.id, date(2026, 7, 29))
+
+        self.assertFalse(result.success)
+        # The original watched date is untouched by the rejected retry.
+        item = self.service.get_suggestion(self.matrix.id)
+        self.assertEqual((date(2026, 7, 28),), item.journey.watch_dates)
+
+    def test_rejects_an_unknown_id(self) -> None:
+        result = self.service.mark_suggestion_watched(999999, date(2026, 7, 28))
+
+        self.assertFalse(result.success)
+
+
 class SetSuggestionStatusTests(unittest.TestCase):
     """/edit_suggestion's Change Status action (Requirement 8): an
     unconditional administrative override to any of the three persisted

@@ -11,6 +11,7 @@ and the existing SuggestionService, reused unchanged.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Awaitable, Callable, Optional
 
 import discord
@@ -19,6 +20,8 @@ from watch_party_manager.domain.watch_item import WatchItem, WatchItemStatus
 
 OnToggleRejectionCallback = Callable[[discord.Interaction, int], Awaitable[None]]
 OnUndoRejectionCallback = Callable[[discord.Interaction, int], Awaitable[None]]
+OnWatchedClickCallback = Callable[[discord.Interaction, int], Awaitable[None]]
+OnWatchedDateSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 
 REJECTION_CONFIRMATION_TIMEOUT_SECONDS = 300
 
@@ -34,7 +37,7 @@ def build_reject_button_custom_id(suggestion_id: int) -> str:
     return f"wpm_suggestion_reject_{suggestion_id}"
 
 
-def build_reject_button_label(rejection_count: int, threshold: int, *, archived: bool) -> str:
+def build_reject_button_label(rejection_count: int, threshold: int, *, archived: bool, watched: bool = False) -> str:
     """Build the "I WILL NOT WATCH" button's label.
 
     The button label itself is how the suggestion message displays its
@@ -46,11 +49,17 @@ def build_reject_button_label(rejection_count: int, threshold: int, *, archived:
         rejection_count: How many distinct members have rejected this suggestion.
         threshold: The configured rejection threshold for automatic archiving.
         archived: Whether the suggestion has already been archived.
+        watched: Whether the suggestion has been marked Watched (Watched
+            Button & Archive Workflow) -- also disables the button, with
+            its own, distinct label prefix so it never misleadingly
+            claims the item was archived when it wasn't.
 
     Returns:
         The button's label text.
     """
     counter = f"{rejection_count} / {threshold}"
+    if watched:
+        return f"Watched — I WILL NOT WATCH: {counter}"
     if archived:
         return f"Archived — I WILL NOT WATCH: {counter}"
     return f"I WILL NOT WATCH: {counter}"
@@ -73,6 +82,7 @@ class RejectSuggestionButton(discord.ui.Button):
         threshold: int,
         *,
         archived: bool,
+        watched: bool = False,
         on_toggle: OnToggleRejectionCallback,
     ) -> None:
         """Initialize the button.
@@ -84,13 +94,17 @@ class RejectSuggestionButton(discord.ui.Button):
             archived: Disables the button and switches its style/label
                 once the suggestion has been archived -- an archived
                 suggestion's rejection history is final.
+            watched: Disables the button once the suggestion has been
+                marked Watched -- "I WILL NOT WATCH" no longer applies
+                once the group has actually watched it.
             on_toggle: Called with (interaction, suggestion_id) when clicked.
         """
+        disabled = archived or watched
         super().__init__(
-            label=build_reject_button_label(rejection_count, threshold, archived=archived),
-            style=discord.ButtonStyle.secondary if archived else discord.ButtonStyle.danger,
+            label=build_reject_button_label(rejection_count, threshold, archived=archived, watched=watched),
+            style=discord.ButtonStyle.secondary if disabled else discord.ButtonStyle.danger,
             custom_id=build_reject_button_custom_id(suggestion_id),
-            disabled=archived,
+            disabled=disabled,
         )
         self.suggestion_id = suggestion_id
         self._on_toggle = on_toggle
@@ -99,23 +113,75 @@ class RejectSuggestionButton(discord.ui.Button):
         await self._on_toggle(interaction, self.suggestion_id)
 
 
-class SuggestionView(discord.ui.View):
-    """The single "I WILL NOT WATCH" button for one suggestion message.
+def build_watched_button_custom_id(suggestion_id: int) -> str:
+    """Build the stable custom_id for a suggestion's "Watched" button.
 
-    timeout=None and a stable custom_id make this a persistent Discord
+    Shared between WatchedSuggestionButton's construction and bot.py's
+    startup migration, mirroring build_reject_button_custom_id's role
+    for the reject button.
+    """
+    return f"wpm_suggestion_watched_{suggestion_id}"
+
+
+class WatchedSuggestionButton(discord.ui.Button):
+    """The suggestion message's "Watched" button (Watched Button & Archive
+    Workflow).
+
+    Visible to everyone -- so members notice an item hasn't been marked
+    watched yet -- but only WASH Crew can successfully use it; the
+    permission check happens in the on_click callback, never here
+    (component visibility is never the security boundary). Delegates
+    entirely to on_click for the permission check, confirmation, and
+    the actual mutation, matching RejectSuggestionButton's own
+    "render and forward only" design.
+    """
+
+    def __init__(self, suggestion_id: int, *, watched: bool, on_click: OnWatchedClickCallback) -> None:
+        """Initialize the button.
+
+        Args:
+            suggestion_id: The suggestion this button belongs to.
+            watched: Disables the button once already marked Watched --
+                a suggestion is only ever confirmed watched once.
+            on_click: Called with (interaction, suggestion_id) when clicked.
+        """
+        super().__init__(
+            label="Watched" if not watched else "✅ Watched",
+            style=discord.ButtonStyle.secondary if watched else discord.ButtonStyle.success,
+            custom_id=build_watched_button_custom_id(suggestion_id),
+            disabled=watched,
+        )
+        self.suggestion_id = suggestion_id
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction, self.suggestion_id)
+
+
+class SuggestionView(discord.ui.View):
+    """The "I WILL NOT WATCH" and Watched buttons for one suggestion message.
+
+    timeout=None and stable custom_ids make this a persistent Discord
     view. bot.py re-registers the view for every active suggestion's
     stored message on startup (see restore_persistent_suggestion_views).
     """
 
-    def __init__(self, watch_item: WatchItem, threshold: int, on_toggle: OnToggleRejectionCallback) -> None:
+    def __init__(
+        self,
+        watch_item: WatchItem,
+        threshold: int,
+        on_toggle: OnToggleRejectionCallback,
+        on_watched: OnWatchedClickCallback,
+    ) -> None:
         """Initialize the view for one suggestion.
 
         Args:
             watch_item: The suggestion this view belongs to. Its current
-                rejection count and archived status drive the button's
-                label and disabled state.
+                rejection count, archived status, and watched status
+                drive both buttons' labels and disabled states.
             threshold: The suggestion database's configured rejection threshold.
-            on_toggle: Passed through to the button.
+            on_toggle: Passed through to the reject button.
+            on_watched: Passed through to the Watched button.
         """
         if watch_item.id is None or watch_item.id <= 0:
             raise ValueError("SuggestionView requires a suggestion with a positive ID.")
@@ -123,15 +189,18 @@ class SuggestionView(discord.ui.View):
         super().__init__(timeout=None)
         rejection_count = len(watch_item.journey.rejected_by_discord_user_ids)
         archived = watch_item.status == WatchItemStatus.ARCHIVED
+        watched = watch_item.status == WatchItemStatus.WATCHED
         self.add_item(
             RejectSuggestionButton(
                 watch_item.id,
                 rejection_count,
                 threshold,
                 archived=archived,
+                watched=watched,
                 on_toggle=on_toggle,
             )
         )
+        self.add_item(WatchedSuggestionButton(watch_item.id, watched=watched, on_click=on_watched))
 
 
 class UndoRejectionButton(discord.ui.Button):
@@ -171,3 +240,28 @@ class RejectionConfirmationView(discord.ui.View):
             )
             return False
         return True
+
+
+class WatchedDateModal(discord.ui.Modal):
+    """Watched Button & Archive Workflow: confirm (and optionally edit)
+    the date a suggestion was actually watched, defaulting to today.
+
+    A single free-text field rather than a Select, since a date has no
+    small fixed set of choices -- validation (a real calendar date, not
+    in the future) happens in bot.py's on_submit callback, matching
+    every other modal in this codebase (the modal only collects raw
+    text; parsing/validation is the caller's job).
+    """
+
+    def __init__(self, suggestion_id: int, on_submit: OnWatchedDateSubmit, *, default: Optional[str] = None) -> None:
+        super().__init__(title="Confirm Watched Date")
+        self.suggestion_id = suggestion_id
+        self._submit_callback = on_submit
+        self.watched_date_input = discord.ui.TextInput(
+            label="Watched date (YYYY-MM-DD)",
+            default=default or date.today().isoformat(),
+        )
+        self.add_item(self.watched_date_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self._submit_callback(interaction, self.watched_date_input.value)

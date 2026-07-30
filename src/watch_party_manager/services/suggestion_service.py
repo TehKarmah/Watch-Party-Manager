@@ -2,7 +2,7 @@
 
 import re
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
@@ -501,6 +501,31 @@ class SuggestionService:
         self._save()
         return SuggestionResult(
             success=True, message=f'"{watch_item.title}" has been reactivated.', watch_item=watch_item
+        )
+
+    def mark_suggestion_watched(self, suggestion_id: int, watched_date: date) -> SuggestionResult:
+        """Record the Watched button's explicit confirmation (Watched
+        Button & Archive Workflow).
+
+        Reachable from any prior status -- winning a vote or being
+        retired never implies Watched automatically, so WASH Crew must
+        always be able to confirm it explicitly regardless of a
+        suggestion's current state. Rejects only a second confirmation
+        on an already-Watched item (the button is disabled once Watched,
+        so this guard only matters for a stale/duplicate interaction).
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return SuggestionResult(success=False, message="That suggestion doesn't exist.")
+
+        if watch_item.status is WatchItemStatus.WATCHED:
+            return SuggestionResult(success=False, message="That suggestion is already marked watched.")
+
+        watch_item.status = WatchItemStatus.WATCHED
+        watch_item.journey.record_watch_date(watched_date)
+        self._save()
+        return SuggestionResult(
+            success=True, message=f'"{watch_item.title}" has been marked watched.', watch_item=watch_item
         )
 
     def set_suggestion_status(self, suggestion_id: int, status: WatchItemStatus) -> SuggestionResult:

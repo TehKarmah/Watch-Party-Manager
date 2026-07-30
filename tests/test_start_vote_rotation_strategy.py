@@ -179,6 +179,50 @@ class InfinitePoolModeTests(StartVoteRotationStrategyTestCase):
         self.assertEqual(len(second_round.candidate_suggestion_ids), 3)
 
 
+class AlreadyOpenRoundRotationCorrectnessTests(StartVoteRotationStrategyTestCase):
+    """Rotation Cooldown Correctness Bug: a second /start_vote attempt
+    while a round is already open for this collection must be rejected
+    *before* touching rotation state at all. Previously,
+    eligible_candidate_count/select_nominees ran first (marking new
+    candidates presented and possibly rolling the rotation over) and
+    only then did vote_service.create_round() reject the attempt --
+    leaving rotation state corrupted (candidates on cooldown, or even a
+    fresh rotation started) for a round that was never actually created.
+    """
+
+    def test_second_start_while_open_is_rejected_and_leaves_rotation_state_untouched(self) -> None:
+        self._configure_mode(CandidateSelectionMode.ROTATION_POOL)
+        self._start_vote(nominee_count=2)
+        first_round = self.vote_service.get_open_round()
+        first_rotation = self.rotation_service.get_open_rotation(self.database.database_id)
+        presented_after_first_start = {
+            item.id
+            for item in self.suggestion_service.get_suggestions_for_database(self.database.database_id)
+            if first_rotation.id in item.journey.rotation_history
+        }
+
+        message, ephemeral = self._start_vote(nominee_count=2)
+
+        self.assertTrue(ephemeral)
+        self.assertIn("already open", message)
+        # Still the same single round -- no second round was created.
+        self.assertEqual(self.vote_service.get_open_round().id, first_round.id)
+        # Still the same rotation -- no rollover was triggered by the
+        # rejected attempt's eligible_candidate_count call.
+        second_rotation = self.rotation_service.get_open_rotation(self.database.database_id)
+        self.assertEqual(second_rotation.id, first_rotation.id)
+        # No additional candidate was marked presented in this rotation
+        # by the rejected attempt's select_nominees call -- the one
+        # suggestion never presented in the first round ("C") must
+        # remain untouched.
+        presented_after_second_attempt = {
+            item.id
+            for item in self.suggestion_service.get_suggestions_for_database(self.database.database_id)
+            if second_rotation.id in item.journey.rotation_history
+        }
+        self.assertEqual(presented_after_second_attempt, presented_after_first_start)
+
+
 class NoRotationServiceConfiguredTests(StartVoteRotationStrategyTestCase):
     def test_omitting_rotation_service_preserves_pre_fr_033b_behavior(self) -> None:
         message, ephemeral = perform_start_vote(

@@ -155,9 +155,13 @@ WASH is invited using the OAuth2 URL Generator described in Section 9. When you 
 - Embed Links
 - Attach Files (used by `/backup`, `/database backup`, and `/import` to send/receive `.zip` files)
 - Read Message History (used to edit WASH's own suggestion, vote, and confirmation posts)
+- Manage Channels (the Setup Wizard's Home Channel and Admin Channel steps can create a new channel for you; without this permission, choose **Use Existing Channel** in those steps instead)
 - Use External Emojis (optional, cosmetic only)
 
-WASH does not need Manage Messages, Manage Channels, Manage Roles, Administrator, or any moderation permission. It never moderates members or deletes other users' messages.
+WASH does not need Manage Messages, Manage Roles, Administrator, or any moderation permission. It never moderates members or deletes other users' messages.
+
+> [!IMPORTANT]
+> **WASH must be added as a Guild Install, with both scopes selected together.** WASH is a traditional bot: it needs to actually join your server as a member to function -- it does not support Discord's User Install or command-only integration types, and nothing in WASH is built to work that way. If your Discord Application's **Installation** page (in the Developer Portal, separate from the OAuth2 URL Generator) has Guild Install scopes configured with `applications.commands` but not `bot`, slash commands can still appear to work in some contexts while WASH never actually joins the server -- which breaks anything that depends on WASH being a real member, including `/setup`'s first-run owner check. Confirm Guild Install is enabled and both `bot` and `applications.commands` are selected for it before inviting WASH.
 
 ## 7. Configure `.env`
 
@@ -205,9 +209,9 @@ Without a configured key, pasting an IMDb link into `/add` returns a clear messa
 ## 9. Invite WASH to Your Server
 
 1. In the [Discord Developer Portal](https://discord.com/developers/applications), open your application, then **OAuth2 -> URL Generator**.
-2. Check the scopes and permissions listed in Section 6.
+2. Check the scopes and permissions listed in Section 6 -- both `bot` and `applications.commands` must be selected.
 3. Copy the generated URL, open it in a browser, choose your server, and authorize.
-4. WASH now appears in your server's member list (offline until you start it in Section 10).
+4. **Verify WASH now appears in your server's member list** (offline until you start it in Section 10). This is the confirmation that the invite actually worked -- if slash commands later show up but WASH was never added as a member, the `bot` scope was likely missing from the invite; see Section 14.
 
 ## 10. Start WASH
 
@@ -297,11 +301,13 @@ If a step fails, check Section 14 before assuming something is broken.
 | WASH never comes online | `DISCORD_TOKEN` is missing, wrong, or was reset in the Developer Portal after you copied it. | Reset the token in the Developer Portal, update `.env`, restart WASH. |
 | WASH logs a configuration error and exits immediately | A malformed value in `.env` (e.g. `WASH_CREW_ROLE_ID` isn't a plain number). | Fix or remove the offending line; unset optional values are fine left blank or commented out. |
 | Slash commands don't appear in Discord | Global sync can take up to an hour on first install; or the bot wasn't invited with the `applications.commands` scope. | Set `DISCORD_GUILD_ID` for instant sync during setup, or wait; re-invite with the correct scope if commands never appear. |
+| Slash commands appear and respond, but WASH does not appear in the server member list | The `bot` scope is probably missing from Guild Install -- the server only granted `applications.commands`, so Discord routes command interactions without WASH ever having joined as a member. This breaks anything that depends on WASH being an actual member, including `/setup`'s first-run owner check. | Re-invite WASH with both `bot` and `applications.commands` selected under Guild Install (Section 6/9), and confirm WASH now shows up in the member list before running `/setup` again. |
 | "You need the WASH Crew role to use this command" / commands fail closed for everyone | Neither `WASH_CREW_ROLE_ID` nor `/setup`'s WASH Crew step has been configured yet. | Run `/setup`, or set `WASH_CREW_ROLE_ID` in `.env` and restart. |
 | "You need the Watch Party member role..." | `WATCH_PARTY_MEMBER_ROLE_ID` isn't configured and you're not WASH Crew. | Run `/setup`'s Watch Party role step, or join via `/join_watch_party` if Self-Service mode is enabled. |
 | Pasting an IMDb link into `/add` says lookup isn't configured | `OMDB_API_KEY` is unset. | Follow Section 8, or continue using plain titles -- this is optional. |
 | `/stats server`'s member count looks too low | The Server Members Intent isn't enabled (see Section 6's note). | Enable it in the Developer Portal if you want that one figure to be accurate; otherwise it's safe to ignore. |
 | WASH can't post in a channel | Missing View Channel/Send Messages/Embed Links permission in that specific channel (server-wide invite permissions don't override channel-level overwrites). | Check that channel's permission overwrites for WASH's role. |
+| The Setup Wizard's "Create New Channel" option fails with a permission message | WASH wasn't invited with Manage Channels (see Section 6). | Grant WASH the Manage Channels permission and try again, or choose **Use Existing Channel** in that step instead. |
 | Changes made via `/restore`, `/database restore`, `/database reset`, `/factory_reset`, or `/import` don't seem to take effect | Several repositories cache their data in memory at startup. | Restart WASH after any of these commands -- see [Administration](05-Administration.md)'s "Backup & Recovery" section for the full explanation. |
 | `python -m pip install -e .` fails | Python version below 3.12, or the virtual environment isn't active. | Confirm `python --version` reports 3.12+ and your prompt shows `(.venv)`. |
 

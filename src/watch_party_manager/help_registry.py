@@ -155,30 +155,12 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
-    CommandHelp(
-        "/watch-party status",
-        "View the scheduled watch party.",
-        "Watch Parties",
-        HelpAudience.WASH_CREW,
-    ),
-    CommandHelp(
-        "/watch-party schedule",
-        "Schedule a watch party.",
-        "WASH Crew: Watch Parties",
-        HelpAudience.WASH_CREW,
-    ),
-    CommandHelp(
-        "/watch-party reschedule",
-        "Change a watch party's start.",
-        "WASH Crew: Watch Parties",
-        HelpAudience.WASH_CREW,
-    ),
-    CommandHelp(
-        "/watch-party cancel",
-        "Cancel a scheduled watch party.",
-        "WASH Crew: Watch Parties",
-        HelpAudience.WASH_CREW,
-    ),
+    # v1 Final Polish: /watch-party schedule/reschedule/cancel/status are
+    # intentionally not listed here for v1 -- the command group itself is
+    # unregistered (see WatchPartyBot's command-tree setup in bot.py),
+    # so there is nothing here to document yet. The scheduled watch
+    # party workflow may return in a later release; do not re-add these
+    # entries without also re-registering the command group.
 )
 
 

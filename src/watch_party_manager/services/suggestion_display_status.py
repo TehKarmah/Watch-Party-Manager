@@ -23,12 +23,13 @@ from watch_party_manager.domain.watch_item import WatchItem, WatchItemStatus
 
 
 class SuggestionDisplayStatus(str, Enum):
-    """One of the four statuses shown on a suggestion's embed/listing."""
+    """One of the statuses shown on a suggestion's embed/listing."""
 
     AVAILABLE = "available"
     ROTATION_COOLDOWN = "rotation_cooldown"
     VOTE_WINNER = "vote_winner"
     RETIRED = "retired"
+    WATCHED = "watched"
 
 
 # UI Polish (Watch Item Status Presentation): Vote Winner and Retired
@@ -44,6 +45,7 @@ SUGGESTION_DISPLAY_STATUS_EMOJI: dict[SuggestionDisplayStatus, str] = {
     SuggestionDisplayStatus.ROTATION_COOLDOWN: "🟡",
     SuggestionDisplayStatus.VOTE_WINNER: "🏆",
     SuggestionDisplayStatus.RETIRED: "🗄️",
+    SuggestionDisplayStatus.WATCHED: "✅",
 }
 
 _SUGGESTION_DISPLAY_STATUS_WORDS: dict[SuggestionDisplayStatus, str] = {
@@ -51,6 +53,7 @@ _SUGGESTION_DISPLAY_STATUS_WORDS: dict[SuggestionDisplayStatus, str] = {
     SuggestionDisplayStatus.ROTATION_COOLDOWN: "Rotation Cooldown",
     SuggestionDisplayStatus.VOTE_WINNER: "Vote Winner",
     SuggestionDisplayStatus.RETIRED: "Retired",
+    SuggestionDisplayStatus.WATCHED: "Watched",
 }
 
 SUGGESTION_DISPLAY_STATUS_LABELS: dict[SuggestionDisplayStatus, str] = {
@@ -83,17 +86,31 @@ def vote_winner_won_date_line(item: WatchItem) -> Optional[str]:
     return f"Won: {format_won_date(won_date)}"
 
 
+def watched_date_line(item: WatchItem) -> Optional[str]:
+    """"Watched: <date>" for the most recently confirmed watch date, or
+    None if somehow unset. journey.watch_dates is append-only, so its
+    last entry is always the most recent confirmation.
+    """
+    watch_dates = item.journey.watch_dates
+    if not watch_dates:
+        return None
+    return f"Watched: {format_won_date(watch_dates[-1])}"
+
+
 def format_display_status_with_won_date(item: WatchItem, status: SuggestionDisplayStatus) -> str:
-    """The status label, plus a "Won: <date>" line whenever status is
-    Vote Winner and a win date was recorded -- the one shared building
+    """The status label, plus a "Won: <date>"/"Watched: <date>" line for
+    Vote Winner/Watched when one was recorded -- the one shared building
     block for every "Status" field/line shown anywhere in WASH (the
     public confirmation embed, /edit_suggestion's summary, and /list).
     """
     label = display_status_label(status)
-    if status is not SuggestionDisplayStatus.VOTE_WINNER:
-        return label
-    won_line = vote_winner_won_date_line(item)
-    return label if won_line is None else f"{label}\n{won_line}"
+    if status is SuggestionDisplayStatus.VOTE_WINNER:
+        won_line = vote_winner_won_date_line(item)
+        return label if won_line is None else f"{label}\n{won_line}"
+    if status is SuggestionDisplayStatus.WATCHED:
+        watched_line = watched_date_line(item)
+        return label if watched_line is None else f"{label}\n{watched_line}"
+    return label
 
 
 class RotationCooldownLookup:
@@ -110,6 +127,8 @@ def compute_display_status(watch_item: WatchItem, *, in_rotation_cooldown: bool)
     resolve_display_status() so tests never need a real RotationService
     just to exercise this decision table.
     """
+    if watch_item.status is WatchItemStatus.WATCHED:
+        return SuggestionDisplayStatus.WATCHED
     if watch_item.status is WatchItemStatus.ARCHIVED:
         return SuggestionDisplayStatus.RETIRED
     if watch_item.status is WatchItemStatus.VOTE_WINNER:

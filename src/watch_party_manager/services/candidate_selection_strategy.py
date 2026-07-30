@@ -152,11 +152,12 @@ class SoftRotationStrategy:
         # mode's existing behavior unchanged. Rotation & Collection
         # Health Audit: a Vote Winner must never be selectable again in
         # any mode, so it's excluded here explicitly -- get_suggestions_
-        # for_database's own default only ever excludes Archived.
+        # for_database's own default only ever excludes Archived. A
+        # Watched item is excluded the same way, for the same reason.
         return [
             item
             for item in self.suggestion_source.get_suggestions_for_database(database_id)
-            if item.status is not WatchItemStatus.VOTE_WINNER
+            if item.status not in (WatchItemStatus.VOTE_WINNER, WatchItemStatus.WATCHED)
         ]
 
     def weight_for(self, watch_item: WatchItem) -> float:
@@ -179,11 +180,12 @@ class InfinitePoolStrategy:
         # behavior unchanged. Rotation & Collection Health Audit: a Vote
         # Winner must never be selectable again in any mode, so it's
         # excluded here explicitly -- see SoftRotationStrategy's
-        # identical fix for the full rationale.
+        # identical fix for the full rationale. A Watched item is
+        # excluded the same way, for the same reason.
         return [
             item
             for item in self.suggestion_source.get_suggestions_for_database(database_id)
-            if item.status is not WatchItemStatus.VOTE_WINNER
+            if item.status not in (WatchItemStatus.VOTE_WINNER, WatchItemStatus.WATCHED)
         ]
 
     def weight_for(self, watch_item: WatchItem) -> float:

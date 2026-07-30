@@ -10,7 +10,7 @@ import unittest
 
 import discord
 
-from watch_party_manager.domain.guild_configuration import JoinMode
+from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, JoinMode
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.setup_wizard_view import (
     SETUP_WIZARD_STEP_TIMEOUT_SECONDS,
@@ -33,6 +33,7 @@ from watch_party_manager.setup_wizard_view import (
     SetupSaveForLaterButton,
     SetupWizardResumeView,
     SuggestionDatabaseChoiceView,
+    VisibilitySelectComponent,
     VotingDefaultsIntroView,
     VotingDefaultsModal,
     WashCrewRoleStepView,
@@ -237,12 +238,13 @@ class CreateDatabaseNameModalTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_channel_select_skip_back_save_and_cancel(self) -> None:
-        view = AdminChannelStepView(_noop, _noop, _noop, _noop, _noop)
+    async def test_has_channel_select_create_new_skip_back_save_and_cancel(self) -> None:
+        view = AdminChannelStepView(_noop, _noop, _noop, _noop, _noop, _noop)
         self.assertEqual(
             [getattr(child, "label", None) or getattr(child, "custom_id", None) for child in view.children],
             [
                 "wpm_setup_admin_channel_select",
+                "Create New Channel",
                 "Skip for Now",
                 "Back",
                 "Save & Finish Later",
@@ -250,14 +252,24 @@ class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_create_new_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_create_new(interaction) -> None:
+            calls.append("create_new")
+
+        view = AdminChannelStepView(_noop, on_create_new, _noop, _noop, _noop, _noop)
+        await view.children[1].callback(interaction=object())
+        self.assertEqual(calls, ["create_new"])
+
     async def test_skip_button_triggers_its_callback(self) -> None:
         calls = []
 
         async def on_skip(interaction) -> None:
             calls.append("skip")
 
-        view = AdminChannelStepView(_noop, on_skip, _noop, _noop, _noop)
-        await view.children[1].callback(interaction=object())
+        view = AdminChannelStepView(_noop, _noop, on_skip, _noop, _noop, _noop)
+        await view.children[2].callback(interaction=object())
         self.assertEqual(calls, ["skip"])
 
     async def test_back_button_triggers_its_callback(self) -> None:
@@ -266,7 +278,7 @@ class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_back(interaction) -> None:
             calls.append("back")
 
-        view = AdminChannelStepView(_noop, _noop, on_back, _noop, _noop)
+        view = AdminChannelStepView(_noop, _noop, _noop, on_back, _noop, _noop)
         back_button = next(c for c in view.children if isinstance(c, SetupBackButton))
         await back_button.callback(interaction=object())
         self.assertEqual(calls, ["back"])
@@ -447,25 +459,60 @@ class ModalStepIntroViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_three_fields_with_expected_defaults(self) -> None:
+    async def test_has_exactly_two_fields_both_text_inputs(self) -> None:
+        # Live-Discord regression: a Select embedded in a modal
+        # constructs without error locally, but Discord's API rejects
+        # the resulting payload with a 400 "Invalid Form Body" at
+        # submission time. This modal must contain TextInput components
+        # only -- Candidate Selection Mode and Visibility are both
+        # collected beforehand, on VotingDefaultsIntroView.
         modal = VotingDefaultsModal(_noop)
-        self.assertEqual(len(modal.children), 3)
+        self.assertEqual(len(modal.children), 2)
+        self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in modal.children))
         self.assertEqual(modal.candidate_count_input.default, "3")
         self.assertEqual(modal.duration_input.default, "1d")
-        self.assertEqual(modal.visibility_input.default, "visible")
 
-    async def test_submission_forwards_all_three_values(self) -> None:
+    async def test_submission_forwards_both_values(self) -> None:
         calls = []
 
-        async def on_submit(interaction, candidate_count, duration_text, visibility) -> None:
-            calls.append((candidate_count, duration_text, visibility))
+        async def on_submit(interaction, candidate_count, duration_text) -> None:
+            calls.append((candidate_count, duration_text))
 
         modal = VotingDefaultsModal(on_submit)
         modal.candidate_count_input._value = "4"
         modal.duration_input._value = "10"
-        modal.visibility_input._value = "visible"
         await modal.on_submit(interaction=object())
-        self.assertEqual(calls, [("4", "10", "visible")])
+        self.assertEqual(calls, [("4", "10")])
+
+    async def test_uses_the_supplied_defaults(self) -> None:
+        modal = VotingDefaultsModal(_noop, defaults=("5", "2d"))
+        self.assertEqual(modal.candidate_count_input.default, "5")
+        self.assertEqual(modal.duration_input.default, "2d")
+
+
+class VisibilitySelectComponentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_displays_both_options_with_their_own_explanation(self) -> None:
+        select = VisibilitySelectComponent(default=GuildVoteVisibility.VISIBLE)
+        self.assertEqual(
+            [option.value for option in select.options],
+            [GuildVoteVisibility.VISIBLE.value, GuildVoteVisibility.BLIND.value],
+        )
+        self.assertTrue(all(option.description for option in select.options))
+
+    async def test_default_option_matches_the_requested_default(self) -> None:
+        select = VisibilitySelectComponent(default=GuildVoteVisibility.BLIND)
+        defaults = {option.value: option.default for option in select.options}
+        self.assertTrue(defaults[GuildVoteVisibility.BLIND.value])
+        self.assertFalse(defaults[GuildVoteVisibility.VISIBLE.value])
+
+    async def test_selected_falls_back_to_default_when_never_touched(self) -> None:
+        select = VisibilitySelectComponent(default=GuildVoteVisibility.BLIND)
+        self.assertEqual(select.selected, GuildVoteVisibility.BLIND)
+
+    async def test_selected_reflects_a_made_choice(self) -> None:
+        select = VisibilitySelectComponent(default=GuildVoteVisibility.VISIBLE)
+        select._values = [GuildVoteVisibility.BLIND.value]
+        self.assertEqual(select.selected, GuildVoteVisibility.BLIND)
 
 
 class CandidateSelectionSelectComponentTests(unittest.IsolatedAsyncioTestCase):
@@ -502,47 +549,64 @@ class CandidateSelectionSelectComponentTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VotingDefaultsIntroViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_candidate_selection_select_configure_back_save_and_cancel(self) -> None:
-        view = VotingDefaultsIntroView(
-            _noop, _noop, _noop, _noop, default_candidate_selection=CandidateSelectionMode.ROTATION_POOL
+    def _make_view(self, on_configure=_noop, **kwargs) -> "VotingDefaultsIntroView":
+        defaults = dict(
+            default_candidate_selection=CandidateSelectionMode.ROTATION_POOL,
+            default_visibility=GuildVoteVisibility.VISIBLE,
         )
-        self.assertEqual(len(view.children), 5)
+        defaults.update(kwargs)
+        return VotingDefaultsIntroView(on_configure, _noop, _noop, _noop, **defaults)
+
+    async def test_has_both_selects_configure_back_save_and_cancel(self) -> None:
+        view = self._make_view()
+        self.assertEqual(len(view.children), 6)
         self.assertEqual(view.children[0].custom_id, "wpm_setup_voting_candidate_selection_select")
-        self.assertEqual(view.children[1].label, "Set Voting Defaults")
+        self.assertEqual(view.children[1].custom_id, "wpm_voting_defaults_visibility_select")
+        self.assertEqual(view.children[2].label, "Set Voting Defaults")
         self.assertIsInstance(view.children[-1], SetupCancelButton)
         self.assertTrue(any(isinstance(child, SetupBackButton) for child in view.children))
         self.assertTrue(any(isinstance(child, SetupSaveForLaterButton) for child in view.children))
 
-    async def test_configure_forwards_the_selected_candidate_selection(self) -> None:
+    async def test_configure_forwards_the_selected_candidate_selection_and_visibility(self) -> None:
         calls = []
 
-        async def on_configure(interaction, candidate_selection) -> None:
-            calls.append(candidate_selection)
+        async def on_configure(interaction, candidate_selection, visibility) -> None:
+            calls.append((candidate_selection, visibility))
 
-        view = VotingDefaultsIntroView(
-            on_configure, _noop, _noop, _noop, default_candidate_selection=CandidateSelectionMode.ROTATION_POOL
-        )
+        view = self._make_view(on_configure)
         view.candidate_selection_select._values = [CandidateSelectionMode.INFINITE_POOL.value]
-        await view.children[1].callback(interaction=object())
-        self.assertEqual(calls, [CandidateSelectionMode.INFINITE_POOL])
+        view.visibility_select._values = [GuildVoteVisibility.BLIND.value]
+        await view.children[2].callback(interaction=object())
+        self.assertEqual(calls, [(CandidateSelectionMode.INFINITE_POOL, GuildVoteVisibility.BLIND)])
 
-    async def test_configure_uses_default_when_selection_never_touched(self) -> None:
+    async def test_configure_uses_defaults_when_neither_select_is_touched(self) -> None:
         calls = []
 
-        async def on_configure(interaction, candidate_selection) -> None:
-            calls.append(candidate_selection)
+        async def on_configure(interaction, candidate_selection, visibility) -> None:
+            calls.append((candidate_selection, visibility))
 
-        view = VotingDefaultsIntroView(
-            on_configure, _noop, _noop, _noop, default_candidate_selection=CandidateSelectionMode.SOFT_ROTATION
+        view = self._make_view(
+            on_configure,
+            default_candidate_selection=CandidateSelectionMode.SOFT_ROTATION,
+            default_visibility=GuildVoteVisibility.BLIND,
         )
-        await view.children[1].callback(interaction=object())
-        self.assertEqual(calls, [CandidateSelectionMode.SOFT_ROTATION])
+        await view.children[2].callback(interaction=object())
+        self.assertEqual(calls, [(CandidateSelectionMode.SOFT_ROTATION, GuildVoteVisibility.BLIND)])
+
+    async def test_visibility_options_have_clear_explanations(self) -> None:
+        view = self._make_view()
+        descriptions = {option.value: option.description for option in view.visibility_select.options}
+        self.assertIn("shown", descriptions[GuildVoteVisibility.VISIBLE.value].lower())
+        self.assertIn("hidden", descriptions[GuildVoteVisibility.BLIND.value].lower())
 
 
 class ReminderDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_two_fields_with_expected_defaults(self) -> None:
+    async def test_has_two_fields_both_text_inputs(self) -> None:
+        # Live-Discord regression guard (see VotingDefaultsModal): every
+        # field on this modal must be a TextInput.
         modal = ReminderDefaultsModal(_noop)
         self.assertEqual(len(modal.children), 2)
+        self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in modal.children))
         self.assertEqual(modal.enabled_input.default, "yes")
         self.assertEqual(modal.minutes_input.default, "1d")
 
@@ -716,7 +780,7 @@ class RequesterScopedInteractionCheckTests(unittest.IsolatedAsyncioTestCase):
         views = [
             SetupPreparationView(_noop, _noop, requester_id=42),
             WatchPartyRoleStepView(_noop, _noop, _noop, _noop, requester_id=42),
-            AdminChannelStepView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
+            AdminChannelStepView(_noop, _noop, _noop, _noop, _noop, _noop, requester_id=42),
             HomeChannelChoiceView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
             SuggestionDatabaseChoiceView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
             WatchDestinationStepView(_noop, _noop, _noop, _noop, _noop, _noop, requester_id=42),
@@ -727,6 +791,7 @@ class RequesterScopedInteractionCheckTests(unittest.IsolatedAsyncioTestCase):
                 _noop,
                 _noop,
                 default_candidate_selection=CandidateSelectionMode.ROTATION_POOL,
+                default_visibility=GuildVoteVisibility.VISIBLE,
                 requester_id=42,
             ),
             ReviewStepView([("wash_crew_role", "WASH Crew Role")], _noop, _noop, _noop, _noop, _noop, requester_id=42),

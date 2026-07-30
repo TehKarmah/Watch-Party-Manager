@@ -41,8 +41,10 @@ class CollectionEligibility:
         Rotation/Infinite Pool have no cooldown concept).
     rotation_cooldown: active but not currently eligible (always empty
         outside ROTATION_POOL mode).
-    vote_winners / retired: terminal-state suggestions, included for
-        Collection Health's reconciliation, never part of "eligible."
+    vote_winners / retired / watched: terminal-state suggestions,
+        included for Collection Health's reconciliation, never part of
+        "eligible." watched is populated only by the explicit Watched
+        action -- never automatically from winning a vote or retiring.
     rollover_occurred: True only when resolve() actually rolled the
         rotation over to produce this snapshot -- always False from
         peek(), which never mutates anything.
@@ -54,6 +56,7 @@ class CollectionEligibility:
     rotation_cooldown: Tuple[WatchItem, ...]
     vote_winners: Tuple[WatchItem, ...]
     retired: Tuple[WatchItem, ...]
+    watched: Tuple[WatchItem, ...] = ()
     rollover_occurred: bool = False
 
     @property
@@ -64,8 +67,8 @@ class CollectionEligibility:
 
     @property
     def total(self) -> int:
-        """Total = Active + Vote Winners + Retired."""
-        return len(self.active) + len(self.vote_winners) + len(self.retired)
+        """Total = Active + Vote Winners + Retired + Watched."""
+        return len(self.active) + len(self.vote_winners) + len(self.retired) + len(self.watched)
 
 
 class CollectionEligibilityService:
@@ -150,6 +153,7 @@ class CollectionEligibilityService:
         all_items = self._suggestion_service.get_suggestions_for_database(database_id, include_archived=True)
         retired = tuple(item for item in all_items if item.status is WatchItemStatus.ARCHIVED)
         vote_winners = tuple(item for item in all_items if item.status is WatchItemStatus.VOTE_WINNER)
+        watched = tuple(item for item in all_items if item.status is WatchItemStatus.WATCHED)
         active_items = tuple(item for item in all_items if item.status is WatchItemStatus.SUGGESTED)
 
         eligible = tuple(eligible_items)
@@ -166,5 +170,6 @@ class CollectionEligibilityService:
             rotation_cooldown=rotation_cooldown,
             vote_winners=vote_winners,
             retired=retired,
+            watched=watched,
             rollover_occurred=rollover_occurred,
         )

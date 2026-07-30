@@ -14,6 +14,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import discord
+
 from watch_party_manager.bot import (
     WatchPartyBot,
     build_setup_completion_summary,
@@ -58,6 +60,7 @@ from watch_party_manager.services.config_service import ConfigService
 from watch_party_manager.services.setup_wizard_service import SetupWizardService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.setup_wizard_view import (
+    AdminChannelNameModal,
     AdminChannelStepView,
     BackupDefaultsChoiceView,
     ExistingChannelSelectView,
@@ -577,7 +580,9 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         self.assertIn("Admin Channel", interaction.response.sent_message)
         self.assertIsInstance(interaction.response.sent_view, AdminChannelStepView)
 
-        skip_button = interaction.response.sent_view.children[1]
+        skip_button = next(
+            child for child in interaction.response.sent_view.children if getattr(child, "label", None) == "Skip for Now"
+        )
         skip_interaction = FakeInteraction()
         await skip_button.callback(interaction=skip_interaction)
 
@@ -587,14 +592,16 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         # Regression test: Voting Defaults previously crashed with
         # discord.errors.HTTPException 400 ("Must be between 1 and 45 in
         # length") because VotingDefaultsModal's fourth TextInput label
-        # was 46 characters (candidate selection has since moved to a
-        # Discord Select on VotingDefaultsIntroView, dropping that field
-        # from the modal entirely). This exercises the current path --
-        # go_to_step -> send_setup_wizard_step -> VotingDefaultsIntroView's
-        # Set Voting Defaults button -> on_configure ->
-        # interaction.response.send_modal(...) -- and confirms every
-        # field on the modal actually sent has a label within Discord's
-        # 1-45 character limit.
+        # was 46 characters. Candidate Selection Mode and Visibility are
+        # both collected beforehand, as Selects on VotingDefaultsIntroView
+        # -- never inside the modal itself, since Discord's API rejects a
+        # Select embedded in a modal at submission time even though
+        # discord.py allows constructing one. This exercises the current
+        # path -- go_to_step -> send_setup_wizard_step ->
+        # VotingDefaultsIntroView's Set Voting Defaults button ->
+        # on_configure -> interaction.response.send_modal(...) -- and
+        # confirms every field on the modal actually sent is a TextInput
+        # with a label within Discord's 1-45 character limit.
         from watch_party_manager.domain.setup_wizard import SetupWizardStep
         from watch_party_manager.setup_wizard_view import VotingDefaultsIntroView, VotingDefaultsModal
 
@@ -605,13 +612,17 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
         self.assertIsInstance(interaction.response.sent_view, VotingDefaultsIntroView)
-        configure_button = interaction.response.sent_view.children[1]
+        configure_button = next(
+            child for child in interaction.response.sent_view.children
+            if getattr(child, "label", None) == "Set Voting Defaults"
+        )
 
         configure_interaction = FakeInteraction()
         await configure_button.callback(interaction=configure_interaction)
 
         sent_modal = configure_interaction.response.sent_modal
         self.assertIsInstance(sent_modal, VotingDefaultsModal)
+        self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in sent_modal.children))
         for child in sent_modal.children:
             label = getattr(child, "label", None)
             if label is not None:
@@ -834,7 +845,10 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
         intro_view: VotingDefaultsIntroView = interaction.response.sent_view
         self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.SOFT_ROTATION)
-        configure_button = intro_view.children[1]
+        self.assertEqual(intro_view.visibility_select.selected, GuildVoteVisibility.VISIBLE)
+        configure_button = next(
+            child for child in intro_view.children if getattr(child, "label", None) == "Set Voting Defaults"
+        )
 
         configure_interaction = FakeInteraction()
         await configure_button.callback(interaction=configure_interaction)
@@ -842,7 +856,6 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         modal: VotingDefaultsModal = configure_interaction.response.sent_modal
         self.assertEqual(modal.candidate_count_input.default, "5")
         self.assertEqual(modal.duration_input.default, "14m")
-        self.assertEqual(modal.visibility_input.default, "visible")
 
     async def test_back_from_review_returns_to_backup_defaults(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
@@ -1149,6 +1162,20 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.ROTATION_POOL)
         self.assertEqual(CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.ROTATION_POOL], "Balanced Random")
 
+    async def test_visibility_is_collected_on_the_setup_view_not_the_modal(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        intro_view: VotingDefaultsIntroView = interaction.response.sent_view
+        self.assertEqual(intro_view.visibility_select.selected, GuildVoteVisibility.VISIBLE)
+        option_values = {option.value for option in intro_view.visibility_select.options}
+        self.assertEqual(option_values, {GuildVoteVisibility.VISIBLE.value, GuildVoteVisibility.BLIND.value})
+        descriptions = {option.value: option.description for option in intro_view.visibility_select.options}
+        self.assertIn("shown", descriptions[GuildVoteVisibility.VISIBLE.value].lower())
+        self.assertIn("hidden", descriptions[GuildVoteVisibility.BLIND.value].lower())
+
     async def test_dropdown_displays_all_three_candidate_selection_modes(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
@@ -1173,27 +1200,33 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
         intro_view: VotingDefaultsIntroView = interaction.response.sent_view
         intro_view.candidate_selection_select._values = [CandidateSelectionMode.INFINITE_POOL.value]
-        configure_button = intro_view.children[1]
+        intro_view.visibility_select._values = [GuildVoteVisibility.BLIND.value]
+        configure_button = next(
+            child for child in intro_view.children if getattr(child, "label", None) == "Set Voting Defaults"
+        )
 
         configure_interaction = FakeInteraction()
         await configure_button.callback(interaction=configure_interaction)
         modal: VotingDefaultsModal = configure_interaction.response.sent_modal
         modal.candidate_count_input._value = "3"
         modal.duration_input._value = "7d"
-        modal.visibility_input._value = "blind"
 
         submit_interaction = FakeInteraction()
         await modal.on_submit(interaction=submit_interaction)
 
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertEqual(persisted.draft.voting_candidate_selection, CandidateSelectionMode.INFINITE_POOL)
+        self.assertEqual(persisted.draft.voting_visibility, GuildVoteVisibility.BLIND)
 
     async def test_candidate_count_default_is_three(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
-        configure_button = interaction.response.sent_view.children[1]
+        configure_button = next(
+            child for child in interaction.response.sent_view.children
+            if getattr(child, "label", None) == "Set Voting Defaults"
+        )
 
         configure_interaction = FakeInteraction()
         await configure_button.callback(interaction=configure_interaction)
@@ -1586,13 +1619,20 @@ class HomeChannelStepIntegrationTests(SetupCommandTestCase):
             self.id = channel_id
 
     class FakeGuildForHomeChannel:
-        def __init__(self, *, channel_id: int = 900, fail: bool = False) -> None:
+        def __init__(self, *, channel_id: int = 900, fail: bool = False, forbidden: bool = False) -> None:
             self._channel_id = channel_id
             self._fail = fail
+            self._forbidden = forbidden
             self.created_with = None
 
         async def create_text_channel(self, *, name):
             self.created_with = name
+            if self._forbidden:
+                import discord
+
+                raise discord.Forbidden(
+                    response=HomeChannelStepIntegrationTests.FakeHTTPResponse(), message="Missing Permissions"
+                )
             if self._fail:
                 import discord
 
@@ -1647,6 +1687,29 @@ class HomeChannelStepIntegrationTests(SetupCommandTestCase):
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertIsNone(persisted.draft.home_channel_id)
 
+    async def test_missing_permission_shows_a_friendly_message_not_the_raw_exception(self) -> None:
+        interaction = await self._render_step()
+        create_new_button = interaction.response.sent_view.children[0]
+
+        failing_guild = self.FakeGuildForHomeChannel(forbidden=True)
+        create_interaction = FakeInteraction(guild=failing_guild)
+        await create_new_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        name_modal.name_input._value = "Watch Party"
+
+        submit_interaction = FakeInteraction(guild=failing_guild)
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        message = submit_interaction.response.edited_content
+        self.assertIn("does not have permission to create channels", message)
+        self.assertIn("Manage Channels", message)
+        self.assertIn("Use Existing Channel", message)
+        self.assertNotIn("403", message)
+        self.assertNotIn("Missing Permissions", message)
+        self.assertIsInstance(submit_interaction.response.edited_view, HomeChannelChoiceView)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertIsNone(persisted.draft.home_channel_id)
+
     async def test_using_an_existing_channel_persists_it_and_advances(self) -> None:
         interaction = await self._render_step()
         use_existing_button = interaction.response.sent_view.children[1]
@@ -1683,6 +1746,141 @@ class HomeChannelStepIntegrationTests(SetupCommandTestCase):
         self.assertTrue(resumed)
         self.assertEqual(resumed_state.draft.home_channel_id, DESTINATION_CHANNEL_ID)
         self.assertIn(SetupWizardStep.HOME_CHANNEL, resumed_state.completed_steps)
+
+
+class AdminChannelCreationIntegrationTests(SetupCommandTestCase):
+    """Setup Wizard Channel Creation UX: the Admin Channel step's "Create
+    New Channel" option (mirroring Home Channel's) must create a private,
+    WASH-Crew-only channel -- @everyone denied, WASH's own bot member and
+    the configured WASH Crew role granted -- and surface the same friendly
+    missing-permission message as Home Channel rather than a raw exception.
+    """
+
+    class FakeHTTPResponse:
+        status = 403
+        reason = "Forbidden"
+
+    class FakeRole:
+        def __init__(self, role_id: int) -> None:
+            self.id = role_id
+
+    class FakeCreatedChannel:
+        def __init__(self, channel_id: int) -> None:
+            self.id = channel_id
+
+    class FakeGuildForAdminChannel:
+        def __init__(self, *, channel_id: int = 950, wash_crew_role_id=None, forbidden: bool = False) -> None:
+            self._channel_id = channel_id
+            self._forbidden = forbidden
+            self.default_role = object()
+            self.me = object()
+            self._roles = {}
+            if wash_crew_role_id is not None:
+                self._roles[wash_crew_role_id] = AdminChannelCreationIntegrationTests.FakeRole(wash_crew_role_id)
+            self.created_with = None
+
+        def get_role(self, role_id):
+            return self._roles.get(role_id)
+
+        async def create_text_channel(self, *, name, overwrites=None, topic=None):
+            self.created_with = (name, overwrites, topic)
+            if self._forbidden:
+                import discord
+
+                raise discord.Forbidden(
+                    response=AdminChannelCreationIntegrationTests.FakeHTTPResponse(), message="Missing Permissions"
+                )
+            return AdminChannelCreationIntegrationTests.FakeCreatedChannel(self._channel_id)
+
+    async def _render_step(self, *, wash_crew_role_id=None):
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        if wash_crew_role_id is not None:
+            state = self.bot.setup_wizard_service.set_wash_crew_role(state, wash_crew_role_id)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.ADMIN_CHANNEL)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        return interaction
+
+    async def test_creating_a_new_channel_persists_it_advances_and_applies_overwrites(self) -> None:
+        interaction = await self._render_step(wash_crew_role_id=WASH_CREW_ROLE_ID)
+        self.assertIsInstance(interaction.response.sent_view, AdminChannelStepView)
+        create_new_button = next(
+            child
+            for child in interaction.response.sent_view.children
+            if getattr(child, "label", None) == "Create New Channel"
+        )
+
+        guild = self.FakeGuildForAdminChannel(channel_id=951, wash_crew_role_id=WASH_CREW_ROLE_ID)
+        create_interaction = FakeInteraction(guild=guild)
+        await create_new_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        self.assertIsInstance(name_modal, AdminChannelNameModal)
+        self.assertEqual(name_modal.name_input.default, "WASH Crew")
+        name_modal.name_input._value = "WASH Crew"
+
+        submit_interaction = FakeInteraction(guild=guild)
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        name, overwrites, topic = guild.created_with
+        self.assertEqual(name, "WASH Crew")
+        self.assertIn("private", topic.lower())
+        self.assertFalse(overwrites[guild.default_role].view_channel)
+        self.assertTrue(overwrites[guild.me].view_channel)
+        wash_crew_role = guild.get_role(WASH_CREW_ROLE_ID)
+        self.assertTrue(overwrites[wash_crew_role].view_channel)
+
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.admin_channel_id, 951)
+
+    async def test_creating_a_new_channel_without_a_configured_wash_crew_role_still_succeeds(self) -> None:
+        interaction = await self._render_step()
+        create_new_button = next(
+            child
+            for child in interaction.response.sent_view.children
+            if getattr(child, "label", None) == "Create New Channel"
+        )
+
+        guild = self.FakeGuildForAdminChannel(channel_id=952)
+        create_interaction = FakeInteraction(guild=guild)
+        await create_new_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        name_modal.name_input._value = "WASH Crew"
+
+        submit_interaction = FakeInteraction(guild=guild)
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        name, overwrites, _topic = guild.created_with
+        self.assertEqual(name, "WASH Crew")
+        self.assertEqual(set(overwrites), {guild.default_role, guild.me})
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.admin_channel_id, 952)
+
+    async def test_missing_permission_shows_a_friendly_message_not_the_raw_exception(self) -> None:
+        interaction = await self._render_step()
+        create_new_button = next(
+            child
+            for child in interaction.response.sent_view.children
+            if getattr(child, "label", None) == "Create New Channel"
+        )
+
+        failing_guild = self.FakeGuildForAdminChannel(forbidden=True)
+        create_interaction = FakeInteraction(guild=failing_guild)
+        await create_new_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        name_modal.name_input._value = "WASH Crew"
+
+        submit_interaction = FakeInteraction(guild=failing_guild)
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        message = submit_interaction.response.edited_content
+        self.assertIn("does not have permission to create channels", message)
+        self.assertIn("Manage Channels", message)
+        self.assertIn("Use Existing Channel", message)
+        self.assertNotIn("403", message)
+        self.assertNotIn("Missing Permissions", message)
+        self.assertIsInstance(submit_interaction.response.edited_view, AdminChannelStepView)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertIsNone(persisted.draft.admin_channel_id)
 
 
 class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):

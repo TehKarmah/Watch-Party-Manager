@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from watch_party_manager.domain.rotation import RotationStatus
@@ -424,6 +424,25 @@ class RotationProgressTests(RotationServiceTestCase):
 
         self.assertEqual(progress.retired, 1)
         self.assertEqual(progress.remaining, 0)
+
+    def test_progress_treats_a_watched_item_as_complete_without_inflating_the_legacy_watched_count(
+        self,
+    ) -> None:
+        # progress.watched is a pre-existing field that actually counts
+        # Vote Winners (a legacy name from before Vote Winner replaced
+        # Watched as a concept) -- WatchItemStatus.WATCHED (this
+        # milestone's distinct, later, explicit action) must count
+        # toward completion (excluded from "remaining") without being
+        # folded into that unrelated counter.
+        item = self._add("Alien")
+        self.rotation_service.get_or_start_rotation(DATABASE_ID)
+        self.suggestion_service.mark_suggestion_watched(item.id, date(2026, 7, 28))
+
+        progress = self.rotation_service.rotation_progress(DATABASE_ID)
+
+        self.assertEqual(progress.remaining, 0)
+        self.assertEqual(progress.watched, 0)
+        self.assertEqual(progress.completion_percentage, 100.0)
 
     def test_progress_is_read_only_and_does_not_auto_transition(self) -> None:
         item = self._add("Alien")

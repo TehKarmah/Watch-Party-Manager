@@ -158,11 +158,47 @@ class ResolveAndPresentTests(EditSuggestionTestCase):
         self.assertIn("🟢 Available", summary)
 
     async def test_summary_shows_imdb_link_when_present(self) -> None:
+        # No confirmation post exists for this suggestion (no channel_id/
+        # message_id) -- the legacy IMDb-URL fallback applies, since
+        # there's no "Original Suggestion" post to link to instead.
         item_with_imdb = self.suggestion_service.suggest(
             "Aliens", database_id=self.database.database_id, imdb_url="https://www.imdb.com/title/tt0090605/"
         ).watch_item
         summary = build_edit_suggestion_summary(item_with_imdb, self.suggestion_service)
         self.assertIn("tt0090605", summary)
+
+    async def test_summary_links_to_the_original_post_instead_of_the_raw_imdb_url_when_one_exists(self) -> None:
+        # UX Polish: the original post's own embed already has an
+        # IMDb-linked title card, so once a link to that post exists,
+        # the top link points there instead of repeating the raw IMDb
+        # URL a second time.
+        item_with_post = self.suggestion_service.suggest(
+            "Aliens",
+            database_id=self.database.database_id,
+            guild_id=GUILD_ID,
+            channel_id=777,
+            message_id=888,
+            imdb_url="https://www.imdb.com/title/tt0090605/",
+        ).watch_item
+
+        summary = build_edit_suggestion_summary(item_with_post, self.suggestion_service)
+
+        expected_link = f"https://discord.com/channels/{GUILD_ID}/777/888"
+        self.assertIn(f"[Original Suggestion]({expected_link})", summary)
+        self.assertNotIn("tt0090605", summary)
+
+    async def test_summary_falls_back_to_the_raw_imdb_url_for_a_legacy_suggestion_without_a_post(self) -> None:
+        # Graceful handling: a legacy suggestion never publicly
+        # confirmed has no post to link to -- the raw IMDb URL remains
+        # the only way to reach its IMDb page from here.
+        item_without_post = self.suggestion_service.suggest(
+            "Aliens", database_id=self.database.database_id, imdb_url="https://www.imdb.com/title/tt0090605/"
+        ).watch_item
+
+        summary = build_edit_suggestion_summary(item_without_post, self.suggestion_service)
+
+        self.assertNotIn("Original Suggestion", summary)
+        self.assertIn("IMDb: https://www.imdb.com/title/tt0090605/", summary)
 
     async def test_summary_shows_the_won_date_for_a_vote_winner(self) -> None:
         from datetime import date

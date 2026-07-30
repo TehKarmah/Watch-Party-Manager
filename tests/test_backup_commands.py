@@ -78,7 +78,10 @@ class SendHelpResponseTests(unittest.IsolatedAsyncioTestCase):
 
         await send_help_response(interaction, response)
 
-        self.assertEqual(interaction.response.sent_messages, [response.command_text])
+        # A trailing spacer line separates the command list from the
+        # Commands Reference embed below it -- see send_help_response.
+        self.assertEqual(len(interaction.response.sent_messages), 1)
+        self.assertTrue(interaction.response.sent_messages[0].startswith(response.command_text))
         self.assertEqual(interaction.followup.sent_messages, [])
 
     async def test_wash_crew_response_is_also_a_single_message(self) -> None:
@@ -87,7 +90,8 @@ class SendHelpResponseTests(unittest.IsolatedAsyncioTestCase):
 
         await send_help_response(interaction, response)
 
-        self.assertEqual(interaction.response.sent_messages, [response.command_text])
+        self.assertEqual(len(interaction.response.sent_messages), 1)
+        self.assertTrue(interaction.response.sent_messages[0].startswith(response.command_text))
         self.assertEqual(interaction.followup.sent_messages, [])
 
     async def test_reference_link_is_an_embed_not_raw_message_content(self) -> None:
@@ -127,6 +131,22 @@ class SendHelpResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(interaction.response.sent_messages), 1)
         self.assertEqual(len(interaction.followup.sent_messages), 0)
         self.assertEqual(interaction.response.sent_ephemeral, [True])
+
+    async def test_a_visual_gap_separates_the_command_list_from_the_reference_embed(self) -> None:
+        # UX Polish: the final command section previously sat flush
+        # against the Commands Reference embed card below it with no
+        # breathing room -- a trailing blank line (a zero-width space so
+        # Discord doesn't collapse pure trailing whitespace) now
+        # separates them.
+        interaction = FakeInteraction()
+        response = build_help_response(show_wash_crew=True)
+
+        await send_help_response(interaction, response)
+
+        sent_message = interaction.response.sent_messages[0]
+        self.assertTrue(sent_message.startswith(response.command_text))
+        gap = sent_message[len(response.command_text):]
+        self.assertEqual(gap, "\n\u200b")
 
 
 class BackupCommandTests(unittest.TestCase):

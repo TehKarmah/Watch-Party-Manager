@@ -59,6 +59,17 @@ class RotationPoolStrategyTests(CandidateSelectionStrategyTestCase):
 
         self.assertEqual(pool_ids, {item_b.id})
 
+    def test_candidate_pool_excludes_a_watched_item(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        strategy = RotationPoolStrategy(rotation_service=self.rotation_service)
+        strategy.candidate_pool(DATABASE_ID)
+        self.suggestion_service.mark_suggestion_watched(item_a.id, date.today())
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
+
+        self.assertEqual(pool_ids, {item_b.id})
+
     def test_weight_for_is_always_neutral(self) -> None:
         item = self._add("Alien")
         strategy = RotationPoolStrategy(rotation_service=self.rotation_service)
@@ -157,6 +168,19 @@ class SoftRotationStrategyTests(CandidateSelectionStrategyTestCase):
 
         self.assertEqual(pool_ids, {item_b.id})
 
+    def test_candidate_pool_excludes_a_watched_item(self) -> None:
+        # Watched Button & Archive Workflow: a Watched item must never
+        # be selectable again either, for the exact same reason as a
+        # Vote Winner above.
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.suggestion_service.mark_suggestion_watched(item_a.id, date.today())
+        strategy = SoftRotationStrategy(rotation_service=self.rotation_service, suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
+
+        self.assertEqual(pool_ids, {item_b.id})
+
     def test_candidate_pool_ignores_a_requested_count_and_never_rolls_over(self) -> None:
         """Soft Rotation never excludes anything, so there is nothing for
         a requested vote size to roll over -- passing requested_count
@@ -187,6 +211,16 @@ class InfinitePoolStrategyTests(CandidateSelectionStrategyTestCase):
         item_a = self._add("Alien")
         item_b = self._add("The Matrix")
         self.suggestion_service.record_vote_win(item_a.id, date.today())
+        strategy = InfinitePoolStrategy(suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
+
+        self.assertEqual(pool_ids, {item_b.id})
+
+    def test_candidate_pool_excludes_a_watched_item(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.suggestion_service.mark_suggestion_watched(item_a.id, date.today())
         strategy = InfinitePoolStrategy(suggestion_source=self.suggestion_service)
 
         pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}

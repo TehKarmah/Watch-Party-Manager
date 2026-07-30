@@ -12,7 +12,11 @@ from watch_party_manager.persistence.suggestion_database_repository import (
 )
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.services.suggestion_service import SuggestionService
-from watch_party_manager.suggestion_view import SuggestionView, build_reject_button_custom_id
+from watch_party_manager.suggestion_view import (
+    SuggestionView,
+    build_reject_button_custom_id,
+    build_watched_button_custom_id,
+)
 
 
 class SimulatedDiscordError(Exception):
@@ -122,6 +126,20 @@ class PersistentSuggestionViewsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored, 0)
         self.assertEqual(bot.calls, [])
 
+    async def test_skips_a_watched_suggestion_even_with_a_stored_message(self) -> None:
+        # Both of a Watched suggestion's buttons are permanently disabled
+        # (see mark_suggestion_watched), same as an archived one -- there
+        # is nothing left to restore or migrate.
+        watch_item = self.suggestion_service.suggest("The Matrix").watch_item
+        self.suggestion_service.attach_message_reference(watch_item.id, message_id=500)
+        watch_item.status = WatchItemStatus.WATCHED
+        bot = FakeBot()
+
+        restored = await restore_persistent_suggestion_views(bot, self.suggestion_service)
+
+        self.assertEqual(restored, 0)
+        self.assertEqual(bot.calls, [])
+
     # --- No channel_id on record: fully legacy metadata, callback-only fallback ---
 
     async def test_falls_back_to_callback_only_registration_when_channel_id_is_missing(self) -> None:
@@ -178,20 +196,45 @@ class PersistentSuggestionViewsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_already_updated_message_only_gets_callback_registration_not_a_second_edit(self) -> None:
         watch_item = self._suggest_with_full_metadata("The Matrix")
-        custom_id = build_reject_button_custom_id(watch_item.id)
-        message = FakeSuggestionMessage(components=[FakeActionRowComponent([FakeButtonComponent(custom_id)])])
+        reject_custom_id = build_reject_button_custom_id(watch_item.id)
+        watched_custom_id = build_watched_button_custom_id(watch_item.id)
+        message = FakeSuggestionMessage(
+            components=[
+                FakeActionRowComponent(
+                    [FakeButtonComponent(reject_custom_id), FakeButtonComponent(watched_custom_id)]
+                )
+            ]
+        )
         bot = FakeBot(channel=FakeSuggestionChannel(message))
 
         restored = await restore_persistent_suggestion_views(bot, self.suggestion_service)
 
         self.assertEqual(restored, 1)
-        # Already has the button -- must not be edited again...
+        # Already has both buttons -- must not be edited again...
         self.assertEqual(message.edited_view, "not-edited")
         # ...only callback routing is (re-)registered, the normal path.
         self.assertEqual(len(bot.calls), 1)
         view, message_id = bot.calls[0]
         self.assertIsInstance(view, SuggestionView)
         self.assertEqual(message_id, watch_item.message_id)
+
+    async def test_legacy_message_with_only_the_reject_button_is_migrated_to_add_the_watched_button(self) -> None:
+        # A post from before the Watched button existed has the reject
+        # button but not the Watched one -- this must still be treated
+        # as needing migration (the edit branch), not "already current".
+        watch_item = self._suggest_with_full_metadata("The Matrix")
+        reject_custom_id = build_reject_button_custom_id(watch_item.id)
+        message = FakeSuggestionMessage(
+            components=[FakeActionRowComponent([FakeButtonComponent(reject_custom_id)])]
+        )
+        bot = FakeBot(channel=FakeSuggestionChannel(message))
+
+        restored = await restore_persistent_suggestion_views(bot, self.suggestion_service)
+
+        self.assertEqual(restored, 1)
+        self.assertIsInstance(message.edited_view, SuggestionView)
+        self.assertEqual(len(message.edited_view.children), 2)
+        self.assertEqual(bot.calls, [])
 
     async def test_a_different_suggestions_button_does_not_count_as_already_present(self) -> None:
         watch_item = self._suggest_with_full_metadata("The Matrix")

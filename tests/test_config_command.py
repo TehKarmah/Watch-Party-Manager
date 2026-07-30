@@ -28,7 +28,7 @@ from watch_party_manager.bot import (
     send_config_section,
     send_config_voting_defaults_modal,
 )
-from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, GuildConfiguration
+from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, GuildConfiguration, GuildVoteVisibility
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
@@ -110,6 +110,7 @@ from watch_party_manager.config_view import (
     ConfigMainMenuView,
     ConfigRoleSectionView,
     ConfigSuggestionDestinationSectionView,
+    ConfigVotingDefaultsIntroView,
     ConfigWatchDestinationSectionView,
     DATABASE_SETTING_CANDIDATE_SELECTION,
     DATABASE_SETTING_SUGGESTION_DESTINATION,
@@ -985,10 +986,33 @@ class WashCrewRoleConfirmationTests(ConfigCommandTestCase):
 
 
 class ModalDefaultsSectionTests(ConfigCommandTestCase):
-    async def test_voting_defaults_modal_is_prefilled_with_current_values(self) -> None:
-        # Guild-wide only now -- candidate selection moved to Manage
-        # Databases, so /config's Voting Defaults goes straight to the
-        # modal again (no intermediate dropdown screen).
+    async def _open_voting_defaults_modal(self, on_back=None):
+        """Drive /config's Voting Defaults flow through its intro view
+        (Visibility select + Set Voting Defaults button) to the modal,
+        mirroring the real two-step interaction sequence.
+        """
+        if on_back is None:
+            async def on_back(back_interaction) -> None:
+                pass
+
+        interaction = FakeInteraction()
+        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+        intro_view = interaction.response.edited_view
+        configure_button = next(
+            child for child in intro_view.children if getattr(child, "label", None) == "Set Voting Defaults"
+        )
+        configure_interaction = FakeInteraction()
+        await configure_button.callback(interaction=configure_interaction)
+        return intro_view, configure_interaction.response.sent_modal
+
+    async def test_voting_defaults_shows_a_visibility_select_before_the_modal(self) -> None:
+        # Guild-wide default candidate count/duration/visibility --
+        # candidate selection stays per-database, under Manage
+        # Databases. Visibility is a small fixed set of choices, so it's
+        # collected via a dropdown on this intro screen, never inside
+        # the modal (Discord's API rejects a Select embedded in a modal
+        # at submission time even though discord.py allows constructing
+        # one).
         self._seed_completed_setup()
         interaction = FakeInteraction()
 
@@ -997,23 +1021,38 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
 
         await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
 
-        modal = interaction.response.sent_modal
+        intro_view = interaction.response.edited_view
+        self.assertIsInstance(intro_view, ConfigVotingDefaultsIntroView)
+        self.assertEqual(intro_view.visibility_select.selected, GuildVoteVisibility.VISIBLE)
+        descriptions = {option.value: option.description for option in intro_view.visibility_select.options}
+        self.assertIn("shown", descriptions[GuildVoteVisibility.VISIBLE.value].lower())
+        self.assertIn("hidden", descriptions[GuildVoteVisibility.BLIND.value].lower())
+
+    async def test_set_voting_defaults_button_opens_a_modal_with_only_text_inputs(self) -> None:
+        self._seed_completed_setup()
+
+        _intro_view, modal = await self._open_voting_defaults_modal()
+
+        self.assertIsNotNone(modal)
+        self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in modal.children))
         self.assertEqual(modal.candidate_count_input.default, "3")
         self.assertEqual(modal.duration_input.default, "1d")
-        self.assertEqual(modal.visibility_input.default, "visible")
 
-    async def test_voting_defaults_submission_saves_and_shows_result(self) -> None:
+    async def test_voting_defaults_submission_saves_the_selected_visibility_and_modal_values(self) -> None:
         self._seed_completed_setup()
-        interaction = FakeInteraction()
-
-        async def on_back(back_interaction) -> None:
-            pass
-
-        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        modal = interaction.response.sent_modal
+        intro_view, modal = await self._open_voting_defaults_modal()
+        intro_view.visibility_select._values = [GuildVoteVisibility.BLIND.value]
+        # Re-open the modal now that Blind is selected, mirroring the
+        # real flow (the modal opens fresh from the intro view's
+        # current selection each time).
+        configure_button = next(
+            child for child in intro_view.children if getattr(child, "label", None) == "Set Voting Defaults"
+        )
+        configure_interaction = FakeInteraction()
+        await configure_button.callback(interaction=configure_interaction)
+        modal = configure_interaction.response.sent_modal
         modal.candidate_count_input._value = "5"
         modal.duration_input._value = "14h"
-        modal.visibility_input._value = "visible"
 
         submit_interaction = FakeInteraction()
         await modal.on_submit(interaction=submit_interaction)
@@ -1021,19 +1060,13 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         self.assertIn("Voting defaults updated", submit_interaction.response.edited_content)
         voting_defaults = self.guild_configuration_repository.get(GUILD_ID).voting_defaults
         self.assertEqual(voting_defaults.candidate_count, 5)
+        self.assertEqual(voting_defaults.visibility, GuildVoteVisibility.BLIND)
 
     async def test_voting_defaults_submission_with_invalid_value_shows_retry(self) -> None:
         self._seed_completed_setup()
-        interaction = FakeInteraction()
-
-        async def on_back(back_interaction) -> None:
-            pass
-
-        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        modal = interaction.response.sent_modal
+        _intro_view, modal = await self._open_voting_defaults_modal()
         modal.candidate_count_input._value = "not-a-number"
         modal.duration_input._value = "14"
-        modal.visibility_input._value = "visible"
 
         submit_interaction = FakeInteraction()
         await modal.on_submit(interaction=submit_interaction)
@@ -1051,6 +1084,7 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
 
         await send_config_reminder_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
         modal = interaction.response.sent_modal
+        self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in modal.children))
         self.assertEqual(modal.enabled_input.default, "yes")
         self.assertEqual(modal.minutes_input.default, "1d")
 

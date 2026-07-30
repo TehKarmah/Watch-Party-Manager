@@ -107,6 +107,33 @@ class RotationPoolPeekTests(CollectionEligibilityServiceTestCase):
         self.assertEqual(result.total, 4)
         self.assertEqual({item.id for item in result.eligible}, {item_d.id})
 
+    def test_watched_items_are_bucketed_separately_and_counted_in_total(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.suggestion_service.mark_suggestion_watched(item_a.id, date.today())
+
+        result = self.eligibility_service.peek(DATABASE_ID, CandidateSelectionMode.ROTATION_POOL)
+
+        self.assertEqual({item.id for item in result.watched}, {item_a.id})
+        self.assertEqual({item.id for item in result.eligible}, {item_b.id})
+        self.assertEqual(
+            result.total, len(result.active) + len(result.vote_winners) + len(result.retired) + len(result.watched)
+        )
+        self.assertEqual(result.total, 2)
+
+    def test_a_watched_vote_winner_is_bucketed_as_watched_not_vote_winner(self) -> None:
+        # Watched is reachable from any prior status and always wins --
+        # a suggestion that won a vote and was later confirmed watched
+        # must not double-count in both buckets.
+        item = self._add("Alien")
+        self.suggestion_service.record_vote_win(item.id, date.today())
+        self.suggestion_service.mark_suggestion_watched(item.id, date.today())
+
+        result = self.eligibility_service.peek(DATABASE_ID, CandidateSelectionMode.ROTATION_POOL)
+
+        self.assertEqual({i.id for i in result.watched}, {item.id})
+        self.assertEqual(result.vote_winners, ())
+
 
 class SoftRotationAndInfinitePoolPeekTests(CollectionEligibilityServiceTestCase):
     def test_soft_rotation_has_no_cooldown_bucket(self) -> None:

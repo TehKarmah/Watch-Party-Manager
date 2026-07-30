@@ -18,6 +18,7 @@ from watch_party_manager.services.suggestion_display_status import (
     format_won_date,
     resolve_display_status,
     vote_winner_won_date_line,
+    watched_date_line,
 )
 
 
@@ -56,6 +57,15 @@ class ComputeDisplayStatusTests(unittest.TestCase):
             SuggestionDisplayStatus.AVAILABLE, compute_display_status(item, in_rotation_cooldown=False)
         )
 
+    def test_watched_is_watched_regardless_of_cooldown(self) -> None:
+        item = make_item(WatchItemStatus.WATCHED)
+        self.assertEqual(
+            SuggestionDisplayStatus.WATCHED, compute_display_status(item, in_rotation_cooldown=True)
+        )
+        self.assertEqual(
+            SuggestionDisplayStatus.WATCHED, compute_display_status(item, in_rotation_cooldown=False)
+        )
+
 
 class ResolveDisplayStatusTests(unittest.TestCase):
     class _FakeRotationService:
@@ -89,6 +99,7 @@ class DisplayStatusLabelTests(unittest.TestCase):
         )
         self.assertEqual("🏆 Vote Winner", display_status_label(SuggestionDisplayStatus.VOTE_WINNER))
         self.assertEqual("🗄️ Retired", display_status_label(SuggestionDisplayStatus.RETIRED))
+        self.assertEqual("✅ Watched", display_status_label(SuggestionDisplayStatus.WATCHED))
 
     def test_every_status_has_a_bare_emoji(self) -> None:
         for status in SuggestionDisplayStatus:
@@ -126,6 +137,19 @@ class VoteWinnerWonDateLineTests(unittest.TestCase):
         self.assertIsNone(vote_winner_won_date_line(item))
 
 
+class WatchedDateLineTests(unittest.TestCase):
+    def test_returns_the_watched_line_for_the_most_recent_date(self) -> None:
+        item = make_item(WatchItemStatus.WATCHED)
+        item.journey = WatchItemJourney(watch_dates=(date(2026, 6, 1), date(2026, 7, 28)))
+
+        self.assertEqual("Watched: July 28, 2026", watched_date_line(item))
+
+    def test_returns_none_when_no_watch_date_is_recorded(self) -> None:
+        item = make_item(WatchItemStatus.WATCHED)
+
+        self.assertIsNone(watched_date_line(item))
+
+
 class FormatDisplayStatusWithWonDateTests(unittest.TestCase):
     def test_vote_winner_with_a_date_appends_the_won_line(self) -> None:
         item = make_item(WatchItemStatus.VOTE_WINNER)
@@ -148,6 +172,21 @@ class FormatDisplayStatusWithWonDateTests(unittest.TestCase):
         result = format_display_status_with_won_date(item, SuggestionDisplayStatus.RETIRED)
 
         self.assertEqual("🗄️ Retired", result)
+
+    def test_watched_with_a_date_appends_the_watched_line(self) -> None:
+        item = make_item(WatchItemStatus.WATCHED)
+        item.journey = WatchItemJourney(watch_dates=(date(2026, 7, 28),))
+
+        result = format_display_status_with_won_date(item, SuggestionDisplayStatus.WATCHED)
+
+        self.assertEqual("✅ Watched\nWatched: July 28, 2026", result)
+
+    def test_watched_without_a_date_omits_the_watched_line_gracefully(self) -> None:
+        item = make_item(WatchItemStatus.WATCHED)
+
+        result = format_display_status_with_won_date(item, SuggestionDisplayStatus.WATCHED)
+
+        self.assertEqual("✅ Watched", result)
 
 
 if __name__ == "__main__":

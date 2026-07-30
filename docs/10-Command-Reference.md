@@ -63,7 +63,7 @@ Casting a vote itself happens through the interactive buttons on the voting post
 | --- | --- | --- |
 | `/watch_party` | WASH Crew | Manage Watch Party membership. |
 
-`/watch_party` (underscore) manages *membership* -- who holds the Watch Party role. It's a distinct command from `/watch-party` (hyphen, below), which manages the *scheduled watch party itself*. Discord treats the two as entirely separate, valid command names.
+`/watch_party` (underscore) manages *membership* -- who holds the Watch Party role. This is distinct from scheduling an actual watch party event, which is not part of WASH's v1 user-facing command set.
 
 ## WASH Crew: Configuration
 
@@ -96,17 +96,6 @@ None of these take a raw ID parameter. `/database add` walks through a type choi
 
 **Rotation Refresh Notification.** Whenever `/vote start` or `/list` actually rolls a completed rotation forward, WASH says so plainly ("All eligible watch items have now been presented. Starting Rotation 4.") -- as a follow-up message only the invoking WASH Crew member sees for `/vote start` (never on the public voting post itself), or as a leading line in `/list`'s own response.
 
-## WASH Crew: Watch Parties
-
-| Command | Required Role | Description |
-| --- | --- | --- |
-| `/watch-party status` | WASH Crew | View the scheduled watch party. |
-| `/watch-party schedule` | WASH Crew | Schedule a watch party. |
-| `/watch-party reschedule` | WASH Crew | Change a watch party's start. |
-| `/watch-party cancel` | WASH Crew | Cancel a scheduled watch party. |
-
-`/watch-party reschedule` takes a `when` option; `/watch-party cancel` takes none. Neither takes a watch party ID -- both show a picker of currently scheduled watch parties (title and scheduled date/time) to choose from instead.
-
 ## WASH Crew: Maintenance
 
 | Command | Required Role | Description |
@@ -119,7 +108,7 @@ None of these take a raw ID parameter. `/database add` walks through a type choi
 
 ### Note on remaining underscore commands
 
-`/join_watch_party`, `/edit_suggestion`, `/repair_suggestions`, and `/factory_reset` remain top-level, underscored commands rather than joining a group like `/database`/`/vote`/`/watch-party` (UI Polish review). Each was deliberately left as-is:
+`/join_watch_party`, `/edit_suggestion`, `/repair_suggestions`, and `/factory_reset` remain top-level, underscored commands rather than joining a group like `/database`/`/vote` (UI Polish review). Each was deliberately left as-is:
 
 - **`/join_watch_party`** is a member-facing, everyone-can-use command, at least as frequently used as `/add`/`/list`/`/remove` -- exactly the kind of "short, commonly-used command" left unchanged. Folding it into the WASH Crew-only `/watch_party` (membership administration) group would also blur its "anyone can use this" identity with a group whose every other subcommand is WASH Crew-only.
 - **`/edit_suggestion`** has no natural existing group to join without also regrouping `/add`, `/list`, and `/remove` -- which would contradict keeping those unchanged. A future, deliberate `/suggestion` group covering the whole Watch Item command family remains an option, but as one coordinated rename, not an isolated one.

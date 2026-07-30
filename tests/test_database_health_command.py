@@ -223,6 +223,42 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
         self.assertIn("Vote Winners: 1", message)
         self.assertIn("Retired: 1", message)
 
+    async def test_each_status_line_uses_the_same_emoji_list_uses_for_that_status(self) -> None:
+        # Visual Consistency: /database health previously had no
+        # color-coded indicators at all -- these must match /list's own
+        # SUGGESTION_DISPLAY_STATUS_EMOJI exactly, not a new visual
+        # system invented just for this command.
+        item_a = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
+        item_b = self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id).watch_item
+        item_c = self.suggestion_service.suggest("Inception", database_id=self.database.database_id).watch_item
+        self.suggestion_service.suggest("Arrival", database_id=self.database.database_id)
+        self.suggestion_service.record_vote_win(item_a.id, date.today())
+        self.suggestion_service.reject_suggestion(item_b.id, 1)
+        self.suggestion_service.reject_suggestion(item_b.id, 2)
+        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
+        self.bot.rotation_service.record_presentation(self.database.database_id, [item_c.id])
+        interaction = FakeInteraction()
+
+        await handle_database_health(interaction, self.bot)
+
+        message = interaction.response.sent_message
+        self.assertIn("🟢 Eligible for Voting: 1", message)
+        self.assertIn("🟡 Rotation Cooldown: 1", message)
+        self.assertIn("🏆 Vote Winners: 1", message)
+        self.assertIn("🗄️ Retired: 1", message)
+
+    async def test_watched_count_appears_and_is_included_in_the_total(self) -> None:
+        item = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
+        self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id)
+        self.suggestion_service.mark_suggestion_watched(item.id, date.today())
+        interaction = FakeInteraction()
+
+        await handle_database_health(interaction, self.bot)
+
+        message = interaction.response.sent_message
+        self.assertIn("✅ Watched: 1", message)
+        self.assertIn("Total Watch Items: 2", message)
+
     async def test_never_modifies_rotation_state(self) -> None:
         self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
         interaction = FakeInteraction()
@@ -241,7 +277,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
         await handle_database_health(interaction, self.bot)
 
-        self.assertIn("Next Vote: Ready", interaction.response.sent_message)
+        self.assertIn("Next Vote: 🟢 Ready", interaction.response.sent_message)
 
     async def test_next_vote_needs_rollover_when_active_covers_it_but_eligible_does_not(self) -> None:
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
@@ -255,7 +291,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
         await handle_database_health(interaction, self.bot)
 
-        self.assertIn("Next Vote: Needs Rollover", interaction.response.sent_message)
+        self.assertIn("Next Vote: 🟡 Needs Rollover", interaction.response.sent_message)
 
     async def test_next_vote_is_insufficient_when_the_whole_collection_is_too_small(self) -> None:
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
@@ -266,7 +302,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
         await handle_database_health(interaction, self.bot)
 
-        self.assertIn("Next Vote: Insufficient Suggestions", interaction.response.sent_message)
+        self.assertIn("Next Vote: 🔴 Insufficient Suggestions", interaction.response.sent_message)
 
     async def test_low_pool_status_healthy_well_above_threshold(self) -> None:
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
@@ -278,7 +314,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
         await handle_database_health(interaction, self.bot)
 
-        self.assertIn("Low Pool Status: Healthy", interaction.response.sent_message)
+        self.assertIn("Low Pool Status: 🟢 Healthy", interaction.response.sent_message)
 
     async def test_low_pool_status_insufficient_below_candidate_count(self) -> None:
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
@@ -289,7 +325,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
         await handle_database_health(interaction, self.bot)
 
-        self.assertIn("Low Pool Status: Insufficient", interaction.response.sent_message)
+        self.assertIn("Low Pool Status: 🔴 Insufficient", interaction.response.sent_message)
 
     async def test_infinite_pool_shows_no_rotation_progress(self) -> None:
         self._set_candidate_selection(CandidateSelectionMode.INFINITE_POOL)

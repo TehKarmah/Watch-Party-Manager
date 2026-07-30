@@ -880,6 +880,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ## 6. Watch Party Scheduling
 
+> **Deferred from v1.** `/watch-party schedule`/`reschedule`/`cancel`/`status` are not registered in v1 -- the scheduled watch party workflow is hidden from the user-facing command set for this release (the underlying implementation is untouched and may return in a later release). Skip this entire section for v1 sign-off; the tests below are kept for whenever this feature is re-enabled.
+
 ### 6.1 Schedule a watch party
 
 - **Objective:** Confirm a watch party can be scheduled from a winning or existing suggestion.

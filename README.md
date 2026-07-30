@@ -71,7 +71,6 @@ WASH's in-Discord `/help` command always reflects the exact command set availabl
 - Suggestions: `/remove`, `/edit_suggestion`, `/repair_suggestions`
 - Voting: `/vote start`, `/vote status`, `/vote edit`
 - Suggestion databases: `/database add`, `/database manage`, `/database list`, `/database move`, `/database remove`, `/database backup`, `/database restore`, `/database reset`
-- Watch parties: `/watch-party schedule`, `/watch-party reschedule`, `/watch-party cancel`, `/watch-party status`
 - Membership: `/watch_party`
 - Configuration: `/setup`, `/config`
 - Maintenance: `/backup`, `/restore`, `/factory_reset`, `/import`

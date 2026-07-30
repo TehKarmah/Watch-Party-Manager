@@ -410,6 +410,15 @@ class AddNoDestinationTests(HandleAddSuggestionTestCase):
 
         self.assertEqual(0, len(self.suggestion_service.get_suggestions_for_database(self.database.database_id)))
 
+    async def test_ephemeral_ack_omits_the_link_when_no_post_was_created(self) -> None:
+        # Graceful omission: nothing to link to when no suggestion
+        # channel is configured, so no public confirmation post exists.
+        interaction = FakeInteraction()
+
+        await handle_add_suggestion(interaction, self.bot, "Alien", None, None)
+
+        self.assertNotIn("[View Suggestion]", interaction.response.sent_message)
+
 
 class AddWithDestinationTests(HandleAddSuggestionTestCase):
     def setUp(self) -> None:
@@ -439,6 +448,28 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
         # AdmissionModeAndLowPoolReminderTests for the notification
         # actually firing.
         self.assertEqual(1, len(self.confirmation_channel.sent))
+
+    async def test_ephemeral_ack_links_to_the_post_when_added_from_outside_its_destination(self) -> None:
+        # UX Polish: /add invoked from CHANNEL_ID (200) while the
+        # collection's suggestion channel is 777 -- the ephemeral ack
+        # must link straight to the post it just created, not just
+        # report a title and reference number.
+        interaction = FakeInteraction()
+
+        await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
+
+        item = self.suggestion_service.get_suggestions_for_database(self.database.database_id)[0]
+        expected_link = f"https://discord.com/channels/{GUILD_ID}/777/{item.message_id}"
+        self.assertIn(f"[View Suggestion]({expected_link})", interaction.response.sent_message)
+
+    async def test_ephemeral_ack_omits_the_link_when_added_from_its_own_destination(self) -> None:
+        # Avoid redundant wording -- a member already looking at the
+        # destination channel doesn't need a link back to it.
+        interaction = FakeInteraction(channel_id=777)
+
+        await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
+
+        self.assertNotIn("[View Suggestion]", interaction.response.sent_message)
 
     async def test_active_duplicate_is_blocked(self) -> None:
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)

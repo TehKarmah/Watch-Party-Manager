@@ -23,7 +23,7 @@ from typing import Awaitable, Callable, List, Optional, Tuple
 
 import discord
 
-from watch_party_manager.domain.guild_configuration import JoinMode
+from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, JoinMode
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.setup_wizard_view import (
     _JOIN_MODE_OPTIONS,
@@ -34,6 +34,7 @@ from watch_party_manager.setup_wizard_view import (
     ExistingChannelSelectView,
     HomeChannelNameModal,
     UseExistingChannelButton,
+    VisibilitySelectComponent,
 )
 
 CONFIG_VIEW_TIMEOUT_SECONDS = 900
@@ -46,7 +47,8 @@ OnConfigSkip = Callable[[discord.Interaction], Awaitable[None]]
 OnConfigSectionChosen = Callable[[discord.Interaction, str], Awaitable[None]]
 OnBackToMenu = Callable[[discord.Interaction], Awaitable[None]]
 OnConfigRetry = Callable[[discord.Interaction], Awaitable[None]]
-OnConfigVotingDefaultsSubmit = Callable[[discord.Interaction, str, str, str], Awaitable[None]]
+OnConfigVotingDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
+OnConfigVisibilitySelected = Callable[[discord.Interaction, GuildVoteVisibility], Awaitable[None]]
 OnConfigRetryModalSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnConfigVotingDefaultsConfigure = Callable[[discord.Interaction, CandidateSelectionMode], Awaitable[None]]
 OnConfigReminderDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
@@ -300,6 +302,39 @@ class ConfigDatabaseCandidateSelectionView(discord.ui.View):
 
     async def _handle_save(self, interaction: discord.Interaction) -> None:
         await self._on_save(interaction, self.candidate_selection_select.selected)
+
+
+class ConfigVotingDefaultsIntroView(discord.ui.View):
+    """/config's Voting Defaults entry screen: choose Visibility from a
+    dropdown, then press Set Voting Defaults to open the modal for the
+    remaining, flexible fields (candidate count, duration). Discord
+    modals accept TextInput components only, so Visibility -- a small
+    fixed set of choices -- is collected here instead of inside the
+    modal (see setup_wizard_view.VotingDefaultsModal's own docstring for
+    the full explanation). Candidate Selection stays out of this screen
+    entirely -- it's per-database, under Manage Databases instead.
+    """
+
+    def __init__(
+        self,
+        on_configure: OnConfigVisibilitySelected,
+        on_back: OnBackToMenu,
+        *,
+        default_visibility: GuildVoteVisibility,
+    ) -> None:
+        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
+        self.visibility_select = VisibilitySelectComponent(default=default_visibility)
+        self.add_item(self.visibility_select)
+        self.add_item(
+            ConfigureStepButton(
+                self._handle_configure, label="Set Voting Defaults", custom_id="wpm_config_voting_defaults_configure"
+            )
+        )
+        self.add_item(BackToMenuButton(on_back))
+        self._on_configure = on_configure
+
+    async def _handle_configure(self, interaction: discord.Interaction) -> None:
+        await self._on_configure(interaction, self.visibility_select.selected)
 
 
 # --- Suggestion Post Destination ------------------------------------------------------------

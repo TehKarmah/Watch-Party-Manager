@@ -25,6 +25,7 @@ from watch_party_manager.domain.suggestion_database_configuration import (
 )
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
+from watch_party_manager.pagination_view import PaginatedListView
 from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
@@ -39,6 +40,7 @@ from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_display_status import SuggestionDisplayStatus
 from watch_party_manager.services.suggestion_service import SuggestionService
+from watch_party_manager.suggestion_selection_view import ListDatabaseSelectView
 
 GUILD_ID = 100
 CHANNEL_ID = 200
@@ -60,6 +62,7 @@ class ResolveSuggestionListEntriesTests(unittest.TestCase):
         self.cooldown_item = make_item(2)
         self.winner_item = make_item(3, status=WatchItemStatus.VOTE_WINNER)
         self.retired_item = make_item(4, status=WatchItemStatus.ARCHIVED)
+        self.watched_item = make_item(5, status=WatchItemStatus.WATCHED)
         self.eligibility = CollectionEligibility(
             database_id=1,
             mode=CandidateSelectionMode.ROTATION_POOL,
@@ -67,6 +70,7 @@ class ResolveSuggestionListEntriesTests(unittest.TestCase):
             rotation_cooldown=(self.cooldown_item,),
             vote_winners=(self.winner_item,),
             retired=(self.retired_item,),
+            watched=(self.watched_item,),
         )
 
     def test_active_mixes_eligible_and_cooldown(self) -> None:
@@ -96,6 +100,10 @@ class ResolveSuggestionListEntriesTests(unittest.TestCase):
         entries = resolve_suggestion_list_entries(self.eligibility, SuggestionListStatusFilter.RETIRED)
         self.assertEqual([(self.retired_item, SuggestionDisplayStatus.RETIRED)], entries)
 
+    def test_watched_shows_only_watched(self) -> None:
+        entries = resolve_suggestion_list_entries(self.eligibility, SuggestionListStatusFilter.WATCHED)
+        self.assertEqual([(self.watched_item, SuggestionDisplayStatus.WATCHED)], entries)
+
     def test_all_shows_every_bucket(self) -> None:
         entries = resolve_suggestion_list_entries(self.eligibility, SuggestionListStatusFilter.ALL)
         items_and_statuses = {(item.id, status) for item, status in entries}
@@ -105,13 +113,14 @@ class ResolveSuggestionListEntriesTests(unittest.TestCase):
                 (self.cooldown_item.id, SuggestionDisplayStatus.ROTATION_COOLDOWN),
                 (self.winner_item.id, SuggestionDisplayStatus.VOTE_WINNER),
                 (self.retired_item.id, SuggestionDisplayStatus.RETIRED),
+                (self.watched_item.id, SuggestionDisplayStatus.WATCHED),
             },
             items_and_statuses,
         )
 
-    def test_six_filters_exist(self) -> None:
+    def test_seven_filters_exist(self) -> None:
         self.assertEqual(
-            {"active", "eligible", "rotation_cooldown", "vote_winner", "retired", "all"},
+            {"active", "eligible", "rotation_cooldown", "vote_winner", "retired", "watched", "all"},
             {member.value for member in SuggestionListStatusFilter},
         )
 
@@ -514,6 +523,22 @@ class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
         self.assertNotIn("Available Movie", message)
         self.assertIn("🗄️", message)
 
+    async def test_watched_mode_shows_only_watched_items(self) -> None:
+        database = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        self.suggestion_service.suggest("Available Movie", database_id=database.database_id)
+        watched = self.suggestion_service.suggest("Watched Movie", database_id=database.database_id).watch_item
+        self.suggestion_service.mark_suggestion_watched(watched.id, date.today())
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "watched", False)
+
+        message = interaction.response.sent_message
+        self.assertIn("Watched Movie", message)
+        self.assertNotIn("Available Movie", message)
+        self.assertIn("✅", message)
+
     async def test_eligible_mode_shows_only_eligible_items(self) -> None:
         database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
@@ -806,6 +831,40 @@ class ListSwitchCollectionTests(HandleListSuggestionsTestCase):
         await select.callback(interaction=select_interaction)
 
         self.assertIn("Breaking Bad", select_interaction.response.edited_content)
+
+    async def test_switching_acknowledges_the_interaction_on_a_paginated_list(self) -> None:
+        # Regression coverage: Switch Collection must still ack the
+        # interaction (never leave Discord waiting) when /list's own
+        # results span multiple pages -- a distinct code path
+        # (PaginatedListView instead of a plain discord.ui.View) from the
+        # single-page case the other tests in this class cover.
+        first = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        second = self.suggestion_service.create_database(
+            "TV Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID + 1
+        ).database
+        for index in range(60):
+            self.suggestion_service.suggest(
+                f"A Very Long Watch Item Title Number {index} With Extra Padding To Force Pagination",
+                database_id=first.database_id,
+            )
+        self.suggestion_service.suggest("Breaking Bad", database_id=second.database_id)
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "active", False)
+
+        self.assertIsInstance(interaction.response.sent_view, PaginatedListView)
+        switch_button = next(
+            item for item in interaction.response.sent_view.children
+            if getattr(item, "custom_id", None) == "wpm_list_switch_collection"
+        )
+
+        switch_interaction = FakeInteraction()
+        await switch_button.callback(interaction=switch_interaction)
+
+        self.assertIsInstance(switch_interaction.response.edited_view, ListDatabaseSelectView)
+        self.assertEqual(switch_interaction.response.edited_content, "Choose a collection:")
 
 
 if __name__ == "__main__":

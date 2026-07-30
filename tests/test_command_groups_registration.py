@@ -11,10 +11,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from watch_party_manager.bot import DatabaseGroup, VotingGroup, WatchPartyEventGroup
+from watch_party_manager.bot import DatabaseGroup, VotingGroup, WatchPartyBot, WatchPartyEventGroup
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
 )
@@ -131,6 +132,30 @@ class WatchPartyEventGroupRegistrationTests(unittest.TestCase):
         self.assertEqual(
             {command.name for command in group.commands}, {"schedule", "status", "reschedule", "cancel"}
         )
+
+
+class WatchPartySchedulingHiddenFromV1Tests(unittest.IsolatedAsyncioTestCase):
+    """v1 Final Polish, Section 12: the scheduled watch party workflow
+    (/watch-party schedule/reschedule/cancel/status) is hidden from v1 by
+    simply never registering WatchPartyEventGroup on the real command
+    tree -- the class above proves the group itself is still fully
+    intact, unchanged, and ready to be re-registered later; this proves
+    the actual bot never exposes it as a command in the meantime.
+    """
+
+    async def test_watch_party_group_is_not_registered_on_the_real_command_tree(self) -> None:
+        bot = WatchPartyBot(token="test-token")
+        bot.tree.sync = AsyncMock(return_value=[])
+
+        await bot.setup_hook()
+
+        top_level_names = {command.name for command in bot.tree.get_commands()}
+        self.assertNotIn("watch-party", top_level_names)
+        # The unrelated, still-active groups/commands must be unaffected.
+        self.assertIn("watch_party", top_level_names)
+        self.assertIn("database", top_level_names)
+        self.assertIn("vote", top_level_names)
+        self.assertIn("join_watch_party", top_level_names)
 
 
 if __name__ == "__main__":

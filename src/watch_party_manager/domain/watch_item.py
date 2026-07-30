@@ -34,11 +34,16 @@ class WatchItemStatus(str, Enum):
     rotation state (see RotationService.is_in_rotation_cooldown) rather
     than persisted, since it reverts to Available automatically the
     moment a new rotation begins. SUGGESTED covers both.
+
+    WATCHED is reachable from any other status via the dedicated
+    Watched button/action only -- winning a vote or being retired never
+    implies it automatically (see SuggestionService.mark_suggestion_watched).
     """
 
     SUGGESTED = "suggested"
     VOTE_WINNER = "vote_winner"
     ARCHIVED = "archived"
+    WATCHED = "watched"
 
 
 @dataclass(slots=True)

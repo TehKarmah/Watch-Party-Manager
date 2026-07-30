@@ -243,6 +243,7 @@ from watch_party_manager.config_view import (
     ConfigRoleSectionView,
     ConfigRotationLowPoolNotificationView,
     ConfigSuggestionDestinationSectionView,
+    ConfigVotingDefaultsIntroView,
     ConfigWatchDestinationSectionView,
     OnBackToMenu,
     RotationLowPoolThresholdModal,
@@ -260,6 +261,7 @@ from watch_party_manager.suggestion_selection_view import (
 from watch_party_manager.type_to_confirm_view import DestructiveConfirmationView
 from watch_party_manager.watch_party_selection_view import WatchPartySelectView
 from watch_party_manager.setup_wizard_view import (
+    AdminChannelNameModal,
     AdminChannelStepView,
     BackupDefaultsChoiceView,
     BackupDefaultsModal,
@@ -291,7 +293,9 @@ from watch_party_manager.start_vote_view import (
 from watch_party_manager.suggestion_view import (
     RejectionConfirmationView,
     SuggestionView,
+    WatchedDateModal,
     build_reject_button_custom_id,
+    build_watched_button_custom_id,
 )
 from watch_party_manager.version import __build__, __version__
 from watch_party_manager.voting_view import VotingView
@@ -503,6 +507,7 @@ class WatchPartyBot(commands.Bot):
                 discord.app_commands.Choice(name="Rotation Cooldown", value="rotation_cooldown"),
                 discord.app_commands.Choice(name="Vote Winners", value="vote_winner"),
                 discord.app_commands.Choice(name="Retired", value="retired"),
+                discord.app_commands.Choice(name="Watched", value="watched"),
                 discord.app_commands.Choice(name="All Watch Items", value="all"),
             ]
         )
@@ -676,7 +681,13 @@ class WatchPartyBot(commands.Bot):
         self.tree.add_command(WatchPartyAdminGroup(self))
         self.tree.add_command(DatabaseGroup(self))
         self.tree.add_command(VotingGroup(self))
-        self.tree.add_command(WatchPartyEventGroup(self))
+        # v1 Final Polish: /watch-party schedule/reschedule/cancel/status
+        # are intentionally not registered for v1 -- the scheduled watch
+        # party workflow is being held back from this release, not
+        # removed. WatchPartyEventGroup itself, its underlying services,
+        # and its persisted data are left fully intact (see the class
+        # definition below) so this can be re-enabled later by restoring
+        # this one line; do not delete any of that in the meantime.
 
         # Environment variables remain the primary way to configure the
         # WASH Crew / Watch Party roles (unchanged, backward compatible),
@@ -1448,6 +1459,19 @@ def perform_start_vote(
             )
 
     if resolution is not None:
+        # Rotation Cooldown Correctness: this collection's own open-round
+        # check must happen before anything below mutates rotation state
+        # (eligible_candidate_count can trigger a rollover;
+        # select_nominees marks candidates as presented -- both permanent,
+        # unrolled-back side effects). vote_service.create_round() below
+        # performs this exact same check, but only after those mutations
+        # already ran -- previously, starting a vote on a collection that
+        # already had one open would corrupt rotation state (candidates
+        # marked presented/on cooldown for a round that was then
+        # rejected and never created) instead of failing cleanly.
+        if vote_service.get_open_round(resolution.database.database_id) is not None:
+            return "A voting round is already open for this collection.", True
+
         strategy = None
         if rotation_service is not None and suggestion_database_configuration_repository is not None:
             database_configuration = suggestion_database_configuration_repository.get(
@@ -1850,6 +1874,46 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
     return "\n".join(lines)
 
 
+def describe_channel_creation_failure(exc: Exception) -> str:
+    """Build a user-facing explanation for a failed channel creation.
+
+    Never exposes discord.Forbidden's raw text (a bare "403 Forbidden
+    (error code: 50013): Missing Permissions") -- that's a permissions
+    problem WASH Crew can actually fix, so it gets a specific, actionable
+    message instead. Other failures keep their prior (already reasonably
+    informative) exception text.
+    """
+    if isinstance(exc, discord.Forbidden):
+        return (
+            "WASH does not have permission to create channels here. Grant WASH the "
+            "**Manage Channels** permission, or choose **Use Existing Channel** instead."
+        )
+    return f"Could not create the channel: {exc}"
+
+
+def build_admin_channel_overwrites(
+    guild: discord.Guild, wash_crew_role_id: Optional[int]
+) -> dict:
+    """Permission overwrites for a newly created Admin Channel.
+
+    Private to WASH Crew: @everyone is denied View Channel, and WASH's
+    own bot member plus the configured WASH Crew role (when known) are
+    explicitly granted it. Server administrators are never explicitly
+    touched here -- Discord's Administrator permission already bypasses
+    channel-specific overwrites entirely, so no special-case is needed
+    to preserve their access.
+    """
+    overwrites: dict = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+    }
+    if wash_crew_role_id is not None:
+        wash_crew_role = guild.get_role(wash_crew_role_id)
+        if wash_crew_role is not None:
+            overwrites[wash_crew_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+    return overwrites
+
+
 def build_setup_preparation_text() -> str:
     """Build the one-time preparation screen shown before Step 1 of a
     brand-new /setup run (never shown again once a draft is resumed).
@@ -1984,10 +2048,47 @@ async def send_setup_wizard_step(
             updated = setup_wizard_service.skip_admin_channel(state)
             await send_setup_wizard_step(skip_interaction, bot, updated, edit=True, requester_id=requester_id)
 
-        view = AdminChannelStepView(on_select, on_skip, on_back, on_save_for_later, on_cancel, requester_id=requester_id)
+        async def on_create_new(create_interaction: discord.Interaction) -> None:
+            async def on_name_submit(modal_interaction: discord.Interaction, channel_name: str) -> None:
+                if modal_interaction.guild is None:
+                    await modal_interaction.response.edit_message(
+                        content=body + "\n\n⚠ That server is no longer available. Choose another option.",
+                        view=AdminChannelStepView(
+                            on_select, on_create_new, on_skip, on_back, on_save_for_later, on_cancel,
+                            requester_id=requester_id,
+                        ),
+                    )
+                    return
+                try:
+                    overwrites = build_admin_channel_overwrites(modal_interaction.guild, state.draft.wash_crew_role_id)
+                    channel = await modal_interaction.guild.create_text_channel(
+                        name=channel_name,
+                        overwrites=overwrites,
+                        topic="Private WASH Crew administrative channel -- not visible to other members.",
+                    )
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    logger.warning("Could not create Admin Channel %r", channel_name, exc_info=True)
+                    await modal_interaction.response.edit_message(
+                        content=body + f"\n\n⚠ {describe_channel_creation_failure(exc)}",
+                        view=AdminChannelStepView(
+                            on_select, on_create_new, on_skip, on_back, on_save_for_later, on_cancel,
+                            requester_id=requester_id,
+                        ),
+                    )
+                    return
+                updated = setup_wizard_service.set_admin_channel(state, channel.id)
+                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
+
+            await create_interaction.response.send_modal(AdminChannelNameModal(on_name_submit))
+
+        view = AdminChannelStepView(
+            on_select, on_create_new, on_skip, on_back, on_save_for_later, on_cancel, requester_id=requester_id
+        )
         body += (
-            "\n\nSelect the channel where Approval-Required membership requests should be "
-            "posted for WASH Crew, or skip for now."
+            "\n\nSelect the channel where Approval-Required membership requests should be posted for "
+            "WASH Crew, create a new private channel for it, or skip for now. A newly created channel "
+            "is visible only to WASH Crew -- it's meant for private administrative activity, not "
+            "general discussion."
         )
 
     elif step == SetupWizardStep.HOME_CHANNEL:
@@ -2016,8 +2117,9 @@ async def send_setup_wizard_step(
                 try:
                     channel = await modal_interaction.guild.create_text_channel(name=channel_name)
                 except (discord.Forbidden, discord.HTTPException) as exc:
+                    logger.warning("Could not create Home Channel %r", channel_name, exc_info=True)
                     await modal_interaction.response.edit_message(
-                        content=body + f"\n\n⚠ Could not create the channel: {exc}",
+                        content=body + f"\n\n⚠ {describe_channel_creation_failure(exc)}",
                         view=HomeChannelChoiceView(
                             on_create_new, on_use_existing, on_back, on_save_for_later, on_cancel,
                             requester_id=requester_id,
@@ -2250,27 +2352,31 @@ async def send_setup_wizard_step(
                 if state.draft.voting_duration_minutes is not None
                 else format_duration_minutes_compact(DEFAULT_VOTE_DURATION_MINUTES)
             ),
-            state.draft.voting_visibility.value if state.draft.voting_visibility is not None else "visible",
         )
         default_candidate_selection = (
             state.draft.voting_candidate_selection
             if state.draft.voting_candidate_selection is not None
             else CandidateSelectionMode.ROTATION_POOL
         )
+        default_visibility = (
+            state.draft.voting_visibility
+            if state.draft.voting_visibility is not None
+            else GuildVoteVisibility.VISIBLE
+        )
 
         async def on_configure(
-            configure_interaction: discord.Interaction, candidate_selection: CandidateSelectionMode
+            configure_interaction: discord.Interaction,
+            candidate_selection: CandidateSelectionMode,
+            visibility: GuildVoteVisibility,
         ) -> None:
             async def on_submit(
                 modal_interaction: discord.Interaction,
                 candidate_count_text: str,
                 duration_text: str,
-                visibility_text: str,
             ) -> None:
                 try:
                     candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
                     duration_minutes = parse_setup_voting_duration_minutes(duration_text)
-                    visibility = parse_setup_voting_visibility(visibility_text)
                 except ValueError as exc:
                     await modal_interaction.response.edit_message(
                         content=body + f"\n\n⚠ {exc}",
@@ -2280,6 +2386,7 @@ async def send_setup_wizard_step(
                             on_save_for_later,
                             on_cancel,
                             default_candidate_selection=candidate_selection,
+                            default_visibility=visibility,
                             requester_id=requester_id,
                         ),
                     )
@@ -2300,13 +2407,13 @@ async def send_setup_wizard_step(
             on_save_for_later,
             on_cancel,
             default_candidate_selection=default_candidate_selection,
+            default_visibility=default_visibility,
             requester_id=requester_id,
         )
         body += (
-            "\n\nChoose the server's default candidate selection mode below, then press "
-            "**Set Voting Defaults** to configure the default candidate count, vote duration, and "
-            "visibility.\n\n"
-            f"{VISIBILITY_HELP_TEXT}"
+            "\n\nChoose the server's default candidate selection mode and visibility below -- each option "
+            "explains its own behavior when opened -- then press **Set Voting Defaults** to configure the "
+            "default candidate count and vote duration."
         )
 
     elif step == SetupWizardStep.REMINDER_DEFAULTS:
@@ -2658,8 +2765,9 @@ async def send_config_section(
                 try:
                     channel = await modal_interaction.guild.create_text_channel(name=channel_name)
                 except (discord.Forbidden, discord.HTTPException) as exc:
+                    logger.warning("Could not create Home Channel %r via /config", channel_name, exc_info=True)
                     await modal_interaction.response.edit_message(
-                        content=f"{body}\n\n⚠ Could not create the channel: {exc}",
+                        content=f"{body}\n\n⚠ {describe_channel_creation_failure(exc)}",
                         view=home_channel_view(),
                     )
                     return
@@ -2974,13 +3082,12 @@ async def handle_config_wash_crew_role_selected(
     )
 
 
-def _resolve_config_voting_defaults_modal_defaults(bot: "WatchPartyBot", guild_id: int) -> Tuple[str, str, str]:
+def _resolve_config_voting_defaults_modal_defaults(bot: "WatchPartyBot", guild_id: int) -> Tuple[str, str]:
     """Pre-fill the Voting Defaults modal with the guild's current values."""
     configuration = bot.config_service.get_configuration(guild_id)
     return (
         str(configuration.voting_defaults.candidate_count),
         format_duration_minutes_compact(configuration.voting_defaults.duration_minutes),
-        configuration.voting_defaults.visibility.value,
     )
 
 
@@ -2994,36 +3101,52 @@ async def send_config_voting_defaults_modal(
     Candidate Selection instead -- it is no longer bundled here, since
     bundling it into this guild-wide section is exactly the "which
     database does this apply to?" ambiguity this model removes.
+
+    Visibility is collected first, via ConfigVotingDefaultsIntroView's
+    dropdown, before the modal opens -- Discord modals accept TextInput
+    components only (see setup_wizard_view.VotingDefaultsModal's own
+    docstring), so a fixed-choice value like Visibility can never live
+    inside the modal itself.
     """
     config_service = bot.config_service
+    current_visibility = config_service.get_configuration(guild_id).voting_defaults.visibility
 
-    async def on_retry(retry_interaction: discord.Interaction) -> None:
-        await send_config_voting_defaults_modal(retry_interaction, bot, guild_id, on_back)
+    async def on_configure(configure_interaction: discord.Interaction, visibility: GuildVoteVisibility) -> None:
+        async def on_retry(retry_interaction: discord.Interaction) -> None:
+            await open_modal(retry_interaction)
 
-    async def on_submit(
-        modal_interaction: discord.Interaction,
-        candidate_count_text: str,
-        duration_text: str,
-        visibility_text: str,
-    ) -> None:
-        try:
-            candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
-            duration_minutes = parse_setup_voting_duration_minutes(duration_text)
-            visibility = parse_setup_voting_visibility(visibility_text)
-        except ValueError as exc:
-            view = ConfigModalRetryView(
-                on_retry, on_back, button_label="Try Again", custom_id="wpm_config_voting_defaults_retry"
-            )
-            await modal_interaction.response.edit_message(
-                content=f"**WASH Configuration -- Voting Defaults**\n\n⚠ {exc}", view=view
-            )
-            return
+        async def on_submit(
+            modal_interaction: discord.Interaction,
+            candidate_count_text: str,
+            duration_text: str,
+        ) -> None:
+            try:
+                candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
+                duration_minutes = parse_setup_voting_duration_minutes(duration_text)
+            except ValueError as exc:
+                view = ConfigModalRetryView(
+                    on_retry, on_back, button_label="Try Again", custom_id="wpm_config_voting_defaults_retry"
+                )
+                await modal_interaction.response.edit_message(
+                    content=f"**WASH Configuration -- Voting Defaults**\n\n⚠ {exc}", view=view
+                )
+                return
 
-        result = config_service.set_voting_defaults(guild_id, candidate_count, duration_minutes, visibility)
-        await send_config_result(modal_interaction, bot, guild_id, result)
+            result = config_service.set_voting_defaults(guild_id, candidate_count, duration_minutes, visibility)
+            await send_config_result(modal_interaction, bot, guild_id, result)
 
-    defaults = _resolve_config_voting_defaults_modal_defaults(bot, guild_id)
-    await interaction.response.send_modal(VotingDefaultsModal(on_submit, defaults=defaults))
+        async def open_modal(modal_trigger_interaction: discord.Interaction) -> None:
+            defaults = _resolve_config_voting_defaults_modal_defaults(bot, guild_id)
+            await modal_trigger_interaction.response.send_modal(VotingDefaultsModal(on_submit, defaults=defaults))
+
+        await open_modal(configure_interaction)
+
+    view = ConfigVotingDefaultsIntroView(on_configure, on_back, default_visibility=current_visibility)
+    await interaction.response.edit_message(
+        content="**WASH Configuration -- Voting Defaults**\n\nChoose the default visibility below, then press "
+        "**Set Voting Defaults** to configure the default candidate count and vote duration.",
+        view=view,
+    )
 
 
 async def send_config_reminder_defaults_modal(
@@ -4651,18 +4774,23 @@ def build_suggestion_view(
             bot=bot,
         )
 
-    return SuggestionView(watch_item, threshold, on_toggle)
+    async def on_watched(interaction: discord.Interaction, suggestion_id: int) -> None:
+        await handle_watched_button_click(interaction, bot, suggestion_id, permission_service=permission_service)
+
+    return SuggestionView(watch_item, threshold, on_toggle, on_watched)
 
 
-def _suggestion_message_has_reject_button(message: object, custom_id: str) -> bool:
-    """Check whether a fetched suggestion message already carries this button.
+def _suggestion_message_has_custom_id(message: object, custom_id: str) -> bool:
+    """Check whether a fetched suggestion message already carries a
+    component with this custom_id.
 
     A real discord.py Message's components are a list of top-level
     ActionRows, each holding the actual Button/SelectMenu children -- so
     both the top-level components and one level of nested children are
     checked. Used by restore_persistent_suggestion_views() to decide
-    whether a legacy message (posted before this feature existed) needs
-    to be edited to attach the button, or already has it.
+    whether a legacy message (posted before the reject and/or Watched
+    button existed) needs to be edited to attach the current
+    SuggestionView, or already has both.
     """
     for component in getattr(message, "components", []):
         if getattr(component, "custom_id", None) == custom_id:
@@ -4712,17 +4840,19 @@ async def restore_persistent_suggestion_views(
     other Discord-side error) is logged and that suggestion is skipped
     -- one bad reference never blocks startup or any other suggestion.
 
-    Archived suggestions are skipped entirely: their button is already
-    disabled and permanently so (see SuggestionService.reject_suggestion/
-    remove_rejection, which both refuse to touch an archived suggestion),
-    so there's nothing to restore or migrate for them.
+    Archived and Watched suggestions are skipped entirely: both of their
+    buttons are already disabled and permanently so (see
+    SuggestionService.reject_suggestion/remove_rejection/
+    mark_suggestion_watched, none of which allow touching an archived or
+    already-watched suggestion), so there's nothing to restore or
+    migrate for them.
 
     Returns:
         The number of suggestion views restored or migrated.
     """
     restored = 0
     for watch_item in suggestion_service.get_suggestions():
-        if watch_item.status == WatchItemStatus.ARCHIVED:
+        if watch_item.status in (WatchItemStatus.ARCHIVED, WatchItemStatus.WATCHED):
             continue
         if watch_item.message_id is None:
             continue
@@ -4756,15 +4886,19 @@ async def restore_persistent_suggestion_views(
             )
             continue
 
-        custom_id = build_reject_button_custom_id(watch_item.id)
-        if _suggestion_message_has_reject_button(message, custom_id):
+        reject_custom_id = build_reject_button_custom_id(watch_item.id)
+        watched_custom_id = build_watched_button_custom_id(watch_item.id)
+        has_both_buttons = _suggestion_message_has_custom_id(
+            message, reject_custom_id
+        ) and _suggestion_message_has_custom_id(message, watched_custom_id)
+        if has_both_buttons:
             bot.add_view(view, message_id=watch_item.message_id)
         else:
             try:
                 await message.edit(view=view)
             except Exception:
                 logger.warning(
-                    "Could not attach the rejection button to suggestion %s's "
+                    "Could not attach the current buttons to suggestion %s's "
                     "legacy message %s; skipping",
                     watch_item.id,
                     watch_item.message_id,
@@ -4772,7 +4906,7 @@ async def restore_persistent_suggestion_views(
                 )
                 continue
             logger.info(
-                "Attached a new rejection button to legacy suggestion %s's message %s",
+                "Attached the current buttons to legacy suggestion %s's message %s",
                 watch_item.id,
                 watch_item.message_id,
             )
@@ -5897,6 +6031,63 @@ async def post_suggestion_confirmation(
         )
 
 
+async def post_watched_item_archive(bot: "WatchPartyBot", watch_item: WatchItem) -> tuple[bool, str]:
+    """Post a freshly-Watched suggestion's own confirmation embed to the
+    configured Watched Item Archive (Watched Button & Archive Workflow).
+
+    A one-time post, never edited afterward -- the Watched button is
+    disabled the moment a suggestion is marked watched, so there is only
+    ever one confirmation to post here, unlike post_suggestion_confirmation
+    (which must handle repeated re-confirmation/reactivation).
+
+    Returns:
+        A (posted, note) tuple, mirroring post_suggestion_confirmation's
+        own contract: note is empty on a clean post, or an actionable
+        explanation when no archive is configured or posting failed.
+        Marking the suggestion watched is never rolled back either way.
+    """
+    if watch_item.guild_id is None or watch_item.database_id is None:
+        return (
+            False,
+            "No Watched Item Archive is configured, so this wasn't posted there.",
+        )
+
+    destination_channel_id = bot.config_service.resolve_effective_watch_destination(
+        watch_item.guild_id, watch_item.database_id
+    )
+    if destination_channel_id is None:
+        return (
+            False,
+            "No Watched Item Archive is configured, so this wasn't posted there. "
+            "Configure one via `/setup` or `/config` to archive future Watched items.",
+        )
+
+    database = bot.suggestion_service.get_database(watch_item.database_id)
+    suggested_by = (
+        f"<@{watch_item.journey.original_suggester}>" if watch_item.journey.original_suggester else "Unknown"
+    )
+    embed = build_suggestion_confirmation_embed(
+        watch_item,
+        database_name=database.name if database is not None else "Unknown collection",
+        suggested_by=suggested_by,
+        rotation_service=bot.rotation_service,
+    )
+
+    try:
+        channel = bot.get_channel(destination_channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(destination_channel_id)
+        await channel.send(embed=embed)
+        return True, ""
+    except Exception:
+        logger.warning("Could not post Watched Item Archive entry for suggestion %s", watch_item.id, exc_info=True)
+        return (
+            False,
+            "The suggestion was marked watched, but WASH could not post to the Watched Item Archive. "
+            "Check that channel's permissions.",
+        )
+
+
 async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchItem) -> None:
     """Edit a suggestion's existing public post in place after its status
     changes (Requirement 7), so its Status field never goes stale.
@@ -6099,8 +6290,15 @@ async def finish_add_or_reactivate(
     configured), or fails.
     """
     action_word = "added" if is_new else "reactivated"
-    _posted, note = await post_suggestion_confirmation(bot, watch_item, database, interaction)
+    posted, note = await post_suggestion_confirmation(bot, watch_item, database, interaction)
     ack = f'"{watch_item.title}" has been {action_word}. Reference: {watch_item.reference}.'
+    if posted and watch_item.channel_id != interaction.channel_id:
+        # Only worth a link when /add was invoked somewhere other than
+        # the collection's own destination -- otherwise the member is
+        # already looking at the post that was just created/refreshed.
+        link = build_suggestion_message_link(watch_item)
+        if link is not None:
+            ack += f"\n[View Suggestion]({link})"
     if note:
         ack += f"\n{note}"
     await interaction.response.send_message(ack, ephemeral=True)
@@ -7161,8 +7359,8 @@ class SuggestionListStatusFilter(str, Enum):
     ACTIVE (the new default) is Eligible + Rotation Cooldown mixed
     together -- CollectionEligibility.active, unchanged. ELIGIBLE is
     the pool actually eligible for the next vote (what the old
-    AVAILABLE filter showed). ROTATION_COOLDOWN, VOTE_WINNER, and
-    RETIRED are unchanged, plain-bucket filters. ALL is every watch
+    AVAILABLE filter showed). ROTATION_COOLDOWN, VOTE_WINNER, RETIRED,
+    and WATCHED are unchanged, plain-bucket filters. ALL is every watch
     item in the collection, active or not.
     """
 
@@ -7171,6 +7369,7 @@ class SuggestionListStatusFilter(str, Enum):
     ROTATION_COOLDOWN = "rotation_cooldown"
     VOTE_WINNER = "vote_winner"
     RETIRED = "retired"
+    WATCHED = "watched"
     ALL = "all"
 
 
@@ -7180,6 +7379,7 @@ SUGGESTION_LIST_STATUS_FILTER_LABELS: dict[SuggestionListStatusFilter, str] = {
     SuggestionListStatusFilter.ROTATION_COOLDOWN: "Rotation Cooldown",
     SuggestionListStatusFilter.VOTE_WINNER: "Vote Winners",
     SuggestionListStatusFilter.RETIRED: "Retired",
+    SuggestionListStatusFilter.WATCHED: "Watched",
     SuggestionListStatusFilter.ALL: "All Watch Items",
 }
 
@@ -7220,12 +7420,15 @@ def resolve_suggestion_list_entries(
         return [(item, SuggestionDisplayStatus.VOTE_WINNER) for item in eligibility.vote_winners]
     if status_filter is SuggestionListStatusFilter.RETIRED:
         return [(item, SuggestionDisplayStatus.RETIRED) for item in eligibility.retired]
+    if status_filter is SuggestionListStatusFilter.WATCHED:
+        return [(item, SuggestionDisplayStatus.WATCHED) for item in eligibility.watched]
     # ALL
     return (
         [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.eligible]
         + [(item, SuggestionDisplayStatus.ROTATION_COOLDOWN) for item in eligibility.rotation_cooldown]
         + [(item, SuggestionDisplayStatus.VOTE_WINNER) for item in eligibility.vote_winners]
         + [(item, SuggestionDisplayStatus.RETIRED) for item in eligibility.retired]
+        + [(item, SuggestionDisplayStatus.WATCHED) for item in eligibility.watched]
     )
 
 
@@ -7472,21 +7675,37 @@ async def build_switch_collection_options(
 async def show_list_switch_collection_picker(
     interaction: discord.Interaction, bot: "WatchPartyBot", status_filter: SuggestionListStatusFilter, public: bool
 ) -> None:
-    options = await build_switch_collection_options(bot, interaction.guild_id)
-    if not options:
-        await interaction.response.send_message("There's only one collection in this server.", ephemeral=True)
-        return
+    """Show the Switch Collection picker.
 
-    async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
-        database = bot.suggestion_service.get_database(database_id)
-        if database is None:
-            await select_interaction.response.send_message("That collection no longer exists.", ephemeral=True)
+    Wrapped end-to-end so an unexpected exception always still leaves the
+    interaction acknowledged -- otherwise Discord's client falls back to a
+    generic "didn't respond in time" with nothing in the logs pointing at
+    why, since discord.ui.View's default on_error only logs to discord.py's
+    own logger and never responds to the interaction itself.
+    """
+    try:
+        options = await build_switch_collection_options(bot, interaction.guild_id)
+        if not options:
+            await interaction.response.send_message("There's only one collection in this server.", ephemeral=True)
             return
-        await send_suggestion_list(select_interaction, bot, database, status_filter, public, edit=True)
 
-    await interaction.response.edit_message(
-        content="Choose a collection:", view=ListDatabaseSelectView(options, on_select)
-    )
+        async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
+            database = bot.suggestion_service.get_database(database_id)
+            if database is None:
+                await select_interaction.response.send_message("That collection no longer exists.", ephemeral=True)
+                return
+            await send_suggestion_list(select_interaction, bot, database, status_filter, public, edit=True)
+
+        await interaction.response.edit_message(
+            content="Choose a collection:", view=ListDatabaseSelectView(options, on_select)
+        )
+    except Exception:
+        logger.warning("Switch Collection picker failed for guild %s", interaction.guild_id, exc_info=True)
+        error_message = "Something went wrong showing the collection picker. Please try again."
+        if interaction.response.is_done():
+            await interaction.followup.send(error_message, ephemeral=True)
+        else:
+            await interaction.response.send_message(error_message, ephemeral=True)
 
 
 # --- Rotation & Collection Health: /database health -----------------------------------------
@@ -7509,6 +7728,24 @@ class LowPoolStatus(str, Enum):
     HEALTHY = "Healthy"
     ALMOST_COMPLETE = "Almost Complete"
     INSUFFICIENT = "Insufficient"
+
+
+# /database health Visual Consistency: reuses the same traffic-light
+# idiom SUGGESTION_DISPLAY_STATUS_EMOJI already established for /list
+# (green/yellow for Available/Rotation Cooldown) rather than inventing a
+# new visual system -- red extends that same idiom for the one case
+# /list never had: a status that's an actual blocking problem.
+NEXT_VOTE_STATUS_EMOJI: dict[NextVoteStatus, str] = {
+    NextVoteStatus.READY: "🟢",
+    NextVoteStatus.NEEDS_ROLLOVER: "🟡",
+    NextVoteStatus.INSUFFICIENT: "🔴",
+}
+
+LOW_POOL_STATUS_EMOJI: dict[LowPoolStatus, str] = {
+    LowPoolStatus.HEALTHY: "🟢",
+    LowPoolStatus.ALMOST_COMPLETE: "🟡",
+    LowPoolStatus.INSUFFICIENT: "🔴",
+}
 
 
 def build_collection_health_report(bot: "WatchPartyBot", database: SuggestionDatabase, guild: Optional[discord.Guild]) -> str:
@@ -7585,16 +7822,17 @@ def build_collection_health_report(bot: "WatchPartyBot", database: SuggestionDat
             f"Total Watch Items: {eligibility.total}",
             "",
             f"Active Watch Items: {active_count} (Eligible for Voting + Rotation Cooldown)",
-            f"    Eligible for Voting: {eligible_count}",
-            f"    Rotation Cooldown: {len(eligibility.rotation_cooldown)}",
-            f"Vote Winners: {len(eligibility.vote_winners)}",
-            f"Retired: {len(eligibility.retired)}",
+            f"    {SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.AVAILABLE]} Eligible for Voting: {eligible_count}",
+            f"    {SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.ROTATION_COOLDOWN]} Rotation Cooldown: {len(eligibility.rotation_cooldown)}",
+            f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.VOTE_WINNER]} Vote Winners: {len(eligibility.vote_winners)}",
+            f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.RETIRED]} Retired: {len(eligibility.retired)}",
+            f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.WATCHED]} Watched: {len(eligibility.watched)}",
             "",
             rotation_progress_line,
             f"Configured Candidate Count: {candidate_count}",
             "",
-            f"Next Vote: {next_vote.value}",
-            f"Low Pool Status: {low_pool.value}",
+            f"Next Vote: {NEXT_VOTE_STATUS_EMOJI[next_vote]} {next_vote.value}",
+            f"Low Pool Status: {LOW_POOL_STATUS_EMOJI[low_pool]} {low_pool.value}",
         ]
     )
 
@@ -7693,7 +7931,7 @@ async def handle_list_suggestions(
     except ValueError:
         await interaction.response.send_message(
             "Choose Active Watch Items, Eligible for Voting, Rotation Cooldown, Vote Winners, Retired, "
-            "or All Watch Items.",
+            "Watched, or All Watch Items.",
             ephemeral=True,
         )
         return
@@ -8060,6 +8298,66 @@ async def handle_suggestion_rejection_toggle(
     await interaction.message.edit(view=view)
 
 
+async def handle_watched_button_click(
+    interaction: discord.Interaction,
+    bot: Optional["WatchPartyBot"],
+    suggestion_id: int,
+    *,
+    permission_service: Optional[PermissionService] = None,
+) -> None:
+    """Handle a click on a suggestion's Watched button.
+
+    Visible to everyone, but only WASH Crew may successfully use it --
+    permission-gated here, in the callback, never by hiding or removing
+    the component itself (component visibility is never the security
+    boundary). Opens a modal to confirm (and optionally edit) the
+    watched date; nothing is recorded until that modal is submitted and
+    the date validates.
+    """
+    if bot is None or permission_service is None:
+        await interaction.response.send_message(
+            "This isn't available right now. Please try again later.", ephemeral=True
+        )
+        return
+
+    permission = permission_service.require_wash_crew(interaction.user)
+    if not permission.allowed:
+        await interaction.response.send_message(permission.message, ephemeral=True)
+        return
+
+    watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
+    if watch_item is None:
+        await interaction.response.send_message("That suggestion no longer exists.", ephemeral=True)
+        return
+    if watch_item.status is WatchItemStatus.WATCHED:
+        await interaction.response.send_message("That suggestion is already marked watched.", ephemeral=True)
+        return
+
+    async def on_date_submit(modal_interaction: discord.Interaction, date_text: str) -> None:
+        try:
+            watched_date = parse_watched_date(date_text)
+        except ValueError as exc:
+            await modal_interaction.response.send_message(
+                f"⚠ {exc} Click Watched again to retry.", ephemeral=True
+            )
+            return
+
+        result = bot.suggestion_service.mark_suggestion_watched(suggestion_id, watched_date)
+        if not result.success:
+            await modal_interaction.response.send_message(result.message, ephemeral=True)
+            return
+
+        await sync_suggestion_status_embed(bot, result.watch_item)
+        archive_posted, archive_note = await post_watched_item_archive(bot, result.watch_item)
+
+        ack = f'"{result.watch_item.title}" has been marked watched ({watched_date.isoformat()}).'
+        if not archive_posted:
+            ack += f"\n{archive_note}"
+        await modal_interaction.response.send_message(ack, ephemeral=True)
+
+    await interaction.response.send_modal(WatchedDateModal(suggestion_id, on_date_submit))
+
+
 def build_database_add_confirmation(database: SuggestionDatabase) -> str:
     """Build the /database_add confirmation message.
 
@@ -8316,6 +8614,13 @@ def build_edit_suggestion_summary(
     """Build the read-only IMDb-metadata summary shown alongside
     /edit_suggestion's action picker (Requirement 8: OMDb-derived fields
     are for reference only, never manually edited here).
+
+    Links to the suggestion's own Discord post rather than repeating its
+    raw IMDb URL -- that post's own embed already has an IMDb-linked
+    title card, so this is the more useful (and clickable) top link.
+    Falls back to the raw IMDb URL only for a legacy suggestion with no
+    confirmation post to link to, since that's otherwise the only way to
+    reach its IMDb page from here at all.
     """
     database = suggestion_service.get_database(item.database_id) if item.database_id is not None else None
     database_name = database.name if database is not None else "Unknown collection"
@@ -8327,7 +8632,10 @@ def build_edit_suggestion_summary(
         f"Collection: {database_name}",
         f"Status: {format_display_status_with_won_date(item, display_status)}",
     ]
-    if imdb_url:
+    post_link = build_suggestion_message_link(item)
+    if post_link is not None:
+        lines.append(f"[Original Suggestion]({post_link})")
+    elif imdb_url:
         lines.append(f"IMDb: {imdb_url}")
     return "\n".join(lines)
 
@@ -9212,6 +9520,40 @@ def parse_watch_party_schedule_time(value: str) -> datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def parse_watched_date(value: str) -> date:
+    """Parse the Watched button's confirmation modal date into a plain
+    calendar date (Watched Button & Archive Workflow).
+
+    Deliberately a bare date, never a time -- WASH only ever records the
+    date a suggestion was watched, matching journey.watch_dates'
+    existing date-only field, and mirroring format_won_date's own
+    date-only convention for Vote Winners.
+
+    Args:
+        value: The raw modal field text.
+
+    Returns:
+        The parsed date.
+
+    Raises:
+        ValueError: If value is blank, not a parseable date, or in the future.
+    """
+    cleaned = (value or "").strip()
+    if not cleaned:
+        raise ValueError(f"A watched date is required, e.g. '{date.today().isoformat()}'.")
+
+    try:
+        parsed = date.fromisoformat(cleaned)
+    except ValueError as exc:
+        raise ValueError(
+            f"'{cleaned}' isn't a valid date. Use the format YYYY-MM-DD, e.g. '{date.today().isoformat()}'."
+        ) from exc
+
+    if parsed > date.today():
+        raise ValueError("The watched date can't be in the future.")
+    return parsed
 
 
 _DISCORD_TIMESTAMP_PATTERN = re.compile(r"^<t:(-?\d+)(?::[tTdDfFR])?>$")
@@ -10264,9 +10606,16 @@ async def send_help_response(interaction: discord.Interaction, response: HelpRes
     content -- Discord only auto-generates a link-preview card (here, a
     large GitHub repository card) for links in a message's plain content,
     never for a link inside an embed's own title/description.
+
+    A trailing blank line (a zero-width space so Discord doesn't collapse
+    it as pure trailing whitespace) separates the last command section
+    from the embed card below it -- otherwise the two sit flush against
+    each other with no breathing room.
     """
     embed = EmbedFactory.info(response.reference_title, response.reference_description, url=response.reference_url)
-    await interaction.response.send_message(response.command_text, embed=embed, ephemeral=response.ephemeral)
+    await interaction.response.send_message(
+        f"{response.command_text}\n\u200b", embed=embed, ephemeral=response.ephemeral
+    )
 
 
 def main() -> None:

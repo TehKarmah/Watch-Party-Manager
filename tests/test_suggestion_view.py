@@ -8,7 +8,9 @@ from watch_party_manager.domain.watch_item import MediaType, WatchItem, WatchIte
 from watch_party_manager.suggestion_view import (
     RejectSuggestionButton,
     SuggestionView,
+    WatchedSuggestionButton,
     build_reject_button_label,
+    build_watched_button_custom_id,
 )
 
 
@@ -37,57 +39,72 @@ class BuildRejectButtonLabelTests(unittest.TestCase):
         self.assertIn("Archived", label)
         self.assertIn("2 / 2", label)
 
+    def test_watched_label_clearly_indicates_watched_not_archived(self) -> None:
+        label = build_reject_button_label(2, 2, archived=False, watched=True)
+        self.assertIn("Watched", label)
+        self.assertNotIn("Archived", label)
+        self.assertIn("2 / 2", label)
+
 
 class SuggestionViewTests(unittest.IsolatedAsyncioTestCase):
     async def _noop(self, interaction, suggestion_id) -> None:
         pass
 
-    async def test_creates_exactly_one_button(self) -> None:
+    async def test_creates_exactly_two_buttons(self) -> None:
         watch_item = make_watch_item()
 
-        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop)
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
 
-        self.assertEqual(len(view.children), 1)
+        self.assertEqual(len(view.children), 2)
 
     async def test_button_custom_id_encodes_the_suggestion_id(self) -> None:
         watch_item = make_watch_item(id=42)
 
-        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop)
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
 
         self.assertIn("42", view.children[0].custom_id)
 
     async def test_button_label_shows_the_current_count_and_threshold(self) -> None:
         watch_item = make_watch_item(rejected_by=[111])
 
-        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop)
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
 
         self.assertEqual(view.children[0].label, "I WILL NOT WATCH: 1 / 2")
 
     async def test_button_is_enabled_for_an_active_suggestion(self) -> None:
         watch_item = make_watch_item(status=WatchItemStatus.SUGGESTED)
 
-        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop)
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
 
         self.assertFalse(view.children[0].disabled)
 
     async def test_button_is_disabled_for_an_archived_suggestion(self) -> None:
         watch_item = make_watch_item(status=WatchItemStatus.ARCHIVED, rejected_by=[111, 222])
 
-        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop)
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
 
         self.assertTrue(view.children[0].disabled)
 
     async def test_archived_button_label_indicates_archived(self) -> None:
         watch_item = make_watch_item(status=WatchItemStatus.ARCHIVED, rejected_by=[111, 222])
 
-        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop)
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
 
         self.assertIn("Archived", view.children[0].label)
+
+    async def test_reject_button_is_disabled_for_a_watched_suggestion(self) -> None:
+        watch_item = make_watch_item(status=WatchItemStatus.WATCHED, rejected_by=[111])
+
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
+
+        self.assertTrue(view.children[0].disabled)
+        self.assertIn("Watched", view.children[0].label)
+        self.assertNotIn("Archived", view.children[0].label)
 
     async def test_view_has_no_timeout_making_it_persistent(self) -> None:
         watch_item = make_watch_item()
 
-        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop)
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
 
         self.assertIsNone(view.timeout)
 
@@ -95,7 +112,7 @@ class SuggestionViewTests(unittest.IsolatedAsyncioTestCase):
         watch_item = WatchItem(title="Unpersisted", media_type=MediaType.MOVIE)
 
         with self.assertRaisesRegex(ValueError, "positive"):
-            SuggestionView(watch_item, threshold=2, on_toggle=self._noop)
+            SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
 
     async def test_button_click_calls_on_toggle_with_the_correct_suggestion_id(self) -> None:
         watch_item = make_watch_item(id=7)
@@ -104,8 +121,20 @@ class SuggestionViewTests(unittest.IsolatedAsyncioTestCase):
         async def spy(interaction, suggestion_id) -> None:
             calls.append(suggestion_id)
 
-        view = SuggestionView(watch_item, threshold=2, on_toggle=spy)
+        view = SuggestionView(watch_item, threshold=2, on_toggle=spy, on_watched=self._noop)
         await view.children[0].callback(interaction=object())
+
+        self.assertEqual(calls, [7])
+
+    async def test_watched_button_click_calls_on_watched_with_the_correct_suggestion_id(self) -> None:
+        watch_item = make_watch_item(id=7)
+        calls = []
+
+        async def spy(interaction, suggestion_id) -> None:
+            calls.append(suggestion_id)
+
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=spy)
+        await view.children[1].callback(interaction=object())
 
         self.assertEqual(calls, [7])
 
@@ -119,6 +148,35 @@ class RejectSuggestionButtonTests(unittest.TestCase):
             suggestion_id=42, rejection_count=0, threshold=2, archived=False, on_toggle=self._noop
         )
         self.assertIn("42", button.custom_id)
+
+
+class WatchedSuggestionButtonTests(unittest.IsolatedAsyncioTestCase):
+    async def _noop(self, interaction, suggestion_id) -> None:
+        pass
+
+    def test_custom_id_encodes_the_suggestion_id(self) -> None:
+        button = WatchedSuggestionButton(suggestion_id=42, watched=False, on_click=self._noop)
+        self.assertIn("42", button.custom_id)
+        self.assertEqual(button.custom_id, build_watched_button_custom_id(42))
+
+    def test_enabled_and_not_yet_watched(self) -> None:
+        button = WatchedSuggestionButton(suggestion_id=1, watched=False, on_click=self._noop)
+        self.assertFalse(button.disabled)
+
+    def test_disabled_once_watched(self) -> None:
+        button = WatchedSuggestionButton(suggestion_id=1, watched=True, on_click=self._noop)
+        self.assertTrue(button.disabled)
+
+    async def test_click_calls_on_click_with_the_correct_suggestion_id(self) -> None:
+        calls = []
+
+        async def spy(interaction, suggestion_id) -> None:
+            calls.append(suggestion_id)
+
+        button = WatchedSuggestionButton(suggestion_id=9, watched=False, on_click=spy)
+        await button.callback(interaction=object())
+
+        self.assertEqual(calls, [9])
 
 
 if __name__ == "__main__":
