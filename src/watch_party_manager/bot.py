@@ -35,7 +35,6 @@ from watch_party_manager.domain.guild_configuration import (
     GuildVoteVisibility,
     JoinMode,
     RotationLowPoolNotificationDestination,
-    VISIBILITY_HELP_TEXT,
     VISIBILITY_HELP_TEXT_SHORT,
 )
 from watch_party_manager.domain.setup_wizard import (
@@ -290,8 +289,8 @@ from watch_party_manager.setup_wizard_view import (
     WatchPartyRoleStepView,
 )
 from watch_party_manager.start_vote_view import (
-    CustomizeVoteCandidateSelectionView,
     CustomizeVoteModal,
+    CustomizeVoteOverridesView,
     StartVoteChoiceView,
 )
 from watch_party_manager.suggestion_view import (
@@ -998,19 +997,20 @@ def build_customize_vote_modal_defaults(
 ) -> dict[str, str]:
     """Resolve the actual configured defaults CustomizeVoteModal's "leave
     blank" placeholders should name, mirroring perform_start_vote's own
-    resolution (default_visibility/default_duration_minutes) and
-    resolve_vote_reminder_settings exactly, so what's displayed here can
-    never drift from what starting a vote would actually apply.
+    resolution (default_duration_minutes) and resolve_vote_reminder_settings
+    exactly, so what's displayed here can never drift from what starting a
+    vote would actually apply. Visibility is resolved separately (see
+    resolve_customize_vote_default_visibility) -- General Fixed-Option
+    Control Audit moved it out of this modal entirely, onto its own
+    dropdown on CustomizeVoteOverridesView.
 
-    Returns a dict of the 5 default_*_display kwargs CustomizeVoteModal
+    Returns a dict of the 4 default_*_display kwargs CustomizeVoteModal
     accepts, ready to unpack straight into its constructor.
     """
-    default_visibility = GuildVoteVisibility.VISIBLE
     default_duration_minutes = DEFAULT_VOTE_DURATION_MINUTES
     if guild_configuration_repository is not None and guild_id is not None:
         configuration = guild_configuration_repository.get(guild_id)
         if configuration is not None:
-            default_visibility = configuration.voting_defaults.visibility
             default_duration_minutes = configuration.voting_defaults.duration_minutes
 
     # guild_id is only ever used as a lookup key inside
@@ -1025,10 +1025,26 @@ def build_customize_vote_modal_defaults(
     return {
         "default_nominee_count_display": str(default_nominee_count),
         "default_duration_display": format_duration_minutes(default_duration_minutes),
-        "default_visibility_display": default_visibility.value.title(),
         "default_reminder_enabled_display": "Yes" if reminder_enabled else "No",
         "default_reminder_minutes_display": format_duration_minutes(reminder_minutes),
     }
+
+
+def resolve_customize_vote_default_visibility(
+    guild_id: Optional[int], guild_configuration_repository: Optional[GuildConfigurationRepository]
+) -> GuildVoteVisibility:
+    """The value Customize This Vote's visibility dropdown
+    (CustomizeVoteOverridesView) should preselect: the guild's own
+    configured Voting Defaults visibility -- the exact same default
+    perform_start_vote itself falls back to when no override is given
+    (see parse_vote_visibility). Purely a convenience preselection, never
+    a decision acted on here.
+    """
+    if guild_configuration_repository is not None and guild_id is not None:
+        configuration = guild_configuration_repository.get(guild_id)
+        if configuration is not None:
+            return configuration.voting_defaults.visibility
+    return GuildVoteVisibility.VISIBLE
 
 
 def parse_duration_text_to_minutes(text: str) -> int:
@@ -3019,6 +3035,14 @@ async def send_config_manage_databases(
     section); accepting the flag keeps this consistent with
     send_config_section's own edit/send contract for any caller that
     still needs a fresh message.
+
+    Collections Summary: each collection's own settings menu (one level
+    deeper) already shows its current Candidate Selection Mode -- this
+    also surfaces it right here, as this picker option's own description,
+    so an administrator can compare every collection's mode at a glance
+    without opening each one individually. Kept off the main /config
+    summary screen itself (avoiding clutter there) per that same
+    consistency review.
     """
     databases = bot.suggestion_service.list_databases(guild_id)
     header = f"**WASH Configuration -- {CONFIG_SECTION_TITLES[ConfigSection.MANAGE_COLLECTIONS]}**"
@@ -3049,7 +3073,18 @@ async def send_config_manage_databases(
         )
         for database in databases
     ]
-    view = ConfigDatabaseSectionView(options, on_database_selected, on_back_to_menu)
+    candidate_selection_descriptions = {
+        database.database_id: (
+            "Candidate Selection: "
+            + CANDIDATE_SELECTION_DISPLAY_LABELS[
+                bot.config_service.get_database_configuration(guild_id, database.database_id).suggestion_rules.candidate_selection
+            ]
+        )
+        for database in databases
+    }
+    view = ConfigDatabaseSectionView(
+        options, on_database_selected, on_back_to_menu, descriptions=candidate_selection_descriptions
+    )
     body = header + "\n\nSelect a collection to manage its own destination and candidate selection."
     if edit:
         await interaction.response.edit_message(content=body, view=view)
@@ -3909,14 +3944,15 @@ class VotingGroup(discord.app_commands.Group):
             )
 
         async def on_customize(choice_interaction: discord.Interaction) -> None:
-            async def on_candidate_selection_continue(
-                select_interaction: discord.Interaction, candidate_selection_override: CandidateSelectionMode
+            async def on_overrides_continue(
+                select_interaction: discord.Interaction,
+                candidate_selection_override: CandidateSelectionMode,
+                visibility_override: GuildVoteVisibility,
             ) -> None:
                 async def on_modal_submit(
                     modal_interaction: discord.Interaction,
                     nominee_count_text: Optional[str],
                     duration_text: Optional[str],
-                    visibility_text: Optional[str],
                     reminder_enabled_text: Optional[str],
                     reminder_minutes_text: Optional[str],
                 ) -> None:
@@ -3929,7 +3965,6 @@ class VotingGroup(discord.app_commands.Group):
                         default_nominee_count=bot.default_nominee_count,
                         nominee_count_text=nominee_count_text,
                         duration_text=duration_text,
-                        visibility_text=visibility_text,
                         reminder_enabled_text=reminder_enabled_text,
                         reminder_minutes_text=reminder_minutes_text,
                         scheduler_service=bot.scheduler_host.scheduler_service,
@@ -3938,6 +3973,7 @@ class VotingGroup(discord.app_commands.Group):
                         suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
                         bot=bot,
                         candidate_selection_override=candidate_selection_override,
+                        visibility_override=visibility_override,
                     )
 
                 modal_defaults = build_customize_vote_modal_defaults(
@@ -3950,15 +3986,19 @@ class VotingGroup(discord.app_commands.Group):
             default_candidate_selection = resolve_customize_vote_default_candidate_selection(
                 bot, choice_interaction.guild_id, choice_interaction.channel_id
             )
-            candidate_selection_view = CustomizeVoteCandidateSelectionView(
-                on_candidate_selection_continue, default_candidate_selection=default_candidate_selection
+            default_visibility = resolve_customize_vote_default_visibility(
+                choice_interaction.guild_id, bot.guild_configuration_repository
+            )
+            overrides_view = CustomizeVoteOverridesView(
+                on_overrides_continue,
+                default_candidate_selection=default_candidate_selection,
+                default_visibility=default_visibility,
             )
             await choice_interaction.response.send_message(
-                "Optionally override this vote's Candidate Selection Mode below -- this applies to this "
-                "round only and never changes the collection's own configured setting. Then continue to "
-                "the rest of this vote's settings (candidate count, duration, and visibility).\n\n"
-                f"{VISIBILITY_HELP_TEXT}",
-                view=candidate_selection_view,
+                "Optionally override this vote's Candidate Selection Mode and/or Vote Visibility below -- "
+                "both apply to this round only and never change the collection's or guild's own configured "
+                "setting. Then continue to the rest of this vote's settings (candidate count and duration).",
+                view=overrides_view,
                 ephemeral=True,
             )
 
@@ -4593,7 +4633,6 @@ async def handle_customize_vote_submit(
     default_nominee_count: int,
     nominee_count_text: Optional[str],
     duration_text: Optional[str],
-    visibility_text: Optional[str],
     reminder_enabled_text: Optional[str] = None,
     reminder_minutes_text: Optional[str] = None,
     scheduler_service: Optional[SchedulerService] = None,
@@ -4602,6 +4641,7 @@ async def handle_customize_vote_submit(
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
     bot: Optional["WatchPartyBot"] = None,
     candidate_selection_override: Optional[CandidateSelectionMode] = None,
+    visibility_override: Optional[GuildVoteVisibility] = None,
 ) -> None:
     """Start a round using optional one-time modal overrides.
 
@@ -4609,18 +4649,25 @@ async def handle_customize_vote_submit(
     Improvements): the mode chosen on Customize This Vote's own
     candidate-selection dropdown (a separate step before this modal,
     since Discord modals can't contain Select menus -- see
-    CustomizeVoteCandidateSelectionView). None uses the resolved
-    database's own configured mode, unchanged.
+    CustomizeVoteOverridesView). None uses the resolved database's own
+    configured mode, unchanged.
+
+    visibility_override: General Fixed-Option Control Audit: the
+    visibility chosen on that same dropdown screen, alongside candidate
+    selection. None uses the guild's own configured default visibility,
+    unchanged -- see resolve_customize_vote_default_visibility.
     """
     try:
-        nominee_count, duration_minutes, visibility_str, reminder_enabled, reminder_minutes_before_close = (
+        nominee_count, duration_minutes, _, reminder_enabled, reminder_minutes_before_close = (
             parse_start_vote_overrides(
-                nominee_count_text, duration_text, visibility_text, reminder_enabled_text, reminder_minutes_text
+                nominee_count_text, duration_text, None, reminder_enabled_text, reminder_minutes_text
             )
         )
     except ValueError as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
+
+    visibility_str = visibility_override.value if visibility_override is not None else None
 
     await handle_start_vote_completion(
         interaction,

@@ -40,17 +40,14 @@ class GuildVoteVisibility(str, Enum):
 # screens, /vote start's Customize This Vote, and the Expanded
 # Help/Administration docs -- so the choice never has to be inferred
 # from the bare word "Blind"/"Visible" alone. Kept here, next to the
-# enum itself, as the one source of truth for this wording.
-VISIBILITY_HELP_TEXT = (
-    "**Visible** -- everyone can see vote totals while voting is active. "
-    "**Blind** -- results stay hidden until voting closes."
-)
-
-# The same explanation, trimmed to fit Discord's 100-character
-# SelectOption description limit -- used where VISIBILITY_HELP_TEXT
-# itself would be too long (e.g. /config's main menu option for Voting
-# Defaults, which has no other room for explanatory body text before
-# its modal opens).
+# enum itself, as the one source of truth for this wording. Trimmed to
+# fit Discord's 100-character SelectOption description limit -- used
+# where a live VisibilitySelectComponent dropdown's own per-option
+# descriptions aren't yet on screen (e.g. /config's main menu option for
+# Voting Defaults, which has no other room for explanatory body text
+# before its modal opens). Everywhere the dropdown itself is already
+# shown, its per-option descriptions are the explanation -- no separate
+# help text is needed alongside it (see VisibilitySelectComponent).
 VISIBILITY_HELP_TEXT_SHORT = "Visible: totals shown live. Blind: hidden until voting closes."
 
 

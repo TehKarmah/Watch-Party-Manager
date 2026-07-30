@@ -510,6 +510,27 @@ class SectionRenderingTests(ConfigCommandTestCase):
         await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.MANAGE_COLLECTIONS, edit=False)
         self.assertIsInstance(interaction.response.sent_view, ConfigDatabaseSectionView)
 
+    async def test_database_picker_options_show_each_collections_candidate_selection_mode(self) -> None:
+        # Collections Summary: an administrator can compare every
+        # collection's Candidate Selection Mode at a glance from this
+        # picker, without opening each one's own settings menu -- kept
+        # off the main /config summary screen itself (avoiding clutter
+        # there per that same review).
+        self._seed_completed_setup()
+        movies = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID).database
+        tv_shows = self.suggestion_service.create_database("TV Shows", GUILD_ID, DESTINATION_CHANNEL_ID + 1).database
+        self.bot.config_service.set_database_candidate_selection(
+            GUILD_ID, tv_shows.database_id, CandidateSelectionMode.INFINITE_POOL
+        )
+        interaction = FakeInteraction()
+
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.MANAGE_COLLECTIONS, edit=False)
+
+        select = interaction.response.sent_view.children[0]
+        descriptions_by_value = {option.value: option.description for option in select.options}
+        self.assertEqual(descriptions_by_value[str(movies.database_id)], "Candidate Selection: Balanced Random")
+        self.assertEqual(descriptions_by_value[str(tv_shows.database_id)], "Candidate Selection: Pure Random")
+
     async def test_manage_databases_section_with_no_databases_shows_back_only(self) -> None:
         self._seed_completed_setup()
         interaction = FakeInteraction()

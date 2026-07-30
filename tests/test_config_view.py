@@ -182,6 +182,25 @@ class ConfigDatabaseSectionViewTests(unittest.IsolatedAsyncioTestCase):
         await select.callback(interaction=object())
         self.assertEqual(calls, [5])
 
+    async def test_descriptions_apply_only_to_the_matching_database(self) -> None:
+        # Collections Summary: each option's description names that
+        # collection's own Candidate Selection Mode.
+        view = ConfigDatabaseSectionView(
+            [(1, "Movies"), (2, "TV Shows")],
+            _noop,
+            _noop,
+            descriptions={1: "Candidate Selection: Balanced Random"},
+        )
+        select = view.children[0]
+        descriptions_by_value = {option.value: option.description for option in select.options}
+        self.assertEqual(descriptions_by_value["1"], "Candidate Selection: Balanced Random")
+        self.assertIsNone(descriptions_by_value["2"])
+
+    async def test_no_descriptions_leaves_every_option_undescribed(self) -> None:
+        view = ConfigDatabaseSectionView([(1, "Movies")], _noop, _noop)
+        select = view.children[0]
+        self.assertIsNone(select.options[0].description)
+
 
 _SAMPLE_CONFIG_DESTINATION_OPTIONS = [discord.SelectOption(label="general", value="1")]
 

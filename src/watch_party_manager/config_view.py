@@ -233,9 +233,16 @@ class ConfigAdminChannelSectionView(discord.ui.View):
 
 
 class ConfigDatabaseSelect(discord.ui.Select):
-    def __init__(self, databases: List[Tuple[int, str]], on_select: OnConfigDatabaseSelected) -> None:
+    def __init__(
+        self,
+        databases: List[Tuple[int, str]],
+        on_select: OnConfigDatabaseSelected,
+        *,
+        descriptions: Optional[dict[int, str]] = None,
+    ) -> None:
+        descriptions = descriptions or {}
         options = [
-            discord.SelectOption(label=name[:100], value=str(database_id))
+            discord.SelectOption(label=name[:100], value=str(database_id), description=descriptions.get(database_id))
             for database_id, name in databases[:25]
         ]
         super().__init__(placeholder="Choose a collection", options=options, custom_id="wpm_config_database_select")
@@ -247,10 +254,15 @@ class ConfigDatabaseSelect(discord.ui.Select):
 
 class ConfigDatabaseSectionView(discord.ui.View):
     def __init__(
-        self, databases: List[Tuple[int, str]], on_select: OnConfigDatabaseSelected, on_back: OnBackToMenu
+        self,
+        databases: List[Tuple[int, str]],
+        on_select: OnConfigDatabaseSelected,
+        on_back: OnBackToMenu,
+        *,
+        descriptions: Optional[dict[int, str]] = None,
     ) -> None:
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
-        self.add_item(ConfigDatabaseSelect(databases, on_select))
+        self.add_item(ConfigDatabaseSelect(databases, on_select, descriptions=descriptions))
         self.add_item(BackToMenuButton(on_back))
 
 

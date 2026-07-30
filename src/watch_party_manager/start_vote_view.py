@@ -13,14 +13,17 @@ from typing import Awaitable, Callable, Optional
 
 import discord
 
+from watch_party_manager.domain.guild_configuration import GuildVoteVisibility
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
-from watch_party_manager.setup_wizard_view import CandidateSelectionSelectComponent
+from watch_party_manager.setup_wizard_view import CandidateSelectionSelectComponent, VisibilitySelectComponent
 
 OnUseDefaults = Callable[[discord.Interaction], Awaitable[None]]
 OnCustomizeChosen = Callable[[discord.Interaction], Awaitable[None]]
-OnCustomizeCandidateSelectionContinue = Callable[[discord.Interaction, CandidateSelectionMode], Awaitable[None]]
+OnCustomizeOverridesContinue = Callable[
+    [discord.Interaction, CandidateSelectionMode, GuildVoteVisibility], Awaitable[None]
+]
 OnCustomizeSubmit = Callable[
-    [discord.Interaction, Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]],
+    [discord.Interaction, Optional[str], Optional[str], Optional[str], Optional[str]],
     Awaitable[None],
 ]
 
@@ -91,30 +94,38 @@ class StartVoteChoiceView(discord.ui.View):
 
 class ContinueToVoteSettingsButton(discord.ui.Button):
     """Opens the Customize This Vote modal, carrying forward whichever
-    candidate selection mode is currently selected in the dropdown above it.
+    candidate selection mode and visibility are currently selected in the
+    two dropdowns above it.
     """
 
-    def __init__(self, on_click: OnCustomizeCandidateSelectionContinue, select: CandidateSelectionSelectComponent) -> None:
+    def __init__(
+        self,
+        on_click: OnCustomizeOverridesContinue,
+        candidate_selection_select: CandidateSelectionSelectComponent,
+        visibility_select: VisibilitySelectComponent,
+    ) -> None:
         super().__init__(
             label="Continue to Vote Settings",
             style=discord.ButtonStyle.primary,
             custom_id="wpm_start_vote_customize_candidate_selection_continue",
         )
         self._callback = on_click
-        self._select = select
+        self._candidate_selection_select = candidate_selection_select
+        self._visibility_select = visibility_select
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await self._callback(interaction, self._select.selected)
+        await self._callback(interaction, self._candidate_selection_select.selected, self._visibility_select.selected)
 
 
-class CustomizeVoteCandidateSelectionView(discord.ui.View):
+class CustomizeVoteOverridesView(discord.ui.View):
     """Customize This Vote, step one: optionally override this collection's
-    configured Candidate Selection Mode for this one round only -- nothing
-    chosen here is ever saved back to the collection's own configuration
-    (see bot.py's handle_customize_vote_submit). Reuses
-    CandidateSelectionSelectComponent unchanged, so its option labels,
-    help text, and persisted values can never drift from the Setup
-    Wizard's or /config's own dropdown.
+    configured Candidate Selection Mode and/or the guild's configured Vote
+    Visibility, both for this one round only -- nothing chosen here is
+    ever saved back to the collection's or guild's own configuration (see
+    bot.py's handle_customize_vote_submit). Reuses
+    CandidateSelectionSelectComponent and VisibilitySelectComponent
+    unchanged, so their option labels, help text, and persisted values can
+    never drift from the Setup Wizard's or /config's own dropdowns.
 
     A separate step from CustomizeVoteModal because Discord modals cannot
     contain Select menus -- the same reason the Setup Wizard's Voting
@@ -122,16 +133,22 @@ class CustomizeVoteCandidateSelectionView(discord.ui.View):
     """
 
     def __init__(
-        self, on_continue: OnCustomizeCandidateSelectionContinue, *, default_candidate_selection: CandidateSelectionMode
+        self,
+        on_continue: OnCustomizeOverridesContinue,
+        *,
+        default_candidate_selection: CandidateSelectionMode,
+        default_visibility: GuildVoteVisibility,
     ) -> None:
         super().__init__(timeout=START_VOTE_CHOICE_TIMEOUT_SECONDS)
         self.candidate_selection_select = CandidateSelectionSelectComponent(default=default_candidate_selection)
+        self.visibility_select = VisibilitySelectComponent(default=default_visibility)
         self.add_item(self.candidate_selection_select)
-        self.add_item(ContinueToVoteSettingsButton(on_continue, self.candidate_selection_select))
+        self.add_item(self.visibility_select)
+        self.add_item(ContinueToVoteSettingsButton(on_continue, self.candidate_selection_select, self.visibility_select))
 
 
 class CustomizeVoteModal(discord.ui.Modal):
-    """Collects nominee count, duration, visibility, and reminder overrides.
+    """Collects nominee count, duration, and reminder overrides.
 
     All fields are optional text inputs -- a blank field means "use the
     configured default for this setting", matching how nominee_count and
@@ -141,9 +158,14 @@ class CustomizeVoteModal(discord.ui.Modal):
     /start_vote's direct parameters already used, so nothing here
     duplicates that logic.
 
-    FR-027 added the two reminder fields -- Discord modals support at
-    most 5 components, and this was already at 3, so this is the modal's
-    full capacity.
+    Visibility (General Fixed-Option Control Audit) moved out to its own
+    dropdown on CustomizeVoteOverridesView, the step before this modal --
+    a free-text "blind or visible" field let WASH Crew mistype it into a
+    rejected vote, when Candidate Selection Mode already got the same
+    fixed-choice-dropdown treatment. This also leaves headroom under
+    Discord's 5-component modal limit (FR-027's two reminder fields
+    filled the modal to that limit while visibility was still a text
+    field).
     """
 
     def __init__(
@@ -152,7 +174,6 @@ class CustomizeVoteModal(discord.ui.Modal):
         *,
         default_nominee_count_display: str = "",
         default_duration_display: str = "",
-        default_visibility_display: str = "",
         default_reminder_enabled_display: str = "",
         default_reminder_minutes_display: str = "",
     ) -> None:
@@ -160,7 +181,7 @@ class CustomizeVoteModal(discord.ui.Modal):
 
         Args:
             on_submit: Called with (interaction, nominee_count_text,
-                duration_text, visibility_text, reminder_enabled_text,
+                duration_text, reminder_enabled_text,
                 reminder_minutes_text) once submitted.
             default_nominee_count_display: The guild's actual configured
                 candidate count (e.g. "5"), shown in the field's
@@ -188,11 +209,6 @@ class CustomizeVoteModal(discord.ui.Modal):
                 + (f" ({default_duration_display})" if default_duration_display else "")
             ),
         )
-        self.visibility_input = discord.ui.TextInput(
-            label="Visibility: blind or visible",
-            required=False,
-            placeholder=_blank_default_placeholder(default_visibility_display),
-        )
         self.reminder_enabled_input = discord.ui.TextInput(
             label="Reminder before close? (yes/no)",
             required=False,
@@ -208,7 +224,6 @@ class CustomizeVoteModal(discord.ui.Modal):
         )
         self.add_item(self.nominee_count_input)
         self.add_item(self.duration_input)
-        self.add_item(self.visibility_input)
         self.add_item(self.reminder_enabled_input)
         self.add_item(self.reminder_minutes_input)
 
@@ -218,7 +233,6 @@ class CustomizeVoteModal(discord.ui.Modal):
             interaction,
             self.nominee_count_input.value or None,
             self.duration_input.value or None,
-            self.visibility_input.value or None,
             self.reminder_enabled_input.value or None,
             self.reminder_minutes_input.value or None,
         )
