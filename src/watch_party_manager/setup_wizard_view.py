@@ -40,7 +40,7 @@ OnSkip = Callable[[discord.Interaction], Awaitable[None]]
 OnCreateThreadClicked = Callable[[discord.Interaction], Awaitable[None]]
 OnVotingDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 OnVotingDefaultsConfigure = Callable[[discord.Interaction, CandidateSelectionMode, GuildVoteVisibility], Awaitable[None]]
-OnReminderDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
+OnReminderDefaultsSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnBackupDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 OnSave = Callable[[discord.Interaction], Awaitable[None]]
 OnEditSection = Callable[[discord.Interaction, str], Awaitable[None]]
@@ -398,8 +398,13 @@ class CollectionTypeChoiceView(SetupWizardStepView):
     the name, Special Collection/Custom collect it through a friendlier
     modal, Import Existing points at the standalone /import command
     (Discord has no way to attach a file from within this wizard's own
-    interaction flow). Mirrors ExistingDatabaseSelectView's convention
-    for transient sub-screens: Cancel only, no Back/Save & Finish Later.
+    interaction flow).
+
+    Live-testing fix: previously offered Cancel Setup only, making a full
+    destructive cancel the only way to back out of this nested screen --
+    now offers Back (returns to SuggestionDatabaseChoiceView, this
+    screen's own parent) and Save & Finish Later like every other setup
+    screen.
     """
 
     def __init__(
@@ -409,6 +414,8 @@ class CollectionTypeChoiceView(SetupWizardStepView):
         on_special_collection: OnDatabaseChoiceButton,
         on_custom: OnDatabaseChoiceButton,
         on_import_existing: OnDatabaseChoiceButton,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
         on_cancel: OnWizardCancel,
         *,
         requester_id: Optional[int] = None,
@@ -434,6 +441,8 @@ class CollectionTypeChoiceView(SetupWizardStepView):
                 on_import_existing, label="Import Existing Backup", custom_id="wpm_setup_database_type_import"
             )
         )
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
 
 
@@ -444,9 +453,17 @@ class ImportExistingDatabaseNoticeView(SetupWizardStepView):
     in-wizard upload.
     """
 
-    def __init__(self, on_back: OnBack, on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
         super().__init__(requester_id=requester_id)
         self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
 
 
@@ -488,21 +505,26 @@ class ExistingDatabaseSelectView(SetupWizardStepView):
     """Step 4, part 2a: pick which existing suggestion database to use.
 
     A transient sub-screen of the Suggestion Database step, not a
-    top-level wizard step in its own right -- Cancel Setup returns here
-    (matching the choice screen it was reached from); use the Suggestion
-    Database step's own Back button to return to Admin Channel.
+    top-level wizard step in its own right. Live-testing fix: previously
+    offered Cancel Setup only -- now also offers Back (returns to
+    SuggestionDatabaseChoiceView, this screen's own parent) and Save &
+    Finish Later like every other setup screen.
     """
 
     def __init__(
         self,
         databases: List[Tuple[int, str]],
         on_select: OnExistingDatabaseSelected,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
         on_cancel: OnWizardCancel,
         *,
         requester_id: Optional[int] = None,
     ) -> None:
         super().__init__(requester_id=requester_id)
         self.add_item(ExistingDatabaseSelect(databases, on_select))
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
 
 
@@ -554,6 +576,41 @@ class DestinationChannelSelect(discord.ui.ChannelSelect):
         await self._on_select(interaction, self.values[0].id)
 
 
+class ChannelDestinationSelect(discord.ui.Select):
+    """A channel/thread destination picker built from an explicit,
+    caller-supplied option list (see bot.py's
+    build_channel_destination_options) rather than discord.py's
+    auto-populated ChannelSelect.
+
+    Live-testing fix: ChannelSelect can't filter out archived/locked
+    threads, can't show parent-channel context, and can't pre-select a
+    previously saved value -- this can, since every option (including
+    which one is `default`) is decided fresh by the caller on every
+    render.
+    """
+
+    def __init__(
+        self,
+        options: List[discord.SelectOption],
+        on_select: OnChannelSelected,
+        *,
+        custom_id: str,
+        placeholder: str,
+    ) -> None:
+        super().__init__(
+            placeholder=placeholder,
+            options=options or [discord.SelectOption(label="No channels or threads available", value="none")],
+            min_values=1,
+            max_values=1,
+            custom_id=custom_id,
+            disabled=not options,
+        )
+        self._on_select = on_select
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_select(interaction, int(self.values[0]))
+
+
 # --- Home Channel Creation ------------------------------------------------------------------
 #
 # CreateNewChannelButton/UseExistingChannelButton/ExistingChannelSelectView
@@ -592,11 +649,21 @@ class UseExistingChannelButton(discord.ui.Button):
 class ExistingChannelSelectView(SetupWizardStepView):
     """Use Existing Channel: text channels only. Reused by both the Home
     Channel step and (via HomeChannelChoiceView's shared buttons) any
-    other "pick an existing channel" screen.
+    other "pick an existing channel" screen, as well as /config's Home
+    Channel section (which has its own single "Back to Menu" button
+    rather than the wizard's separate Back/Save & Finish Later/Cancel
+    trio -- on_back and on_save_for_later are therefore optional here,
+    added only when the caller is the setup wizard itself).
     """
 
     def __init__(
-        self, on_select: OnChannelSelected, on_cancel: OnWizardCancel, *, requester_id: Optional[int] = None
+        self,
+        on_select: OnChannelSelected,
+        on_cancel: OnWizardCancel,
+        *,
+        on_back: Optional[OnBack] = None,
+        on_save_for_later: Optional[OnSaveForLater] = None,
+        requester_id: Optional[int] = None,
     ) -> None:
         super().__init__(requester_id=requester_id)
         self.add_item(
@@ -607,6 +674,10 @@ class ExistingChannelSelectView(SetupWizardStepView):
                 channel_types=_EXISTING_CHANNEL_TYPES,
             )
         )
+        if on_back is not None:
+            self.add_item(SetupBackButton(on_back))
+        if on_save_for_later is not None:
+            self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
 
 
@@ -653,14 +724,19 @@ class AdminChannelStepView(SetupWizardStepView):
     requests are posted for WASH Crew, create a new private channel for
     it, or skip for now.
 
-    Reuses DestinationChannelSelect (generic, already used for the Watch
+    Reuses ChannelDestinationSelect (generic, already used for the Watch
     Destination step) rather than a duplicate channel-select component,
     and mirrors WatchDestinationStepView's "select existing, create new,
-    or skip" shape.
+    or skip" shape. `options` is built fresh by the caller on every
+    render (see bot.py's build_channel_destination_options) rather than
+    delegating to Discord's own auto-populated channel select, so
+    threads created earlier in the same session are never missing and
+    the previously saved destination is always shown pre-selected.
     """
 
     def __init__(
         self,
+        options: List[discord.SelectOption],
         on_select: OnChannelSelected,
         on_create_new: OnCreateThreadClicked,
         on_skip: OnSkip,
@@ -672,7 +748,8 @@ class AdminChannelStepView(SetupWizardStepView):
     ) -> None:
         super().__init__(requester_id=requester_id)
         self.add_item(
-            DestinationChannelSelect(
+            ChannelDestinationSelect(
+                options,
                 on_select,
                 custom_id="wpm_setup_admin_channel_select",
                 placeholder="Choose an existing channel or thread",
@@ -750,7 +827,9 @@ class SkipWatchDestinationButton(discord.ui.Button):
 class CreateNewThreadButton(discord.ui.Button):
     def __init__(self, on_click: OnCreateThreadClicked) -> None:
         super().__init__(
-            label="Create New Thread", style=discord.ButtonStyle.secondary, custom_id="wpm_setup_destination_create_thread"
+            label="Create New Thread (Recommended)",
+            style=discord.ButtonStyle.primary,
+            custom_id="wpm_setup_destination_create_thread",
         )
         self._on_click = on_click
 
@@ -779,10 +858,20 @@ class CreateThreadNameModal(discord.ui.Modal):
 class WatchDestinationStepView(SetupWizardStepView):
     """Watched Item Archive step: choose an existing channel or
     thread, create a new thread, or skip for now.
+
+    `options` is built fresh by the caller on every render (see bot.py's
+    build_channel_destination_options) -- live-testing found threads
+    created earlier in the same setup session (e.g. a collection's own
+    suggestion thread) missing from this step's selector after
+    navigating back to it; discord.py's auto-populated ChannelSelect
+    can't filter archived/locked threads, show parent-channel context,
+    or pre-select the already-saved destination, so this uses an
+    explicit, freshly built option list instead.
     """
 
     def __init__(
         self,
+        options: List[discord.SelectOption],
         on_select: OnChannelSelected,
         on_create_thread: OnCreateThreadClicked,
         on_skip: OnSkip,
@@ -794,7 +883,8 @@ class WatchDestinationStepView(SetupWizardStepView):
     ) -> None:
         super().__init__(requester_id=requester_id)
         self.add_item(
-            DestinationChannelSelect(
+            ChannelDestinationSelect(
+                options,
                 on_select,
                 custom_id="wpm_setup_watch_destination_channel_select",
                 placeholder="Choose an existing channel or thread",
@@ -910,9 +1000,8 @@ class VotingDefaultsModal(discord.ui.Modal):
             label="Default candidate count (2-10)", default=candidate_count_default
         )
         self.duration_input = discord.ui.TextInput(
-            label="Default vote duration (1 minute - 30 days)",
+            label="Default vote duration (1m-30d; 10m,1h,7d)",
             default=duration_default,
-            placeholder="e.g. 10m, 1h, 1d, or 1w",
         )
         self.add_item(self.candidate_count_input)
         self.add_item(self.duration_input)
@@ -1001,29 +1090,79 @@ class VotingDefaultsIntroView(SetupWizardStepView):
 
 
 class ReminderDefaultsModal(discord.ui.Modal):
-    """Step 7: whether a vote-ending reminder is sent, and how long before close.
-
-    "Enabled?" stays a free-text yes/no field rather than a Select --
-    Discord modals accept TextInput components only (a Select embedded
-    in a modal constructs without error client-side, but Discord's API
-    rejects the resulting payload with a 400 "Invalid Form Body" at
+    """Whether a vote-ending reminder should be sent is decided by
+    ReminderDefaultsChoiceView's Enable/Disable buttons before this modal
+    ever opens (Fixed-Option UX Audit: "enabled?" is a small fixed set of
+    choices, so it no longer lives here as a free-text yes/no field --
+    Discord modals accept TextInput components only, and a Select
+    embedded in a modal constructs without error client-side but Discord's
+    API rejects the resulting payload with a 400 "Invalid Form Body" at
     submission time in a live server; see VotingDefaultsModal's own
-    docstring for the full explanation).
+    docstring for the full explanation). This modal only ever opens after
+    Enable was chosen, so it collects just the flexible lead-time value.
     """
 
-    def __init__(self, on_submit: OnReminderDefaultsSubmit, *, defaults: Optional[Tuple[str, str]] = None) -> None:
+    def __init__(self, on_submit: OnReminderDefaultsSubmit, *, defaults: Optional[str] = None) -> None:
         super().__init__(title="Reminder Defaults")
         self._submit_callback = on_submit
-        enabled_default, minutes_default = defaults or ("yes", "1d")
-        self.enabled_input = discord.ui.TextInput(label="Reminder enabled? (yes/no)", default=enabled_default)
         self.minutes_input = discord.ui.TextInput(
-            label="Reminder before close (e.g. 10m, 1h, 1d, 1w)", default=minutes_default
+            label="Reminder before close (1m-30d; 10m,1h,7d)", default=defaults or "1d"
         )
-        self.add_item(self.enabled_input)
         self.add_item(self.minutes_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        await self._submit_callback(interaction, self.enabled_input.value, self.minutes_input.value)
+        await self._submit_callback(interaction, self.minutes_input.value)
+
+
+class EnableVoteEndingReminderButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigureClicked) -> None:
+        super().__init__(
+            label="Enable Vote-Ending Reminder (Recommended)",
+            style=discord.ButtonStyle.primary,
+            custom_id="wpm_setup_reminder_enable",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class DisableVoteEndingReminderButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigureClicked) -> None:
+        super().__init__(
+            label="Disable Vote-Ending Reminder",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_setup_reminder_disable",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ReminderDefaultsChoiceView(SetupWizardStepView):
+    """Step 7: choose whether a vote-ending reminder is sent at all
+    before -- only if enabled -- configuring its lead time, mirroring
+    BackupDefaultsChoiceView's identical enable/disable-then-configure
+    shape. Enable is the recommended, default action.
+    """
+
+    def __init__(
+        self,
+        on_enable: OnConfigureClicked,
+        on_disable: OnConfigureClicked,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(EnableVoteEndingReminderButton(on_enable))
+        self.add_item(DisableVoteEndingReminderButton(on_disable))
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
+        self.add_item(SetupCancelButton(on_cancel))
 
 
 class EnableAutomaticBackupsButton(discord.ui.Button):

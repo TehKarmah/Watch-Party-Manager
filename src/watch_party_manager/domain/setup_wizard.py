@@ -140,6 +140,16 @@ class SetupWizardState:
     draft: SetupWizardDraft = field(default_factory=SetupWizardDraft)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    return_to_step: Optional[SetupWizardStep] = None
+    """Where re-answering `current_step` should land, instead of the next
+    step in SETUP_WIZARD_STEP_ORDER -- set when jumping here from Review
+    (its "edit a section" dropdown, or a validation-failure redirect) so
+    fixing this one step returns straight to Review rather than forcing
+    the WASH Crew member back through every later step again. None means
+    "advance normally" -- the default for ordinary forward/back
+    navigation. Consumed (reset to None) the moment it's used; see
+    SetupWizardService._advance().
+    """
 
     def __post_init__(self) -> None:
         if not isinstance(self.guild_id, int) or isinstance(self.guild_id, bool) or self.guild_id <= 0:

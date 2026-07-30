@@ -665,7 +665,7 @@ class VotingDefaultsSectionTests(ConfigServiceTestCase):
 class ReminderDefaultsSectionTests(ConfigServiceTestCase):
     def test_enabled_is_saved(self) -> None:
         self._seed_completed_setup()
-        result = self.service.set_reminder_defaults(GUILD_ID, True, 48)
+        result = self.service.enable_vote_ending_reminder(GUILD_ID, 48)
         self.assertTrue(result.success)
         vote_notifications = self.guild_configuration_repository.get(GUILD_ID).notifications.vote
         self.assertTrue(vote_notifications.vote_ending_reminder)
@@ -673,13 +673,24 @@ class ReminderDefaultsSectionTests(ConfigServiceTestCase):
 
     def test_disabled_is_saved(self) -> None:
         self._seed_completed_setup()
-        result = self.service.set_reminder_defaults(GUILD_ID, False, 24)
+        result = self.service.disable_vote_ending_reminder(GUILD_ID)
         self.assertTrue(result.success)
         self.assertFalse(self.guild_configuration_repository.get(GUILD_ID).notifications.vote.vote_ending_reminder)
 
+    def test_disabling_does_not_change_the_previously_saved_lead_time(self) -> None:
+        # Fixed-Option UX Audit: Disable is a button choice that skips the
+        # lead-time modal entirely -- it must never blow away whatever
+        # lead time was last configured.
+        self._seed_completed_setup()
+        self.service.enable_vote_ending_reminder(GUILD_ID, 72)
+        self.service.disable_vote_ending_reminder(GUILD_ID)
+        self.assertEqual(
+            self.guild_configuration_repository.get(GUILD_ID).notifications.vote.reminder_minutes_before_close, 72
+        )
+
     def test_timing_is_updated(self) -> None:
         self._seed_completed_setup()
-        self.service.set_reminder_defaults(GUILD_ID, True, 72)
+        self.service.enable_vote_ending_reminder(GUILD_ID, 72)
         self.assertEqual(
             self.guild_configuration_repository.get(GUILD_ID).notifications.vote.reminder_minutes_before_close, 72
         )

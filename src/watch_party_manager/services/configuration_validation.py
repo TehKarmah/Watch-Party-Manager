@@ -62,6 +62,47 @@ def validate_role_exists(
     return None
 
 
+def describe_channel_permission_failure(
+    channel: Any, permissions: Any, *, resource_label: str = "channel or thread"
+) -> str:
+    """A specific, actionable message for a channel/thread WASH can't
+    use, naming exactly which permission(s) are missing and what to do
+    about it instead of a generic "no permission" message -- never
+    suggesting the Administrator permission as a shortcut, and never
+    including the raw exception/permission-check details Discord itself
+    would show.
+
+    Args:
+        channel: The channel/thread WASH can't fully use -- only its
+            `id` is read, so any duck-typed object with one works.
+        permissions: The result of `channel.permissions_for(guild.me)`.
+        resource_label: Names what to choose/create instead, e.g. "Admin
+            channel" -> "choose a different Admin channel, or create a
+            new one" -- every caller of this function (Admin Channel,
+            Home Channel, Watch Destination) already offers its own
+            "create a new one" flow, so this is never a dead-end
+            suggestion.
+    """
+    missing = []
+    if not permissions.view_channel:
+        missing.append("View Channel")
+    if not permissions.send_messages:
+        missing.append("Send Messages")
+    missing_text = " and ".join(missing)
+    plural = "s" if len(missing) > 1 else ""
+    message = (
+        f"WASH cannot send messages in <#{channel.id}>. Grant WASH {missing_text} permission{plural} "
+        f"on that channel, choose a different {resource_label}, or create a new one."
+    )
+    if not permissions.view_channel:
+        message += (
+            " If it's a private channel, make sure WASH's role has been explicitly added to it -- "
+            "and if WASH's role also manages other roles in this server, that role may need to sit "
+            "higher in the server's role hierarchy to do so."
+        )
+    return message
+
+
 def validate_channel_usable(
     channel_id: Optional[int], guild: ChannelLookup, *, resource_label: str = "channel or thread"
 ) -> Optional[str]:
@@ -71,7 +112,12 @@ def validate_channel_usable(
         channel_id: The channel or thread to check, or None if nothing was
             selected (never an error here).
         guild: A live Discord guild (or an equivalent fake in tests).
-        resource_label: Used in the returned message, e.g. "channel or thread".
+        resource_label: Used in the "no longer exists" message, and to
+            name what to choose/create instead in the permission-failure
+            message (see describe_channel_permission_failure) -- the
+            permission-failure message also names the specific channel
+            directly, since that's more actionable than a generic label
+            alone.
 
     Returns:
         None if channel_id is unset or still usable, otherwise a clear
@@ -86,7 +132,7 @@ def validate_channel_usable(
 
     permissions = channel.permissions_for(guild.me)
     if not permissions.view_channel or not permissions.send_messages:
-        return f"WASH does not have permission to post in the selected {resource_label}."
+        return describe_channel_permission_failure(channel, permissions, resource_label=resource_label)
 
     return None
 

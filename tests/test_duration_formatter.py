@@ -44,7 +44,8 @@ class FormatDurationHoursTests(unittest.TestCase):
 class FormatDurationMinutesCompactTests(unittest.TestCase):
     """Release Polish (Batch): the compact WASH input syntax used to
     prefill editable duration fields (Voting Defaults, Reminder Defaults),
-    matching each field's own "e.g. 10m, 1h, 1d, or 1w" helper text.
+    matching each field's own "10m, 1h, 7d" example wording (Duration UX
+    Standard).
     """
 
     def test_minutes_below_an_hour_stay_in_minutes(self) -> None:

@@ -251,7 +251,7 @@ class CustomDurationModalTests(unittest.IsolatedAsyncioTestCase):
     def test_field_uses_the_expected_label_and_placeholder(self) -> None:
         modal = self._modal()
         self.assertEqual(modal.duration_input.label, "Duration")
-        self.assertEqual(modal.duration_input.placeholder, "e.g. 10m, 1h, 1d, or 1w")
+        self.assertEqual(modal.duration_input.placeholder, "Examples: 10m, 1h, 7d")
 
     def test_title_names_the_action_being_customized(self) -> None:
         shorten_modal = self._modal(title="Shorten Vote")

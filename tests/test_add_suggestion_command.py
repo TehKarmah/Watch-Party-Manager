@@ -143,7 +143,11 @@ class BuildDuplicateMatchLineTests(unittest.TestCase):
     """UI Polish (Duplicate/Reactivation View): a Vote Winner match gets
     Reference, its 🏆 Vote Winner status (with win date, when recorded),
     and Original Suggestion/IMDb as clickable links, replacing the old
-    single-line, raw-IMDb-URL format. Every other category is unchanged.
+    single-line, raw-IMDb-URL format. Every other category is unchanged,
+    except that it too now shows a labeled `[Original Suggestion](url)`
+    link (to the original Discord message) instead of ever exposing a
+    bare IMDb URL -- the IMDb preview card already shown alongside these
+    responses covers IMDb linking, so this line does not repeat it.
     """
 
     def _match(self, category, **item_kwargs):
@@ -152,7 +156,30 @@ class BuildDuplicateMatchLineTests(unittest.TestCase):
         item = WatchItem(title="Zombieland", media_type=MediaType.MOVIE, id=2, release_year=2009, **item_kwargs)
         return DuplicateMatch(watch_item=item, category=category, kind=DuplicateMatchKind.TITLE_AND_YEAR)
 
-    def test_active_match_keeps_the_original_single_line_format(self) -> None:
+    def test_active_match_with_an_original_suggestion_link_shows_it_instead_of_a_raw_url(self) -> None:
+        from watch_party_manager.services.duplicate_detection_service import DuplicateMatchCategory
+
+        match = self._match(
+            DuplicateMatchCategory.ACTIVE,
+            status=WatchItemStatus.SUGGESTED,
+            metadata_ids={MetadataProvider.IMDB: "https://www.imdb.com/title/tt1234567/"},
+            guild_id=1,
+            channel_id=2,
+            message_id=3,
+        )
+        line = build_duplicate_match_line(match)
+        # UX Polish: the established display-status vocabulary ("🟢
+        # Available"), not the raw internal enum value ("Suggested").
+        self.assertEqual(
+            "Reference #0002 | Zombieland | [Original Suggestion](https://discord.com/channels/1/2/3) | "
+            "status: 🟢 Available",
+            line,
+        )
+        self.assertNotIn("https://www.imdb.com/title/tt1234567/", line)
+
+    def test_active_match_without_an_original_suggestion_link_omits_it_gracefully(self) -> None:
+        # A legacy suggestion recorded before message linking existed --
+        # no guild_id/channel_id/message_id to build a link from.
         from watch_party_manager.services.duplicate_detection_service import DuplicateMatchCategory
 
         match = self._match(
@@ -161,11 +188,8 @@ class BuildDuplicateMatchLineTests(unittest.TestCase):
             metadata_ids={MetadataProvider.IMDB: "https://www.imdb.com/title/tt1234567/"},
         )
         line = build_duplicate_match_line(match)
-        # UX Polish: the established display-status vocabulary ("🟢
-        # Available"), not the raw internal enum value ("Suggested").
-        self.assertEqual(
-            "Reference #0002 | Zombieland | https://www.imdb.com/title/tt1234567/ | status: 🟢 Available", line
-        )
+        self.assertEqual("Reference #0002 | Zombieland | status: 🟢 Available", line)
+        self.assertNotIn("https://www.imdb.com/title/tt1234567/", line)
 
     def test_archived_other_match_keeps_the_original_single_line_format(self) -> None:
         from watch_party_manager.services.duplicate_detection_service import DuplicateMatchCategory

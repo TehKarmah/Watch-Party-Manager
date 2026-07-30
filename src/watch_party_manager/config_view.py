@@ -28,6 +28,7 @@ from watch_party_manager.domain.suggestion_database_configuration import Candida
 from watch_party_manager.setup_wizard_view import (
     _JOIN_MODE_OPTIONS,
     CandidateSelectionSelectComponent,
+    ChannelDestinationSelect,
     ConfigureStepButton,
     CreateNewChannelButton,
     DestinationChannelSelect,
@@ -194,14 +195,25 @@ class ConfigClearAdminChannelButton(discord.ui.Button):
 
 
 class ConfigAdminChannelSectionView(discord.ui.View):
-    """Reuses setup_wizard_view.py's generic DestinationChannelSelect,
-    exactly like ConfigWatchDestinationSectionView.
+    """Reuses setup_wizard_view.py's generic ChannelDestinationSelect,
+    exactly like ConfigWatchDestinationSectionView. `options` is built
+    fresh by the caller on every render (see bot.py's
+    build_channel_destination_options), so a thread created since this
+    section was last opened is never missing and the currently saved
+    channel is always shown pre-selected.
     """
 
-    def __init__(self, on_select: OnConfigChannelSelected, on_clear: OnConfigSkip, on_back: OnBackToMenu) -> None:
+    def __init__(
+        self,
+        options: List[discord.SelectOption],
+        on_select: OnConfigChannelSelected,
+        on_clear: OnConfigSkip,
+        on_back: OnBackToMenu,
+    ) -> None:
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
         self.add_item(
-            DestinationChannelSelect(
+            ChannelDestinationSelect(
+                options,
                 on_select,
                 custom_id="wpm_config_admin_channel_select",
                 placeholder="Choose an existing channel or thread",
@@ -384,12 +396,23 @@ class ConfigSkipDestinationButton(discord.ui.Button):
 
 
 class ConfigWatchDestinationSectionView(discord.ui.View):
-    """Reuses setup_wizard_view.py's generic DestinationChannelSelect."""
+    """Reuses setup_wizard_view.py's generic ChannelDestinationSelect --
+    /config's equivalent of the Setup Wizard's Watch Destination step, so
+    it gets the same fresh-every-render, thread-inclusive option list
+    (see bot.py's build_channel_destination_options).
+    """
 
-    def __init__(self, on_select: OnConfigChannelSelected, on_skip: OnConfigSkip, on_back: OnBackToMenu) -> None:
+    def __init__(
+        self,
+        options: List[discord.SelectOption],
+        on_select: OnConfigChannelSelected,
+        on_skip: OnConfigSkip,
+        on_back: OnBackToMenu,
+    ) -> None:
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
         self.add_item(
-            DestinationChannelSelect(
+            ChannelDestinationSelect(
+                options,
                 on_select,
                 custom_id="wpm_config_watch_destination_channel_select",
                 placeholder="Choose an existing channel or thread",
@@ -538,6 +561,53 @@ class ConfigBackupDefaultsChoiceView(discord.ui.View):
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
         self.add_item(ConfigEnableAutomaticBackupsButton(on_enable))
         self.add_item(ConfigDisableAutomaticBackupsButton(on_disable))
+        self.add_item(BackToMenuButton(on_back))
+
+
+# --- Reminder Defaults enable/disable choice -----------------------------------------------
+
+
+class ConfigEnableVoteEndingReminderButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigRetry) -> None:
+        super().__init__(
+            label="Enable Vote-Ending Reminder (Recommended)",
+            style=discord.ButtonStyle.primary,
+            custom_id="wpm_config_reminder_enable",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigDisableVoteEndingReminderButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigRetry) -> None:
+        super().__init__(
+            label="Disable Vote-Ending Reminder",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_config_reminder_disable",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigReminderDefaultsChoiceView(discord.ui.View):
+    """/config's Reminder Defaults entry screen: choose whether the
+    vote-ending reminder is enabled at all before -- only if enabled --
+    configuring its lead time, mirroring ConfigBackupDefaultsChoiceView's
+    identical enable/disable-then-configure shape (Fixed-Option UX
+    Audit: "enabled?" is a small fixed set of choices, not a free-text
+    yes/no field). Enable is the recommended, default action.
+    """
+
+    def __init__(
+        self, on_enable: OnConfigRetry, on_disable: OnConfigRetry, on_back: OnBackToMenu
+    ) -> None:
+        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
+        self.add_item(ConfigEnableVoteEndingReminderButton(on_enable))
+        self.add_item(ConfigDisableVoteEndingReminderButton(on_disable))
         self.add_item(BackToMenuButton(on_back))
 
 

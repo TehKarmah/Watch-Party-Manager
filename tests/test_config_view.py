@@ -183,9 +183,12 @@ class ConfigDatabaseSectionViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [5])
 
 
+_SAMPLE_CONFIG_DESTINATION_OPTIONS = [discord.SelectOption(label="general", value="1")]
+
+
 class ConfigAdminChannelSectionViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_has_channel_select_clear_and_back(self) -> None:
-        view = ConfigAdminChannelSectionView(_noop, _noop, _noop)
+        view = ConfigAdminChannelSectionView(_SAMPLE_CONFIG_DESTINATION_OPTIONS, _noop, _noop, _noop)
         self.assertEqual(len(view.children), 3)
         self.assertEqual(view.children[0].custom_id, "wpm_config_admin_channel_select")
         self.assertEqual(view.children[1].label, "Clear Admin Channel")
@@ -197,14 +200,14 @@ class ConfigAdminChannelSectionViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_clear(interaction) -> None:
             calls.append("clear")
 
-        view = ConfigAdminChannelSectionView(_noop, on_clear, _noop)
+        view = ConfigAdminChannelSectionView(_SAMPLE_CONFIG_DESTINATION_OPTIONS, _noop, on_clear, _noop)
         await view.children[1].callback(interaction=object())
         self.assertEqual(calls, ["clear"])
 
 
 class ConfigWatchDestinationSectionViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_has_channel_select_clear_and_back(self) -> None:
-        view = ConfigWatchDestinationSectionView(_noop, _noop, _noop)
+        view = ConfigWatchDestinationSectionView(_SAMPLE_CONFIG_DESTINATION_OPTIONS, _noop, _noop, _noop)
         self.assertEqual(len(view.children), 3)
         self.assertEqual(view.children[0].custom_id, "wpm_config_watch_destination_channel_select")
         self.assertEqual(view.children[1].label, "Clear Archive")
@@ -216,7 +219,7 @@ class ConfigWatchDestinationSectionViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_skip(interaction) -> None:
             calls.append("skip")
 
-        view = ConfigWatchDestinationSectionView(_noop, on_skip, _noop)
+        view = ConfigWatchDestinationSectionView(_SAMPLE_CONFIG_DESTINATION_OPTIONS, _noop, on_skip, _noop)
         await view.children[1].callback(interaction=object())
         self.assertEqual(calls, ["skip"])
 

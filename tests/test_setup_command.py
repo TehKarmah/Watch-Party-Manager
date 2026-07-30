@@ -12,22 +12,22 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import discord
 
 from watch_party_manager.bot import (
     WatchPartyBot,
+    build_channel_destination_options,
     build_setup_completion_summary,
     build_setup_preparation_text,
     build_setup_step_header,
     parse_setup_backup_interval_days,
     parse_setup_backup_retention_count,
-    parse_setup_reminder_enabled,
     parse_setup_reminder_minutes_before_close,
     parse_setup_voting_candidate_count,
     parse_setup_voting_duration_minutes,
-    parse_setup_voting_visibility,
     perform_setup_permission_check,
     perform_setup_redirect_check,
     post_suggestion_confirmation,
@@ -67,6 +67,8 @@ from watch_party_manager.setup_wizard_view import (
     HomeChannelChoiceView,
     HomeChannelNameModal,
     ModalStepIntroView,
+    ReminderDefaultsChoiceView,
+    ReminderDefaultsModal,
     ReviewStepView,
     SetupBackButton,
     SetupPreparationView,
@@ -195,6 +197,51 @@ class FakeUsableChannel:
 
     def permissions_for(self, member) -> FakeUsablePermissions:
         return FakeUsablePermissions()
+
+
+class FakeUnusablePermissions:
+    view_channel = True
+    send_messages = False
+
+
+class FakeUnusableChannel:
+    """A channel WASH can see but can't post in -- validate_channel_usable()
+    rejects it with an actionable permission-failure message.
+    """
+
+    parent = None
+
+    def __init__(self, channel_id: int) -> None:
+        self.id = channel_id
+        self.name = f"channel-{channel_id}"
+
+    def permissions_for(self, member) -> FakeUnusablePermissions:
+        return FakeUnusablePermissions()
+
+
+class FakeGuildWithSelectivelyUsableChannels:
+    """validate()-time FakeGuild where exactly one channel_id fails
+    validate_channel_usable() (a permission problem) and every other
+    known channel_id/role_id resolves cleanly -- for testing that fixing
+    ONLY the one failing step's value is enough to get past Save.
+    """
+
+    name = "Test Guild"
+
+    def __init__(self, *, usable_channel_ids, unusable_channel_id: int) -> None:
+        self._usable_channel_ids = set(usable_channel_ids)
+        self._unusable_channel_id = unusable_channel_id
+        self.me = object()
+
+    def get_role(self, role_id):
+        return FakeRole(role_id)
+
+    def get_channel_or_thread(self, channel_id):
+        if channel_id == self._unusable_channel_id:
+            return FakeUnusableChannel(channel_id)
+        if channel_id in self._usable_channel_ids:
+            return FakeUsableChannel()
+        return None
 
 
 class WatchPartyBotWiringTests(unittest.TestCase):
@@ -366,18 +413,13 @@ class ParseSetupFieldsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_setup_voting_duration_minutes("31d")  # 31 days = 744 hours, above the 30-day maximum
 
-    def test_voting_visibility_valid_and_invalid(self):
-        self.assertEqual(parse_setup_voting_visibility("Blind"), GuildVoteVisibility.BLIND)
+    def test_voting_duration_minutes_accepts_the_one_minute_lower_bound(self):
+        # Duration UX Standard: the minimum vote duration is 1 minute
+        # (not the old 10-minute floor) -- "1m" and "0m" are the exact
+        # boundary either side of it.
+        self.assertEqual(parse_setup_voting_duration_minutes("1m"), 1)
         with self.assertRaises(ValueError):
-            parse_setup_voting_visibility("secret")
-
-    def test_reminder_enabled_required_and_invalid(self):
-        self.assertTrue(parse_setup_reminder_enabled("yes"))
-        self.assertFalse(parse_setup_reminder_enabled("no"))
-        with self.assertRaises(ValueError):
-            parse_setup_reminder_enabled("")
-        with self.assertRaises(ValueError):
-            parse_setup_reminder_enabled("maybe")
+            parse_setup_voting_duration_minutes("0m")
 
     def test_reminder_minutes_before_close_valid_and_invalid(self):
         self.assertEqual(parse_setup_reminder_minutes_before_close("48h"), 48 * 60)
@@ -386,6 +428,29 @@ class ParseSetupFieldsTests(unittest.TestCase):
             parse_setup_reminder_minutes_before_close("0h")
         with self.assertRaises(ValueError):
             parse_setup_reminder_minutes_before_close("721h")
+
+    def test_reminder_minutes_before_close_accepts_the_one_minute_lower_bound(self):
+        self.assertEqual(parse_setup_reminder_minutes_before_close("1m"), 1)
+        with self.assertRaises(ValueError):
+            parse_setup_reminder_minutes_before_close("0m")
+
+    def test_duration_error_messages_show_the_standard_examples_consistently(self):
+        # Duration UX Standard: every duration field's syntax-error
+        # message shows the same three official examples (10m, 1h, 7d)
+        # -- never both a "1d" and "7d" example, and never a "1w"
+        # example (week syntax stays supported but undocumented) -- and
+        # never drifts between fields.
+        with self.assertRaises(ValueError) as voting_duration_error:
+            parse_setup_voting_duration_minutes("abc")
+        with self.assertRaises(ValueError) as reminder_minutes_error:
+            parse_setup_reminder_minutes_before_close("abc")
+        for error in (voting_duration_error, reminder_minutes_error):
+            message = str(error.exception)
+            for example in ("'10m'", "'1h'", "'7d'"):
+                self.assertIn(example, message)
+            self.assertNotIn("'1d'", message)
+            self.assertNotIn("'1w'", message)
+            self.assertNotIn("week", message.lower())
 
     def test_backup_interval_days_valid_and_invalid(self):
         self.assertEqual(parse_setup_backup_interval_days("2"), 2)
@@ -400,6 +465,177 @@ class ParseSetupFieldsTests(unittest.TestCase):
             parse_setup_backup_retention_count("0")
         with self.assertRaises(ValueError):
             parse_setup_backup_retention_count("101")
+
+
+class _FakePermissionSet:
+    def __init__(self, *, view_channel: bool = True, send_messages: bool = True) -> None:
+        self.view_channel = view_channel
+        self.send_messages = send_messages
+
+
+class _FakeThread:
+    def __init__(
+        self, thread_id: int, name: str, parent, *, archived: bool = False, locked: bool = False,
+        permissions: _FakePermissionSet = None,
+    ) -> None:
+        self.id = thread_id
+        self.name = name
+        self.parent = parent
+        self.archived = archived
+        self.locked = locked
+        self._permissions = permissions or _FakePermissionSet()
+
+    def permissions_for(self, member) -> _FakePermissionSet:
+        return self._permissions
+
+
+class _FakeDestinationChannel:
+    def __init__(
+        self, channel_id: int, name: str, *, threads=(), permissions: _FakePermissionSet = None
+    ) -> None:
+        self.id = channel_id
+        self.name = name
+        self.threads = list(threads)
+        self._permissions = permissions or _FakePermissionSet()
+
+    def permissions_for(self, member) -> _FakePermissionSet:
+        return self._permissions
+
+
+class _FakeDestinationGuild:
+    def __init__(self, *, text_channels=(), me: str = "wash-bot") -> None:
+        self.text_channels = list(text_channels)
+        self.me = me
+
+    def get_channel_or_thread(self, channel_id):
+        for channel in self.text_channels:
+            if channel.id == channel_id:
+                return channel
+            for thread in channel.threads:
+                if thread.id == channel_id:
+                    return thread
+        return None
+
+
+class BuildChannelDestinationOptionsTests(unittest.TestCase):
+    """Live-testing fix (Step 6 thread discovery): options must be built
+    fresh from live guild state on every render, include active/
+    accessible threads with parent context, and exclude archived/locked/
+    inaccessible ones -- never a once-built or stale list.
+    """
+
+    def test_returns_empty_list_when_guild_is_none(self) -> None:
+        self.assertEqual(build_channel_destination_options(None), [])
+
+    def test_includes_text_channels(self) -> None:
+        channel = _FakeDestinationChannel(1, "general")
+        guild = _FakeDestinationGuild(text_channels=[channel])
+        options = build_channel_destination_options(guild)
+        self.assertEqual([o.value for o in options], ["1"])
+        self.assertEqual(options[0].label, "#general")
+
+    def test_includes_active_threads_with_parent_context(self) -> None:
+        channel = _FakeDestinationChannel(1, "watch-party")
+        thread = _FakeThread(2, "watched-items", channel)
+        channel.threads = [thread]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild)
+
+        thread_option = next(o for o in options if o.value == "2")
+        self.assertEqual(thread_option.label, "watch-party › watched-items")
+
+    def test_a_thread_created_earlier_in_the_same_session_appears_on_the_next_render(self) -> None:
+        # The exact live-testing scenario: a collection's suggestion
+        # thread is created under the home channel during an earlier
+        # step, then Step 6 renders -- it must see that thread without
+        # any special-case wiring, since options are rebuilt fresh every
+        # single render straight from the guild's current thread list.
+        channel = _FakeDestinationChannel(1, "watch-party")
+        guild = _FakeDestinationGuild(text_channels=[channel])
+        options_before = build_channel_destination_options(guild)
+        self.assertNotIn("2", [o.value for o in options_before])
+
+        channel.threads.append(_FakeThread(2, "movie-suggestions", channel))
+        options_after = build_channel_destination_options(guild)
+
+        self.assertIn("2", [o.value for o in options_after])
+
+    def test_excludes_archived_threads(self) -> None:
+        channel = _FakeDestinationChannel(1, "watch-party")
+        channel.threads = [_FakeThread(2, "old-thread", channel, archived=True)]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild)
+
+        self.assertNotIn("2", [o.value for o in options])
+
+    def test_excludes_locked_threads(self) -> None:
+        channel = _FakeDestinationChannel(1, "watch-party")
+        channel.threads = [_FakeThread(2, "locked-thread", channel, locked=True)]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild)
+
+        self.assertNotIn("2", [o.value for o in options])
+
+    def test_excludes_inaccessible_threads(self) -> None:
+        channel = _FakeDestinationChannel(1, "watch-party")
+        channel.threads = [
+            _FakeThread(2, "private-thread", channel, permissions=_FakePermissionSet(view_channel=False))
+        ]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild)
+
+        self.assertNotIn("2", [o.value for o in options])
+
+    def test_marks_the_saved_destination_as_the_default_option(self) -> None:
+        channel = _FakeDestinationChannel(1, "watch-party")
+        thread = _FakeThread(2, "watched-items", channel)
+        channel.threads = [thread]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild, selected_channel_id=2)
+
+        selected = next(o for o in options if o.value == "2")
+        self.assertTrue(selected.default)
+        others = [o for o in options if o.value != "2"]
+        self.assertTrue(all(not o.default for o in others))
+
+    def test_retains_the_saved_destination_even_if_no_longer_usable(self) -> None:
+        # Requirement: "If Discord cannot visually preselect the saved
+        # thread: retain it internally, display the current saved
+        # destination, do not clear it unless the user explicitly
+        # changes it."
+        channel = _FakeDestinationChannel(1, "watch-party")
+        thread = _FakeThread(2, "watched-items", channel, permissions=_FakePermissionSet(send_messages=False))
+        channel.threads = [thread]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild, selected_channel_id=2)
+
+        self.assertIn("2", [o.value for o in options])
+        selected = next(o for o in options if o.value == "2")
+        self.assertTrue(selected.default)
+        self.assertEqual(selected.label, "watch-party › watched-items")
+
+    def test_excludes_inaccessible_channels(self) -> None:
+        channel = _FakeDestinationChannel(1, "secret", permissions=_FakePermissionSet(view_channel=False))
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild)
+
+        self.assertEqual(options, [])
+
+    def test_include_channels_false_omits_plain_channels_but_keeps_threads(self) -> None:
+        channel = _FakeDestinationChannel(1, "watch-party")
+        channel.threads = [_FakeThread(2, "watched-items", channel)]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild, include_channels=False)
+
+        self.assertEqual([o.value for o in options], ["2"])
 
 
 class BuildSetupStepHeaderTests(unittest.TestCase):
@@ -525,6 +761,7 @@ class SetupCommandTestCase(unittest.IsolatedAsyncioTestCase):
         self.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository(
             temp_path / "suggestion_database_configurations.json"
         )
+        self.bot.suggestion_database_configuration_repository = self.suggestion_database_configuration_repository
         self.bot.setup_wizard_service = SetupWizardService(
             self.wizard_repository,
             self.guild_configuration_repository,
@@ -684,6 +921,190 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         self.assertIn("could not be saved", save_interaction.response.edited_content)
         self.assertEqual(self.applied_roles, [])
 
+    async def test_validation_failure_preserves_state_and_returns_to_review_after_the_fix(self) -> None:
+        # Live-testing fix: a validation failure at Save (e.g. WASH can no
+        # longer post in the selected Admin Channel) used to redirect to
+        # the failing step correctly, but fixing it there then forced the
+        # WASH Crew member to walk forward through every later step
+        # again -- Home Channel, Collection, Voting Defaults, and so on --
+        # instead of returning directly to Review with everything already
+        # answered still intact.
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        BAD_ADMIN_CHANNEL_ID = 12345
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.bot.setup_wizard_service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.bot.setup_wizard_service.set_admin_channel(state, BAD_ADMIN_CHANNEL_ID)
+        state = self.bot.setup_wizard_service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        state, _ = self.bot.setup_wizard_service.select_existing_database(
+            state, database_result.database.database_id, guild_id=GUILD_ID
+        )
+        state = self.bot.setup_wizard_service.skip_watch_destination(state)
+        state = self.bot.setup_wizard_service.set_voting_defaults(
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+        )
+        state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 30)
+        state = self.bot.setup_wizard_service.enable_automatic_backups(state, 2, 15)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
+
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: ReviewStepView = interaction.response.sent_view
+        save_button = view.children[0]
+
+        guild = FakeGuildWithSelectivelyUsableChannels(
+            usable_channel_ids={DESTINATION_CHANNEL_ID}, unusable_channel_id=BAD_ADMIN_CHANNEL_ID
+        )
+        save_interaction = FakeInteraction(guild=guild)
+        await save_button.callback(interaction=save_interaction)
+
+        # Redirected specifically to Admin Channel (Step 3), with an
+        # actionable message -- not a generic failure.
+        self.assertIn("Step 3 of 10", save_interaction.response.edited_content)
+        self.assertIn("cannot send messages", save_interaction.response.edited_content)
+        self.assertEqual(self.applied_roles, [])
+
+        # Every other already-entered value survived the redirect.
+        preserved = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(preserved.draft.wash_crew_role_id, WASH_CREW_ROLE_ID)
+        self.assertEqual(preserved.draft.watch_party_role_id, WATCH_PARTY_ROLE_ID)
+        self.assertEqual(preserved.draft.home_channel_id, DESTINATION_CHANNEL_ID)
+        self.assertEqual(preserved.draft.voting_candidate_count, 5)
+        self.assertEqual(preserved.draft.voting_candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
+        self.assertTrue(preserved.draft.reminder_enabled)
+        self.assertEqual(preserved.draft.backup_interval_days, 2)
+
+        # Fix the one failing value.
+        admin_channel_view = save_interaction.response.edited_view
+        channel_select = admin_channel_view.children[0]
+        GOOD_ADMIN_CHANNEL_ID = 777
+        channel_select._values = [str(GOOD_ADMIN_CHANNEL_ID)]
+        fix_interaction = FakeInteraction()
+        await channel_select.callback(interaction=fix_interaction)
+
+        # Returns straight to Review -- not Home Channel or any other
+        # step -- and every later value is still there, unchanged.
+        self.assertIsInstance(fix_interaction.response.edited_view, ReviewStepView)
+        after_fix = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(after_fix.current_step, SetupWizardStep.REVIEW)
+        self.assertEqual(after_fix.draft.admin_channel_id, GOOD_ADMIN_CHANNEL_ID)
+        self.assertEqual(after_fix.draft.voting_candidate_count, 5)
+        self.assertEqual(after_fix.draft.backup_interval_days, 2)
+
+        # Save now succeeds without re-entering anything.
+        guild_with_fixed_channel = FakeGuildWithSelectivelyUsableChannels(
+            usable_channel_ids={DESTINATION_CHANNEL_ID, GOOD_ADMIN_CHANNEL_ID}, unusable_channel_id=-1
+        )
+        final_save_button = fix_interaction.response.edited_view.children[0]
+        final_save_interaction = FakeInteraction(guild=guild_with_fixed_channel)
+        await final_save_button.callback(interaction=final_save_interaction)
+
+        self.assertIn("WASH Setup Complete", final_save_interaction.response.edited_content)
+        saved = self.guild_configuration_repository.get(GUILD_ID)
+        self.assertEqual(saved.channels.admin_channel_id, GOOD_ADMIN_CHANNEL_ID)
+        self.assertEqual(saved.voting_defaults.candidate_count, 5)
+
+    async def test_persistence_failure_stays_on_review_distinct_from_validation_failure(self) -> None:
+        # Requirement: validation failures and persistence failures are
+        # separate recovery paths -- a persistence failure has no single
+        # "failing step" to redirect to, so it must keep the WASH Crew
+        # member on Review itself, not send them to some arbitrary step.
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.bot.setup_wizard_service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.bot.setup_wizard_service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        state, _ = self.bot.setup_wizard_service.select_existing_database(
+            state, database_result.database.database_id, guild_id=GUILD_ID
+        )
+        state = self.bot.setup_wizard_service.skip_watch_destination(state)
+        state = self.bot.setup_wizard_service.set_voting_defaults(
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+        )
+        state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
+        state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
+
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: ReviewStepView = interaction.response.sent_view
+        save_button = view.children[0]
+
+        class FakeGuild:
+            name = "Test Guild"
+
+            def get_role(self, role_id):
+                return FakeRole(role_id)
+
+            def get_channel_or_thread(self, channel_id):
+                if channel_id == DESTINATION_CHANNEL_ID:
+                    return FakeUsableChannel()
+                return None
+
+            me = object()
+
+        import unittest.mock
+
+        with unittest.mock.patch.object(
+            self.guild_configuration_repository, "save", side_effect=OSError("disk full")
+        ):
+            save_interaction = FakeInteraction(guild=FakeGuild())
+            await save_button.callback(interaction=save_interaction)
+
+        self.assertIsInstance(save_interaction.response.edited_view, ReviewStepView)
+        preserved = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(preserved.current_step, SetupWizardStep.REVIEW)
+        self.assertEqual(preserved.draft.voting_candidate_count, 3)
+
+    async def test_editing_a_section_from_review_returns_to_review_after_answering_it(self) -> None:
+        # Same return_to_step mechanism as the validation-failure fix,
+        # applied to Review's own "edit a section" dropdown: picking a
+        # section to fix and re-answering it must return to Review, not
+        # march forward through every step after it.
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.bot.setup_wizard_service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.bot.setup_wizard_service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        state, _ = self.bot.setup_wizard_service.select_existing_database(
+            state, database_result.database.database_id, guild_id=GUILD_ID
+        )
+        state = self.bot.setup_wizard_service.skip_watch_destination(state)
+        state = self.bot.setup_wizard_service.set_voting_defaults(
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+        )
+        state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
+        state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
+
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: ReviewStepView = interaction.response.sent_view
+        edit_section_select = view.children[1]
+
+        edit_interaction = FakeInteraction()
+        edit_section_select._values = [SetupWizardStep.WASH_CREW_ROLE.value]
+        await edit_section_select.callback(interaction=edit_interaction)
+
+        self.assertIsInstance(edit_interaction.response.edited_view, WashCrewRoleStepView)
+
+        class FakeRoleValue:
+            id = 999
+
+        role_select = edit_interaction.response.edited_view.children[0]
+        role_select._values = [FakeRoleValue()]
+        answer_interaction = FakeInteraction()
+        await role_select.callback(interaction=answer_interaction)
+
+        # Back to Review -- not Watch Party Role (the next step after
+        # WASH Crew Role in the normal walkthrough order) -- and every
+        # later value is untouched.
+        self.assertIsInstance(answer_interaction.response.edited_view, ReviewStepView)
+        preserved = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(preserved.current_step, SetupWizardStep.REVIEW)
+        self.assertEqual(preserved.draft.wash_crew_role_id, 999)
+        self.assertEqual(preserved.draft.voting_candidate_count, 5)
+        self.assertEqual(preserved.draft.backup_interval_days, 1)
+
     async def test_save_with_a_complete_and_valid_draft_applies_role_configuration(self) -> None:
         database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
@@ -697,7 +1118,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         state = self.bot.setup_wizard_service.set_voting_defaults(
             state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
-        state = self.bot.setup_wizard_service.set_reminder_defaults(state, True, 24)
+        state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
 
         interaction = FakeInteraction()
@@ -725,6 +1146,70 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         self.assertIsNone(save_interaction.response.edited_view)
         self.assertEqual(self.applied_roles, [(WASH_CREW_ROLE_ID, WATCH_PARTY_ROLE_ID)])
 
+    async def test_unexpected_persistence_failure_never_shows_false_success_and_stays_resumable(self) -> None:
+        # Release Candidate walkthrough fix: an unexpected error while
+        # saving (not a validation issue) must never report success, must
+        # keep the wizard open with every value intact, and must let the
+        # WASH Crew member retry without redoing setup or losing state.
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.bot.setup_wizard_service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.bot.setup_wizard_service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        state, _ = self.bot.setup_wizard_service.select_existing_database(
+            state, database_result.database.database_id, guild_id=GUILD_ID
+        )
+        state = self.bot.setup_wizard_service.skip_watch_destination(state)
+        state = self.bot.setup_wizard_service.set_voting_defaults(
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+        )
+        state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
+        state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
+
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: ReviewStepView = interaction.response.sent_view
+        save_button = view.children[0]
+
+        class FakeGuild:
+            name = "Test Guild"
+
+            def get_role(self, role_id):
+                return FakeRole(role_id)
+
+            def get_channel_or_thread(self, channel_id):
+                if channel_id == DESTINATION_CHANNEL_ID:
+                    return FakeUsableChannel()
+                return None
+
+            me = object()
+
+        with unittest.mock.patch.object(
+            self.guild_configuration_repository, "save", side_effect=OSError("disk full")
+        ):
+            save_interaction = FakeInteraction(guild=FakeGuild())
+            await save_button.callback(interaction=save_interaction)
+
+        # No false success, no premature dismissal (view=None is /setup's
+        # own signal that the wizard finished): the wizard stays open.
+        self.assertNotIn("WASH Setup Complete", save_interaction.response.edited_content)
+        self.assertIn("⚠", save_interaction.response.edited_content)
+        self.assertIsNotNone(save_interaction.response.edited_view)
+        self.assertEqual(self.applied_roles, [])
+
+        # Retained state: every previously entered value survives, and a
+        # retry (pressing Save again, now that the failure is resolved)
+        # completes without repeating any step.
+        retry_view: ReviewStepView = save_interaction.response.edited_view
+        retry_save_button = retry_view.children[0]
+        retry_interaction = FakeInteraction(guild=FakeGuild())
+        await retry_save_button.callback(interaction=retry_interaction)
+
+        self.assertIn("WASH Setup Complete", retry_interaction.response.edited_content)
+        saved = self.guild_configuration_repository.get(GUILD_ID)
+        self.assertEqual(saved.wash_crew_role_id, WASH_CREW_ROLE_ID)
+        self.assertEqual(saved.voting_defaults.candidate_count, 3)
+
     async def test_saving_schedules_the_automatic_backup_job(self) -> None:
         # Release Polish (Optional Automatic Backups): completing setup
         # with automatic backups enabled must schedule the job
@@ -741,7 +1226,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         state = self.bot.setup_wizard_service.set_voting_defaults(
             state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
-        state = self.bot.setup_wizard_service.set_reminder_defaults(state, True, 24)
+        state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 3, 15)
 
         interaction = FakeInteraction()
@@ -1064,6 +1549,43 @@ class ResumeDetectionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(message)
         self.assertIn("/config", message)
 
+    def test_partially_configured_guild_can_resume_setup_without_losing_existing_data(self) -> None:
+        # Recovery path: channels/threads/suggestions can exist (created
+        # as side effects of earlier wizard steps) even though
+        # GuildConfiguration itself is missing -- e.g. an old, pre-fix
+        # finalize() failure, or the WASH Crew member simply never
+        # finished. /setup must still be runnable (not blocked), and
+        # resuming/restarting must never delete what already exists.
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, 400)
+        database_id = database_result.database.database_id
+        self.suggestion_service.suggest(
+            "Existing Movie", database_id=database_id, guild_id=GUILD_ID, release_year=2020
+        )
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID))
+
+        redirect_message = perform_setup_redirect_check(self.guild_configuration_repository.get(GUILD_ID))
+        self.assertIsNone(redirect_message)
+
+        state, resumed = self.setup_wizard_service.start_or_resume(GUILD_ID)
+        self.assertFalse(resumed)  # no wizard draft existed -- a fresh one is fine, nothing destructive happened
+
+        databases = self.suggestion_service.list_databases(GUILD_ID)
+        self.assertEqual(len(databases), 1)
+        self.assertEqual(databases[0].database_id, database_id)
+        suggestions = self.suggestion_service.get_suggestions_for_database(database_id)
+        self.assertEqual(len(suggestions), 1)
+
+        # Reusing the existing database (rather than being forced to
+        # create a duplicate) is exactly SUGGESTION_DATABASE step's
+        # "Select Existing" path -- select_existing_database() never
+        # touches the suggestion repository.
+        updated, message = self.setup_wizard_service.select_existing_database(
+            state, database_id, guild_id=GUILD_ID
+        )
+        self.assertEqual(updated.draft.suggestion_database_id, database_id)
+        self.assertEqual(len(self.suggestion_service.list_databases(GUILD_ID)), 1)
+        self.assertEqual(len(self.suggestion_service.get_suggestions_for_database(database_id)), 1)
+
     async def test_setup_command_shows_resume_prompt_with_progress_count(self) -> None:
         state, _ = self.setup_wizard_service.start_or_resume(GUILD_ID)
         self.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
@@ -1253,7 +1775,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         state = self.bot.setup_wizard_service.set_voting_defaults(
             state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
-        state = self.bot.setup_wizard_service.set_reminder_defaults(state, True, 24)
+        state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
 
@@ -1316,7 +1838,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         state = self.bot.setup_wizard_service.set_voting_defaults(
             state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
-        state = self.bot.setup_wizard_service.set_reminder_defaults(state, True, 24)
+        state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
 
         class FakeGuild:
@@ -1365,7 +1887,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         state = self.bot.setup_wizard_service.set_voting_defaults(
             state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.ROTATION_POOL
         )
-        state = self.bot.setup_wizard_service.set_reminder_defaults(state, True, 24)
+        state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
 
         class FakeGuild:
@@ -1395,6 +1917,113 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
             GUILD_ID, database_result.database.database_id
         )
         self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
+
+
+class ReminderDefaultsSetupIntegrationTests(SetupCommandTestCase):
+    """Fixed-Option UX Audit: Reminder Defaults' "enabled?" field is an
+    Enable/Disable button choice, not a free-text yes/no modal field.
+    Disable must skip the lead-time modal entirely; Enable must open it.
+    """
+
+    async def test_step_shows_the_enable_disable_choice_view(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REMINDER_DEFAULTS)
+        interaction = FakeInteraction()
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        view: ReminderDefaultsChoiceView = interaction.response.sent_view
+        self.assertIsInstance(view, ReminderDefaultsChoiceView)
+        labels = [getattr(child, "label", None) for child in view.children]
+        self.assertIn("Enable Vote-Ending Reminder (Recommended)", labels)
+        self.assertIn("Disable Vote-Ending Reminder", labels)
+
+    async def test_disable_saves_immediately_without_opening_a_modal(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REMINDER_DEFAULTS)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: ReminderDefaultsChoiceView = interaction.response.sent_view
+        disable_button = next(
+            child for child in view.children if getattr(child, "label", None) == "Disable Vote-Ending Reminder"
+        )
+
+        disable_interaction = FakeInteraction()
+        await disable_button.callback(interaction=disable_interaction)
+
+        self.assertIsNone(disable_interaction.response.sent_modal)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertFalse(persisted.draft.reminder_enabled)
+        self.assertEqual(persisted.current_step, SetupWizardStep.BACKUP_DEFAULTS)
+
+    async def test_enable_opens_a_modal_with_only_the_lead_time_field(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REMINDER_DEFAULTS)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: ReminderDefaultsChoiceView = interaction.response.sent_view
+        enable_button = next(
+            child for child in view.children
+            if getattr(child, "label", None) == "Enable Vote-Ending Reminder (Recommended)"
+        )
+
+        enable_interaction = FakeInteraction()
+        await enable_button.callback(interaction=enable_interaction)
+
+        modal: ReminderDefaultsModal = enable_interaction.response.sent_modal
+        self.assertEqual(len(modal.children), 1)
+        self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in modal.children))
+        self.assertEqual(modal.minutes_input.default, "1d")
+
+    async def test_enable_then_submit_saves_the_lead_time(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REMINDER_DEFAULTS)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: ReminderDefaultsChoiceView = interaction.response.sent_view
+        enable_button = next(
+            child for child in view.children
+            if getattr(child, "label", None) == "Enable Vote-Ending Reminder (Recommended)"
+        )
+        enable_interaction = FakeInteraction()
+        await enable_button.callback(interaction=enable_interaction)
+        modal: ReminderDefaultsModal = enable_interaction.response.sent_modal
+        modal.minutes_input._value = "2h"
+
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertTrue(persisted.draft.reminder_enabled)
+        self.assertEqual(persisted.draft.reminder_minutes_before_close, 120)
+        self.assertEqual(persisted.current_step, SetupWizardStep.BACKUP_DEFAULTS)
+
+    async def test_invalid_lead_time_shows_a_retry_screen_preserving_enabled_choice(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REMINDER_DEFAULTS)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: ReminderDefaultsChoiceView = interaction.response.sent_view
+        enable_button = next(
+            child for child in view.children
+            if getattr(child, "label", None) == "Enable Vote-Ending Reminder (Recommended)"
+        )
+        enable_interaction = FakeInteraction()
+        await enable_button.callback(interaction=enable_interaction)
+        modal: ReminderDefaultsModal = enable_interaction.response.sent_modal
+        modal.minutes_input._value = "not a duration"
+
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        self.assertIn("⚠", submit_interaction.response.edited_content)
+        retry_view = submit_interaction.response.edited_view
+        retry_button = next(
+            child for child in retry_view.children if getattr(child, "label", None) == "Set Reminder Defaults"
+        )
+        retry_interaction = FakeInteraction()
+        await retry_button.callback(interaction=retry_interaction)
+        self.assertIsInstance(retry_interaction.response.sent_modal, ReminderDefaultsModal)
 
 
 class SetupPreparationScreenIntegrationTests(SetupCommandTestCase):
@@ -1528,7 +2157,54 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         interaction = await self._render_step()
         self.assertIn("archive completed watch items", interaction.response.sent_message)
         self.assertIn("Vote Winners and Retired items", interaction.response.sent_message)
-        self.assertIn("create a new thread", interaction.response.sent_message)
+        self.assertIn("Create New Thread", interaction.response.sent_message)
+
+    async def test_a_thread_created_earlier_in_setup_appears_in_the_selector(self) -> None:
+        # Live-testing fix: a thread created during an earlier step (or
+        # an earlier visit to this one) must show up here without any
+        # special wiring -- the selector's options are rebuilt fresh from
+        # live guild state on every single render.
+        home_channel = _FakeDestinationChannel(self.HOME_CHANNEL_ID, "watch-party")
+        home_channel.threads = [_FakeThread(701, "movie-suggestions", home_channel)]
+        guild = _FakeDestinationGuild(text_channels=[home_channel])
+
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_home_channel(state, self.HOME_CHANNEL_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.WATCH_DESTINATION)
+        interaction = FakeInteraction(guild=guild)
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        select = interaction.response.sent_view.children[0]
+        option_values = [option.value for option in select.options]
+        self.assertIn("701", option_values)
+        thread_option = next(o for o in select.options if o.value == "701")
+        self.assertEqual(thread_option.label, "watch-party › movie-suggestions")
+
+    async def test_saved_destination_is_preselected_when_returning_to_the_step(self) -> None:
+        home_channel = _FakeDestinationChannel(self.HOME_CHANNEL_ID, "watch-party")
+        thread = _FakeThread(701, "movie-suggestions", home_channel)
+        home_channel.threads = [thread]
+        guild = _FakeDestinationGuild(text_channels=[home_channel])
+
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_home_channel(state, self.HOME_CHANNEL_ID)
+        state = self.bot.setup_wizard_service.set_watch_destination(state, 701)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.WATCH_DESTINATION)
+        interaction = FakeInteraction(guild=guild)
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        select = interaction.response.sent_view.children[0]
+        selected = next(o for o in select.options if o.value == "701")
+        self.assertTrue(selected.default)
+
+    async def test_body_recommends_creating_a_new_thread(self) -> None:
+        # Walkthrough fix: Step 6 should steer users toward creating a
+        # dedicated thread, consistent with every other setup step's own
+        # "(Recommended)" convention, without forcing it.
+        interaction = await self._render_step()
+        self.assertIn("recommended", interaction.response.sent_message.lower())
 
     async def test_shows_back_and_save_for_later(self) -> None:
         interaction = await self._render_step()
@@ -1540,7 +2216,7 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         interaction = await self._render_step()
         view = interaction.response.sent_view
         channel_select = view.children[0]
-        channel_select._values = [type("FakeChannelValue", (), {"id": DESTINATION_CHANNEL_ID})()]
+        channel_select._values = [str(DESTINATION_CHANNEL_ID)]
 
         select_interaction = FakeInteraction()
         await channel_select.callback(interaction=select_interaction)
@@ -1801,6 +2477,20 @@ class AdminChannelCreationIntegrationTests(SetupCommandTestCase):
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
         return interaction
 
+    async def test_step_body_explains_private_channel_visibility(self) -> None:
+        # Live-testing fix: administrators may not see a private channel
+        # in the picker until WASH is actually granted access there --
+        # the step must say so explicitly, name the two permissions
+        # needed, and mention role hierarchy for a WASH role that also
+        # manages other roles, without ever suggesting Administrator.
+        interaction = await self._render_step()
+        message = interaction.response.sent_message
+        self.assertIn("Private channels only appear", message)
+        self.assertIn("View Channel", message)
+        self.assertIn("Send Messages", message)
+        self.assertIn("role hierarchy", message)
+        self.assertNotIn("Administrator", message)
+
     async def test_creating_a_new_channel_persists_it_advances_and_applies_overwrites(self) -> None:
         interaction = await self._render_step(wash_crew_role_id=WASH_CREW_ROLE_ID)
         self.assertIsInstance(interaction.response.sent_view, AdminChannelStepView)
@@ -2048,6 +2738,113 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         await back_button.callback(interaction=back_interaction)
 
         self.assertIsInstance(back_interaction.response.edited_view, CollectionTypeChoiceView)
+
+    async def test_import_existing_notice_has_save_for_later(self) -> None:
+        type_view = await self._reach_collection_type_choice()
+        import_button = type_view.children[4]
+        import_interaction = FakeInteraction()
+        await import_button.callback(interaction=import_interaction)
+
+        labels = [getattr(c, "label", None) for c in import_interaction.response.edited_view.children]
+        self.assertIn("Back", labels)
+        self.assertIn("Save & Finish Later", labels)
+        self.assertIn("Cancel Setup", labels)
+
+    async def test_collection_type_choice_has_back_and_save_for_later(self) -> None:
+        # Live-testing fix: this nested sub-screen previously offered
+        # Cancel Setup only -- the only way to exit safely was to
+        # destroy the entire draft.
+        type_view = await self._reach_collection_type_choice()
+        labels = [getattr(child, "label", None) for child in type_view.children]
+        self.assertIn("Back", labels)
+        self.assertIn("Save & Finish Later", labels)
+        self.assertIn("Cancel Setup", labels)
+
+    async def test_collection_type_choice_back_returns_to_collection_step_preserving_draft(self) -> None:
+        from watch_party_manager.setup_wizard_view import SuggestionDatabaseChoiceView
+
+        type_view = await self._reach_collection_type_choice()
+        back_button = next(c for c in type_view.children if getattr(c, "label", None) == "Back")
+
+        back_interaction = FakeInteraction()
+        await back_button.callback(interaction=back_interaction)
+
+        # Back from the "what type" sub-screen returns to the Collection
+        # step's own top-level choice screen -- not further back to an
+        # earlier wizard step -- and never touches the draft.
+        self.assertIsInstance(back_interaction.response.edited_view, SuggestionDatabaseChoiceView)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.home_channel_id, self.HOME_CHANNEL_ID)
+        self.assertEqual(persisted.current_step, SetupWizardStep.SUGGESTION_DATABASE)
+
+    async def test_collection_type_choice_save_for_later_preserves_draft_without_creating_a_collection(self) -> None:
+        type_view = await self._reach_collection_type_choice()
+        save_button = next(
+            c for c in type_view.children if getattr(c, "label", None) == "Save & Finish Later"
+        )
+
+        save_interaction = FakeInteraction()
+        await save_button.callback(interaction=save_interaction)
+
+        self.assertIn("saved", save_interaction.response.edited_content.lower())
+        self.assertIsNone(save_interaction.response.edited_view)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.draft.home_channel_id, self.HOME_CHANNEL_ID)
+        self.assertIsNone(persisted.draft.suggestion_database_id)
+        self.assertEqual(self.suggestion_service.list_databases(GUILD_ID), [])
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID))
+
+    async def _reach_existing_database_select(self):
+        from watch_party_manager.setup_wizard_view import ExistingDatabaseSelectView, SuggestionDatabaseChoiceView
+
+        self.suggestion_service.create_database("Movies", GUILD_ID, self.HOME_CHANNEL_ID)
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_home_channel(state, self.HOME_CHANNEL_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.SUGGESTION_DATABASE)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        self.assertIsInstance(interaction.response.sent_view, SuggestionDatabaseChoiceView)
+        select_existing_button = interaction.response.sent_view.children[1]
+
+        select_interaction = FakeInteraction()
+        await select_existing_button.callback(interaction=select_interaction)
+        self.assertIsInstance(select_interaction.response.edited_view, ExistingDatabaseSelectView)
+        return select_interaction.response.edited_view
+
+    async def test_existing_database_select_has_back_and_save_for_later(self) -> None:
+        select_view = await self._reach_existing_database_select()
+        labels = [getattr(child, "label", None) for child in select_view.children]
+        self.assertIn("Back", labels)
+        self.assertIn("Save & Finish Later", labels)
+        self.assertIn("Cancel Setup", labels)
+
+    async def test_existing_database_select_back_returns_to_collection_step_preserving_draft(self) -> None:
+        from watch_party_manager.setup_wizard_view import SuggestionDatabaseChoiceView
+
+        select_view = await self._reach_existing_database_select()
+        back_button = next(c for c in select_view.children if getattr(c, "label", None) == "Back")
+
+        back_interaction = FakeInteraction()
+        await back_button.callback(interaction=back_interaction)
+
+        self.assertIsInstance(back_interaction.response.edited_view, SuggestionDatabaseChoiceView)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.home_channel_id, self.HOME_CHANNEL_ID)
+        self.assertIsNone(persisted.draft.suggestion_database_id)
+
+    async def test_existing_database_select_save_for_later_does_not_select_a_database(self) -> None:
+        select_view = await self._reach_existing_database_select()
+        save_button = next(
+            c for c in select_view.children if getattr(c, "label", None) == "Save & Finish Later"
+        )
+
+        save_interaction = FakeInteraction()
+        await save_button.callback(interaction=save_interaction)
+
+        self.assertIsNone(save_interaction.response.edited_view)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertIsNone(persisted.draft.suggestion_database_id)
 
     async def test_creating_a_second_database_on_an_already_used_thread_is_rejected(self) -> None:
         # Conflict Prevention: a channel/thread can never route to two

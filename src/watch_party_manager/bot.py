@@ -240,6 +240,7 @@ from watch_party_manager.config_view import (
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
     ConfigModalRetryView,
+    ConfigReminderDefaultsChoiceView,
     ConfigRoleSectionView,
     ConfigRotationLowPoolNotificationView,
     ConfigSuggestionDestinationSectionView,
@@ -274,6 +275,7 @@ from watch_party_manager.setup_wizard_view import (
     HomeChannelNameModal,
     ImportExistingDatabaseNoticeView,
     ModalStepIntroView,
+    ReminderDefaultsChoiceView,
     ReminderDefaultsModal,
     ReviewStepView,
     SetupPreparationView,
@@ -481,7 +483,7 @@ class WatchPartyBot(commands.Bot):
                 interaction.guild_id,
             )
 
-        @self.tree.command(name="add", description="Suggest a watch item.")
+        @self.tree.command(name="add", description="Suggest a watch item by title or IMDb URL.")
         @discord.app_commands.describe(
             title="The watch item's title, or an IMDb link to it.",
             imdb_url="The watch item's IMDb link, if not already given in the title.",
@@ -1031,7 +1033,8 @@ def parse_duration_text_to_minutes(text: str) -> int:
 
     Standardized on WASH's one shared duration syntax (Requirement 3):
     a whole number immediately followed by a unit -- m/minutes, h/hours,
-    d/days, or w/weeks (see services.duration_parser). A vote's duration
+    or d/days (w/week/weeks is also accepted but never advertised --
+    Duration UX Standard; see services.duration_parser). A vote's duration
     supports the same minute precision as reminder-before-close and
     /edit_vote's Shorten/Extend Vote (Release Candidate Polish: Vote
     Duration) -- "10m" and "30m" are valid, not just whole-hour amounts.
@@ -1584,7 +1587,7 @@ def parse_optional_duration_field(value: Optional[str]) -> Optional[int]:
     Blank values mean "use the configured default", matching
     parse_optional_int_field's own contract. A non-blank value is parsed
     by parse_duration_text_to_minutes (WASH's shared duration syntax --
-    "10m", "1h", "1d", "1w", etc.) -- range validation against the
+    "10m", "1h", "7d", etc.) -- range validation against the
     1-minute to 30-day bounds remains in parse_vote_duration_minutes,
     called by :func:`perform_start_vote`.
     """
@@ -1729,14 +1732,15 @@ def parse_setup_voting_duration_minutes(value: str) -> int:
 
     Accepts the same flexible text as /start_vote's Customize This Vote
     duration field (see parse_duration_text_to_minutes): WASH's shared
-    duration syntax -- "10m", "1h", "1d", "1w", etc.
+    duration syntax -- "10m", "1h", "7d", etc. (w/week/weeks is also
+    accepted but never advertised -- Duration UX Standard).
     """
     try:
         minutes = parse_duration_text_to_minutes(value)
     except ValueError:
         raise ValueError(
             "Default vote duration must be a whole number immediately followed by a unit "
-            "-- m/minutes, h/hours, d/days, or w/weeks (e.g. '10m', '1h', '1d', '1w')."
+            "-- m/minutes, h/hours, or d/days (e.g. '10m', '1h', '7d')."
         )
     if not (MIN_VOTE_DURATION_MINUTES <= minutes <= MAX_VOTE_DURATION_MINUTES):
         raise ValueError(
@@ -1746,43 +1750,21 @@ def parse_setup_voting_duration_minutes(value: str) -> int:
     return minutes
 
 
-def parse_setup_voting_visibility(value: str) -> GuildVoteVisibility:
-    """Validate a Voting Defaults modal's visibility field."""
-    normalized = value.strip().lower()
-    try:
-        return GuildVoteVisibility(normalized)
-    except ValueError:
-        raise ValueError("Default visibility must be 'blind' or 'visible'.")
-
-
-def parse_setup_reminder_enabled(value: str) -> bool:
-    """Validate a Reminder Defaults modal's enabled field.
-
-    Unlike parse_optional_bool_field's "blank means default" convention,
-    this field is required -- the wizard's modal always pre-fills it, so
-    a blank submission means the WASH Crew member cleared it deliberately
-    and should be asked to re-enter it rather than silently falling back.
-    """
-    parsed = parse_optional_bool_field(value)
-    if parsed is None:
-        raise ValueError("Reminder enabled must be 'yes' or 'no'.")
-    return parsed
-
-
 def parse_setup_reminder_minutes_before_close(value: str) -> int:
     """Validate a Reminder Defaults modal's before-close field.
 
     Standardized on WASH's one shared duration syntax (Requirement 3):
     a whole number immediately followed by a unit -- m/minutes, h/hours,
-    d/days, or w/weeks. Reuses the same bounds as a /start_vote per-round
-    reminder override (MIN/MAX_VOTE_REMINDER_MINUTES_BEFORE_CLOSE).
+    or d/days (w/week/weeks is also accepted but never advertised --
+    Duration UX Standard). Reuses the same bounds as a /start_vote
+    per-round reminder override (MIN/MAX_VOTE_REMINDER_MINUTES_BEFORE_CLOSE).
     """
     try:
         minutes = parse_duration_to_minutes(value)
     except ValueError:
         raise ValueError(
             "Reminder before close must be a whole number immediately followed by a unit "
-            "-- m/minutes, h/hours, d/days, or w/weeks (e.g. '10m', '1h', '1d')."
+            "-- m/minutes, h/hours, or d/days (e.g. '10m', '1h', '7d')."
         )
     if not (MIN_VOTE_REMINDER_MINUTES_BEFORE_CLOSE <= minutes <= MAX_VOTE_REMINDER_MINUTES_BEFORE_CLOSE):
         raise ValueError(
@@ -1889,6 +1871,83 @@ def describe_channel_creation_failure(exc: Exception) -> str:
             "**Manage Channels** permission, or choose **Use Existing Channel** instead."
         )
     return f"Could not create the channel: {exc}"
+
+
+def build_channel_destination_options(
+    guild: Optional[discord.Guild],
+    *,
+    include_channels: bool = True,
+    include_threads: bool = True,
+    selected_channel_id: Optional[int] = None,
+) -> List[discord.SelectOption]:
+    """Freshly enumerate this guild's usable channel/thread destinations.
+
+    Built fresh on every call -- never cached or built once -- so a
+    thread created earlier in the same setup/config session (or by
+    anyone else, any time before this exact render) always appears
+    immediately. This is what a discord.ui.ChannelSelect's own live,
+    Discord-client-populated options promise, but discord.py's
+    ChannelSelect can't filter out archived/locked threads or show
+    parent-channel context, and can't pre-select a saved value -- three
+    things this project's setup/config screens need, hence building the
+    option list ourselves instead of delegating to it.
+
+    Includes every text channel WASH can post in (when include_channels)
+    and every active, unlocked thread WASH can post in (when
+    include_threads), each thread labeled with its parent channel for
+    context (e.g. "watch-party › watched-items"). Archived and locked
+    threads are never included. The already-saved destination
+    (selected_channel_id), if it still resolves to a real channel/thread,
+    is always included and marked as the pre-selected default even if it
+    would otherwise be filtered out (e.g. WASH's permissions there
+    changed since it was set) -- retaining it rather than silently
+    clearing the user's prior choice; Discord's SelectOption (unlike
+    ChannelSelect) supports exactly this kind of explicit preselection.
+
+    Capped at 25 options (discord.ui.Select's own hard limit) -- the
+    currently selected destination is always kept within that cap even
+    if the guild has more usable destinations than that.
+    """
+    if guild is None:
+        return []
+
+    def usable(channel: Any) -> bool:
+        try:
+            permissions = channel.permissions_for(guild.me)
+        except Exception:
+            return False
+        return permissions.view_channel and permissions.send_messages
+
+    options: dict[int, discord.SelectOption] = {}
+    for channel in getattr(guild, "text_channels", None) or []:
+        if include_channels and usable(channel):
+            options[channel.id] = discord.SelectOption(label=f"#{channel.name}"[:100], value=str(channel.id))
+        if include_threads:
+            for thread in channel.threads:
+                if thread.archived or thread.locked or not usable(thread):
+                    continue
+                options[thread.id] = discord.SelectOption(
+                    label=f"{channel.name} › {thread.name}"[:100], value=str(thread.id)
+                )
+
+    if selected_channel_id is not None and selected_channel_id not in options:
+        get_channel_or_thread = getattr(guild, "get_channel_or_thread", None)
+        current = get_channel_or_thread(selected_channel_id) if get_channel_or_thread is not None else None
+        if current is not None:
+            parent = getattr(current, "parent", None)
+            label = f"{parent.name} › {current.name}" if parent is not None else f"#{current.name}"
+            options[selected_channel_id] = discord.SelectOption(label=label[:100], value=str(selected_channel_id))
+
+    ordered = list(options.values())
+    selected_value = str(selected_channel_id) if selected_channel_id is not None else None
+    for option in ordered:
+        option.default = option.value == selected_value
+    if selected_value is not None:
+        selected_option = next((option for option in ordered if option.value == selected_value), None)
+        if selected_option is not None:
+            ordered.remove(selected_option)
+            ordered.insert(0, selected_option)
+    return ordered[:25]
 
 
 def build_admin_channel_overwrites(
@@ -2040,6 +2099,10 @@ async def send_setup_wizard_step(
 
     elif step == SetupWizardStep.ADMIN_CHANNEL:
 
+        admin_channel_options = build_channel_destination_options(
+            interaction.guild, selected_channel_id=state.draft.admin_channel_id
+        )
+
         async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
             updated = setup_wizard_service.set_admin_channel(state, channel_id)
             await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
@@ -2054,8 +2117,8 @@ async def send_setup_wizard_step(
                     await modal_interaction.response.edit_message(
                         content=body + "\n\n⚠ That server is no longer available. Choose another option.",
                         view=AdminChannelStepView(
-                            on_select, on_create_new, on_skip, on_back, on_save_for_later, on_cancel,
-                            requester_id=requester_id,
+                            admin_channel_options, on_select, on_create_new, on_skip, on_back, on_save_for_later,
+                            on_cancel, requester_id=requester_id,
                         ),
                     )
                     return
@@ -2071,6 +2134,9 @@ async def send_setup_wizard_step(
                     await modal_interaction.response.edit_message(
                         content=body + f"\n\n⚠ {describe_channel_creation_failure(exc)}",
                         view=AdminChannelStepView(
+                            build_channel_destination_options(
+                                modal_interaction.guild, selected_channel_id=state.draft.admin_channel_id
+                            ),
                             on_select, on_create_new, on_skip, on_back, on_save_for_later, on_cancel,
                             requester_id=requester_id,
                         ),
@@ -2082,13 +2148,18 @@ async def send_setup_wizard_step(
             await create_interaction.response.send_modal(AdminChannelNameModal(on_name_submit))
 
         view = AdminChannelStepView(
-            on_select, on_create_new, on_skip, on_back, on_save_for_later, on_cancel, requester_id=requester_id
+            admin_channel_options, on_select, on_create_new, on_skip, on_back, on_save_for_later, on_cancel,
+            requester_id=requester_id,
         )
         body += (
             "\n\nSelect the channel where Approval-Required membership requests should be posted for "
             "WASH Crew, create a new private channel for it, or skip for now. A newly created channel "
             "is visible only to WASH Crew -- it's meant for private administrative activity, not "
-            "general discussion."
+            "general discussion.\n\n"
+            "🔒 Private channels only appear above after WASH has permission to view them. Grant WASH "
+            "**View Channel** and **Send Messages** on the channel you want, then reopen this step (or "
+            "run `/setup` again) to see it in the list. If WASH also assigns server roles, its own role "
+            "must be positioned above those roles in the server's role hierarchy."
         )
 
     elif step == SetupWizardStep.HOME_CHANNEL:
@@ -2142,6 +2213,20 @@ async def send_setup_wizard_step(
 
     elif step == SetupWizardStep.SUGGESTION_DATABASE:
 
+        async def show_suggestion_database_choice(choice_interaction: discord.Interaction) -> None:
+            """Re-render this step's own top-level choice screen -- used
+            as Back from every nested sub-screen (Collection Type,
+            Select Existing, Import Existing Notice) so backing out of
+            one of those returns here, not further back to Admin Channel.
+            """
+            await choice_interaction.response.edit_message(
+                content=body + "\n\nSelect an existing collection or create a new one.",
+                view=SuggestionDatabaseChoiceView(
+                    on_select_existing, show_collection_type_choice, on_back, on_save_for_later, on_cancel,
+                    requester_id=requester_id,
+                ),
+            )
+
         async def on_select_existing(choice_interaction: discord.Interaction) -> None:
             databases = [
                 (
@@ -2173,7 +2258,8 @@ async def send_setup_wizard_step(
             await choice_interaction.response.edit_message(
                 content=body + "\n\nChoose a collection.",
                 view=ExistingDatabaseSelectView(
-                    databases, on_database_selected, on_cancel, requester_id=requester_id
+                    databases, on_database_selected, show_suggestion_database_choice, on_save_for_later, on_cancel,
+                    requester_id=requester_id,
                 ),
             )
 
@@ -2181,7 +2267,8 @@ async def send_setup_wizard_step(
             await type_interaction.response.edit_message(
                 content=body + "\n\nWhat type of collection would you like to create?",
                 view=CollectionTypeChoiceView(
-                    on_movies, on_tv_shows, on_special_collection, on_custom, on_import_existing, on_cancel,
+                    on_movies, on_tv_shows, on_special_collection, on_custom, on_import_existing,
+                    show_suggestion_database_choice, on_save_for_later, on_cancel,
                     requester_id=requester_id,
                 ),
             )
@@ -2202,7 +2289,8 @@ async def send_setup_wizard_step(
                 await interaction_for_edit.response.edit_message(
                     content=body + "\n\n⚠ WASH's home channel is no longer available. Go back and choose another one.",
                     view=CollectionTypeChoiceView(
-                        on_movies, on_tv_shows, on_special_collection, on_custom, on_import_existing, on_cancel,
+                        on_movies, on_tv_shows, on_special_collection, on_custom, on_import_existing,
+                        show_suggestion_database_choice, on_save_for_later, on_cancel,
                         requester_id=requester_id,
                     ),
                 )
@@ -2213,7 +2301,8 @@ async def send_setup_wizard_step(
                 await interaction_for_edit.response.edit_message(
                     content=body + f"\n\n⚠ Could not create the thread: {exc}",
                     view=CollectionTypeChoiceView(
-                        on_movies, on_tv_shows, on_special_collection, on_custom, on_import_existing, on_cancel,
+                        on_movies, on_tv_shows, on_special_collection, on_custom, on_import_existing,
+                        show_suggestion_database_choice, on_save_for_later, on_cancel,
                         requester_id=requester_id,
                     ),
                 )
@@ -2273,7 +2362,7 @@ async def send_setup_wizard_step(
                     "come back here and choose **Select Existing** to pick it up."
                 ),
                 view=ImportExistingDatabaseNoticeView(
-                    show_collection_type_choice, on_cancel, requester_id=requester_id
+                    show_collection_type_choice, on_save_for_later, on_cancel, requester_id=requester_id
                 ),
             )
 
@@ -2284,6 +2373,10 @@ async def send_setup_wizard_step(
         body += "\n\nSelect an existing collection or create a new one."
 
     elif step == SetupWizardStep.WATCH_DESTINATION:
+
+        watch_destination_options = build_channel_destination_options(
+            interaction.guild, selected_channel_id=state.draft.watch_destination_channel_id
+        )
 
         async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
             updated = setup_wizard_service.set_watch_destination(state, channel_id)
@@ -2308,8 +2401,8 @@ async def send_setup_wizard_step(
                     await modal_interaction.response.edit_message(
                         content=body + "\n\n⚠ WASH's home channel is no longer available. Choose another destination.",
                         view=WatchDestinationStepView(
-                            on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
-                            requester_id=requester_id,
+                            watch_destination_options, on_select, on_create_thread, on_skip, on_back,
+                            on_save_for_later, on_cancel, requester_id=requester_id,
                         ),
                     )
                     return
@@ -2321,6 +2414,9 @@ async def send_setup_wizard_step(
                     await modal_interaction.response.edit_message(
                         content=body + f"\n\n⚠ Could not create the thread: {exc}",
                         view=WatchDestinationStepView(
+                            build_channel_destination_options(
+                                modal_interaction.guild, selected_channel_id=state.draft.watch_destination_channel_id
+                            ),
                             on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
                             requester_id=requester_id,
                         ),
@@ -2334,13 +2430,15 @@ async def send_setup_wizard_step(
             )
 
         view = WatchDestinationStepView(
-            on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel, requester_id=requester_id
+            watch_destination_options, on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
+            requester_id=requester_id,
         )
         body += (
             "\n\nChoose where WASH should archive completed watch items. This archive stores Vote "
             "Winners and Retired items together with links back to their suggestion and voting "
-            "history. Pick an existing text channel or thread, create a new thread (a sibling under "
-            "WASH's home channel), or skip for now."
+            "history. **Create New Thread** (a sibling under WASH's home channel) is recommended, "
+            "matching every collection's own suggestion thread -- but you can pick an existing text "
+            "channel or thread instead, or skip for now."
         )
 
     elif step == SetupWizardStep.VOTING_DEFAULTS:
@@ -2418,27 +2516,21 @@ async def send_setup_wizard_step(
 
     elif step == SetupWizardStep.REMINDER_DEFAULTS:
 
-        reminder_defaults_prefill = (
-            "yes" if state.draft.reminder_enabled is None or state.draft.reminder_enabled else "no",
-            (
-                format_duration_minutes_compact(state.draft.reminder_minutes_before_close)
-                if state.draft.reminder_minutes_before_close is not None
-                else "1d"
-            ),
+        reminder_minutes_prefill = (
+            format_duration_minutes_compact(state.draft.reminder_minutes_before_close)
+            if state.draft.reminder_minutes_before_close is not None
+            else "1d"
         )
 
-        async def on_configure(configure_interaction: discord.Interaction) -> None:
-            async def on_submit(
-                modal_interaction: discord.Interaction, enabled_text: str, minutes_text: str
-            ) -> None:
+        async def on_enable(configure_interaction: discord.Interaction) -> None:
+            async def on_submit(modal_interaction: discord.Interaction, minutes_text: str) -> None:
                 try:
-                    enabled = parse_setup_reminder_enabled(enabled_text)
                     minutes_before_close = parse_setup_reminder_minutes_before_close(minutes_text)
                 except ValueError as exc:
                     await modal_interaction.response.edit_message(
                         content=body + f"\n\n⚠ {exc}",
                         view=ModalStepIntroView(
-                            on_configure,
+                            on_enable,
                             on_back,
                             on_save_for_later,
                             on_cancel,
@@ -2449,23 +2541,24 @@ async def send_setup_wizard_step(
                     )
                     return
 
-                updated = setup_wizard_service.set_reminder_defaults(state, enabled, minutes_before_close)
+                updated = setup_wizard_service.enable_vote_ending_reminder(state, minutes_before_close)
                 await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
 
             await configure_interaction.response.send_modal(
-                ReminderDefaultsModal(on_submit, defaults=reminder_defaults_prefill)
+                ReminderDefaultsModal(on_submit, defaults=reminder_minutes_prefill)
             )
 
-        view = ModalStepIntroView(
-            on_configure,
-            on_back,
-            on_save_for_later,
-            on_cancel,
-            button_label="Set Reminder Defaults",
-            custom_id="wpm_setup_reminder_defaults_configure",
-            requester_id=requester_id,
+        async def on_disable(disable_interaction: discord.Interaction) -> None:
+            updated = setup_wizard_service.disable_vote_ending_reminder(state)
+            await send_setup_wizard_step(disable_interaction, bot, updated, edit=True, requester_id=requester_id)
+
+        view = ReminderDefaultsChoiceView(
+            on_enable, on_disable, on_back, on_save_for_later, on_cancel, requester_id=requester_id
         )
-        body += "\n\nConfigure whether a vote-ending reminder is sent, and how long before close."
+        body += (
+            "\n\nShould WASH send a reminder shortly before a voting round closes? Choose below, "
+            "then -- if enabled -- set how long before close it's sent."
+        )
 
     elif step == SetupWizardStep.BACKUP_DEFAULTS:
 
@@ -2523,22 +2616,53 @@ async def send_setup_wizard_step(
             guild_name = guild.name if guild is not None else ""
             result = setup_wizard_service.finalize(state, guild_id, guild_name, guild)
             if not result.success:
-                issue_lines = "\n".join(f"- {issue.step.value}: {issue.message}" for issue in result.issues)
-                failed_step = result.issues[0].step if result.issues else SetupWizardStep.REVIEW
-                redirected = setup_wizard_service.go_to_step(state, failed_step)
+                # result.issues is only populated for validation failures
+                # (a bad channel/role, etc.) -- an internal persistence
+                # error (result.issues empty) has no single failing step,
+                # so it's shown on Review itself with result.message,
+                # rather than silently redirecting past a step the user
+                # never actually got wrong. Either way, nothing was saved
+                # (see SetupWizardService.finalize's own docstring), so
+                # the wizard stays open with every entered value intact
+                # and the Save button still wired to retry.
+                if result.issues:
+                    issue_lines = "\n".join(f"- {issue.step.value}: {issue.message}" for issue in result.issues)
+                    failed_step = result.issues[0].step
+                    error_message = f"Setup could not be saved:\n{issue_lines}"
+                else:
+                    failed_step = SetupWizardStep.REVIEW
+                    error_message = result.message
+                # return_to=REVIEW: fixing this one failing step must
+                # return straight to Review, not force every later step
+                # (already answered once) to be walked through again.
+                redirected = setup_wizard_service.go_to_step(
+                    state, failed_step, return_to=SetupWizardStep.REVIEW
+                )
                 await send_setup_wizard_step(
                     save_interaction,
                     bot,
                     redirected,
                     edit=True,
-                    error_message=f"Setup could not be saved:\n{issue_lines}",
+                    error_message=error_message,
                     requester_id=requester_id,
                 )
                 return
 
-            bot.apply_role_configuration(
-                result.configuration.wash_crew_role_id, result.configuration.watch_party_role.role_id
-            )
+            # Persistence has already succeeded at this point -- show the
+            # completion summary before attempting any further, purely
+            # best-effort follow-up, so a failure in either one below can
+            # never be mistaken for setup itself having failed.
+            summary = build_setup_completion_summary(result.configuration, state.draft)
+            await save_interaction.response.edit_message(content=summary, view=None)
+
+            try:
+                bot.apply_role_configuration(
+                    result.configuration.wash_crew_role_id, result.configuration.watch_party_role.role_id
+                )
+            except Exception:
+                logger.exception(
+                    "Error applying role configuration for guild %s after setup", guild_id
+                )
             try:
                 await reconcile_automatic_backup_schedule(
                     bot.scheduler_host.scheduler_service,
@@ -2549,12 +2673,13 @@ async def send_setup_wizard_step(
                 logger.exception(
                     "Error reconciling automatic backup schedule for guild %s after setup", guild_id
                 )
-            summary = build_setup_completion_summary(result.configuration, state.draft)
-            await save_interaction.response.edit_message(content=summary, view=None)
 
         async def on_edit_section(select_interaction: discord.Interaction, step_value: str) -> None:
             target_step = SetupWizardStep(step_value)
-            updated = setup_wizard_service.go_to_step(state, target_step)
+            # return_to=REVIEW: editing one section from Review must
+            # return there afterward, not walk forward through every
+            # later step (already answered) again.
+            updated = setup_wizard_service.go_to_step(state, target_step, return_to=SetupWizardStep.REVIEW)
             await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
 
         review_lines = setup_wizard_service.build_review_lines(state)
@@ -2712,7 +2837,12 @@ async def send_config_section(
             result = config_service.clear_admin_channel(guild_id)
             await send_config_result(skip_interaction, bot, guild_id, result)
 
-        view = ConfigAdminChannelSectionView(on_select, on_skip, on_back)
+        current_configuration = config_service.get_configuration(guild_id)
+        admin_channel_options = build_channel_destination_options(
+            interaction.guild,
+            selected_channel_id=current_configuration.channels.admin_channel_id if current_configuration else None,
+        )
+        view = ConfigAdminChannelSectionView(admin_channel_options, on_select, on_skip, on_back)
         body += (
             "\n\nSelect the channel where Approval-Required membership requests should be "
             "posted for WASH Crew, or clear it."
@@ -2796,7 +2926,14 @@ async def send_config_section(
             result = config_service.clear_guild_watch_destination(guild_id)
             await send_config_result(skip_interaction, bot, guild_id, result)
 
-        view = ConfigWatchDestinationSectionView(on_select, on_skip, on_back)
+        current_configuration = config_service.get_configuration(guild_id)
+        watch_destination_options = build_channel_destination_options(
+            interaction.guild,
+            selected_channel_id=(
+                current_configuration.channels.watch_history_channel_id if current_configuration else None
+            ),
+        )
+        view = ConfigWatchDestinationSectionView(watch_destination_options, on_select, on_skip, on_back)
         body += (
             "\n\nChoose the default channel or thread where WASH should archive completed watch "
             "items (Vote Winners and Retired items, together with links back to their suggestion "
@@ -2997,7 +3134,10 @@ async def send_config_database_watch_destination(
         result = config_service.clear_database_watch_destination(guild_id, database_id)
         await send_config_result(clear_interaction, bot, guild_id, result)
 
-    view = ConfigWatchDestinationSectionView(on_select, on_clear, on_back)
+    database_watch_destination_options = build_channel_destination_options(
+        interaction.guild, selected_channel_id=current
+    )
+    view = ConfigWatchDestinationSectionView(database_watch_destination_options, on_select, on_clear, on_back)
     await interaction.response.edit_message(content=body, view=view)
 
 
@@ -3082,9 +3222,36 @@ async def handle_config_wash_crew_role_selected(
     )
 
 
+async def send_configuration_missing_message(
+    interaction: discord.Interaction, on_back: OnBackToMenu, section_title: str
+) -> None:
+    """Fail safe instead of crashing when a /config section can't find a
+    GuildConfiguration to read.
+
+    Should not normally be reachable -- /config's own entry point already
+    refuses to proceed unless GuildConfiguration.setup_completed is True
+    (see the `config` command) -- but every section that reads
+    config_service.get_configuration() a second time, deeper inside its
+    own nested callbacks, guards against it having become None or
+    incomplete in between (e.g. a concurrent /factory_reset), rather than
+    raising an AttributeError the requester would just see as "this
+    command failed" with no explanation.
+    """
+    await interaction.response.edit_message(
+        content=(
+            f"**WASH Configuration -- {section_title}**\n\n"
+            "⚠ WASH's configuration for this server could not be found or is incomplete. "
+            "Run `/setup` to (re)configure WASH, then try again."
+        ),
+        view=BackToMenuOnlyView(on_back),
+    )
+
+
 def _resolve_config_voting_defaults_modal_defaults(bot: "WatchPartyBot", guild_id: int) -> Tuple[str, str]:
     """Pre-fill the Voting Defaults modal with the guild's current values."""
     configuration = bot.config_service.get_configuration(guild_id)
+    if configuration is None:
+        return ("3", "1d")
     return (
         str(configuration.voting_defaults.candidate_count),
         format_duration_minutes_compact(configuration.voting_defaults.duration_minutes),
@@ -3109,7 +3276,11 @@ async def send_config_voting_defaults_modal(
     inside the modal itself.
     """
     config_service = bot.config_service
-    current_visibility = config_service.get_configuration(guild_id).voting_defaults.visibility
+    configuration = config_service.get_configuration(guild_id)
+    if configuration is None:
+        await send_configuration_missing_message(interaction, on_back, "Voting Defaults")
+        return
+    current_visibility = configuration.voting_defaults.visibility
 
     async def on_configure(configure_interaction: discord.Interaction, visibility: GuildVoteVisibility) -> None:
         async def on_retry(retry_interaction: discord.Interaction) -> None:
@@ -3152,34 +3323,53 @@ async def send_config_voting_defaults_modal(
 async def send_config_reminder_defaults_modal(
     interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, on_back: OnBackToMenu
 ) -> None:
+    """Enable/disable choice, then -- only if enabled -- the lead-time
+    modal, mirroring send_config_backup_defaults_modal's identical shape
+    (Fixed-Option UX Audit: "enabled?" is a small fixed set of choices,
+    collected via buttons rather than a free-text yes/no modal field).
+    """
     config_service = bot.config_service
 
     async def on_retry(retry_interaction: discord.Interaction) -> None:
         await send_config_reminder_defaults_modal(retry_interaction, bot, guild_id, on_back)
 
-    async def on_submit(modal_interaction: discord.Interaction, enabled_text: str, minutes_text: str) -> None:
-        try:
-            enabled = parse_setup_reminder_enabled(enabled_text)
-            minutes_before_close = parse_setup_reminder_minutes_before_close(minutes_text)
-        except ValueError as exc:
-            view = ConfigModalRetryView(
-                on_retry, on_back, button_label="Try Again", custom_id="wpm_config_reminder_defaults_retry"
-            )
-            await modal_interaction.response.edit_message(
-                content=f"**WASH Configuration -- Reminder Defaults**\n\n⚠ {exc}", view=view
-            )
+    async def on_enable(configure_interaction: discord.Interaction) -> None:
+        async def on_submit(modal_interaction: discord.Interaction, minutes_text: str) -> None:
+            try:
+                minutes_before_close = parse_setup_reminder_minutes_before_close(minutes_text)
+            except ValueError as exc:
+                view = ConfigModalRetryView(
+                    on_retry, on_back, button_label="Try Again", custom_id="wpm_config_reminder_defaults_retry"
+                )
+                await modal_interaction.response.edit_message(
+                    content=f"**WASH Configuration -- Reminder Defaults**\n\n⚠ {exc}", view=view
+                )
+                return
+
+            result = config_service.enable_vote_ending_reminder(guild_id, minutes_before_close)
+            await send_config_result(modal_interaction, bot, guild_id, result)
+
+        configuration = bot.config_service.get_configuration(guild_id)
+        if configuration is None:
+            await send_configuration_missing_message(configure_interaction, on_back, "Reminder Defaults")
             return
+        minutes_default = format_duration_minutes_compact(
+            configuration.notifications.vote.reminder_minutes_before_close
+        )
+        await configure_interaction.response.send_modal(ReminderDefaultsModal(on_submit, defaults=minutes_default))
 
-        result = config_service.set_reminder_defaults(guild_id, enabled, minutes_before_close)
-        await send_config_result(modal_interaction, bot, guild_id, result)
+    async def on_disable(disable_interaction: discord.Interaction) -> None:
+        result = config_service.disable_vote_ending_reminder(guild_id)
+        prefix = "" if result.success else "⚠ "
+        await disable_interaction.response.edit_message(
+            content=f"{prefix}{result.message}", view=BackToMenuOnlyView(on_back)
+        )
 
-    configuration = bot.config_service.get_configuration(guild_id)
-    vote_notifications = configuration.notifications.vote
-    defaults = (
-        "yes" if vote_notifications.vote_ending_reminder else "no",
-        format_duration_minutes_compact(vote_notifications.reminder_minutes_before_close),
+    await interaction.response.edit_message(
+        content="**WASH Configuration -- Reminder Defaults**\n\nShould WASH send a reminder shortly before a "
+        "voting round closes? Choose below, then -- if enabled -- set how long before close it's sent.",
+        view=ConfigReminderDefaultsChoiceView(on_enable, on_disable, on_back),
     )
-    await interaction.response.send_modal(ReminderDefaultsModal(on_submit, defaults=defaults))
 
 
 async def _reconcile_automatic_backup_schedule_after_config_change(
@@ -3232,6 +3422,9 @@ async def send_config_backup_defaults_modal(
             await send_config_result(modal_interaction, bot, guild_id, result)
 
         configuration = bot.config_service.get_configuration(guild_id)
+        if configuration is None:
+            await send_configuration_missing_message(configure_interaction, on_back, "Backup Defaults")
+            return
         interval = configuration.backup.extra_fields.get(BACKUP_INTERVAL_DAYS_EXTRA_FIELD, 1)
         retention = configuration.backup.extra_fields.get(BACKUP_RETENTION_COUNT_EXTRA_FIELD, 30)
         defaults = (str(interval), str(retention))
@@ -5862,25 +6055,44 @@ class AddSuggestionDecision:
     matched_item: Optional[WatchItem] = None
 
 
+def build_original_suggestion_link(item: WatchItem) -> Optional[str]:
+    """A labeled `[Original Suggestion](url)` markdown link to the Discord
+    message where `item` was first suggested, or None if that message
+    reference is missing (a legacy suggestion recorded before message
+    linking existed).
+
+    Deliberately never returns a bare URL -- the IMDb preview card
+    already shown alongside these responses provides IMDb linking, so
+    duplicating a raw link here would be redundant at best and, for a
+    plain (non-markdown) message, would render as an unlabeled, easy to
+    misclick raw URL.
+    """
+    if item.guild_id is None or item.channel_id is None or item.message_id is None:
+        return None
+    message_url = f"https://discord.com/channels/{item.guild_id}/{item.channel_id}/{item.message_id}"
+    return f"[Original Suggestion]({message_url})"
+
+
 def build_duplicate_match_line(match: DuplicateMatch) -> str:
     """One matched existing item's line/block within an /add duplicate
     warning.
 
     UI Polish (Watch Item Status Presentation): a Vote Winner match gets
     its own richer block -- Reference, the 🏆 Vote Winner status (with
-    its win date, when recorded), and Original Suggestion/IMDb as
-    clickable links -- replacing the old single-line, raw-IMDb-URL
-    format. Every other category (active, archived-rejected,
-    archived-other) keeps that original single-line format unchanged.
+    its win date, when recorded), and an Original Suggestion link --
+    replacing the old single-line, raw-IMDb-URL format. Every other
+    category (active, archived-rejected, archived-other) keeps that
+    original single-line format, but with the same labeled link in place
+    of the bare IMDb URL it used to show.
     """
     item = match.watch_item
     if match.category is DuplicateMatchCategory.VOTE_WINNER:
         return build_vote_winner_duplicate_match_block(item)
 
-    imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
     parts = [f"Reference {item.reference}", item.title]
-    if imdb_url:
-        parts.append(imdb_url)
+    original_suggestion_link = build_original_suggestion_link(item)
+    if original_suggestion_link is not None:
+        parts.append(original_suggestion_link)
     display_status = compute_display_status(item, in_rotation_cooldown=False)
     parts.append(f"status: {display_status_label(display_status)}")
     return " | ".join(parts)
@@ -5899,9 +6111,9 @@ def build_vote_winner_duplicate_match_block(item: WatchItem) -> str:
     if won_line is not None:
         lines.append(won_line)
 
-    if item.guild_id is not None and item.channel_id is not None and item.message_id is not None:
-        message_url = f"https://discord.com/channels/{item.guild_id}/{item.channel_id}/{item.message_id}"
-        lines.append(f"[Original Suggestion]({message_url})")
+    original_suggestion_link = build_original_suggestion_link(item)
+    if original_suggestion_link is not None:
+        lines.append(original_suggestion_link)
 
     imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
     if imdb_url:

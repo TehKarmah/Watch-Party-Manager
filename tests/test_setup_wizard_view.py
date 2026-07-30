@@ -25,6 +25,7 @@ from watch_party_manager.setup_wizard_view import (
     HomeChannelChoiceView,
     HomeChannelNameModal,
     ModalStepIntroView,
+    ReminderDefaultsChoiceView,
     ReminderDefaultsModal,
     ReviewStepView,
     SetupBackButton,
@@ -206,7 +207,7 @@ class SuggestionDatabaseChoiceViewTests(unittest.IsolatedAsyncioTestCase):
 
 class ExistingDatabaseSelectViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_builds_one_option_per_database(self) -> None:
-        view = ExistingDatabaseSelectView([(1, "Movies"), (2, "TV Shows")], _noop, _noop)
+        view = ExistingDatabaseSelectView([(1, "Movies"), (2, "TV Shows")], _noop, _noop, _noop, _noop)
         select = view.children[0]
         self.assertEqual([option.value for option in select.options], ["1", "2"])
         self.assertEqual([option.label for option in select.options], ["Movies", "TV Shows"])
@@ -217,11 +218,31 @@ class ExistingDatabaseSelectViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_select(interaction, database_id) -> None:
             calls.append(database_id)
 
-        view = ExistingDatabaseSelectView([(5, "Movies")], on_select, _noop)
+        view = ExistingDatabaseSelectView([(5, "Movies")], on_select, _noop, _noop, _noop)
         select = view.children[0]
         select._values = ["5"]
         await select.callback(interaction=object())
         self.assertEqual(calls, [5])
+
+    async def test_has_back_save_for_later_and_cancel(self) -> None:
+        # Live-testing fix: this nested sub-screen previously offered
+        # Cancel Setup only.
+        view = ExistingDatabaseSelectView([(1, "Movies")], _noop, _noop, _noop, _noop)
+        labels = [getattr(child, "label", None) for child in view.children]
+        self.assertIn("Back", labels)
+        self.assertIn("Save & Finish Later", labels)
+        self.assertIn("Cancel Setup", labels)
+
+    async def test_back_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_back(interaction) -> None:
+            calls.append("back")
+
+        view = ExistingDatabaseSelectView([(1, "Movies")], _noop, on_back, _noop, _noop)
+        back_button = next(c for c in view.children if isinstance(c, SetupBackButton))
+        await back_button.callback(interaction=object())
+        self.assertEqual(calls, ["back"])
 
 
 class CreateDatabaseNameModalTests(unittest.IsolatedAsyncioTestCase):
@@ -237,9 +258,12 @@ class CreateDatabaseNameModalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, ["Movies"])
 
 
+_SAMPLE_DESTINATION_OPTIONS = [discord.SelectOption(label="general", value="1")]
+
+
 class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_has_channel_select_create_new_skip_back_save_and_cancel(self) -> None:
-        view = AdminChannelStepView(_noop, _noop, _noop, _noop, _noop, _noop)
+        view = AdminChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop, _noop)
         self.assertEqual(
             [getattr(child, "label", None) or getattr(child, "custom_id", None) for child in view.children],
             [
@@ -258,7 +282,7 @@ class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_create_new(interaction) -> None:
             calls.append("create_new")
 
-        view = AdminChannelStepView(_noop, on_create_new, _noop, _noop, _noop, _noop)
+        view = AdminChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, on_create_new, _noop, _noop, _noop, _noop)
         await view.children[1].callback(interaction=object())
         self.assertEqual(calls, ["create_new"])
 
@@ -268,7 +292,7 @@ class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_skip(interaction) -> None:
             calls.append("skip")
 
-        view = AdminChannelStepView(_noop, _noop, on_skip, _noop, _noop, _noop)
+        view = AdminChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, on_skip, _noop, _noop, _noop)
         await view.children[2].callback(interaction=object())
         self.assertEqual(calls, ["skip"])
 
@@ -278,20 +302,30 @@ class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_back(interaction) -> None:
             calls.append("back")
 
-        view = AdminChannelStepView(_noop, _noop, _noop, on_back, _noop, _noop)
+        view = AdminChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, on_back, _noop, _noop)
         back_button = next(c for c in view.children if isinstance(c, SetupBackButton))
         await back_button.callback(interaction=object())
         self.assertEqual(calls, ["back"])
 
+    async def test_select_options_reflect_the_supplied_options(self) -> None:
+        # Live-testing fix: options are built fresh by the caller on
+        # every render (see bot.py's build_channel_destination_options),
+        # not auto-populated by Discord -- confirm the view actually uses
+        # whatever list it's given.
+        options = [discord.SelectOption(label="watch-party › archive", value="42", default=True)]
+        view = AdminChannelStepView(options, _noop, _noop, _noop, _noop, _noop, _noop)
+        select = view.children[0]
+        self.assertEqual(select.options, options)
+
 
 class WatchDestinationStepViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_has_channel_select_create_thread_skip_back_save_and_cancel(self) -> None:
-        view = WatchDestinationStepView(_noop, _noop, _noop, _noop, _noop, _noop)
+        view = WatchDestinationStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop, _noop)
         self.assertEqual(
             [getattr(child, "label", None) or getattr(child, "custom_id", None) for child in view.children],
             [
                 "wpm_setup_watch_destination_channel_select",
-                "Create New Thread",
+                "Create New Thread (Recommended)",
                 "Skip for Now",
                 "Back",
                 "Save & Finish Later",
@@ -305,7 +339,9 @@ class WatchDestinationStepViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_create_thread(interaction) -> None:
             calls.append("create_thread")
 
-        view = WatchDestinationStepView(_noop, on_create_thread, _noop, _noop, _noop, _noop)
+        view = WatchDestinationStepView(
+            _SAMPLE_DESTINATION_OPTIONS, _noop, on_create_thread, _noop, _noop, _noop, _noop
+        )
         await view.children[1].callback(interaction=object())
         self.assertEqual(calls, ["create_thread"])
 
@@ -315,9 +351,15 @@ class WatchDestinationStepViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_skip(interaction) -> None:
             calls.append("skip")
 
-        view = WatchDestinationStepView(_noop, _noop, on_skip, _noop, _noop, _noop)
+        view = WatchDestinationStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, on_skip, _noop, _noop, _noop)
         await view.children[2].callback(interaction=object())
         self.assertEqual(calls, ["skip"])
+
+    async def test_select_options_reflect_the_supplied_options_with_parent_context(self) -> None:
+        options = [discord.SelectOption(label="watch-party › watched-items", value="99", default=True)]
+        view = WatchDestinationStepView(options, _noop, _noop, _noop, _noop, _noop, _noop)
+        select = view.children[0]
+        self.assertEqual(select.options, options)
 
 
 class CreateThreadNameModalTests(unittest.IsolatedAsyncioTestCase):
@@ -601,26 +643,71 @@ class VotingDefaultsIntroViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ReminderDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_two_fields_both_text_inputs(self) -> None:
-        # Live-Discord regression guard (see VotingDefaultsModal): every
-        # field on this modal must be a TextInput.
+    async def test_has_exactly_one_field_a_text_input(self) -> None:
+        # Fixed-Option UX Audit: "enabled?" is now collected by
+        # ReminderDefaultsChoiceView's buttons, before this modal ever
+        # opens -- only the flexible lead-time value remains here (see
+        # VotingDefaultsModal's own docstring for why Discord modals must
+        # stay TextInput-only).
         modal = ReminderDefaultsModal(_noop)
-        self.assertEqual(len(modal.children), 2)
+        self.assertEqual(len(modal.children), 1)
         self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in modal.children))
-        self.assertEqual(modal.enabled_input.default, "yes")
         self.assertEqual(modal.minutes_input.default, "1d")
 
-    async def test_submission_forwards_both_values(self) -> None:
+    async def test_uses_the_supplied_default(self) -> None:
+        modal = ReminderDefaultsModal(_noop, defaults="2d")
+        self.assertEqual(modal.minutes_input.default, "2d")
+
+    async def test_submission_forwards_the_value(self) -> None:
         calls = []
 
-        async def on_submit(interaction, enabled, minutes) -> None:
-            calls.append((enabled, minutes))
+        async def on_submit(interaction, minutes) -> None:
+            calls.append(minutes)
 
         modal = ReminderDefaultsModal(on_submit)
-        modal.enabled_input._value = "no"
         modal.minutes_input._value = "2d"
         await modal.on_submit(interaction=object())
-        self.assertEqual(calls, [("no", "2d")])
+        self.assertEqual(calls, ["2d"])
+
+
+class ReminderDefaultsChoiceViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_enable_disable_back_save_and_cancel(self) -> None:
+        view = ReminderDefaultsChoiceView(_noop, _noop, _noop, _noop, _noop)
+        self.assertEqual(
+            [getattr(child, "label", None) for child in view.children],
+            [
+                "Enable Vote-Ending Reminder (Recommended)",
+                "Disable Vote-Ending Reminder",
+                "Back",
+                "Save & Finish Later",
+                "Cancel Setup",
+            ],
+        )
+
+    async def test_enable_is_the_recommended_primary_styled_button(self) -> None:
+        view = ReminderDefaultsChoiceView(_noop, _noop, _noop, _noop, _noop)
+        enable_button = view.children[0]
+        self.assertEqual(enable_button.style, discord.ButtonStyle.primary)
+
+    async def test_enable_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_enable(interaction) -> None:
+            calls.append("enable")
+
+        view = ReminderDefaultsChoiceView(on_enable, _noop, _noop, _noop, _noop)
+        await view.children[0].callback(interaction=object())
+        self.assertEqual(calls, ["enable"])
+
+    async def test_disable_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_disable(interaction) -> None:
+            calls.append("disable")
+
+        view = ReminderDefaultsChoiceView(_noop, on_disable, _noop, _noop, _noop)
+        await view.children[1].callback(interaction=object())
+        self.assertEqual(calls, ["disable"])
 
 
 class BackupDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
@@ -780,11 +867,16 @@ class RequesterScopedInteractionCheckTests(unittest.IsolatedAsyncioTestCase):
         views = [
             SetupPreparationView(_noop, _noop, requester_id=42),
             WatchPartyRoleStepView(_noop, _noop, _noop, _noop, requester_id=42),
-            AdminChannelStepView(_noop, _noop, _noop, _noop, _noop, _noop, requester_id=42),
+            AdminChannelStepView(
+                _SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop, _noop, requester_id=42
+            ),
             HomeChannelChoiceView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
             SuggestionDatabaseChoiceView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
-            WatchDestinationStepView(_noop, _noop, _noop, _noop, _noop, _noop, requester_id=42),
+            WatchDestinationStepView(
+                _SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop, _noop, requester_id=42
+            ),
             ModalStepIntroView(_noop, _noop, _noop, _noop, button_label="Go", custom_id="wpm_x", requester_id=42),
+            ReminderDefaultsChoiceView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
             VotingDefaultsIntroView(
                 _noop,
                 _noop,

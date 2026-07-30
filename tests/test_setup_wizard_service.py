@@ -8,6 +8,7 @@ and completion (including atomicity and resumability guarantees).
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, JoinMode
 from watch_party_manager.domain.setup_wizard import SETUP_WIZARD_STEP_ORDER, SetupWizardStatus, SetupWizardStep
@@ -157,7 +158,7 @@ class WizardFlowTests(SetupWizardServiceTestCase):
         state = self.service.set_voting_defaults(
             state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.ROTATION_POOL
         )
-        state = self.service.set_reminder_defaults(state, True, 48)
+        state = self.service.enable_vote_ending_reminder(state, 48)
         state = self.service.enable_automatic_backups(state, 2, 15)
         self.assertEqual(state.current_step, SetupWizardStep.REVIEW)
 
@@ -230,6 +231,82 @@ class BackNavigationServiceTests(SetupWizardServiceTestCase):
             state = self.service.go_back(state)
 
         self.assertEqual(state.current_step, SetupWizardStep.WASH_CREW_ROLE)
+
+
+class ReturnToStepServiceTests(SetupWizardServiceTestCase):
+    """Live-testing fix: jumping to a step from Review (its "edit a
+    section" dropdown, or a validation-failure redirect) must return
+    straight back to Review once that one step is answered again --
+    never march forward through the rest of SETUP_WIZARD_STEP_ORDER as
+    if this were an ordinary first-time walkthrough.
+    """
+
+    def test_go_to_step_without_return_to_behaves_like_before(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        jumped = self.service.go_to_step(state, SetupWizardStep.ADMIN_CHANNEL)
+        self.assertIsNone(jumped.return_to_step)
+
+        advanced = self.service.set_admin_channel(jumped, DESTINATION_CHANNEL_ID)
+
+        self.assertEqual(advanced.current_step, SetupWizardStep.HOME_CHANNEL)
+
+    def test_answering_a_step_reached_with_return_to_goes_back_there(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.service.set_admin_channel(state, DESTINATION_CHANNEL_ID)
+        state = self.service.go_to_step(state, SetupWizardStep.REVIEW)
+
+        jumped_back = self.service.go_to_step(
+            state, SetupWizardStep.ADMIN_CHANNEL, return_to=SetupWizardStep.REVIEW
+        )
+        self.assertEqual(jumped_back.return_to_step, SetupWizardStep.REVIEW)
+
+        fixed = self.service.set_admin_channel(jumped_back, 999999)
+
+        self.assertEqual(fixed.current_step, SetupWizardStep.REVIEW)
+
+    def test_return_to_step_is_consumed_after_use(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.go_to_step(state, SetupWizardStep.ADMIN_CHANNEL, return_to=SetupWizardStep.REVIEW)
+
+        fixed = self.service.set_admin_channel(state, DESTINATION_CHANNEL_ID)
+
+        self.assertIsNone(fixed.return_to_step)
+
+    def test_return_to_step_never_drops_earlier_or_later_draft_values(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.service.set_admin_channel(state, DESTINATION_CHANNEL_ID)
+        state = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        state = self.service.set_voting_defaults(
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+        )
+        state = self.service.go_to_step(state, SetupWizardStep.REVIEW)
+
+        jumped_back = self.service.go_to_step(
+            state, SetupWizardStep.ADMIN_CHANNEL, return_to=SetupWizardStep.REVIEW
+        )
+        fixed = self.service.set_admin_channel(jumped_back, 999999)
+
+        self.assertEqual(fixed.draft.wash_crew_role_id, WASH_CREW_ROLE_ID)
+        self.assertEqual(fixed.draft.watch_party_role_id, WATCH_PARTY_ROLE_ID)
+        self.assertEqual(fixed.draft.home_channel_id, DESTINATION_CHANNEL_ID)
+        self.assertEqual(fixed.draft.voting_candidate_count, 5)
+        self.assertEqual(fixed.draft.voting_candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
+
+    def test_going_back_from_a_return_to_step_clears_it(self):
+        # Explicitly navigating further away (Back) resumes ordinary
+        # forward-progress semantics rather than snapping back to Review
+        # once the user starts re-walking earlier steps.
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.service.go_to_step(state, SetupWizardStep.ADMIN_CHANNEL, return_to=SetupWizardStep.REVIEW)
+
+        back = self.service.go_back(state)
+
+        self.assertIsNone(back.return_to_step)
 
 
 class SaveForLaterServiceTests(SetupWizardServiceTestCase):
@@ -423,7 +500,7 @@ class AdminChannelStepTests(SetupWizardServiceTestCase):
         state = self.service.set_voting_defaults(
             state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
         )
-        state = self.service.set_reminder_defaults(state, True, 24)
+        state = self.service.enable_vote_ending_reminder(state, 24)
         state = self.service.enable_automatic_backups(state, 1, 30)
 
         guild = self._full_guild()
@@ -540,19 +617,26 @@ class VotingDefaultsStepTests(SetupWizardServiceTestCase):
 class ReminderDefaultsStepTests(SetupWizardServiceTestCase):
     def test_enabled_reminder_is_saved(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
-        updated = self.service.set_reminder_defaults(state, True, 24)
+        updated = self.service.enable_vote_ending_reminder(state, 24)
         self.assertTrue(updated.draft.reminder_enabled)
         self.assertEqual(updated.draft.reminder_minutes_before_close, 24)
         self.assertEqual(updated.current_step, SetupWizardStep.BACKUP_DEFAULTS)
 
     def test_disabled_reminder_is_saved(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
-        updated = self.service.set_reminder_defaults(state, False, 24)
+        updated = self.service.disable_vote_ending_reminder(state)
         self.assertFalse(updated.draft.reminder_enabled)
+
+    def test_disabled_reminder_does_not_advance_a_lead_time(self):
+        # Fixed-Option UX Audit: Disable skips the lead-time modal
+        # entirely -- no minutes value is ever collected for this pass.
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        updated = self.service.disable_vote_ending_reminder(state)
+        self.assertIsNone(updated.draft.reminder_minutes_before_close)
 
     def test_timing_is_saved(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
-        updated = self.service.set_reminder_defaults(state, True, 72)
+        updated = self.service.enable_vote_ending_reminder(state, 72)
         self.assertEqual(updated.draft.reminder_minutes_before_close, 72)
 
 
@@ -643,7 +727,7 @@ class CompletionTests(SetupWizardServiceTestCase):
         state = self.service.set_voting_defaults(
             state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.ROTATION_POOL
         )
-        state = self.service.set_reminder_defaults(state, True, 24)
+        state = self.service.enable_vote_ending_reminder(state, 24)
         state = self.service.enable_automatic_backups(state, 1, 30)
         return state
 
@@ -701,6 +785,123 @@ class CompletionTests(SetupWizardServiceTestCase):
         guild = self._full_guild()
         self.service.finalize(state, GUILD_ID, "Test Guild", guild)
         self.assertIsNone(self.wizard_repository.get(GUILD_ID))
+
+
+class FinalizePersistenceFailureTests(SetupWizardServiceTestCase):
+    """Release Candidate walkthrough fix: a live setup completed all nine
+    steps, but the final save silently failed, leaving the bot in a
+    partially configured, inconsistent state. finalize() must never
+    raise an unhandled exception, never leave setup_completed=True
+    without every save that precedes it having actually succeeded, and
+    must always leave the wizard resumable (every entered value intact)
+    when persistence fails for any reason.
+    """
+
+    def _complete_state(self):
+        database = self._create_database()
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
+        state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
+        state = self.service.set_voting_defaults(
+            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.SOFT_ROTATION
+        )
+        state = self.service.enable_vote_ending_reminder(state, 24)
+        state = self.service.enable_automatic_backups(state, 1, 30)
+        return state, database
+
+    def test_guild_configuration_save_failure_reports_failure_without_raising(self):
+        state, _database = self._complete_state()
+        guild = self._full_guild()
+
+        with patch.object(
+            self.guild_configuration_repository, "save", side_effect=OSError("disk full")
+        ):
+            result = self.service.finalize(state, GUILD_ID, "Test Guild", guild)
+
+        self.assertFalse(result.success)
+        self.assertIn("try again", result.message.lower())
+
+    def test_guild_configuration_save_failure_leaves_the_wizard_resumable(self):
+        state, _database = self._complete_state()
+        guild = self._full_guild()
+
+        with patch.object(
+            self.guild_configuration_repository, "save", side_effect=OSError("disk full")
+        ):
+            self.service.finalize(state, GUILD_ID, "Test Guild", guild)
+
+        preserved = self.wizard_repository.get(GUILD_ID)
+        self.assertIsNotNone(preserved)
+        self.assertEqual(preserved.draft.wash_crew_role_id, WASH_CREW_ROLE_ID)
+        self.assertEqual(preserved.draft.voting_candidate_count, 4)
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID))
+
+    def test_database_configuration_override_save_failure_never_touches_guild_configuration(self):
+        # The per-database override (candidate selection / watch
+        # destination) is saved BEFORE GuildConfiguration -- if it fails,
+        # setup_completed must never be set, so /config stays gated off
+        # and the wizard stays resumable, rather than the guild ending up
+        # with a "looks done" GuildConfiguration and a silently missing
+        # database override.
+        state, _database = self._complete_state()
+        guild = self._full_guild()
+
+        with patch.object(
+            self.suggestion_database_configuration_repository, "save", side_effect=OSError("disk full")
+        ):
+            result = self.service.finalize(state, GUILD_ID, "Test Guild", guild)
+
+        self.assertFalse(result.success)
+        self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID))
+        self.assertIsNotNone(self.wizard_repository.get(GUILD_ID))
+
+    def test_wizard_draft_cleanup_failure_after_a_successful_save_is_non_fatal(self):
+        # Once GuildConfiguration is saved, setup has genuinely succeeded
+        # -- a failure only clearing the wizard's own now-irrelevant
+        # draft row must still report success (see finalize()'s own
+        # docstring: this row is inert once setup_completed is True).
+        state, _database = self._complete_state()
+        guild = self._full_guild()
+
+        with patch.object(self.wizard_repository, "delete", side_effect=OSError("disk full")):
+            result = self.service.finalize(state, GUILD_ID, "Test Guild", guild)
+
+        self.assertTrue(result.success)
+        self.assertTrue(self.guild_configuration_repository.get(GUILD_ID).setup_completed)
+
+    def test_retry_after_a_transient_failure_succeeds_using_the_same_entered_values(self):
+        state, database = self._complete_state()
+        guild = self._full_guild()
+
+        with patch.object(
+            self.guild_configuration_repository, "save", side_effect=OSError("disk full")
+        ):
+            first_attempt = self.service.finalize(state, GUILD_ID, "Test Guild", guild)
+        self.assertFalse(first_attempt.success)
+
+        # Retry: /setup resumes from the preserved wizard draft (bot.py's
+        # Review screen simply calls finalize() again) -- no value needs
+        # to be re-entered, and no Discord resource needs to be recreated
+        # (the database created earlier by _create_database() is reused
+        # as-is, identified by the same database_id already in the draft).
+        resumed = self.wizard_repository.get(GUILD_ID)
+        retry_result = self.service.finalize(resumed, GUILD_ID, "Test Guild", guild)
+
+        self.assertTrue(retry_result.success)
+        saved = self.guild_configuration_repository.get(GUILD_ID)
+        self.assertEqual(saved.wash_crew_role_id, WASH_CREW_ROLE_ID)
+        self.assertEqual(saved.voting_defaults.candidate_count, 4)
+        self.assertIsNone(self.wizard_repository.get(GUILD_ID))
+
+        database_configuration = self.suggestion_database_configuration_repository.get(
+            GUILD_ID, database.database_id
+        )
+        self.assertEqual(
+            database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.SOFT_ROTATION
+        )
 
 
 if __name__ == "__main__":

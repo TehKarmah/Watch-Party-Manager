@@ -110,6 +110,7 @@ class SetupWizardRepository:
             "status": state.status.value,
             "current_step": state.current_step.value,
             "completed_steps": [step.value for step in state.completed_steps],
+            "return_to_step": state.return_to_step.value if state.return_to_step is not None else None,
             "started_at": state.started_at.isoformat(),
             "updated_at": state.updated_at.isoformat(),
             "draft": {
@@ -170,6 +171,7 @@ class SetupWizardRepository:
             backup_retention_count=draft_entry.get("backup_retention_count"),
         )
 
+        return_to_step_raw = entry.get("return_to_step")
         return SetupWizardState(
             guild_id=entry["guild_id"],
             status=SetupWizardStatus(entry.get("status", "in_progress")),
@@ -178,4 +180,5 @@ class SetupWizardRepository:
             draft=draft,
             started_at=datetime.fromisoformat(entry["started_at"]),
             updated_at=datetime.fromisoformat(entry["updated_at"]),
+            return_to_step=SetupWizardStep(return_to_step_raw) if return_to_step_raw else None,
         )

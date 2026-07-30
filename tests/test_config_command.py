@@ -373,7 +373,7 @@ class SectionRenderingTests(ConfigCommandTestCase):
         interaction = FakeInteraction()
         await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.ADMIN_CHANNEL, edit=False)
         select = interaction.response.sent_view.children[0]
-        select._values = [_FakeChannelValue(DESTINATION_CHANNEL_ID)]
+        select._values = [str(DESTINATION_CHANNEL_ID)]
 
         select_interaction = FakeInteraction()
         await select.callback(interaction=select_interaction)
@@ -583,7 +583,7 @@ class SectionRenderingTests(ConfigCommandTestCase):
             interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
         )
         select = interaction.response.edited_view.children[0]
-        select._values = [_FakeChannelValue(DESTINATION_CHANNEL_ID)]
+        select._values = [str(DESTINATION_CHANNEL_ID)]
 
         select_interaction = FakeInteraction()
         await select.callback(interaction=select_interaction)
@@ -850,7 +850,8 @@ class HomeChannelSectionTests(ConfigCommandTestCase):
         select_interaction = FakeInteraction(guild=guild)
         await select.callback(interaction=select_interaction)
 
-        self.assertIn("does not have permission", select_interaction.response.edited_content)
+        self.assertIn("cannot send messages", select_interaction.response.edited_content)
+        self.assertIn("Send Messages", select_interaction.response.edited_content)
         self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID).channels.home_channel_id)
 
 
@@ -871,7 +872,7 @@ class GuildWideWatchDestinationSectionTests(ConfigCommandTestCase):
         interaction = FakeInteraction()
         await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.WATCH_DESTINATION, edit=False)
         select = interaction.response.sent_view.children[0]
-        select._values = [_FakeChannelValue(DESTINATION_CHANNEL_ID)]
+        select._values = [str(DESTINATION_CHANNEL_ID)]
 
         select_interaction = FakeInteraction()
         await select.callback(interaction=select_interaction)
@@ -1075,34 +1076,74 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         # Nothing was saved.
         self.assertEqual(self.guild_configuration_repository.get(GUILD_ID).voting_defaults.candidate_count, 3)
 
+    async def _open_reminder_defaults_modal(self, on_back):
+        """Reminder Defaults now shows an Enable/Disable choice first
+        (Fixed-Option UX Audit) -- Enable opens the lead-time-only modal.
+        """
+        interaction = FakeInteraction()
+        await send_config_reminder_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+        choice_view = interaction.response.edited_view
+        enable_button = next(c for c in choice_view.children if c.custom_id == "wpm_config_reminder_enable")
+        configure_interaction = FakeInteraction()
+        await enable_button.callback(interaction=configure_interaction)
+        return choice_view, configure_interaction.response.sent_modal
+
+    async def test_reminder_defaults_shows_an_enable_disable_choice_first(self) -> None:
+        self._seed_completed_setup()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        interaction = FakeInteraction()
+        await send_config_reminder_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+
+        choice_view = interaction.response.edited_view
+        labels = {getattr(child, "label", None) for child in choice_view.children}
+        self.assertIn("Enable Vote-Ending Reminder (Recommended)", labels)
+        self.assertIn("Disable Vote-Ending Reminder", labels)
+
     async def test_reminder_defaults_modal_is_prefilled_with_current_values(self) -> None:
         self._seed_completed_setup()
-        interaction = FakeInteraction()
 
         async def on_back(back_interaction) -> None:
             pass
 
-        await send_config_reminder_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        modal = interaction.response.sent_modal
+        _choice_view, modal = await self._open_reminder_defaults_modal(on_back)
         self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in modal.children))
-        self.assertEqual(modal.enabled_input.default, "yes")
+        self.assertEqual(len(modal.children), 1)
         self.assertEqual(modal.minutes_input.default, "1d")
 
-    async def test_reminder_defaults_submission_saves(self) -> None:
+    async def test_reminder_defaults_enable_submission_saves(self) -> None:
         self._seed_completed_setup()
-        interaction = FakeInteraction()
 
         async def on_back(back_interaction) -> None:
             pass
 
-        await send_config_reminder_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
-        modal = interaction.response.sent_modal
-        modal.enabled_input._value = "no"
-        modal.minutes_input._value = "1d"
+        _choice_view, modal = await self._open_reminder_defaults_modal(on_back)
+        modal.minutes_input._value = "2h"
 
         submit_interaction = FakeInteraction()
         await modal.on_submit(interaction=submit_interaction)
 
+        vote_notifications = self.guild_configuration_repository.get(GUILD_ID).notifications.vote
+        self.assertTrue(vote_notifications.vote_ending_reminder)
+        self.assertEqual(vote_notifications.reminder_minutes_before_close, 120)
+
+    async def test_reminder_defaults_disable_saves_without_opening_a_modal(self) -> None:
+        self._seed_completed_setup()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        interaction = FakeInteraction()
+        await send_config_reminder_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+        choice_view = interaction.response.edited_view
+        disable_button = next(c for c in choice_view.children if c.custom_id == "wpm_config_reminder_disable")
+
+        disable_interaction = FakeInteraction()
+        await disable_button.callback(interaction=disable_interaction)
+
+        self.assertIsNone(disable_interaction.response.sent_modal)
         self.assertFalse(self.guild_configuration_repository.get(GUILD_ID).notifications.vote.vote_ending_reminder)
 
     async def _open_backup_defaults_modal(self, on_back):
@@ -1217,6 +1258,54 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
 
         active_jobs = [job for job in self.scheduler_repository.jobs.values() if job.is_active]
         self.assertEqual(active_jobs, [])
+
+    async def test_voting_defaults_fails_safely_when_configuration_is_missing(self) -> None:
+        # Defense in depth: /config's own entry point already refuses to
+        # proceed unless GuildConfiguration exists and setup_completed is
+        # True, so this section function should never normally be
+        # reachable with a missing configuration -- but it must fail
+        # safely with an actionable message rather than crash if it ever
+        # is (e.g. a concurrent /factory_reset), matching the walkthrough
+        # requirement that configuration-dependent commands never throw
+        # unhandled errors.
+        async def on_back(back_interaction) -> None:
+            pass
+
+        interaction = FakeInteraction()
+        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+
+        self.assertIn("could not be found", interaction.response.edited_content)
+        self.assertIn("/setup", interaction.response.edited_content)
+
+    async def test_reminder_defaults_fails_safely_when_configuration_is_missing(self) -> None:
+        async def on_back(back_interaction) -> None:
+            pass
+
+        interaction = FakeInteraction()
+        await send_config_reminder_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+        choice_view = interaction.response.edited_view
+        enable_button = next(c for c in choice_view.children if c.custom_id == "wpm_config_reminder_enable")
+
+        configure_interaction = FakeInteraction()
+        await enable_button.callback(interaction=configure_interaction)
+
+        self.assertIn("could not be found", configure_interaction.response.edited_content)
+        self.assertIn("/setup", configure_interaction.response.edited_content)
+
+    async def test_backup_defaults_fails_safely_when_configuration_is_missing(self) -> None:
+        async def on_back(back_interaction) -> None:
+            pass
+
+        interaction = FakeInteraction()
+        await send_config_backup_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+        choice_view = interaction.response.edited_view
+        enable_button = next(c for c in choice_view.children if c.custom_id == "wpm_config_backup_enable")
+
+        configure_interaction = FakeInteraction()
+        await enable_button.callback(interaction=configure_interaction)
+
+        self.assertIn("could not be found", configure_interaction.response.edited_content)
+        self.assertIn("/setup", configure_interaction.response.edited_content)
 
 
 class SendConfigResultTests(ConfigCommandTestCase):

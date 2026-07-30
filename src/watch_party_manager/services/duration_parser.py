@@ -18,6 +18,10 @@ _DURATION_PATTERN = re.compile(
     r"^(\d+)\s*(m|minute|minutes|h|hour|hours|d|day|days|w|week|weeks)$",
     re.IGNORECASE,
 )
+# w/week/weeks are deliberately still accepted (never rejected) but never
+# advertised anywhere user-facing -- DURATION_SYNTAX_HELP and every UI
+# label/placeholder in the project intentionally omit them (Duration UX
+# Standard: supported but undocumented).
 
 _UNIT_TO_MINUTES = {
     "m": 1,
@@ -36,7 +40,7 @@ _UNIT_TO_MINUTES = {
 
 DURATION_SYNTAX_HELP = (
     "Duration must be a whole number immediately followed by a unit -- "
-    "m/minutes, h/hours, d/days, or w/weeks (e.g. '10m', '1h', '1d', '1w')."
+    "m/minutes, h/hours, or d/days (e.g. '10m', '1h', '7d')."
 )
 
 
@@ -44,7 +48,7 @@ def parse_duration_to_minutes(text: str) -> int:
     """Parse a relative duration into whole minutes.
 
     Args:
-        text: The raw duration text, e.g. "10m", "1h", "12 hours", "1w".
+        text: The raw duration text, e.g. "10m", "1h", "7d", "12 hours".
 
     Returns:
         The equivalent whole number of minutes.

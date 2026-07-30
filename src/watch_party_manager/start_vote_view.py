@@ -181,10 +181,10 @@ class CustomizeVoteModal(discord.ui.Modal):
             placeholder=_blank_default_placeholder(default_nominee_count_display),
         )
         self.duration_input = discord.ui.TextInput(
-            label="Duration (1 minute - 30 days)",
+            label="Duration (1m-30d)",
             required=False,
             placeholder=(
-                "e.g. 10m, 1h, 1d, or 1w -- blank uses the default"
+                "Examples: 10m, 1h, 7d -- blank uses the default"
                 + (f" ({default_duration_display})" if default_duration_display else "")
             ),
         )
@@ -199,10 +199,10 @@ class CustomizeVoteModal(discord.ui.Modal):
             placeholder=_blank_default_placeholder(default_reminder_enabled_display),
         )
         self.reminder_minutes_input = discord.ui.TextInput(
-            label="Reminder timing (how long before close)",
+            label="Reminder timing (1m-30d)",
             required=False,
             placeholder=(
-                "e.g. 10m, 1h, 1d, or 1w -- blank uses the default"
+                "Examples: 10m, 1h, 7d -- blank uses the default"
                 + (f" ({default_reminder_minutes_display})" if default_reminder_minutes_display else "")
             ),
         )

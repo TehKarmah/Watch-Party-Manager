@@ -576,9 +576,11 @@ class ConfigService:
 
     # --- Reminder Defaults ------------------------------------------------------------
 
-    def set_reminder_defaults(
-        self, guild_id: int, enabled: bool, minutes_before_close: int
-    ) -> ConfigUpdateResult:
+    def enable_vote_ending_reminder(self, guild_id: int, minutes_before_close: int) -> ConfigUpdateResult:
+        """Enable the vote-ending reminder with the given lead time
+        (Fixed-Option UX Audit: "enabled?" is now an Enable/Disable button
+        choice, mirroring enable_automatic_backups()'s identical shape).
+        """
         configuration = self.get_configuration(guild_id)
         if configuration is None:
             return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
@@ -589,18 +591,34 @@ class ConfigService:
                 configuration.notifications,
                 vote=replace(
                     configuration.notifications.vote,
-                    vote_ending_reminder=enabled,
+                    vote_ending_reminder=True,
                     reminder_minutes_before_close=minutes_before_close,
                 ),
             ),
         )
         self._guild_configuration_repository.save(updated)
-        message = (
-            f"Reminder defaults updated: enabled, {format_duration_minutes(minutes_before_close)} before close."
-            if enabled
-            else "Reminder defaults updated: disabled."
-        )
+        message = f"Reminder defaults updated: enabled, {format_duration_minutes(minutes_before_close)} before close."
         return ConfigUpdateResult(True, message, updated)
+
+    def disable_vote_ending_reminder(self, guild_id: int) -> ConfigUpdateResult:
+        """Disable the vote-ending reminder, leaving its previously saved
+        lead time untouched (inert while disabled, relevant again the
+        moment it's re-enabled) -- mirroring
+        disable_automatic_backups()'s identical shape.
+        """
+        configuration = self.get_configuration(guild_id)
+        if configuration is None:
+            return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
+
+        updated = replace(
+            configuration,
+            notifications=replace(
+                configuration.notifications,
+                vote=replace(configuration.notifications.vote, vote_ending_reminder=False),
+            ),
+        )
+        self._guild_configuration_repository.save(updated)
+        return ConfigUpdateResult(True, "Reminder defaults updated: disabled.", updated)
 
     # --- Backup Defaults ------------------------------------------------------------
 

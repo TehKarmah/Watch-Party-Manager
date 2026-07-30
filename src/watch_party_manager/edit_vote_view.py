@@ -262,9 +262,13 @@ class DurationDeltaChoiceView(discord.ui.View):
 
 
 class CustomDurationModal(discord.ui.Modal):
-    """Collects a single free-text duration (e.g. "10m", "1h", "1d", "1w")
+    """Collects a single free-text duration (e.g. "10m", "1h", "7d")
     for Shorten/Extend Vote's Custom... option, using WASH's one shared
-    duration syntax (see services.duration_parser).
+    duration syntax (see services.duration_parser). This field has no
+    fixed range of its own (Shorten/Extend only rejects a result that
+    would move the end time into the past), so its label/placeholder
+    show examples only, never a "1m-30d"-style range that wouldn't
+    actually apply here.
 
     Parsing and validation happen in bot.py; this modal only collects the
     raw text. title is caller-supplied ("Shorten Vote" or "Extend Vote")
@@ -277,7 +281,7 @@ class CustomDurationModal(discord.ui.Modal):
 
         self.duration_input = discord.ui.TextInput(
             label="Duration",
-            placeholder="e.g. 10m, 1h, 1d, or 1w",
+            placeholder="Examples: 10m, 1h, 7d",
             required=True,
         )
         self.add_item(self.duration_input)

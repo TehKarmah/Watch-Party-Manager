@@ -188,6 +188,31 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 2.3b Validation failure at Save preserves state and returns to Review
+
+- **Objective:** Confirm that when Save (on Review) fails validation -- e.g. WASH can no longer post in the previously selected Admin Channel because a permission was revoked after it was chosen -- fixing just that one value returns straight to Review with every other already-answered value intact, rather than forcing the whole rest of the wizard to be re-walked.
+- **Preconditions:** All steps completed once, reaching Review, with a resource (e.g. the Admin Channel) that will fail validation (its permissions changed, or it was deleted, after being selected).
+- **Steps:**
+  1. From Review, click **Save**.
+  2. Confirm WASH redirects to the specific failing step (e.g. "Step 3 of 10: Admin Channel") with a clear, actionable error -- not a generic failure, and not silently discarding the review state.
+  3. Fix the value there (pick a channel WASH can actually use).
+  4. Confirm the result.
+- **Expected Result:** Step 4 returns directly to Review -- not Home Channel or any other step in between -- and every other section (roles, join mode, collection, voting defaults, reminders, backups) still shows exactly what was entered before Save was first clicked. Save now completes successfully without re-entering anything. The error names the channel directly (e.g. "WASH cannot send messages in #admin") and says exactly which permissions to grant (View Channel, Send Messages), suggests choosing a different Admin channel, and suggests creating a new one -- never a generic "no permission" message, never raw exception text, and never suggesting the Administrator permission. If the channel is private, the message also reminds that WASH's role must be explicitly added to it, and that WASH's role may need to sit higher in the role hierarchy if it also manages roles elsewhere.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 2.3c Private Admin Channel visibility guidance
+
+- **Objective:** Confirm the Admin Channel step explains why a private channel might not appear in the picker, before the administrator gets confused wondering where it went.
+- **Preconditions:** A private channel exists that WASH has not yet been granted access to.
+- **Steps:**
+  1. Reach the Admin Channel step; confirm the body text includes a note (e.g. "🔒 Private channels only appear...") explaining that WASH must be granted **View Channel** and **Send Messages** on a private channel before it appears in the picker, and that reopening the step (or running `/setup` again) refreshes the list.
+  2. Confirm the note also mentions that if WASH assigns server roles, its own role must sit above those roles in the role hierarchy.
+  3. Grant WASH those permissions on the private channel from Discord's own channel settings, then reopen this step; confirm the channel now appears in the destination picker.
+- **Expected Result:** The guidance is visible without requiring any interaction, names the exact two permissions needed, mentions role hierarchy, and never suggests granting Administrator. The channel appears in the picker once access is actually granted, without needing to restart the wizard.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 2.4 Save & Finish Later, then resume
 
 - **Objective:** Confirm partial progress can be saved and resumed without loss.
@@ -228,6 +253,19 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 2.5c Nested Collection screens expose Back and Save & Finish Later
+
+- **Objective:** Confirm the "what type of collection" screen and the "select an existing collection" screen (both nested under the Collection step) offer **Back** and **Save & Finish Later**, not just **Cancel Setup** -- live testing found these two buttons missing, leaving a full destructive cancel as the only way to exit safely.
+- **Preconditions:** Test 2.5 passed.
+- **Steps:**
+  1. From the Collection step, click **Create New** to reach the "what type" screen; confirm **Back**, **Save & Finish Later**, and **Cancel Setup** all appear alongside the five type buttons.
+  2. Click **Back**; confirm it returns to the Collection step (Create New / Select Existing), not an earlier wizard step, and every previously entered value (roles, channels) is still intact.
+  3. Return to the "what type" screen and click **Save & Finish Later**; confirm setup exits without creating a collection and without marking setup complete, and `/setup` later resumes at the Collection step.
+  4. Repeat steps 1-3 for the "select an existing collection" screen (reached via **Select Existing**, with at least one collection already present).
+- **Expected Result:** Both nested screens expose the same Back/Save & Finish Later/Cancel Setup trio as every top-level step; Back returns to the Collection step's own choice screen; Save & Finish Later never creates a collection or marks setup complete.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 2.5b Duplicate destination is rejected (Conflict Prevention)
 
 - **Objective:** Confirm a channel or thread already used by one database cannot be assigned to a second one.
@@ -247,6 +285,19 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Select an existing destination channel or thread, or click **Skip for Now**.
   3. Separately, repeat and instead choose **Create New Thread**; confirm the name prompt defaults to "Watched Item Archive" and the new thread is created as a sibling under the home channel (never nested under a suggestion thread).
 - **Expected Result:** Every choice advances the wizard and is reflected correctly on the Review step ("Watched Item Archive: Configured/Skipped/Incomplete").
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 2.6c Thread discovery after revisiting Step 6
+
+- **Objective:** Confirm the Watched Item Archive selector always shows every currently active, accessible thread -- including one created earlier in the very same setup session -- and never a stale list; live testing found a collection's own suggestion thread (created in Step 5) missing from this step's picker.
+- **Preconditions:** At least one collection created (Test 2.5), so its suggestion thread already exists under the home channel.
+- **Steps:**
+  1. Reach Step 6; open the destination picker and confirm the Step 5 collection's suggestion thread appears as an option, labeled with its parent channel for context (e.g. "watch-party › movie-suggestions").
+  2. Select it, then click **Back** and return to Step 6 again; confirm the same thread is still listed and now shows as the pre-selected value.
+  3. Separately, archive or lock that thread in Discord directly, then reopen Step 6; confirm the archived/locked thread no longer appears as a selectable option.
+  4. Create a brand-new thread under the home channel from outside the wizard (e.g. via `/database add`), then reopen Step 6 without restarting the bot; confirm that thread also appears immediately.
+- **Expected Result:** The destination list is rebuilt fresh every time this step renders -- never cached -- always includes active, accessible threads with parent-channel context, and excludes archived/locked/inaccessible ones. The previously saved destination is always shown pre-selected, never silently cleared.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -270,12 +321,12 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** Reached the Voting Defaults step.
 - **Steps:**
   0. Before opening the modal, confirm the step's body text explains: "Visible -- everyone can see vote totals while voting is active. Blind -- results stay hidden until voting closes."
-  1. Open the modal (**Set Voting Defaults**); confirm the duration field's helper text reads "e.g. 10m, 1h, 1d, or 1w" and the field is pre-filled `1d` (not "1 day") on a brand-new server.
+  1. Open the modal (**Set Voting Defaults**); confirm the duration field's label reads "Default vote duration (1m-30d; 10m,1h,7d)" (Duration UX Standard -- range and examples in the label itself, since this field always has a value and its placeholder would never show) and the field is pre-filled `1d` (not "1 day") on a brand-new server.
   2. Enter a candidate count (try an in-range value, e.g. `4`).
-  3. Enter a duration using WASH's shared duration syntax (try `4h`, then separately `3d`, then `3 days` -- confirm all are accepted and mean what you'd expect). Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
+  3. Enter a duration using WASH's shared duration syntax (try `4h`, then separately `3d`, then `3 days` -- confirm all are accepted and mean what you'd expect). Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required. Separately, confirm `1m` (the new one-minute minimum) is accepted.
   4. Set visibility to `visible` or `blind`.
   5. Submit, then reopen the modal and confirm the just-saved duration redisplays in the same compact form (e.g. `4h`, not "4 hours").
-- **Expected Result:** Values in range are accepted; the modal's duration field is pre-filled `1d` on a brand-new server and always redisplays previously saved durations in compact form. An out-of-range duration (e.g. `31d` / `0h`) is rejected with a clear, specific error naming the 1 hour-30 day range; a unitless value is rejected with a clear syntax error.
+- **Expected Result:** Values in range are accepted; the modal's duration field is pre-filled `1d` on a brand-new server and always redisplays previously saved durations in compact form. An out-of-range duration (e.g. `31d` / `0m`) is rejected with a clear, specific error naming the actual 1 minute-30 day range; a unitless value is rejected with a clear syntax error that shows only the `10m`/`1h`/`7d` examples (never `1w` or a duplicate day example).
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -304,12 +355,14 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 2.10 Reminder Defaults
 
-- **Objective:** Confirm the Reminder Defaults step saves correctly and its duration examples are consistent with every other duration field.
+- **Objective:** Confirm the Reminder Defaults step's Enable/Disable choice works correctly (Fixed-Option UX Audit: "enabled?" is a button choice, not a free-text yes/no field) and its duration examples are consistent with every other duration field.
 - **Preconditions:** Test 2.7 passed.
 - **Steps:**
-  1. Reach the Reminder Defaults step; confirm the "Reminder before close" field's label reads "Reminder before close (e.g. 10m, 1h, 1d, 1w)" and the pre-filled value is compact (e.g. `1d`, not "1 day").
-  2. Configure (or disable) the vote-ending reminder and its lead time, using WASH's shared duration syntax -- try minute precision (e.g. `10m`, `30m`) as well as hours/days (e.g. `1h`, `1d`).
-- **Expected Result:** The step accepts valid values (minute precision, not just whole hours) and rejects out-of-range ones with a clear error; the field's label and pre-filled value are both in compact form.
+  1. Reach the Reminder Defaults step; confirm it shows **Enable Vote-Ending Reminder (Recommended)** and **Disable Vote-Ending Reminder** buttons, not a modal.
+  2. Press **Disable Vote-Ending Reminder**; confirm no modal opens and the wizard advances straight to Backup Defaults.
+  3. Go back and press **Enable Vote-Ending Reminder (Recommended)** instead; confirm a modal opens with exactly one field, labeled "Reminder before close (1m-30d; 10m,1h,7d)", pre-filled with a compact value (e.g. `1d`, not "1 day").
+  4. Submit using WASH's shared duration syntax -- try minute precision (e.g. `10m`, `30m`, and the new one-minute minimum `1m`) as well as hours/days (e.g. `1h`, `7d`), and confirm an out-of-range or malformed value is rejected with a clear error while keeping the Enable choice (no need to re-pick Enable/Disable).
+- **Expected Result:** Disable saves immediately with no modal; Enable opens a single-field modal that accepts valid values (minute precision, not just whole hours) and rejects invalid ones with a clear error; the field's label and pre-filled value are both in compact form.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -338,6 +391,19 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 2.11b Final save failure never reports false success
+
+- **Objective:** Confirm that if the final save on the Review step fails for any reason other than a validation issue (e.g. a transient disk/IO error), setup never reports success, the wizard stays open with every value intact, and a retry completes cleanly using the same answers and Discord resources -- no duplicate channel/thread/collection is created.
+- **Preconditions:** All prior steps completed, reaching Review.
+- **Steps:**
+  1. Simulate an unexpected persistence failure on Save (e.g. temporarily make the guild-configurations data file unwritable, or use a debugger/log injection to force an exception in `GuildConfigurationRepository.save`).
+  2. Click **Save** and observe the response.
+  3. Restore normal write access and click **Save** again.
+  4. Run `/config` and check every section against what was entered.
+- **Expected Result:** Step 2 never shows the completion summary and never dismisses the wizard (the Review screen redisplays with a clear "could not be saved" warning); the log records which persistence stage failed (guild configuration, or the database's own candidate-selection/watch-destination override) without leaking secrets. Step 3's retry succeeds without re-entering any value or recreating any channel/thread/collection -- the exact same ones created earlier are reused. Step 4 shows every value exactly as entered, and `/config`'s Voting Defaults, Reminder Defaults, and other config-dependent sections all work normally (see Test 2.12b for a guild left without ever completing Step 3 here).
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 2.12 Setup state after completion
 
 - **Objective:** Confirm a completed setup is distinguishable from "not started" and "in progress."
@@ -345,6 +411,19 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/setup` again.
 - **Expected Result:** WASH reports setup is already complete and redirects to `/config` rather than restarting the wizard.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 2.12b Recovering a guild left partially configured
+
+- **Objective:** Confirm a guild that has channels, threads, a collection, or suggestions from an earlier, never-finished (or failed) setup attempt can still safely run `/setup` to completion -- without deleting any of that existing data or creating duplicates -- and that config-dependent commands fail safely with an actionable message in the meantime rather than erroring unpredictably.
+- **Preconditions:** A guild with at least one collection/suggestion created (e.g. via a `/setup` run stopped or interrupted before reaching Review) but no completed `GuildConfiguration` (`setup_completed` is not True).
+- **Steps:**
+  1. Run `/config` on this guild.
+  2. Run `/setup`; on the Collection step, choose **Select Existing** and pick the collection created earlier.
+  3. Complete the remaining steps and Save.
+  4. Confirm the collection's suggestions and any created channels/threads are unchanged throughout.
+- **Expected Result:** Step 1 shows a friendly "Initial setup hasn't been completed yet. Run `/setup` first." message, not an error. Step 2 offers the existing collection rather than forcing a new one. Steps 3-4 show no data loss and no duplicate collection, channel, or thread at any point -- `/setup` never automatically deletes or resets existing data to "fix" an incomplete configuration.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -549,12 +628,13 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 4.3 Duplicate detection
 
-- **Objective:** Confirm definite and possible duplicate warnings behave as documented for both regular members and WASH Crew.
-- **Preconditions:** An existing suggestion (e.g. from Test 4.1) with a known release year.
+- **Objective:** Confirm definite and possible duplicate warnings behave as documented for both regular members and WASH Crew, and that the match line never exposes a raw IMDb URL.
+- **Preconditions:** An existing suggestion (e.g. from Test 4.1) with a known release year and a resolved original post reference.
 - **Steps:**
   1. As a regular Watch Party member, try to `/add` the exact same title/year again -- confirm it's blocked.
   2. As WASH Crew, try to `/add` the same title with no year -- confirm a possible-duplicate confirmation is offered and reactivation/creation only proceeds after explicit confirmation.
-- **Expected Result:** Matches [Administration](05-Administration.md) Section 3's table exactly: active matches always block; archived/watched matches offer WASH Crew reactivation only; possible duplicates require explicit confirmation and never guess.
+  3. Inspect the matched item's line in the response.
+- **Expected Result:** Matches [Administration](05-Administration.md) Section 3's table exactly: active matches always block; archived/watched matches offer WASH Crew reactivation only; possible duplicates require explicit confirmation and never guess. The line reads `Reference #NNNN | <Title> | [Original Suggestion](link) | status: ...` -- a labeled, clickable link to the original Discord message, never a bare IMDb URL (the IMDb preview card already covers that). A legacy match with no recorded original-post reference simply omits that link segment.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -770,10 +850,10 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm both minute- and hour-based durations work end to end.
 - **Preconditions:** No open round.
 - **Steps:**
-  1. Run `/vote start` -> **Customize This Vote**; confirm both the duration field and the reminder-before-close field show a placeholder starting "e.g. 10m, 1h, 1d, or 1w".
+  1. Run `/vote start` -> **Customize This Vote**; confirm both the duration field's label reads "Duration (1m-30d)" and its placeholder starts "Examples: 10m, 1h, 7d", and the reminder-before-close field's label reads "Reminder timing (1m-30d)" with the same placeholder style.
   2. Enter a duration of `10m`, submit, and confirm the round's end time is ~10 minutes out.
-  3. Repeat with `30m`, `1h`, `4h`, `12h`, and `3d` to confirm all forms are accepted. Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
-- **Expected Result:** All forms with an explicit unit are accepted, including minute-level precision; the resulting end time matches; a value outside 1 minute-30 days (e.g. `0h`, `31w`) is rejected with a clear, actionable error.
+  3. Repeat with `1m` (the new one-minute minimum), `30m`, `1h`, `4h`, `12h`, and `3d` to confirm all forms are accepted. Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required.
+- **Expected Result:** All forms with an explicit unit are accepted, including minute-level precision down to `1m`; the resulting end time matches; a value outside 1 minute-30 days (e.g. `0m`, `31d`) is rejected with a clear, actionable error.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -846,7 +926,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/vote edit` -> **Change End Time**; confirm the menu offers **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
   2. Use **Shorten Vote** -> **1 Hour**; confirm the round's end time moves 1 hour *earlier than its current deadline* (not 1 hour from now), and that the public post and a public notice both reflect the new deadline with a Discord relative timestamp shown. Repeat with **Extend Vote** -> **1 Day** and confirm it moves 1 day *later* than the current deadline.
-  3. Use **Shorten Vote** -> **Custom...**; confirm the modal is titled "Shorten Vote" with a "Duration" field (placeholder `e.g. 10m, 1h, 1d, or 1w`). Try `10m`, `2h`. Repeat with **Extend Vote** -> **Custom...** (modal titled "Extend Vote"). Confirm a malformed value (e.g. a bare number with no unit) is rejected with a clear error.
+  3. Use **Shorten Vote** -> **Custom...**; confirm the modal is titled "Shorten Vote" with a "Duration" field (placeholder `Examples: 10m, 1h, 7d` -- this field has no fixed range of its own, since Shorten/Extend only rejects a result that would move the end time into the past). Try `10m`, `2h`. Repeat with **Extend Vote** -> **Custom...** (modal titled "Extend Vote"). Confirm a malformed value (e.g. a bare number with no unit) is rejected with a clear error.
   4. On a round closing soon, use **Shorten Vote** with an amount larger than the time remaining; confirm it's rejected with a clear "would move the end time into the past" message rather than silently succeeding.
   5. Use **Set Exact End Time**; confirm the modal presents a single "Discord Timestamp" field with placeholder `<t:1785639600:F>` and help text explaining how to generate one (type `@time` in any normal Discord message box, pick a date/time, then copy the generated timestamp here). Confirm a malformed value (e.g. plain text, or a timestamp missing the `<t:...>` wrapper), and a validly-formatted but past timestamp, are each rejected with a clear message; confirm a valid future timestamp (in any of the standard styles, e.g. `<t:1785639600:F>` or `<t:1785639600:R>`) reschedules correctly.
   6. Start a second round (after the first completes or is cancelled) and use `/vote edit` -> **End Now**; confirm it closes immediately with correct results (a confirmation prompt appears first, since this can't be undone).

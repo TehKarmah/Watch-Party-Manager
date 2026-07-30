@@ -15,6 +15,7 @@ already accept, once the wizard's draft has been validated.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
@@ -70,6 +71,13 @@ MIN_BACKUP_INTERVAL_DAYS = 1
 MAX_BACKUP_INTERVAL_DAYS = 30
 MIN_BACKUP_RETENTION_COUNT = 1
 MAX_BACKUP_RETENTION_COUNT = 100
+
+logger = logging.getLogger(__name__)
+
+INTERNAL_ERROR_MESSAGE = (
+    "Setup could not be saved due to an unexpected error. Nothing was changed -- "
+    "your answers are still here, so you can try again."
+)
 
 
 def _format_day_count(days: int) -> str:
@@ -153,21 +161,44 @@ class SetupWizardService:
     def _advance(
         self, state: SetupWizardState, completed_step: SetupWizardStep, draft: SetupWizardDraft
     ) -> SetupWizardState:
-        """Persist a step's answer, mark it completed, and move to the next step."""
-        next_step = _next_step(completed_step)
+        """Persist a step's answer, mark it completed, and move on.
+
+        Moves to state.return_to_step if one is set (this step was
+        reached via go_to_step(..., return_to=...) -- Review's "edit a
+        section" dropdown, or a validation-failure redirect -- so
+        answering it returns straight back rather than marching forward
+        through every later step again), consuming it in the same move.
+        Otherwise moves to the next step in SETUP_WIZARD_STEP_ORDER, the
+        ordinary forward-progress behavior.
+        """
+        next_step = state.return_to_step if state.return_to_step is not None else _next_step(completed_step)
         updated = replace(
             state,
             draft=draft,
             current_step=next_step,
+            return_to_step=None,
             completed_steps=state.with_step_completed(completed_step),
             updated_at=datetime.now(timezone.utc),
         )
         self._wizard_repository.save(updated)
         return updated
 
-    def go_to_step(self, state: SetupWizardState, step: SetupWizardStep) -> SetupWizardState:
-        """Jump directly to a step -- used by the Review screen's "edit a section"."""
-        updated = replace(state, current_step=step, updated_at=datetime.now(timezone.utc))
+    def go_to_step(
+        self, state: SetupWizardState, step: SetupWizardStep, *, return_to: Optional[SetupWizardStep] = None
+    ) -> SetupWizardState:
+        """Jump directly to a step -- used by the Review screen's "edit a
+        section" dropdown, a validation-failure redirect, and "Review
+        Progress" from the resume prompt.
+
+        return_to records where re-answering `step` should land (see
+        SetupWizardState.return_to_step) -- pass SetupWizardStep.REVIEW
+        when jumping here FROM Review so the single correction returns
+        there instead of continuing forward through the rest of the
+        wizard. Left as None (the default) clears any previously set
+        return_to_step, matching go_back()'s existing contract that
+        navigating away resumes ordinary forward-progress semantics.
+        """
+        updated = replace(state, current_step=step, return_to_step=return_to, updated_at=datetime.now(timezone.utc))
         self._wizard_repository.save(updated)
         return updated
 
@@ -317,11 +348,26 @@ class SetupWizardService:
         )
         return self._advance(state, SetupWizardStep.VOTING_DEFAULTS, draft)
 
-    def set_reminder_defaults(
-        self, state: SetupWizardState, enabled: bool, minutes_before_close: int
+    def enable_vote_ending_reminder(
+        self, state: SetupWizardState, minutes_before_close: int
     ) -> SetupWizardState:
+        """Enable the vote-ending reminder for this setup pass, with the
+        given lead time (Fixed-Option UX Audit: "enabled?" is now a
+        button choice, mirroring enable_automatic_backups()'s identical
+        enable/disable-then-configure shape).
+        """
         draft = replace(
-            state.draft, reminder_enabled=enabled, reminder_minutes_before_close=minutes_before_close
+            state.draft, reminder_enabled=True, reminder_minutes_before_close=minutes_before_close
+        )
+        return self._advance(state, SetupWizardStep.REMINDER_DEFAULTS, draft)
+
+    def disable_vote_ending_reminder(self, state: SetupWizardState) -> SetupWizardState:
+        """Disable the vote-ending reminder for this setup pass, skipping
+        lead-time configuration entirely, mirroring
+        disable_automatic_backups()'s identical shape.
+        """
+        draft = replace(
+            state.draft, reminder_enabled=False, reminder_minutes_before_close=None
         )
         return self._advance(state, SetupWizardStep.REMINDER_DEFAULTS, draft)
 
@@ -506,11 +552,29 @@ class SetupWizardService:
     def finalize(self, state: SetupWizardState, guild_id: int, guild_name: str, guild: GuildLookup) -> FinalizeResult:
         """Validate the draft and, if valid, save it as the guild's configuration.
 
-        Never partially saves: GuildConfigurationRepository.save() (and
-        the optional SuggestionDatabaseConfigurationRepository.save())
-        are only ever called after validate() reports no issues. Deletes
-        the wizard's own draft state once the configuration is saved --
-        completion is the one case /setup never remains resumable for.
+        Staged, not a single atomic transaction (the JSON repositories
+        underneath have no cross-file transaction support), but ordered so
+        a mid-save failure never leaves the guild in an inconsistent
+        "looks done but isn't" state:
+
+        1. The per-database configuration override (Candidate Selection
+           Mode / Watch Destination), if the draft touched one, is saved
+           first.
+        2. GuildConfiguration -- with setup_completed=True -- is saved
+           last. This is the single authoritative flag every other
+           command gates on (/config, perform_setup_redirect_check), so
+           it must never be written unless every earlier step already
+           succeeded.
+        3. Only once both saves succeed is the wizard's own draft state
+           deleted.
+
+        If any save raises, nothing further is attempted: earlier saves
+        that already completed stand (retrying just re-saves the same
+        values again, which is idempotent), but GuildConfiguration is
+        never left half-updated, and if step 2 never ran,
+        setup_completed is never set -- so the wizard remains resumable
+        and /config stays gated off with its existing "run /setup first"
+        message rather than exposing a partially configured guild.
 
         Args:
             state: The wizard state to finalize.
@@ -520,17 +584,53 @@ class SetupWizardService:
             guild: Used to validate the draft (see validate()).
 
         Returns:
-            FinalizeResult. On failure, nothing was saved and the wizard
-            state is untouched, so /setup remains resumable.
+            FinalizeResult. On failure (validation issues or an
+            unexpected persistence error), nothing new was saved and the
+            wizard state is untouched, so /setup remains resumable with
+            every previously entered value intact.
         """
         issues = self.validate(state, guild)
         if issues:
             return FinalizeResult(success=False, message="Setup could not be saved.", issues=tuple(issues))
 
         configuration = self._build_guild_configuration(state, guild_id, guild_name)
-        self._guild_configuration_repository.save(configuration)
-        self._save_database_configuration_overrides(state, guild_id)
-        self._wizard_repository.delete(guild_id)
+        database_override = self._build_database_configuration_override(state, guild_id)
+
+        if database_override is not None:
+            try:
+                self._suggestion_database_configuration_repository.save(database_override)
+            except Exception:
+                logger.exception(
+                    "Setup finalize failed while saving the suggestion database configuration "
+                    "override for guild %s (database %s)",
+                    guild_id,
+                    database_override.database_id,
+                )
+                return FinalizeResult(success=False, message=INTERNAL_ERROR_MESSAGE)
+
+        try:
+            self._guild_configuration_repository.save(configuration)
+        except Exception:
+            logger.exception(
+                "Setup finalize failed while saving the guild configuration for guild %s", guild_id
+            )
+            return FinalizeResult(success=False, message=INTERNAL_ERROR_MESSAGE)
+
+        try:
+            self._wizard_repository.delete(guild_id)
+        except Exception:
+            # Non-fatal: the guild configuration above is already saved
+            # and setup_completed=True, so setup genuinely succeeded.
+            # perform_setup_redirect_check() gates /setup on
+            # setup_completed, not on this row's existence, so a
+            # leftover draft row here is inert -- log it for cleanup
+            # rather than reporting a failure the user would need to
+            # (and couldn't) retry.
+            logger.exception(
+                "Setup finalize saved successfully but failed to clear the wizard's own draft "
+                "state for guild %s",
+                guild_id,
+            )
 
         return FinalizeResult(success=True, message="Setup complete.", configuration=configuration)
 
@@ -575,10 +675,22 @@ class SetupWizardService:
             )
 
         if draft.reminder_enabled is not None:
+            # Disabling the reminder never asks for a lead time (Fixed-Option
+            # UX Audit: Disable skips the modal entirely -- see
+            # disable_vote_ending_reminder()), so reminder_minutes_before_close
+            # is only ever None here when disabled. VoteNotificationsConfig's
+            # own field is a required int (see its __post_init__ validation),
+            # so the previously saved/default lead time is kept rather than
+            # overwritten with None -- it's inert while disabled and becomes
+            # relevant again the moment the reminder is re-enabled.
             updated_vote_notifications = replace(
                 base.notifications.vote,
                 vote_ending_reminder=draft.reminder_enabled,
-                reminder_minutes_before_close=draft.reminder_minutes_before_close,
+                reminder_minutes_before_close=(
+                    draft.reminder_minutes_before_close
+                    if draft.reminder_minutes_before_close is not None
+                    else base.notifications.vote.reminder_minutes_before_close
+                ),
             )
             updated = replace(
                 updated,
@@ -601,16 +713,25 @@ class SetupWizardService:
 
         return updated
 
-    def _save_database_configuration_overrides(self, state: SetupWizardState, guild_id: int) -> None:
+    def _build_database_configuration_override(
+        self, state: SetupWizardState, guild_id: int
+    ) -> Optional[SuggestionDatabaseConfiguration]:
+        """Build (without saving) the per-database configuration override
+        the draft's Candidate Selection Mode / Watch Destination answers
+        imply, or None if there is nothing to save.
+
+        Kept side-effect-free so finalize() can build every record it
+        intends to save up front, before performing any writes.
+        """
         draft = state.draft
         if draft.suggestion_database_id is None:
-            return
+            return None
         if draft.voting_candidate_selection is None and not draft.watch_destination_channel_id:
-            return
+            return None
 
         database = self._suggestion_service.get_database(draft.suggestion_database_id)
         if database is None:
-            return
+            return None
 
         existing = self._suggestion_database_configuration_repository.get(guild_id, draft.suggestion_database_id)
         base = existing if existing is not None else SuggestionDatabaseConfiguration(
@@ -633,7 +754,7 @@ class SetupWizardService:
                 ),
             )
 
-        self._suggestion_database_configuration_repository.save(updated)
+        return updated
 
 
 def _next_step(step: SetupWizardStep) -> SetupWizardStep:

@@ -33,10 +33,15 @@ def format_duration_hours(hours: int) -> str:
 
 def format_duration_minutes_compact(minutes: int) -> str:
     """Render a minute count in WASH's compact input syntax (e.g. "10m",
-    "1h", "1d", "1w") -- the same short form every duration field's own
-    helper text advertises, picking the largest whole unit it evenly
-    divides into exactly like format_duration_minutes(), but abbreviated
-    rather than spelled out.
+    "1h", "7d") -- the same short form every duration field's own label
+    advertises (Duration UX Standard), picking the largest whole unit it
+    evenly divides into exactly like format_duration_minutes(), but
+    abbreviated rather than spelled out.
+
+    A value that happens to be an exact multiple of a week still renders
+    with a "w" suffix (e.g. "2w") -- week syntax remains fully supported
+    for parsing and round-tripping an existing value, it just isn't
+    advertised in any label, placeholder, or error message.
 
     Used to prefill an editable duration field (Voting Defaults' vote
     duration, Reminder Defaults' minutes-before-close) with a value in
