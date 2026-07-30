@@ -438,11 +438,11 @@ class SetupWizardService:
         if draft.suggestion_database_id is not None:
             action = "created" if draft.suggestion_database_is_new else "selected"
             lines.append(
-                f'Collection: Configured ({action} "{draft.suggestion_database_name}" '
+                f'Collections: Configured ({action} "{draft.suggestion_database_name}" '
                 f"#{draft.suggestion_database_id})"
             )
         else:
-            lines.append("Collection: Incomplete")
+            lines.append("Collections: Incomplete")
 
         if draft.watch_destination_skipped:
             lines.append("Watched Item Archive: Skipped")

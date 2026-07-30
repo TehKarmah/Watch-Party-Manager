@@ -61,7 +61,7 @@ Casting a vote itself happens through the interactive buttons on the voting post
 The complete definitions are maintained in [Terminology & Concepts](98-Glossary.md). Important terms include:
 
 - Watch Item
-- Collection (Suggestion Database)
+- Collections (Suggestion Database)
 - WASH Crew
 - Blind Vote
 - Visible Vote

@@ -101,8 +101,8 @@ CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
     ConfigSection.WATCH_PARTY_JOIN_MODE: "Watch Party Join Mode",
     ConfigSection.ADMIN_CHANNEL: "Admin Channel",
     ConfigSection.HOME_CHANNEL: "Watch Party Home Channel",
-    ConfigSection.MANAGE_COLLECTIONS: "Manage Collections",
-    ConfigSection.WATCH_DESTINATION: "Watched Item Archive (Default)",
+    ConfigSection.MANAGE_COLLECTIONS: "Collections",
+    ConfigSection.WATCH_DESTINATION: "Watched Item Archive",
     ConfigSection.VOTING_DEFAULTS: "Voting Defaults",
     ConfigSection.REMINDER_DEFAULTS: "Reminder Defaults",
     ConfigSection.BACKUP_DEFAULTS: "Backup Defaults",
@@ -201,22 +201,22 @@ class ConfigService:
         databases = self._suggestion_service.list_databases(guild_id)
         active_databases = [database for database in databases if database.active]
         if not databases:
-            lines.append("Manage Collections: Not configured")
+            lines.append("Collections: Not configured")
         else:
             lines.append(
-                f"Manage Collections: Configured ({len(active_databases)} active of {len(databases)} total -- "
+                f"Collections: Configured ({len(active_databases)} active of {len(databases)} total -- "
                 "select below to edit each collection's destination and candidate selection)"
             )
 
         watch_destination_channel_id = configuration.channels.watch_history_channel_id
         if watch_destination_channel_id is None:
-            lines.append("Watched Item Archive (Default): Not configured")
+            lines.append("Watched Item Archive: Not configured")
         elif validate_channel_usable(watch_destination_channel_id, guild):
             lines.append(
-                f"Watched Item Archive (Default): Invalid (<#{watch_destination_channel_id}> no longer usable)"
+                f"Watched Item Archive: Invalid (<#{watch_destination_channel_id}> no longer usable)"
             )
         else:
-            lines.append(f"Watched Item Archive (Default): Configured (<#{watch_destination_channel_id}>)")
+            lines.append(f"Watched Item Archive: Configured (<#{watch_destination_channel_id}>)")
 
         voting_defaults = configuration.voting_defaults
         lines.append(
@@ -272,7 +272,7 @@ class ConfigService:
     def resolve_effective_watch_destination(self, guild_id: int, database_id: int) -> Optional[int]:
         """The channel where a collection's Watched Item Archive should
         post: its own override if set, otherwise the guild-wide default
-        (Watched Item Archive (Default) section), otherwise None
+        (the Watched Item Archive section), otherwise None
         (nothing archived). Unlike a suggestion destination, this may
         legitimately be None, and the same channel may be shared by any
         number of collections and/or the guild default -- never checked
@@ -418,7 +418,7 @@ class ConfigService:
         self._guild_configuration_repository.save(updated)
         return ConfigUpdateResult(True, "Default Watched Item Archive cleared.", updated)
 
-    # --- Manage Collections ------------------------------------------------------------
+    # --- Collections ------------------------------------------------------------
     #
     # Replaces the old "Active Suggestion Database" section (which required
     # picking exactly one database before any of its settings could be

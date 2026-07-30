@@ -120,6 +120,7 @@ from watch_party_manager.services.config_service import (
     ConfigService,
     ConfigUpdateResult,
 )
+from watch_party_manager.services.configuration_validation import GuildLookup
 from watch_party_manager.services.collection_display import (
     STANDARD_COLLECTION_TYPES,
     format_collection_display,
@@ -1715,7 +1716,7 @@ SETUP_WIZARD_STEP_TITLES: dict[SetupWizardStep, str] = {
     SetupWizardStep.WATCH_PARTY_ROLE: "Watch Party Role",
     SetupWizardStep.ADMIN_CHANNEL: "Admin Channel",
     SetupWizardStep.HOME_CHANNEL: "Home Channel",
-    SetupWizardStep.SUGGESTION_DATABASE: "Collection",
+    SetupWizardStep.SUGGESTION_DATABASE: "Collections",
     SetupWizardStep.WATCH_DESTINATION: "Watched Item Archive",
     SetupWizardStep.VOTING_DEFAULTS: "Voting Defaults",
     SetupWizardStep.REMINDER_DEFAULTS: "Reminder Defaults",
@@ -1839,7 +1840,7 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
         lines.append(f"Admin Channel: <#{draft.admin_channel_id}>")
     if draft.home_channel_id is not None:
         lines.append(f"Home Channel: <#{draft.home_channel_id}>")
-    lines.append(f'Collection: "{draft.suggestion_database_name}" (#{draft.suggestion_database_id})')
+    lines.append(f'Collections: "{draft.suggestion_database_name}" (#{draft.suggestion_database_id})')
     if draft.watch_destination_skipped:
         lines.append("Watched Item Archive: Skipped")
     elif draft.watch_destination_channel_id is not None:
@@ -2728,6 +2729,33 @@ async def send_setup_wizard_step(
 # --- FR-029: /config -------------------------------------------------------------------
 
 
+def build_config_summary_body(config_service: ConfigService, guild_id: int, guild: GuildLookup) -> str:
+    """Build /config's main-menu summary text: one numbered line per
+    section, using the same step numbers as the Setup Wizard's own
+    walkthrough (Consistent Step Numbering) -- CONFIG_SECTION_ORDER is
+    /config's own equivalent of SETUP_WIZARD_STEP_ORDER, so numbering it
+    the same way (position in that tuple, 1-based) can never drift from
+    /setup's own "Step N of M" numbering for the sections both share.
+    """
+    lines = config_service.build_summary_lines(guild_id, guild)
+    numbered_lines = [f"{index}. {line}" for index, line in enumerate(lines, start=1)]
+    return "**WASH Configuration**\n\n" + "\n".join(numbered_lines)
+
+
+def build_config_section_options(
+    sections: Tuple[ConfigSection, ...] = CONFIG_SECTION_ORDER,
+) -> List[Tuple[str, str]]:
+    """Build /config's section-picker dropdown options, each numbered with
+    its step number in CONFIG_SECTION_ORDER (Consistent Step Numbering) --
+    the same numbering build_config_summary_body's lines use, so the
+    summary above this dropdown and the dropdown itself never disagree.
+    """
+    return [
+        (section.value, f"{index}. {CONFIG_SECTION_TITLES[section]}")
+        for index, section in enumerate(sections, start=1)
+    ]
+
+
 async def send_config_main_menu(
     interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, *, edit: bool
 ) -> None:
@@ -2735,14 +2763,13 @@ async def send_config_main_menu(
     "choose a section to edit" dropdown.
     """
     config_service = bot.config_service
-    lines = config_service.build_summary_lines(guild_id, interaction.guild)
-    body = "**WASH Configuration**\n\n" + "\n".join(lines)
+    body = build_config_summary_body(config_service, guild_id, interaction.guild)
 
     async def on_section_chosen(select_interaction: discord.Interaction, section_value: str) -> None:
         await send_config_section(select_interaction, bot, guild_id, ConfigSection(section_value), edit=True)
 
     view = ConfigMainMenuView(
-        [(section.value, CONFIG_SECTION_TITLES[section]) for section in CONFIG_SECTION_ORDER],
+        build_config_section_options(),
         on_section_chosen,
         descriptions={ConfigSection.VOTING_DEFAULTS.value: VISIBILITY_HELP_TEXT_SHORT},
     )
@@ -2961,7 +2988,7 @@ async def send_config_section(
             "\n\nChoose the default channel or thread where WASH should archive completed watch "
             "items (Vote Winners and Retired items, together with links back to their suggestion "
             "and voting history) when a collection has no archive of its own configured, or clear "
-            "it. Any collection can override this individually via Manage Collections."
+            "it. Any collection can override this individually via Collections."
         )
 
     if edit:
@@ -2994,7 +3021,7 @@ async def send_config_manage_databases(
     still needs a fresh message.
     """
     databases = bot.suggestion_service.list_databases(guild_id)
-    header = "**WASH Configuration -- Manage Collections**"
+    header = f"**WASH Configuration -- {CONFIG_SECTION_TITLES[ConfigSection.MANAGE_COLLECTIONS]}**"
 
     if not databases:
         body = header + "\n\nNo collections exist in this server yet. Create one with `/database add`."
@@ -9691,7 +9718,7 @@ async def start_database_move(
 
     Moves ONLY the suggestion destination -- reuses
     ConfigService.set_database_suggestion_destination() unchanged, the
-    exact same operation /config's Manage Collections -> Suggestion
+    exact same operation /config's Collections -> Suggestion
     Destination already performs, so this can never disagree with it.
     That method already enforces destination validation (still exists,
     still usable) and duplicate-destination prevention (no other

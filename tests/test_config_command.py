@@ -19,6 +19,9 @@ from pathlib import Path
 import discord
 
 from watch_party_manager.bot import (
+    SETUP_WIZARD_STEP_TITLES,
+    build_config_section_options,
+    build_config_summary_body,
     handle_config_wash_crew_role_selected,
     send_config_backup_defaults_modal,
     send_config_main_menu,
@@ -29,6 +32,7 @@ from watch_party_manager.bot import (
     send_config_voting_defaults_modal,
 )
 from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, GuildConfiguration, GuildVoteVisibility
+from watch_party_manager.domain.setup_wizard import SETUP_WIZARD_STEP_ORDER, SetupWizardStep
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
@@ -40,7 +44,7 @@ from watch_party_manager.persistence.suggestion_database_repository import (
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.scheduler.scheduled_job import JobResult, JobStatus, ScheduledJob
 from watch_party_manager.scheduler.scheduler_service import SchedulerService
-from watch_party_manager.services.config_service import ConfigSection, ConfigService
+from watch_party_manager.services.config_service import CONFIG_SECTION_ORDER, CONFIG_SECTION_TITLES, ConfigSection, ConfigService
 from watch_party_manager.services.permission_service import PermissionService
 
 
@@ -344,6 +348,122 @@ class MainMenuTests(ConfigCommandTestCase):
         self.assertIsNotNone(options_by_value["voting_defaults"].description)
         self.assertIn("Blind", options_by_value["voting_defaults"].description)
         self.assertIsNone(options_by_value["wash_crew_role"].description)
+
+
+class ConfigSectionNumberingTests(ConfigCommandTestCase):
+    """Consistent Step Numbering: /config's sections are numbered the same
+    way the Setup Wizard numbers its own steps -- CONFIG_SECTION_ORDER is
+    /config's equivalent of SETUP_WIZARD_STEP_ORDER, so a section's
+    position in that tuple (1-based) is its step number everywhere /config
+    shows it: the main-menu summary and the section dropdown.
+    """
+
+    def test_summary_lines_are_numbered_in_order(self) -> None:
+        self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
+
+        body = build_config_summary_body(self.bot.config_service, GUILD_ID, FakeInteraction().guild)
+
+        for index, section in enumerate(CONFIG_SECTION_ORDER, start=1):
+            self.assertIn(f"{index}. {CONFIG_SECTION_TITLES[section]}:", body)
+
+    def test_summary_numbers_are_sequential_starting_at_one(self) -> None:
+        self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
+
+        body = build_config_summary_body(self.bot.config_service, GUILD_ID, FakeInteraction().guild)
+        summary_section = body.split("\n\n", 1)[1]
+        numbered_lines = summary_section.splitlines()
+
+        self.assertEqual(len(numbered_lines), len(CONFIG_SECTION_ORDER))
+        for index, line in enumerate(numbered_lines, start=1):
+            self.assertTrue(line.startswith(f"{index}. "), f"line {index} was: {line!r}")
+
+    def test_dropdown_options_are_numbered_in_order(self) -> None:
+        options = build_config_section_options()
+
+        self.assertEqual(len(options), len(CONFIG_SECTION_ORDER))
+        for index, (section, (value, label)) in enumerate(zip(CONFIG_SECTION_ORDER, options), start=1):
+            self.assertEqual(value, section.value)
+            self.assertEqual(label, f"{index}. {CONFIG_SECTION_TITLES[section]}")
+
+    async def test_main_menu_dropdown_shows_numbered_labels(self) -> None:
+        # End-to-end through the real Discord-facing entry point, not just
+        # the pure helper -- proves the numbering actually reaches the
+        # rendered dropdown a WASH Crew member sees.
+        self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
+        interaction = FakeInteraction()
+
+        await send_config_main_menu(interaction, self.bot, GUILD_ID, edit=False)
+
+        view: ConfigMainMenuView = interaction.response.sent_view
+        select = view.children[0]
+        labels = [option.label for option in select.options]
+        self.assertEqual(
+            labels,
+            [f"{index}. {CONFIG_SECTION_TITLES[section]}" for index, section in enumerate(CONFIG_SECTION_ORDER, start=1)],
+        )
+
+    async def test_main_menu_summary_shows_numbered_lines(self) -> None:
+        self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
+        interaction = FakeInteraction()
+
+        await send_config_main_menu(interaction, self.bot, GUILD_ID, edit=False)
+
+        for index, section in enumerate(CONFIG_SECTION_ORDER, start=1):
+            self.assertIn(f"{index}. {CONFIG_SECTION_TITLES[section]}:", interaction.response.sent_message)
+
+    def test_shared_sections_preserve_the_setup_wizards_relative_order(self) -> None:
+        """Ordering matches the Setup Wizard: every /config section that
+        also exists as a Setup Wizard step must appear in the same
+        relative order here as it does in SETUP_WIZARD_STEP_ORDER --
+        /config never reorders a step relative to another shared step,
+        even though it also carries a couple of its own extra sections
+        (Watch Party Join Mode, Rotation Low-Pool Notification) the wizard
+        has no equivalent step for.
+        """
+        config_to_wizard_step = {
+            ConfigSection.WASH_CREW_ROLE: SetupWizardStep.WASH_CREW_ROLE,
+            ConfigSection.WATCH_PARTY_ROLE: SetupWizardStep.WATCH_PARTY_ROLE,
+            ConfigSection.ADMIN_CHANNEL: SetupWizardStep.ADMIN_CHANNEL,
+            ConfigSection.HOME_CHANNEL: SetupWizardStep.HOME_CHANNEL,
+            ConfigSection.MANAGE_COLLECTIONS: SetupWizardStep.SUGGESTION_DATABASE,
+            ConfigSection.WATCH_DESTINATION: SetupWizardStep.WATCH_DESTINATION,
+            ConfigSection.VOTING_DEFAULTS: SetupWizardStep.VOTING_DEFAULTS,
+            ConfigSection.REMINDER_DEFAULTS: SetupWizardStep.REMINDER_DEFAULTS,
+            ConfigSection.BACKUP_DEFAULTS: SetupWizardStep.BACKUP_DEFAULTS,
+        }
+
+        wizard_positions = {step: SETUP_WIZARD_STEP_ORDER.index(step) for step in config_to_wizard_step.values()}
+        shared_config_sections = [section for section in CONFIG_SECTION_ORDER if section in config_to_wizard_step]
+        wizard_order_for_shared_sections = [
+            wizard_positions[config_to_wizard_step[section]] for section in shared_config_sections
+        ]
+
+        self.assertEqual(wizard_order_for_shared_sections, sorted(wizard_order_for_shared_sections))
+
+    def test_shared_section_titles_match_the_setup_wizard_exactly(self) -> None:
+        """Consistency: for every section whose name isn't deliberately
+        more descriptive in /config (Watch Party Home Channel says more
+        than the wizard's plain Home Channel, by design), the title text
+        itself must be identical to the Setup Wizard's -- never a
+        different word for the same thing (e.g. Collections, not Manage
+        Collections).
+        """
+        identical_titles = {
+            ConfigSection.WASH_CREW_ROLE: SetupWizardStep.WASH_CREW_ROLE,
+            ConfigSection.WATCH_PARTY_ROLE: SetupWizardStep.WATCH_PARTY_ROLE,
+            ConfigSection.ADMIN_CHANNEL: SetupWizardStep.ADMIN_CHANNEL,
+            ConfigSection.MANAGE_COLLECTIONS: SetupWizardStep.SUGGESTION_DATABASE,
+            ConfigSection.WATCH_DESTINATION: SetupWizardStep.WATCH_DESTINATION,
+            ConfigSection.VOTING_DEFAULTS: SetupWizardStep.VOTING_DEFAULTS,
+            ConfigSection.REMINDER_DEFAULTS: SetupWizardStep.REMINDER_DEFAULTS,
+            ConfigSection.BACKUP_DEFAULTS: SetupWizardStep.BACKUP_DEFAULTS,
+        }
+        for config_section, wizard_step in identical_titles.items():
+            self.assertEqual(
+                CONFIG_SECTION_TITLES[config_section],
+                SETUP_WIZARD_STEP_TITLES[wizard_step],
+                f"{config_section} and {wizard_step} should use identical wording",
+            )
 
 
 class SectionRenderingTests(ConfigCommandTestCase):
@@ -858,7 +978,7 @@ class HomeChannelSectionTests(ConfigCommandTestCase):
 class GuildWideWatchDestinationSectionTests(ConfigCommandTestCase):
     """Design refinement: a guild-wide default Watched Item Archive,
     distinct from -- and overridden by -- any per-collection setting
-    inside Manage Collections.
+    inside Collections.
     """
 
     async def test_section_shows_the_channel_picker(self) -> None:

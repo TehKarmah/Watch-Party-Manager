@@ -893,7 +893,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
         self.assertIn(f"WASH Crew Role: Configured (<@&{WASH_CREW_ROLE_ID}>)", interaction.response.sent_message)
-        self.assertIn("Collection: Incomplete", interaction.response.sent_message)
+        self.assertIn("Collections: Incomplete", interaction.response.sent_message)
         self.assertIsInstance(interaction.response.sent_view, ReviewStepView)
 
     async def test_save_with_incomplete_draft_shows_issues_and_returns_to_the_failing_step(self) -> None:
@@ -1379,7 +1379,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         back_button = next(c for c in view.children if isinstance(c, SetupBackButton))
         back_interaction = FakeInteraction()
         await back_button.callback(interaction=back_interaction)
-        self.assertIn("Collection", back_interaction.response.edited_content)
+        self.assertIn("Collections", back_interaction.response.edited_content)
 
     async def test_unauthorized_user_cannot_use_another_administrators_wizard_controls(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)

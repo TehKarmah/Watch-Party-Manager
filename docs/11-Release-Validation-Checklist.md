@@ -238,10 +238,10 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 2.5 Collection (suggestion destination)
+### 2.5 Collections (suggestion destination)
 
 - **Objective:** Confirm a collection (internally an ordinary `SuggestionDatabase` record) is created with its own suggestion thread automatically created as a sibling under WASH's home channel, and that thread is immediately saved as that collection's Suggestion Destination -- no separate destination choice, and no additional configuration needed before `/add` works in it.
-- **Preconditions:** Test 2.4b passed, reached the Collection step.
+- **Preconditions:** Test 2.4b passed, reached the Collections step.
 - **Steps:**
   0. Before choosing anything, confirm the buttons appear in this order: **Create New** (primary/highlighted style), **Select Existing** (secondary style), **Back**, **Save & Finish Later**, then **Cancel Setup** (danger/red style, visually separated from the rest).
   1. Choose **Create New**; confirm a "What type of collection would you like to create?" screen appears with **Movies (Recommended)**, **TV Shows**, **Special Collection**, **Custom**, and **Import Existing Database**.
@@ -249,20 +249,20 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   3. In the server, open the new "Movie Suggestions" thread and run `/add` with any title; confirm the public suggestion post is created immediately in that thread, with no "no suggestion channel is configured" error.
   4. Separately, repeat with **Special Collection** or **Custom**; confirm a name prompt appears first (still fully custom, unaffected by the Movies/TV Shows default naming), then the thread is created using that name.
   5. Separately, click **Import Existing Database**; confirm WASH explains that `/import` must be run as its own command (Discord does not allow attaching a file from inside this wizard) and offers a way back to the type-choice screen.
-- **Expected Result:** The Collection step's buttons appear in the order and styles described in step 0 -- **Create New** is the recommended/default (primary) action, **Select Existing** is secondary, and **Cancel Setup** is styled as danger. Movies/TV Shows create a collection using their descriptive default thread name ("Movie Suggestions"/"TV Suggestions") with no name prompt; Special Collection/Custom collect a name first; every creation path ends with the collection's suggestion thread created as a sibling under the home channel and immediately persisted as that collection's Suggestion Destination (and, internally, all remain ordinary `SuggestionDatabase` records). `/add` works in the new thread right away. Import Existing never fakes an in-wizard upload.
+- **Expected Result:** The Collections step's buttons appear in the order and styles described in step 0 -- **Create New** is the recommended/default (primary) action, **Select Existing** is secondary, and **Cancel Setup** is styled as danger. Movies/TV Shows create a collection using their descriptive default thread name ("Movie Suggestions"/"TV Suggestions") with no name prompt; Special Collection/Custom collect a name first; every creation path ends with the collection's suggestion thread created as a sibling under the home channel and immediately persisted as that collection's Suggestion Destination (and, internally, all remain ordinary `SuggestionDatabase` records). `/add` works in the new thread right away. Import Existing never fakes an in-wizard upload.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 2.5c Nested Collection screens expose Back and Save & Finish Later
+### 2.5c Nested Collections screens expose Back and Save & Finish Later
 
-- **Objective:** Confirm the "what type of collection" screen and the "select an existing collection" screen (both nested under the Collection step) offer **Back** and **Save & Finish Later**, not just **Cancel Setup** -- live testing found these two buttons missing, leaving a full destructive cancel as the only way to exit safely.
+- **Objective:** Confirm the "what type of collection" screen and the "select an existing collection" screen (both nested under the Collections step) offer **Back** and **Save & Finish Later**, not just **Cancel Setup** -- live testing found these two buttons missing, leaving a full destructive cancel as the only way to exit safely.
 - **Preconditions:** Test 2.5 passed.
 - **Steps:**
-  1. From the Collection step, click **Create New** to reach the "what type" screen; confirm **Back**, **Save & Finish Later**, and **Cancel Setup** all appear alongside the five type buttons.
-  2. Click **Back**; confirm it returns to the Collection step (Create New / Select Existing), not an earlier wizard step, and every previously entered value (roles, channels) is still intact.
-  3. Return to the "what type" screen and click **Save & Finish Later**; confirm setup exits without creating a collection and without marking setup complete, and `/setup` later resumes at the Collection step.
+  1. From the Collections step, click **Create New** to reach the "what type" screen; confirm **Back**, **Save & Finish Later**, and **Cancel Setup** all appear alongside the five type buttons.
+  2. Click **Back**; confirm it returns to the Collections step (Create New / Select Existing), not an earlier wizard step, and every previously entered value (roles, channels) is still intact.
+  3. Return to the "what type" screen and click **Save & Finish Later**; confirm setup exits without creating a collection and without marking setup complete, and `/setup` later resumes at the Collections step.
   4. Repeat steps 1-3 for the "select an existing collection" screen (reached via **Select Existing**, with at least one collection already present).
-- **Expected Result:** Both nested screens expose the same Back/Save & Finish Later/Cancel Setup trio as every top-level step; Back returns to the Collection step's own choice screen; Save & Finish Later never creates a collection or marks setup complete.
+- **Expected Result:** Both nested screens expose the same Back/Save & Finish Later/Cancel Setup trio as every top-level step; Back returns to the Collections step's own choice screen; Save & Finish Later never creates a collection or marks setup complete.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -303,11 +303,11 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 2.6b Server-wide default Watched Item Archive (`/config`)
 
-- **Objective:** Confirm `/config`'s Watched Item Archive (Default) section sets a server-wide fallback, and that a collection's own override takes precedence when both are set.
+- **Objective:** Confirm `/config`'s Watched Item Archive section sets a server-wide fallback, and that a collection's own override takes precedence when both are set.
 - **Preconditions:** Setup completed; at least one collection exists.
 - **Steps:**
-  1. Run `/config` -> **Watched Item Archive (Default)**; set it to a channel, or clear it.
-  2. Run `/config` -> **Manage Collections** -> a collection -> its Watched Item Archive; confirm the screen shows both "This collection's own override" and "Currently effective" values.
+  1. Run `/config` -> **Watched Item Archive**; set it to a channel, or clear it.
+  2. Run `/config` -> **Collections** -> a collection -> its Watched Item Archive; confirm the screen shows both "This collection's own override" and "Currently effective" values.
   3. With no per-collection override set, confirm "Currently effective" matches the server default from step 1.
   4. Set a per-collection override to a different channel; confirm "Currently effective" now shows the override, not the server default.
   5. Clear the per-collection override; confirm "Currently effective" falls back to the server default again.
@@ -420,7 +420,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** A guild with at least one collection/suggestion created (e.g. via a `/setup` run stopped or interrupted before reaching Review) but no completed `GuildConfiguration` (`setup_completed` is not True).
 - **Steps:**
   1. Run `/config` on this guild.
-  2. Run `/setup`; on the Collection step, choose **Select Existing** and pick the collection created earlier.
+  2. Run `/setup`; on the Collections step, choose **Select Existing** and pick the collection created earlier.
   3. Complete the remaining steps and Save.
   4. Confirm the collection's suggestions and any created channels/threads are unchanged throughout.
 - **Expected Result:** Step 1 shows a friendly "Initial setup hasn't been completed yet. Run `/setup` first." message, not an error. Step 2 offers the existing collection rather than forcing a new one. Steps 3-4 show no data loss and no duplicate collection, channel, or thread at any point -- `/setup` never automatically deletes or resets existing data to "fix" an incomplete configuration.
@@ -437,7 +437,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** Section 2 completed.
 - **Steps:**
   1. Run `/config` as WASH Crew.
-- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Manage Collections, Watched Item Archive (Default), Voting Defaults, Reminder Defaults, Backup Defaults) appears, each showing its current status.
+- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Collections, Watched Item Archive, Voting Defaults, Reminder Defaults, Backup Defaults) appears, each showing its current status.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -521,8 +521,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   7. Repeat step 1-4 choosing **Create New Thread** instead; confirm the new thread is created under WASH's configured Home Channel and the suggested default name can be renamed before creation (renaming here must not change the collection's own name -- only `/database add`'s Create New Thread renames the collection).
   8. Run `/database move` again from inside a thread; confirm **Use Current Thread** is enabled and, when chosen, moves the collection's destination to that same thread with no further prompts.
   9. Run `/database move` again from a plain text channel, including WASH's own Home Channel; confirm **Use Current Thread** stays disabled in both cases.
-  10. Attempt to route a collection's suggestion destination to WASH's configured Home Channel (e.g. via `/config` -> Manage Collections -> Suggestion Destination, if reachable, or by any other means available); confirm it's clearly rejected and nothing changes.
-- **Expected Result:** Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, rotation history, and statistics are all unchanged (spot-check via `/stats type:Collection` or `/config` -> Manage Collections before and after); existing Discord suggestion posts are never moved; only suggestions added after the move appear in the new destination; a duplicate destination is rejected cleanly; **Use Current Thread** behaves identically to `/database add`'s version (same enable/disable rule) but never renames the collection; WASH's Home Channel is never accepted as a destination, from any path.
+  10. Attempt to route a collection's suggestion destination to WASH's configured Home Channel (e.g. via `/config` -> Collections -> Suggestion Destination, if reachable, or by any other means available); confirm it's clearly rejected and nothing changes.
+- **Expected Result:** Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, rotation history, and statistics are all unchanged (spot-check via `/stats type:Collection` or `/config` -> Collections before and after); existing Discord suggestion posts are never moved; only suggestions added after the move appear in the new destination; a duplicate destination is rejected cleanly; **Use Current Thread** behaves identically to `/database add`'s version (same enable/disable rule) but never renames the collection; WASH's Home Channel is never accepted as a destination, from any path.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -534,7 +534,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   1. From collection A's *original* (pre-move) location, run `/add`, `/list`, `/vote start`, and `/stats type:Collection`; confirm none of them resolve to collection A there anymore (each should show its usual ambiguous/no-match picker or message, since collection B still exists too).
   2. From collection A's *new* thread, run the same four commands; confirm all four resolve to collection A immediately, with no extra step.
   3. Restart the bot, then repeat step 2.
-  4. Run `/database list` and `/config` -> Manage Collections; confirm both show collection A's *current* (post-move) channel, not its original one.
+  4. Run `/database list` and `/config` -> Collections; confirm both show collection A's *current* (post-move) channel, not its original one.
   5. Create a brand-new collection C using collection A's *original*, now-freed location as its destination; confirm this succeeds (the old location is genuinely free for reuse, not permanently reserved).
 - **Expected Result:** Exactly one location resolves to collection A at any given time -- its current destination -- both before and after a restart; `/database list`/`/config` never show a stale channel; a freed-up former destination can be reused by a different collection.
 - **Result:** [ ] Pass [ ] Fail
@@ -548,7 +548,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   1. Run `/database manage`; confirm the same collection picker used elsewhere in `/database` appears.
   2. Choose a collection; confirm a management menu appears offering exactly: **Move Collection**, **Edit Collection**, **Backup Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, **Cancel**.
   3. Choose **Move Collection**; confirm it launches the identical destination-choice screen used by `/database move` (same three thread-only options, same order) and completes the move.
-  4. Return to `/database manage` and choose **Edit Collection**; confirm it shows the same settings menu `/config` -> Manage Collections shows for that database, and that its **Back** button returns to the `/database manage` management menu (not to `/config`'s picker).
+  4. Return to `/database manage` and choose **Edit Collection**; confirm it shows the same settings menu `/config` -> Collections shows for that database, and that its **Back** button returns to the `/database manage` management menu (not to `/config`'s picker).
   5. Choose **Backup Collection**; confirm a backup file is produced, matching `/database backup`'s output.
   6. Choose **Restore Collection**; confirm it points the user at running `/database restore` directly (a modal/component interaction cannot carry a file upload, so this cannot be button-driven) rather than silently failing.
   7. Choose **Reset Collection**; confirm the same confirmation and behavior as `/database reset`.
@@ -597,7 +597,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/add`, `/list`, `/vote start`, or `/stats type:Rotation`/`type:Database` inside one database's configured channel or thread; confirm WASH uses that database automatically, with no prompt.
   2. Run the same command in a channel not tied to either database; confirm WASH asks "Which collection would you like to use?" with a picker listing both instead of guessing.
-  3. Run `/config` -> **Manage Collections**; confirm both collections are listed and each is directly, independently editable (destinations and candidate selection) -- neither is reported as "Invalid" for being simultaneously active.
+  3. Run `/config` -> **Collections**; confirm both collections are listed and each is directly, independently editable (destinations and candidate selection) -- neither is reported as "Invalid" for being simultaneously active.
 - **Expected Result:** WASH never silently guesses between multiple databases; a matching channel resolves automatically, and an unmatched channel always shows a picker.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -663,7 +663,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 ### 4.5 Suggestion posting to a public thread destination
 
 - **Objective:** Confirm a public thread works identically to a text channel as a suggestion destination, and that `/add` run *inside* that thread resolves the same database `/config` reports for it.
-- **Preconditions:** A suggestion database whose configured post destination is a public thread (change it via `/config` -> Manage Collections -> the collection -> Suggestion Destination, if the database's original channel differs).
+- **Preconditions:** A suggestion database whose configured post destination is a public thread (change it via `/config` -> Collections -> the collection -> Suggestion Destination, if the database's original channel differs).
 - **Steps:**
   1. Confirm `/config` reports the thread as the configured Suggestion Post Destination.
   2. Run `/add` from inside that thread.
@@ -840,7 +840,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Confirm the message body also explains Visible/Blind (same wording as Test 2.7).
   3. Select **Pure Random**, then press **Continue to Vote Settings**; confirm the familiar candidate count/duration/visibility/reminder modal opens (no candidate-selection field in it).
   4. Submit the modal; confirm the round is created successfully.
-  5. Run `/config` -> **Manage Collections** -> this collection -> **Candidate Selection**; confirm it still shows **Balanced Random**, unchanged by the override just used.
+  5. Run `/config` -> **Collections** -> this collection -> **Candidate Selection**; confirm it still shows **Balanced Random**, unchanged by the override just used.
 - **Expected Result:** The override applies to that one round's nominee selection only; the collection's own configured Candidate Selection Mode is never modified by Customize This Vote.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
