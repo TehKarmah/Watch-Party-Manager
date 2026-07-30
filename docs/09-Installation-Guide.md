@@ -162,6 +162,9 @@ WASH does not need Manage Messages, Manage Roles, Administrator, or any moderati
 
 > [!IMPORTANT]
 > **WASH must be added as a Guild Install, with both scopes selected together.** WASH is a traditional bot: it needs to actually join your server as a member to function -- it does not support Discord's User Install or command-only integration types, and nothing in WASH is built to work that way. If your Discord Application's **Installation** page (in the Developer Portal, separate from the OAuth2 URL Generator) has Guild Install scopes configured with `applications.commands` but not `bot`, slash commands can still appear to work in some contexts while WASH never actually joins the server -- which breaks anything that depends on WASH being a real member, including `/setup`'s first-run owner check. Confirm Guild Install is enabled and both `bot` and `applications.commands` are selected for it before inviting WASH.
+>
+> <img width="1339" height="558" alt="image" src="https://github.com/user-attachments/assets/f2b6e372-d1f6-4f0e-beec-6bfd91deee32" />
+
 
 ## 7. Configure `.env`
 
