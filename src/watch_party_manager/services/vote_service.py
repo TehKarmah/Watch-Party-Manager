@@ -126,6 +126,7 @@ class VoteService:
         closes_at: Optional[datetime] = None,
         candidate_suggestion_ids: Optional[List[int]] = None,
         database_id: Optional[int] = None,
+        rotation_id: Optional[int] = None,
         reminder_enabled: Optional[bool] = None,
         reminder_minutes_before_close: Optional[int] = None,
     ) -> VoteRoundResult:
@@ -138,6 +139,10 @@ class VoteService:
             candidate_suggestion_ids: The exact nominees eligible in this round.
                 When omitted, legacy service callers retain the previous behavior.
             database_id: The suggestion database this round belongs to, when known.
+            rotation_id: The Rotation (see domain/rotation.py) this round's
+                candidates were drawn from, when known -- recorded once so
+                "Round X • Rotation Y" can be shown consistently without
+                re-deriving it from candidate journeys later.
             reminder_enabled: FR-027: a per-round override of the guild's
                 configured vote-ending reminder setting, or None to use
                 the guild default (see
@@ -193,6 +198,7 @@ class VoteService:
             closes_at=closes_at,
             candidate_suggestion_ids=candidate_ids,
             database_id=database_id,
+            rotation_id=rotation_id,
             reminder_enabled=reminder_enabled,
             reminder_minutes_before_close=reminder_minutes_before_close,
         )

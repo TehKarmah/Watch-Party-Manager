@@ -446,6 +446,64 @@ class VoteRepositoryDatabaseTests(unittest.TestCase):
         self.assertIsNone(self.repository.load().rounds[0].database_id)
 
 
+class VoteRepositoryRotationTests(unittest.TestCase):
+    """Rotation Context in Voting: VoteRound.rotation_id persists like any
+    other optional int field (mirrors VoteRepositoryDatabaseTests exactly)
+    -- a legacy record saved before this field existed must keep loading
+    cleanly, with rotation_id defaulting to None rather than raising or
+    fabricating a value.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.file_path = Path(self._temp_dir.name) / "voting_rotation.json"
+        self.repository = JsonVoteRepository(self.file_path)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_rotation_id_round_trips(self) -> None:
+        self.repository.save([VoteRound(id=1, database_id=9, rotation_id=3)], next_round_id=2)
+        self.assertEqual(self.repository.load().rounds[0].rotation_id, 3)
+
+    def test_a_round_with_no_rotation_id_round_trips_as_none(self) -> None:
+        self.repository.save([VoteRound(id=1, database_id=9)], next_round_id=2)
+        self.assertIsNone(self.repository.load().rounds[0].rotation_id)
+
+    def test_legacy_round_without_rotation_id_defaults_to_none(self) -> None:
+        # A record written by the persistence layer before rotation_id
+        # existed has no "rotation_id" key in its JSON at all (not merely
+        # a null value) -- this is that exact shape.
+        now = utc_now()
+        self.file_path.write_text(
+            '{"next_round_id": 2, "rounds": [{"id": 1, "status": "open", '
+            '"visibility": "visible", "created_at": "' + now.isoformat() + '", '
+            '"closes_at": null, "winning_suggestion_id": null, "database_id": 9, "votes": []}]}',
+            encoding="utf-8",
+        )
+        loaded_round = self.repository.load().rounds[0]
+        self.assertIsNone(loaded_round.rotation_id)
+        # And the round itself is otherwise fully usable -- loading a
+        # legacy record is not merely "does not crash," it produces a
+        # normal, functional VoteRound.
+        self.assertEqual(loaded_round.id, 1)
+        self.assertEqual(loaded_round.database_id, 9)
+
+    def test_legacy_round_missing_both_database_id_and_rotation_id_still_loads(self) -> None:
+        # Even older records predate database_id too -- rotation_id must
+        # default to None independently of database_id's own presence.
+        now = utc_now()
+        self.file_path.write_text(
+            '{"next_round_id": 2, "rounds": [{"id": 1, "status": "closed", '
+            '"visibility": "visible", "created_at": "' + now.isoformat() + '", '
+            '"closes_at": null, "winning_suggestion_id": null, "votes": []}]}',
+            encoding="utf-8",
+        )
+        loaded_round = self.repository.load().rounds[0]
+        self.assertIsNone(loaded_round.database_id)
+        self.assertIsNone(loaded_round.rotation_id)
+
+
 class VoteRepositoryCancelledStatusTests(unittest.TestCase):
     """FR-023: VoteRoundStatus.CANCELLED persists and loads like any other status."""
 

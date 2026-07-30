@@ -203,6 +203,7 @@ from watch_party_manager.services.vote_announcement_formatter import (
     build_vote_cancellation_notice,
     build_vote_deadline_change_notice,
     build_vote_link,
+    build_vote_round_line,
     format_standings_lines,
     format_vote_title,
     resolve_vote_collection_name,
@@ -372,6 +373,7 @@ class WatchPartyBot(commands.Bot):
                 self.suggestion_service,
                 self,
                 on_finalized=lambda result: sync_vote_completion_status_embeds(self, result),
+                rotation_service=self.rotation_service,
             ),
         )
         self.scheduler_host.scheduler_service.register_handler(
@@ -1228,6 +1230,7 @@ def build_vote_status_text(
     standings: Optional[List[StandingsEntry]],
     standings_error: Optional[str],
     candidates: Optional[List[WatchItem]] = None,
+    rotation_number: Optional[int] = None,
 ) -> str:
     """Build the /vote_status message for a round.
 
@@ -1243,6 +1246,10 @@ def build_vote_status_text(
             titles rather than internal suggestion numbers (Release
             Polish Batch 2, Priority 3). Optional so existing callers
             with no candidates in scope keep working.
+        rotation_number: The Rotation this round's candidates were drawn
+            from, if known (Rotation Context in Voting) -- see
+            resolve_rotation_number_for_round. None omits it, e.g. a
+            legacy round created before VoteRound.rotation_id existed.
 
     Returns:
         The formatted status text. Total votes cast is always shown,
@@ -1251,8 +1258,11 @@ def build_vote_status_text(
         round has enough Discord message metadata to build one (see
         build_vote_link); omitted entirely for legacy rounds that don't.
     """
+    round_line = f"Voting round {vote_round.id}"
+    if rotation_number is not None:
+        round_line = f"{round_line} • Rotation {rotation_number}"
     lines = [
-        f"Voting round {vote_round.id}",
+        round_line,
         f"Status: {vote_round.status.value.capitalize()}",
         f"Visibility: {vote_round.visibility.value.capitalize()}",
         f"Candidates: {candidate_count}",
@@ -1535,7 +1545,19 @@ def perform_start_vote(
         candidates = nominee_selection_service.select_nominees(
             resolution.database.database_id, count, strategy=strategy
         )
+        # Rotation Context in Voting: record which Rotation these
+        # candidates actually came from (the one select_nominees just
+        # admitted/presented them into), so the active voting embed,
+        # /vote_status, and results can all show "Rotation Y" without
+        # re-deriving it from candidate journeys later.
+        open_rotation = (
+            rotation_service.get_open_rotation(resolution.database.database_id)
+            if rotation_service is not None
+            else None
+        )
+        rotation_id = open_rotation.id if open_rotation is not None else None
     else:
+        rotation_id = None
         # No database context (or no selection service configured): fall
         # back to a simple, non-database-scoped pool. Same rule as above
         # -- compare against the actual resolved candidate count, not a
@@ -1552,6 +1574,7 @@ def perform_start_vote(
         closes_at=closes_at,
         candidate_suggestion_ids=[candidate.id for candidate in candidates],
         database_id=(resolution.database.database_id if resolution is not None else None),
+        rotation_id=rotation_id,
         reminder_enabled=reminder_enabled,
         reminder_minutes_before_close=reminder_minutes_before_close,
     )
@@ -4457,10 +4480,17 @@ async def handle_start_vote_completion(
             ),
             wash_crew_role_id=wash_crew_role_id,
         ),
+        rotation_service=rotation_service,
     )
     collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
+    rotation_number = resolve_rotation_number_for_round(rotation_service, vote_round)
     post_embed = build_voting_post_embed(
-        vote_round, candidates, standings=None, standings_error=None, collection_name=collection_name
+        vote_round,
+        candidates,
+        standings=None,
+        standings_error=None,
+        collection_name=collection_name,
+        rotation_number=rotation_number,
     )
     await interaction.response.send_message(embed=post_embed, view=view)
     sent_message = await interaction.original_response()
@@ -4590,6 +4620,7 @@ def perform_vote_status(
     vote_service: VoteService,
     suggestion_service: SuggestionService,
     database_id: Optional[int] = None,
+    rotation_service: Optional[RotationService] = None,
 ) -> str:
     """Core logic for /vote_status, kept free of Discord objects entirely.
 
@@ -4605,6 +4636,11 @@ def perform_vote_status(
             Optional so existing callers/tests without a resolved
             collection keep working unchanged (see
             VoteService.get_latest_round).
+        rotation_service: Used to resolve which Rotation the round's
+            candidates were drawn from (Rotation Context in Voting), for
+            display as "Round X • Rotation Y". Optional, defaulting to
+            None so existing callers/tests keep working unchanged; the
+            rotation number is simply omitted in that case.
 
     Returns:
         The status message, or a clear "no round exists" message.
@@ -4632,7 +4668,10 @@ def perform_vote_status(
         else suggestion_service.suggestion_count()
     )
     candidates = get_round_candidates(suggestion_service, vote_round)
-    return build_vote_status_text(vote_round, candidate_count, standings, standings_error, candidates)
+    rotation_number = resolve_rotation_number_for_round(rotation_service, vote_round)
+    return build_vote_status_text(
+        vote_round, candidate_count, standings, standings_error, candidates, rotation_number
+    )
 
 
 async def handle_vote_status(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
@@ -4658,6 +4697,7 @@ async def handle_vote_status(interaction: discord.Interaction, bot: "WatchPartyB
             vote_service=bot.vote_service,
             suggestion_service=bot.suggestion_service,
             database_id=database.database_id,
+            rotation_service=getattr(bot, "rotation_service", None),
         )
         await resolved_interaction.response.send_message(message, ephemeral=True)
 
@@ -4794,6 +4834,7 @@ def build_voting_view(
     suggestion_service: SuggestionService,
     candidates: List[WatchItem],
     permission_service: Optional[PermissionService] = None,
+    rotation_service: Optional[RotationService] = None,
 ) -> VotingView:
     """Build a voting view whose buttons use the shared vote handler."""
 
@@ -4806,6 +4847,7 @@ def build_voting_view(
             suggestion_service,
             suggestion_id,
             permission_service=permission_service,
+            rotation_service=rotation_service,
         )
 
     return VotingView(candidates, on_vote=on_vote_click)
@@ -4889,6 +4931,7 @@ def restore_persistent_voting_views(
             suggestion_service,
             candidates,
             permission_service=permission_service,
+            rotation_service=getattr(bot, "rotation_service", None),
         )
         bot.add_view(view, message_id=vote_round.message_id)
         logger.info(
@@ -5232,6 +5275,7 @@ def build_voting_post_embed(
     standings: Optional[List[StandingsEntry]],
     standings_error: Optional[str],
     collection_name: Optional[str] = None,
+    rotation_number: Optional[int] = None,
 ) -> discord.Embed:
     """Build the public voting post's embed for a round (Release Polish
     Batch 2, Priority 5).
@@ -5258,8 +5302,14 @@ def build_voting_post_embed(
         collection_name: The round's collection, if known (Requirement 1:
             voting is centered on the collection, not the round number)
             -- see resolve_vote_collection_name. None falls back to a
-            generic "Voting Is Open" title; the round number is always
-            shown separately as a field either way.
+            generic "Voting Is Open" title.
+        rotation_number: The Rotation this round's candidates were drawn
+            from, if known (Rotation Context in Voting; see
+            resolve_rotation_number_for_round) -- shown as "Round X •
+            Rotation Y" on the very first line of the description, so
+            both values are immediately visible without scrolling to the
+            fields row. Falls back to "Round X" alone when unresolvable
+            (a legacy round, or one with no database context).
 
     Returns:
         The embed. Total votes cast is always shown -- for a blind round
@@ -5267,7 +5317,11 @@ def build_voting_post_embed(
         percentages, and progress bars are additionally shown for a
         visible round (never for blind, preserving that round's privacy).
     """
-    description_lines = [f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}", ""]
+    description_lines = [
+        build_vote_round_line(vote_round, rotation_number),
+        f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
+        "",
+    ]
     description_lines.extend(build_candidate_standings_lines(candidates, vote_round, standings, standings_error))
 
     return EmbedFactory.info(
@@ -5275,7 +5329,6 @@ def build_voting_post_embed(
         "\n".join(description_lines),
         footer=None,
         fields=[
-            {"name": "Round", "value": str(vote_round.id), "inline": True},
             {"name": "Visibility", "value": vote_round.visibility.value.capitalize(), "inline": True},
             {"name": "Votes Cast", "value": str(len(vote_round.votes)), "inline": True},
         ],
@@ -5283,7 +5336,10 @@ def build_voting_post_embed(
 
 
 def build_current_voting_post_embed(
-    vote_service: VoteService, suggestion_service: SuggestionService, vote_round: VoteRound
+    vote_service: VoteService,
+    suggestion_service: SuggestionService,
+    vote_round: VoteRound,
+    rotation_service: Optional[RotationService] = None,
 ) -> discord.Embed:
     """Recompute and build a round's voting post embed from its current state.
 
@@ -5296,6 +5352,10 @@ def build_current_voting_post_embed(
         vote_service: Used to recompute standings.
         suggestion_service: Used to re-list the current nominees.
         vote_round: The round to build the post embed for.
+        rotation_service: Used to resolve which Rotation this round's
+            candidates were drawn from (Rotation Context in Voting), for
+            display as "Round X • Rotation Y". Omitted (embed shows only
+            "Round X") when not supplied.
 
     Returns:
         The embed (see build_voting_post_embed).
@@ -5305,7 +5365,10 @@ def build_current_voting_post_embed(
     standings = standings_result.standings if standings_result.success else None
     standings_error = None if standings_result.success else standings_result.message
     collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
-    return build_voting_post_embed(vote_round, candidates, standings, standings_error, collection_name)
+    rotation_number = resolve_rotation_number_for_round(rotation_service, vote_round)
+    return build_voting_post_embed(
+        vote_round, candidates, standings, standings_error, collection_name, rotation_number
+    )
 
 
 async def refresh_voting_post(
@@ -5313,6 +5376,7 @@ async def refresh_voting_post(
     vote_service: VoteService,
     suggestion_service: SuggestionService,
     vote_round: VoteRound,
+    rotation_service: Optional[RotationService] = None,
 ) -> None:
     """Update the public voting post after a vote, for visible rounds only.
 
@@ -5322,8 +5386,10 @@ async def refresh_voting_post(
         vote_service: Used to recompute standings.
         suggestion_service: Used to re-list the current nominees.
         vote_round: The round being voted in.
+        rotation_service: Used to show "Round X • Rotation Y" (Rotation
+            Context in Voting) -- see build_current_voting_post_embed.
     """
-    embed = build_current_voting_post_embed(vote_service, suggestion_service, vote_round)
+    embed = build_current_voting_post_embed(vote_service, suggestion_service, vote_round, rotation_service)
     await interaction.message.edit(embed=embed)
 
 
@@ -5333,6 +5399,7 @@ async def handle_nominee_vote(
     suggestion_service: SuggestionService,
     suggestion_id: int,
     permission_service: Optional[PermissionService] = None,
+    rotation_service: Optional[RotationService] = None,
 ) -> None:
     """Core logic for a nominee button click.
 
@@ -5345,6 +5412,8 @@ async def handle_nominee_vote(
         vote_service: The vote service to cast the vote through.
         suggestion_service: Used to re-list nominees when refreshing the post.
         suggestion_id: The nominee this button represents.
+        rotation_service: Threaded through to refresh_voting_post so the
+            refreshed post keeps showing "Round X • Rotation Y".
     """
     if permission_service is not None:
         permission = permission_service.require_watch_party_member(interaction.user)
@@ -5360,7 +5429,7 @@ async def handle_nominee_vote(
     # different collection's concurrently-open round.
     vote_round = vote_service.get_open_round_for_suggestion(suggestion_id)
     if vote_round is not None and vote_round.visibility == VoteVisibility.VISIBLE:
-        await refresh_voting_post(interaction, vote_service, suggestion_service, vote_round)
+        await refresh_voting_post(interaction, vote_service, suggestion_service, vote_round, rotation_service)
 
 
 # --- FR-023: /edit_vote -- WASH Crew administrative vote management -------------
@@ -5796,15 +5865,17 @@ async def handle_reschedule_vote_completion(
             guild_configuration_repository=guild_configuration_repository,
         )
 
+    rotation_service = getattr(bot, "rotation_service", None)
     if vote_round.channel_id is not None:
         collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
-        notice = build_vote_deadline_change_notice(vote_round, collection_name)
+        rotation_number = resolve_rotation_number_for_round(rotation_service, vote_round)
+        notice = build_vote_deadline_change_notice(vote_round, collection_name, rotation_number)
         channel = bot.get_channel(vote_round.channel_id)
         if channel is None:
             channel = await bot.fetch_channel(vote_round.channel_id)
         await channel.send(notice)
 
-    embed = build_current_voting_post_embed(vote_service, suggestion_service, vote_round)
+    embed = build_current_voting_post_embed(vote_service, suggestion_service, vote_round, rotation_service)
     await update_voting_message(bot, vote_round, embed=embed)
 
 
@@ -5892,7 +5963,13 @@ async def handle_end_vote_now_completion(
     # disabled).
     await cancel_vote_jobs(scheduler_service, round_id)
 
-    await finalize_vote_completion(vote_service, suggestion_service, bot, result)
+    await finalize_vote_completion(
+        vote_service,
+        suggestion_service,
+        bot,
+        result,
+        rotation_service=getattr(bot, "rotation_service", None),
+    )
     await sync_vote_completion_status_embeds(bot, result)
 
 
@@ -5969,7 +6046,8 @@ async def handle_cancel_vote_now_completion(
             if suggestion_service is not None
             else None
         )
-        notice = build_vote_cancellation_notice(vote_round, collection_name)
+        rotation_number = resolve_rotation_number_for_round(getattr(bot, "rotation_service", None), vote_round)
+        notice = build_vote_cancellation_notice(vote_round, collection_name, rotation_number)
         channel = bot.get_channel(vote_round.channel_id)
         if channel is None:
             channel = await bot.fetch_channel(vote_round.channel_id)
@@ -6073,7 +6151,7 @@ def build_original_suggestion_link(item: WatchItem) -> Optional[str]:
     return f"[Original Suggestion]({message_url})"
 
 
-def build_duplicate_match_line(match: DuplicateMatch) -> str:
+def build_duplicate_match_line(match: DuplicateMatch, rotation_service: Optional[RotationService] = None) -> str:
     """One matched existing item's line/block within an /add duplicate
     warning.
 
@@ -6084,6 +6162,10 @@ def build_duplicate_match_line(match: DuplicateMatch) -> str:
     category (active, archived-rejected, archived-other) keeps that
     original single-line format, but with the same labeled link in place
     of the bare IMDb URL it used to show.
+
+    rotation_service resolves the real Rotation Cooldown status (rather
+    than always reporting Available) -- optional, defaulting to None so
+    existing callers/tests keep working unchanged.
     """
     item = match.watch_item
     if match.category is DuplicateMatchCategory.VOTE_WINNER:
@@ -6093,7 +6175,7 @@ def build_duplicate_match_line(match: DuplicateMatch) -> str:
     original_suggestion_link = build_original_suggestion_link(item)
     if original_suggestion_link is not None:
         parts.append(original_suggestion_link)
-    display_status = compute_display_status(item, in_rotation_cooldown=False)
+    display_status = resolve_display_status(item, rotation_service)
     parts.append(f"status: {display_status_label(display_status)}")
     return " | ".join(parts)
 
@@ -6129,7 +6211,12 @@ _ARCHIVE_CATEGORY_LABELS = {
 }
 
 
-def decide_add_suggestion_outcome(duplicate_result: DuplicateCheckResult, *, is_crew: bool) -> AddSuggestionDecision:
+def decide_add_suggestion_outcome(
+    duplicate_result: DuplicateCheckResult,
+    *,
+    is_crew: bool,
+    rotation_service: Optional[RotationService] = None,
+) -> AddSuggestionDecision:
     """Turn a duplicate check into what /add should do next (Sections 2-3).
 
     Never guesses: an ACTIVE match always blocks outright (no override,
@@ -6138,6 +6225,10 @@ def decide_add_suggestion_outcome(duplicate_result: DuplicateCheckResult, *, is_
     confirms; a possible-only match only proceeds (as a genuinely new
     suggestion) after WASH Crew explicitly confirms. Regular members
     can never bypass either warning.
+
+    rotation_service resolves each matched item's real Rotation Cooldown
+    status (rather than always reporting Available) -- optional,
+    defaulting to None so existing callers/tests keep working unchanged.
     """
     if duplicate_result.has_definite_match:
         active_matches = [
@@ -6147,12 +6238,15 @@ def decide_add_suggestion_outcome(duplicate_result: DuplicateCheckResult, *, is_
             match = active_matches[0]
             return AddSuggestionDecision(
                 AddSuggestionOutcomeKind.BLOCKED_ACTIVE,
-                "🔴 That title is already in this collection.\n" + build_duplicate_match_line(match),
+                "🔴 That title is already in this collection.\n" + build_duplicate_match_line(match, rotation_service),
                 matched_item=match.watch_item,
             )
 
         match = duplicate_result.definite_matches[0]
-        detail = f"This title has {_ARCHIVE_CATEGORY_LABELS[match.category]}:\n" + build_duplicate_match_line(match)
+        detail = (
+            f"This title has {_ARCHIVE_CATEGORY_LABELS[match.category]}:\n"
+            + build_duplicate_match_line(match, rotation_service)
+        )
         if not is_crew:
             return AddSuggestionDecision(
                 AddSuggestionOutcomeKind.BLOCKED_NO_CREW_OVERRIDE, detail, matched_item=match.watch_item
@@ -6162,7 +6256,9 @@ def decide_add_suggestion_outcome(duplicate_result: DuplicateCheckResult, *, is_
         )
 
     if duplicate_result.has_possible_only:
-        lines = "\n".join(build_duplicate_match_line(match) for match in duplicate_result.matches)
+        lines = "\n".join(
+            build_duplicate_match_line(match, rotation_service) for match in duplicate_result.matches
+        )
         detail = (
             "This title matches existing item(s) with no confirmed release year, "
             "so it might be a duplicate:\n" + lines
@@ -6300,6 +6396,16 @@ async def post_watched_item_archive(bot: "WatchPartyBot", watch_item: WatchItem)
         )
 
 
+# Rotation-state consistency audit (Section 3): sync_suggestion_status_embed
+# retries a transient failure once, after a short delay, rather than leaving
+# a post stale until some unrelated later event happens to touch it again.
+# Deliberately small and inline (no background job/queue) -- a genuinely
+# unrecoverable failure (deleted message, revoked permissions) is detected
+# via discord.NotFound/discord.Forbidden and never retried.
+_STATUS_EMBED_SYNC_MAX_ATTEMPTS = 2
+_STATUS_EMBED_SYNC_RETRY_DELAY_SECONDS = 0.5
+
+
 async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchItem) -> None:
     """Edit a suggestion's existing public post in place after its status
     changes (Requirement 7), so its Status field never goes stale.
@@ -6307,11 +6413,15 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
     Deliberately never creates a new post -- "edit the original
     suggestion embed... Do not recreate the message." A suggestion with
     no existing post (message_id/channel_id unset, e.g. one never
-    publicly confirmed) or an unreachable one (deleted, permissions
-    revoked) is silently skipped: there's nothing to keep synchronized,
-    and the status itself is already correctly persisted regardless of
-    whether the embed could be refreshed. Called after every status
-    change this milestone introduces admin control over: archive,
+    publicly confirmed) is a no-op: there's nothing to sync. An
+    unreachable post (deleted, permissions revoked -- discord.NotFound/
+    discord.Forbidden) is logged and skipped without retrying, since
+    that's a permanent condition. Any other failure (a transient network
+    blip, a Discord-side 5xx) is retried once after a short delay before
+    being logged and skipped -- see _STATUS_EMBED_SYNC_MAX_ATTEMPTS.
+    Either way, the status itself is already correctly persisted
+    regardless of whether the embed could be refreshed. Called after
+    every status change this milestone introduces admin control over: archive,
     reactivate, and /edit_suggestion's Change Status action. Vote
     completion is synchronized separately, once per candidate, by
     sync_vote_completion_status_embeds() -- called after both completion
@@ -6346,18 +6456,52 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
         bot=bot,
     )
 
-    try:
-        channel = bot.get_channel(watch_item.channel_id)
-        if channel is None:
-            channel = await bot.fetch_channel(watch_item.channel_id)
-        message = await channel.fetch_message(watch_item.message_id)
-        await message.edit(embed=embed, view=view)
-    except Exception:
+    def log_final_failure(reason: str) -> None:
+        # Logs enough to find the exact post by hand: which suggestion,
+        # and which Discord message/channel its post lives at.
         logger.warning(
-            "Could not sync suggestion %s's status embed; leaving the existing post as-is",
+            "Could not sync suggestion %s's status embed (channel %s, message %s) after %s attempt(s); "
+            "leaving the existing post as-is (%s)",
             watch_item.id,
+            watch_item.channel_id,
+            watch_item.message_id,
+            attempt + 1,
+            reason,
             exc_info=True,
         )
+
+    for attempt in range(_STATUS_EMBED_SYNC_MAX_ATTEMPTS):
+        try:
+            channel = bot.get_channel(watch_item.channel_id)
+            if channel is None:
+                channel = await bot.fetch_channel(watch_item.channel_id)
+            message = await channel.fetch_message(watch_item.message_id)
+            await message.edit(embed=embed, view=view)
+            return
+        except (discord.NotFound, discord.Forbidden):
+            # The message/channel is gone or no longer accessible -- a
+            # permanent condition retrying can't fix (message deleted,
+            # permissions revoked) -- so this is logged and skipped
+            # without spending the remaining retry attempts.
+            log_final_failure("permanent: message/channel unreachable")
+            return
+        except Exception:
+            if attempt + 1 >= _STATUS_EMBED_SYNC_MAX_ATTEMPTS:
+                log_final_failure("transient failure persisted past the retry budget")
+                return
+            # Reliability fix (rotation-state consistency audit): a
+            # transient failure (network blip, Discord-side 5xx) used to
+            # leave a post permanently stale with no retry. One short,
+            # bounded retry -- not a background job or queue -- resolves
+            # the common transient case with minimal added complexity.
+            logger.info(
+                "Retrying suggestion %s's status embed sync (channel %s, message %s) after a transient failure",
+                watch_item.id,
+                watch_item.channel_id,
+                watch_item.message_id,
+                exc_info=True,
+            )
+            await asyncio.sleep(_STATUS_EMBED_SYNC_RETRY_DELAY_SECONDS)
 
 
 async def sync_vote_start_status_embeds(bot: "WatchPartyBot", candidates: "List[WatchItem]") -> None:
@@ -6555,7 +6699,9 @@ async def handle_add_suggestion(
         duplicate_result = find_duplicates(
             title=final_title, release_year=final_release_year, imdb_url=resolved.imdb_url, existing_items=existing_items
         )
-        decision = decide_add_suggestion_outcome(duplicate_result, is_crew=is_crew)
+        decision = decide_add_suggestion_outcome(
+            duplicate_result, is_crew=is_crew, rotation_service=getattr(bot, "rotation_service", None)
+        )
 
         async def create_new_suggestion(create_interaction: discord.Interaction) -> None:
             result = bot.suggestion_service.suggest(
@@ -7735,6 +7881,29 @@ def resolve_rotation_number(rotation_service: RotationService, database_id: int,
     return len(rotation_service.list_rotations(database_id))
 
 
+def resolve_rotation_number_for_round(
+    rotation_service: Optional[RotationService], vote_round: VoteRound
+) -> Optional[int]:
+    """The 1-based "Rotation N" number a voting round's candidates were
+    drawn from (Rotation Context in Voting), for display alongside
+    "Round X" wherever a round is shown -- the active voting embed,
+    /vote_status, results, and vote-history text.
+
+    Returns None -- callers omit the rotation entirely rather than show
+    a placeholder -- when rotation_service is unavailable, or the round
+    has no database_id/rotation_id recorded (a legacy round created
+    before VoteRound.rotation_id existed, or one created outside any
+    collection context), or its rotation could no longer be found in
+    that collection's own history.
+    """
+    if rotation_service is None or vote_round.database_id is None or vote_round.rotation_id is None:
+        return None
+    for index, rotation in enumerate(rotation_service.list_rotations(vote_round.database_id), start=1):
+        if rotation.id == vote_round.rotation_id:
+            return index
+    return None
+
+
 def build_rotation_refresh_notification(rotation_number: int) -> str:
     """UI Polish (Rotation & Collection Health): a short, informational
     (not warning-toned) note that a completed rotation was automatically
@@ -8747,14 +8916,20 @@ def perform_remove_suggestion(
 # --- FR-033A: /remove with reference/title matching, a selector, and archival ------------
 
 
-def build_removal_option_label(item: WatchItem, suggestion_service: SuggestionService) -> str:
+def build_removal_option_label(
+    item: WatchItem, suggestion_service: SuggestionService, rotation_service: Optional[RotationService] = None
+) -> str:
     """Build one /remove selector option's label: reference, title, year,
     database, and status (Section 6's "Show a selector including...").
+
+    rotation_service resolves the real Rotation Cooldown status (rather
+    than always reporting Available) -- optional, defaulting to None so
+    existing callers/tests keep working unchanged.
     """
     database = suggestion_service.get_database(item.database_id) if item.database_id is not None else None
     database_name = database.name if database is not None else "Unknown collection"
     year_part = f" ({item.release_year})" if item.release_year else ""
-    display_status = compute_display_status(item, in_rotation_cooldown=False)
+    display_status = resolve_display_status(item, rotation_service)
     status_part = display_status_label(display_status)
     return f"{item.reference} {item.title}{year_part} -- {database_name} -- {status_part}"
 
@@ -8768,7 +8943,7 @@ async def send_removal_confirmation(interaction: discord.Interaction, bot: "Watc
     for genuinely broken records) -- this reuses archive_suggestion()
     instead, which preserves identity, journey, and history.
     """
-    summary = build_removal_option_label(item, bot.suggestion_service)
+    summary = build_removal_option_label(item, bot.suggestion_service, getattr(bot, "rotation_service", None))
 
     async def on_confirm(confirm_interaction: discord.Interaction) -> None:
         result = bot.suggestion_service.archive_suggestion(item.id)
@@ -8810,7 +8985,10 @@ async def handle_remove_suggestion(interaction: discord.Interaction, bot: "Watch
             return
         await send_removal_confirmation(select_interaction, bot, item)
 
-    options = [(item.id, build_removal_option_label(item, bot.suggestion_service)) for item in matches]
+    options = [
+        (item.id, build_removal_option_label(item, bot.suggestion_service, getattr(bot, "rotation_service", None)))
+        for item in matches
+    ]
     view = RemovalMatchSelectView(options, on_select)
     await interaction.response.send_message(
         f'Multiple suggestions match "{query}". Choose one:', view=view, ephemeral=True
@@ -8887,7 +9065,9 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
             return
 
         async def on_status_selected(select_interaction: discord.Interaction, new_status: WatchItemStatus) -> None:
-            result = bot.suggestion_service.set_suggestion_status(item.id, new_status)
+            result = bot.suggestion_service.set_suggestion_status(
+                item.id, new_status, getattr(bot, "rotation_service", None)
+            )
             await select_interaction.response.send_message(result.message, ephemeral=True)
             if result.success:
                 await sync_suggestion_status_embed(bot, result.watch_item)
@@ -8957,13 +9137,17 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
             if duplicate_result.has_definite_match:
                 match = duplicate_result.definite_matches[0]
                 await select_interaction.response.send_message(
-                    "This move would duplicate an existing suggestion:\n" + build_duplicate_match_line(match),
+                    "This move would duplicate an existing suggestion:\n"
+                    + build_duplicate_match_line(match, getattr(bot, "rotation_service", None)),
                     ephemeral=True,
                 )
                 return
 
             if duplicate_result.has_possible_only:
-                lines = "\n".join(build_duplicate_match_line(match) for match in duplicate_result.matches)
+                lines = "\n".join(
+                    build_duplicate_match_line(match, getattr(bot, "rotation_service", None))
+                    for match in duplicate_result.matches
+                )
                 message = f"This move might duplicate existing item(s):\n{lines}"
 
                 async def on_confirm(confirm_interaction: discord.Interaction) -> None:
@@ -10599,7 +10783,10 @@ async def send_suggestion_statistics(
         return
 
     if len(matches) > 1:
-        options = [(item.id, build_removal_option_label(item, bot.suggestion_service)) for item in matches]
+        options = [
+        (item.id, build_removal_option_label(item, bot.suggestion_service, getattr(bot, "rotation_service", None)))
+        for item in matches
+    ]
 
         async def on_select(select_interaction: discord.Interaction, suggestion_id: int) -> None:
             stats = bot.statistics_service.suggestion_statistics(suggestion_id)

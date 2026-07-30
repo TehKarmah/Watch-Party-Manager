@@ -12,6 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import discord
+
 from watch_party_manager.bot import (
     build_suggestion_confirmation_embed,
     handle_reject_suggestion,
@@ -144,19 +146,58 @@ class FakeMessage:
 
 
 class FakeChannel:
-    def __init__(self, *messages: FakeMessage, fail_fetch: bool = False) -> None:
+    def __init__(
+        self,
+        *messages: FakeMessage,
+        fail_fetch: bool = False,
+        fail_fetch_times: int = 0,
+        fetch_exception_factory=None,
+    ) -> None:
+        """fail_fetch=True fails every call (a permanent condition in
+        tests that don't care about retry behavior). fail_fetch_times
+        fails only the first N calls, then succeeds -- used to simulate a
+        transient failure that a retry recovers from.
+        fetch_exception_factory controls which exception is raised
+        (defaults to a generic RuntimeError, i.e. "some transient
+        failure"); pass one that builds discord.NotFound/discord.Forbidden
+        to simulate a permanent failure instead.
+        """
         self._messages = {message.id: message for message in messages}
         self._fail_fetch = fail_fetch
+        self._fail_fetch_times = fail_fetch_times
+        self._fetch_exception_factory = fetch_exception_factory or (
+            lambda: RuntimeError("simulated fetch failure")
+        )
+        self.fetch_attempts = 0
         self.sent_messages = []
 
     async def fetch_message(self, message_id):
-        if self._fail_fetch:
-            raise RuntimeError("simulated fetch failure")
+        self.fetch_attempts += 1
+        if self._fail_fetch or self.fetch_attempts <= self._fail_fetch_times:
+            raise self._fetch_exception_factory()
         return self._messages[message_id]
 
     async def send(self, *args, **kwargs):
         self.sent_messages.append((args, kwargs))
         return FakeMessage(message_id=999)
+
+
+class FakeHTTPResponse:
+    status = 404
+    reason = "Not Found"
+
+
+class FakeForbiddenHTTPResponse:
+    status = 403
+    reason = "Forbidden"
+
+
+def make_discord_not_found() -> discord.NotFound:
+    return discord.NotFound(response=FakeHTTPResponse(), message="Unknown Message")
+
+
+def make_discord_forbidden() -> discord.Forbidden:
+    return discord.Forbidden(response=FakeForbiddenHTTPResponse(), message="Missing Access")
 
 
 class FakeBot:
@@ -264,7 +305,11 @@ class SyncSuggestionStatusEmbedTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(0, message.edit_calls)
 
-    async def test_silently_skips_an_unreachable_message(self) -> None:
+    async def test_gracefully_skips_an_unreachable_message_after_exhausting_retries(self) -> None:
+        # A transient failure that never recovers (both attempts fail)
+        # must not raise, and must be logged rather than silently
+        # swallowed -- see test_recovers_after_one_transient_failure for
+        # the "one failure, then success" case this is paired with.
         watch_item = self.suggestion_service.suggest(
             "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).watch_item
@@ -274,8 +319,75 @@ class SyncSuggestionStatusEmbedTests(unittest.IsolatedAsyncioTestCase):
         channel = FakeChannel(FakeMessage(message_id=555), fail_fetch=True)
         bot = FakeBot(self.suggestion_service, channel)
 
-        # Must not raise.
-        await sync_suggestion_status_embed(bot, watch_item)
+        with self.assertLogs("watch_party_manager.bot", level="WARNING") as logs:
+            await sync_suggestion_status_embed(bot, watch_item)
+
+        self.assertEqual(2, channel.fetch_attempts)
+        self.assertTrue(any(str(watch_item.id) in message for message in logs.output))
+        self.assertTrue(any("555" in message for message in logs.output))
+
+    async def test_recovers_after_one_transient_failure(self) -> None:
+        # Reliability fix (rotation-state consistency audit): a transient
+        # failure (network blip, Discord-side 5xx) on the first attempt
+        # must not leave the post stale -- the bounded retry recovers it.
+        watch_item = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(watch_item.id, GUILD_ID, CHANNEL_ID, 555)
+        self.suggestion_service.archive_suggestion(watch_item.id)
+        archived_item = self.suggestion_service.get_suggestion(watch_item.id)
+
+        message = FakeMessage(message_id=555)
+        channel = FakeChannel(message, fail_fetch_times=1)
+        bot = FakeBot(self.suggestion_service, channel)
+
+        await sync_suggestion_status_embed(bot, archived_item)
+
+        self.assertEqual(2, channel.fetch_attempts)
+        self.assertEqual(1, message.edit_calls)
+        status_field = next(field for field in message.edited_embed.fields if field.name == "Status")
+        self.assertEqual("🗄️ Retired", status_field.value)
+
+    async def test_a_permanent_not_found_failure_is_not_retried(self) -> None:
+        # A deleted message (discord.NotFound) is a permanent condition:
+        # retrying can never succeed, so it must fail fast (one attempt)
+        # rather than spend the retry budget, and must still be logged.
+        watch_item = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(watch_item.id, GUILD_ID, CHANNEL_ID, 555)
+        watch_item = self.suggestion_service.get_suggestion(watch_item.id)
+
+        channel = FakeChannel(
+            FakeMessage(message_id=555), fail_fetch=True, fetch_exception_factory=make_discord_not_found
+        )
+        bot = FakeBot(self.suggestion_service, channel)
+
+        with self.assertLogs("watch_party_manager.bot", level="WARNING") as logs:
+            await sync_suggestion_status_embed(bot, watch_item)
+
+        self.assertEqual(1, channel.fetch_attempts)
+        self.assertTrue(any(str(watch_item.id) in message for message in logs.output))
+
+    async def test_a_permanent_forbidden_failure_is_not_retried(self) -> None:
+        # Revoked channel permissions (discord.Forbidden) is likewise
+        # permanent -- one attempt, not the full retry budget.
+        watch_item = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(watch_item.id, GUILD_ID, CHANNEL_ID, 555)
+        watch_item = self.suggestion_service.get_suggestion(watch_item.id)
+
+        channel = FakeChannel(
+            FakeMessage(message_id=555), fail_fetch=True, fetch_exception_factory=make_discord_forbidden
+        )
+        bot = FakeBot(self.suggestion_service, channel)
+
+        with self.assertLogs("watch_party_manager.bot", level="WARNING") as logs:
+            await sync_suggestion_status_embed(bot, watch_item)
+
+        self.assertEqual(1, channel.fetch_attempts)
+        self.assertTrue(any(str(watch_item.id) in message for message in logs.output))
 
 
 class SyncVoteStartStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):

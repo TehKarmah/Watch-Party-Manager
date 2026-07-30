@@ -284,6 +284,9 @@ class WatchedDateSubmissionTests(WatchedButtonTestCase):
 
         refreshed_message = await confirmation_channel.fetch_message(posted_message.id)
         self.assertIsNotNone(refreshed_message.edited)
+        refreshed_embed, _ = refreshed_message.edited
+        status_field = next(field for field in refreshed_embed.fields if field.name == "Status")
+        self.assertTrue(status_field.value.startswith("✅ Watched"))
 
     async def test_no_archive_configured_still_marks_watched_and_notes_it_gracefully(self) -> None:
         bot = FakeBot(self.suggestion_service, self.permission_service, config_service=FakeConfigService(None))

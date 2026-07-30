@@ -25,7 +25,9 @@ from __future__ import annotations
 import logging
 from typing import List, Optional, Protocol
 
+from watch_party_manager.domain.rotation import Rotation
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
+from watch_party_manager.domain.vote import VoteRound
 from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.services.discord_message_link import build_discord_message_link
 from watch_party_manager.services.vote_announcement_formatter import (
@@ -76,6 +78,34 @@ class DiscordChannelMessenger(Protocol):
     def get_channel(self, channel_id: int): ...
 
     async def fetch_channel(self, channel_id: int): ...
+
+
+class RotationLookup(Protocol):
+    """The subset of RotationService needed to resolve a round's own
+    "Rotation Y" number (Rotation Context in Voting). Protocol-based,
+    matching this module's existing dependency conventions, so this
+    stays reachable from the scheduler package without importing
+    RotationService's full concrete type.
+    """
+
+    def list_rotations(self, database_id: int) -> List[Rotation]: ...
+
+
+def resolve_rotation_number_for_round(
+    rotation_service: Optional[RotationLookup], vote_round: VoteRound
+) -> Optional[int]:
+    """The 1-based "Rotation N" number `vote_round`'s candidates were
+    drawn from, or None when unknown -- mirrors bot.py's own
+    resolve_rotation_number_for_round exactly (duplicated rather than
+    imported, since bot.py cannot be imported from a module reachable by
+    the scheduler package; see this module's own docstring).
+    """
+    if rotation_service is None or vote_round.database_id is None or vote_round.rotation_id is None:
+        return None
+    for index, rotation in enumerate(rotation_service.list_rotations(vote_round.database_id), start=1):
+        if rotation.id == vote_round.rotation_id:
+            return index
+    return None
 
 
 def _resolve_watch_items(suggestion_service: SuggestionLookup, suggestion_ids: List[int]) -> List[WatchItem]:
@@ -129,6 +159,7 @@ async def finalize_vote_completion(
     suggestion_service: SuggestionLookup,
     messenger: DiscordChannelMessenger,
     result: VoteCompletionResult,
+    rotation_service: Optional[RotationLookup] = None,
 ) -> None:
     """Present a just-completed voting round: update the original post,
     disable its buttons, and post the single canonical results announcement.
@@ -163,6 +194,11 @@ async def finalize_vote_completion(
         suggestion_service: Used to resolve candidates and winner(s) to their WatchItems.
         messenger: Used to resolve the round's channel and send/edit messages.
         result: The just-completed round's outcome.
+        rotation_service: Used to resolve which Rotation the round's
+            candidates were drawn from (Rotation Context in Voting), for
+            display as "Round X • Rotation Y" in both the closed post and
+            the results announcement. Omitted (shows "Round X" alone)
+            when not supplied.
     """
     vote_round = result.vote_round
 
@@ -176,6 +212,7 @@ async def finalize_vote_completion(
     candidates = _resolve_watch_items(suggestion_service, vote_round.candidate_suggestion_ids)
     winning_items = _resolve_watch_items(suggestion_service, result.winning_suggestion_ids)
     collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
+    rotation_number = resolve_rotation_number_for_round(rotation_service, vote_round)
 
     closed_text = build_closed_voting_post_text(
         vote_round,
@@ -184,6 +221,7 @@ async def finalize_vote_completion(
         result.standings,
         result.total_votes_cast,
         collection_name=collection_name,
+        rotation_number=rotation_number,
     )
     await _update_original_voting_post(messenger, vote_round, closed_text)
 
@@ -205,6 +243,7 @@ async def finalize_vote_completion(
         result.total_votes_cast,
         original_vote_link,
         collection_name,
+        rotation_number=rotation_number,
     )
     embeds = build_vote_results_embeds(winning_items, result.standings)
 
@@ -227,5 +266,6 @@ async def finalize_vote_completion(
             result.total_votes_cast,
             results_link,
             collection_name=collection_name,
+            rotation_number=rotation_number,
         )
         await _update_original_voting_post(messenger, vote_round, closed_text_with_link)

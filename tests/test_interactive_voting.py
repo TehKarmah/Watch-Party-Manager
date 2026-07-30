@@ -9,14 +9,20 @@ from watch_party_manager.bot import (
     build_voting_post_embed,
     handle_nominee_vote,
     perform_start_vote,
+    resolve_rotation_number_for_round,
 )
 from watch_party_manager.domain.vote import VoteVisibility
+from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
+from watch_party_manager.persistence.suggestion_database_configuration_repository import (
+    SuggestionDatabaseConfigurationRepository,
+)
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
+from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import VoteService
 from watch_party_manager.voting_view import VotingView
@@ -757,6 +763,97 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(interaction.response.sent_ephemeral)
         self.assertIn("recorded", interaction.response.sent_message)
         self.assertEqual(self.vote_service.get_open_round().votes[111].suggestion_id, nominee_id)
+
+    def test_active_voting_embed_shows_the_rotation_the_candidates_were_drawn_from(self) -> None:
+        # Rotation Context in Voting: the active voting embed must show
+        # "Round X • Rotation Y" -- Y being whichever Rotation
+        # select_nominees actually admitted/presented these candidates
+        # into, recorded on the round at creation time (VoteRound.rotation_id).
+        rotation_service = RotationService(
+            self.suggestion_service, repository=JsonRotationRepository(Path(self._temp_dir.name) / "rotations.json")
+        )
+        configuration_repository = SuggestionDatabaseConfigurationRepository(
+            Path(self._temp_dir.name) / "suggestion_database_configurations.json"
+        )
+        self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
+        self.suggestion_service.suggest("Inception", database_id=self.database_id)
+        self.suggestion_service.suggest("The Dark Knight", database_id=self.database_id)
+
+        message, ephemeral = perform_start_vote(
+            vote_service=self.vote_service,
+            suggestion_service=self.suggestion_service,
+            nominee_selection_service=self.selector,
+            user=self._authorized_user(),
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            visibility_str="visible",
+            duration_minutes=None,
+            guild_id=100,
+            channel_id=200,
+            rotation_service=rotation_service,
+            suggestion_database_configuration_repository=configuration_repository,
+        )
+        self.assertFalse(ephemeral)
+
+        vote_round = self.vote_service.get_open_round(self.database_id)
+        self.assertIsNotNone(vote_round.rotation_id)
+        rotation_number = resolve_rotation_number_for_round(rotation_service, vote_round)
+        self.assertEqual(rotation_number, 1)
+
+        candidates = self.suggestion_service.get_suggestions_for_database(self.database_id)
+        post_embed = build_voting_post_embed(
+            vote_round, candidates, standings=None, standings_error=None, rotation_number=rotation_number
+        )
+        self.assertEqual(post_embed.description.splitlines()[0], f"Round: {vote_round.id} • Rotation 1")
+
+    def test_rotation_number_stays_fixed_after_the_database_advances_to_a_later_rotation(self) -> None:
+        # Rotation-number semantics: "Rotation Y" is captured once, at
+        # round-creation time, from whichever Rotation select_nominees
+        # actually drew this round's candidates from (VoteRound.rotation_id
+        # is written once in perform_start_vote and never reassigned
+        # afterward -- see domain/vote.py). It must keep reporting that
+        # same rotation even after the collection has since moved on to
+        # a later one -- never silently relabeled to "whatever rotation
+        # is currently open."
+        rotation_service = RotationService(
+            self.suggestion_service, repository=JsonRotationRepository(Path(self._temp_dir.name) / "rotations.json")
+        )
+        configuration_repository = SuggestionDatabaseConfigurationRepository(
+            Path(self._temp_dir.name) / "suggestion_database_configurations.json"
+        )
+        self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
+        self.suggestion_service.suggest("Inception", database_id=self.database_id)
+        self.suggestion_service.suggest("The Dark Knight", database_id=self.database_id)
+
+        perform_start_vote(
+            vote_service=self.vote_service,
+            suggestion_service=self.suggestion_service,
+            nominee_selection_service=self.selector,
+            user=self._authorized_user(),
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            visibility_str="visible",
+            duration_minutes=None,
+            guild_id=100,
+            channel_id=200,
+            rotation_service=rotation_service,
+            suggestion_database_configuration_repository=configuration_repository,
+        )
+        vote_round = self.vote_service.get_open_round(self.database_id)
+        original_rotation_id = vote_round.rotation_id
+        self.assertEqual(resolve_rotation_number_for_round(rotation_service, vote_round), 1)
+
+        # The collection moves on to a fresh rotation -- e.g. the current
+        # one is exhausted and rolled over -- entirely independent of
+        # this already-open round.
+        rotation_service.begin_next_rotation(self.database_id)
+        new_open_rotation = rotation_service.get_open_rotation(self.database_id)
+        self.assertNotEqual(new_open_rotation.id, original_rotation_id)
+
+        # The round's own stored rotation_id is untouched by the rollover...
+        unchanged_round = self.vote_service.get_open_round(self.database_id)
+        self.assertEqual(unchanged_round.rotation_id, original_rotation_id)
+        # ...and so its resolved display number is still "Rotation 1",
+        # not "Rotation 2" (the now-current rotation) and not None.
+        self.assertEqual(resolve_rotation_number_for_round(rotation_service, unchanged_round), 1)
 
 
 if __name__ == "__main__":

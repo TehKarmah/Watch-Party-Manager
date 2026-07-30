@@ -118,6 +118,7 @@ class VoteRound:
     message_id: Optional[int] = None
     results_message_id: Optional[int] = None
     database_id: Optional[int] = None
+    rotation_id: Optional[int] = None
     candidate_suggestion_ids: list[int] = field(default_factory=list)
     reminder_enabled: Optional[bool] = None
     reminder_minutes_before_close: Optional[int] = None
@@ -132,6 +133,7 @@ class VoteRound:
         self._validate_message_id()
         self._validate_results_message_id()
         self._validate_database_id()
+        self._validate_rotation_id()
         self._validate_candidate_suggestion_ids()
         self._validate_reminder_minutes_before_close()
         self._validate_reminder_sent_at()
@@ -169,6 +171,16 @@ class VoteRound:
     def _validate_database_id(self) -> None:
         if self.database_id is not None and self.database_id <= 0:
             raise ValueError("database_id must be a positive integer when provided")
+
+    def _validate_rotation_id(self) -> None:
+        # Which Rotation (see domain/rotation.py) this round's candidates
+        # were drawn from -- recorded once at round-creation time so the
+        # active voting embed, /vote_status, and results can all show
+        # "Rotation Y" without re-deriving it from candidate journeys.
+        # None for a round created before this field existed, or one with
+        # no database_id at all (nothing to look a rotation up against).
+        if self.rotation_id is not None and self.rotation_id <= 0:
+            raise ValueError("rotation_id must be a positive integer when provided")
 
     def _validate_candidate_suggestion_ids(self) -> None:
         candidate_ids = list(self.candidate_suggestion_ids)

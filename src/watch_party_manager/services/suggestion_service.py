@@ -9,7 +9,11 @@ from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.suggestion_database_configuration import SuggestionDatabaseConfiguration
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
-from watch_party_manager.services.suggestion_display_status import compute_display_status, display_status_label
+from watch_party_manager.services.suggestion_display_status import (
+    RotationCooldownLookup,
+    display_status_label,
+    resolve_display_status,
+)
 
 _TRAILING_YEAR_PATTERN = re.compile(r"\s*\(\d{4}\)\s*$")
 
@@ -528,7 +532,12 @@ class SuggestionService:
             success=True, message=f'"{watch_item.title}" has been marked watched.', watch_item=watch_item
         )
 
-    def set_suggestion_status(self, suggestion_id: int, status: WatchItemStatus) -> SuggestionResult:
+    def set_suggestion_status(
+        self,
+        suggestion_id: int,
+        status: WatchItemStatus,
+        rotation_service: Optional[RotationCooldownLookup] = None,
+    ) -> SuggestionResult:
         """Directly set a suggestion's status (/edit_suggestion's Change
         Status action).
 
@@ -540,6 +549,12 @@ class SuggestionService:
         Rotation Cooldown is never a valid value here -- it's a computed
         display state, not something to assign (see
         services/suggestion_display_status.py).
+
+        rotation_service resolves the confirmation message's displayed
+        status against the real Rotation Cooldown check (e.g. setting a
+        suggestion back to SUGGESTED while it's still on cooldown must
+        report Rotation Cooldown, not Available) -- optional, defaulting
+        to None so existing callers/tests keep working unchanged.
         """
         watch_item = self.get_suggestion(suggestion_id)
         if watch_item is None:
@@ -547,7 +562,7 @@ class SuggestionService:
 
         watch_item.status = status
         self._save()
-        display_status = compute_display_status(watch_item, in_rotation_cooldown=False)
+        display_status = resolve_display_status(watch_item, rotation_service)
         status_label = display_status_label(display_status)
         return SuggestionResult(
             success=True, message=f'"{watch_item.title}" status set to {status_label}.', watch_item=watch_item
