@@ -29,7 +29,7 @@ OnMoveCollectionClicked = Callable[[discord.Interaction], Awaitable[None]]
 OnCancelEditSuggestion = Callable[[discord.Interaction], Awaitable[None]]
 OnStatusSelected = Callable[[discord.Interaction, WatchItemStatus], Awaitable[None]]
 
-# The only statuses WASH Crew may set directly. Rotation Cooldown is
+# The only statuses WASH Crew may set directly. In an Active Vote is
 # deliberately absent -- it's a computed display state (see
 # services/suggestion_display_status.py), never something to assign.
 _ASSIGNABLE_STATUSES: tuple[WatchItemStatus, ...] = (

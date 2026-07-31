@@ -305,9 +305,8 @@ class SuggestionRepositoryJourneyTests(unittest.TestCase):
         self.assertIsNone(loaded_journey.last_nominated_date)
         self.assertIsNone(loaded_journey.last_won_date)
 
-    def test_watch_dates_and_rotation_history_also_round_trip(self) -> None:
+    def test_watch_dates_round_trip(self) -> None:
         journey = WatchItemJourney(
-            rotation_history=(1, 2, 3),
             watch_dates=(date(2026, 1, 1), date(2026, 2, 1)),
             rewatch_count=1,
         )
@@ -317,9 +316,35 @@ class SuggestionRepositoryJourneyTests(unittest.TestCase):
         result = self.repository.load()
 
         loaded_journey = result.watch_items[0].journey
-        self.assertEqual(loaded_journey.rotation_history, (1, 2, 3))
         self.assertEqual(loaded_journey.watch_dates, (date(2026, 1, 1), date(2026, 2, 1)))
         self.assertEqual(loaded_journey.rewatch_count, 1)
+
+    def test_a_journey_with_obsolete_rotation_keys_still_loads(self) -> None:
+        # Rotation Removal: a suggestions.json saved before this milestone
+        # may still have "rotation_history" and "retired_from_rotation_id"
+        # on a journey entry -- these must be silently ignored on load,
+        # never cause a crash.
+        legacy_json = """
+        {
+          "next_id": 2,
+          "suggestions": [
+            {
+              "id": 1,
+              "title": "The Matrix",
+              "media_type": "movie",
+              "metadata_ids": {},
+              "journey": {"rotation_history": [1, 2, 3], "retired_from_rotation_id": 4}
+            }
+          ]
+        }
+        """
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+
+        loaded_journey = result.watch_items[0].journey
+        self.assertFalse(hasattr(loaded_journey, "rotation_history"))
+        self.assertFalse(hasattr(loaded_journey, "retired_from_rotation_id"))
 
     def test_rejection_history_round_trips_through_save_and_load(self) -> None:
         journey = WatchItemJourney(rejected_by_discord_user_ids=(111, 222))

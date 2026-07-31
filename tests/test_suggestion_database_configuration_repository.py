@@ -356,7 +356,7 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
     def test_missing_schema_version_defaults_to_version_one_and_migrates(self) -> None:
         # A missing schema_version is treated as version 1, then migrated
         # forward to CURRENT_SCHEMA_VERSION like any other v1 entry (see
-        # FR-033B's v1->v2 migration below).
+        # the migrations below).
         now_iso = utc_now().isoformat()
         legacy_json = json.dumps(
             {
@@ -381,10 +381,10 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
         loaded = self.repository.get(100, 1)
 
         self.assertIsNotNone(loaded)
-        self.assertEqual(loaded.schema_version, 2)
+        self.assertEqual(loaded.schema_version, 3)
 
-    def test_migration_registry_has_exactly_the_v1_to_v2_migration(self) -> None:
-        self.assertEqual(list(SuggestionDatabaseConfigurationRepository._MIGRATIONS.keys()), [1])
+    def test_migration_registry_has_exactly_the_registered_migrations(self) -> None:
+        self.assertEqual(list(SuggestionDatabaseConfigurationRepository._MIGRATIONS.keys()), [1, 2])
 
     # --- FR-033B: candidate_selection legacy value migration -------------------------
 
@@ -412,24 +412,77 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         self.file_path.write_text(legacy_json, encoding="utf-8")
 
-    def test_legacy_random_candidate_selection_migrates_to_rotation_pool(self) -> None:
+    def test_legacy_random_candidate_selection_migrates_to_favor_new_additions(self) -> None:
         self._write_legacy_candidate_selection("random")
 
         loaded = self.repository.get(100, 1)
 
-        self.assertEqual(loaded.schema_version, 2)
-        self.assertEqual(loaded.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
+        self.assertEqual(loaded.schema_version, 3)
+        self.assertEqual(loaded.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
 
-    def test_legacy_balanced_random_candidate_selection_migrates_to_rotation_pool(self) -> None:
-        # Deliberately NOT soft_rotation -- the legacy value never drove
-        # any behavior, so it must not be mapped to a different-behaving
-        # new mode (see _migrate_v1_to_v2's docstring).
+    def test_legacy_balanced_random_candidate_selection_migrates_to_favor_new_additions(self) -> None:
+        # The legacy value never drove any behavior, so it must not be
+        # mapped to a different-behaving mode just because a setting
+        # nothing ever read is finally removed (see
+        # _migrate_v1_to_v2's docstring).
         self._write_legacy_candidate_selection("balanced_random")
 
         loaded = self.repository.get(100, 1)
 
-        self.assertEqual(loaded.schema_version, 2)
-        self.assertEqual(loaded.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
+        self.assertEqual(loaded.schema_version, 3)
+        self.assertEqual(loaded.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+
+    def test_legacy_rotation_pool_candidate_selection_migrates_to_favor_new_additions(self) -> None:
+        # Rotation Removal: rotation_pool/soft_rotation no longer exist --
+        # a database still configured for either moves to the current
+        # default rather than a differently-behaving mode.
+        self._write_legacy_candidate_selection("rotation_pool")
+
+        loaded = self.repository.get(100, 1)
+
+        self.assertEqual(loaded.schema_version, 3)
+        self.assertEqual(loaded.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+
+    def test_legacy_soft_rotation_candidate_selection_migrates_to_favor_new_additions(self) -> None:
+        self._write_legacy_candidate_selection("soft_rotation")
+
+        loaded = self.repository.get(100, 1)
+
+        self.assertEqual(loaded.schema_version, 3)
+        self.assertEqual(loaded.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+
+    def test_legacy_admission_mode_is_dropped_without_error(self) -> None:
+        now_iso = utc_now().isoformat()
+        legacy_json = json.dumps(
+            {
+                "guilds": {
+                    "100": {
+                        "databases": {
+                            "1": {
+                                "schema_version": 2,
+                                "guild_id": 100,
+                                "database_id": 1,
+                                "display_name": "Movies",
+                                "created_at": now_iso,
+                                "updated_at": now_iso,
+                                "suggestion_rules": {
+                                    "candidate_selection": "favor_new_additions",
+                                    "admission_mode": "join_current_rotation",
+                                },
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        loaded = self.repository.get(100, 1)
+
+        self.assertEqual(loaded.schema_version, 3)
+        self.assertFalse(hasattr(loaded.suggestion_rules, "admission_mode"))
+        self.assertNotIn("admission_mode", loaded.suggestion_rules.extra_fields)
 
     def test_migration_creates_a_pre_migration_backup(self) -> None:
         self._write_legacy_candidate_selection("random")

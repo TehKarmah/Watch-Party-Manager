@@ -81,7 +81,7 @@ Validation:
 
 Runoff and other tie strategies are deferred.
 
-Per-database voting overrides (candidate count, duration, visibility, max vote changes, tie behavior) and per-database candidate-selection strategy (Rotation Pool, Soft Rotation, Infinite Pool) are database-owned configuration, outside this document's scope (see "Purpose & Scope" above).
+Per-database voting overrides (candidate count, duration, visibility, max vote changes, tie behavior) and per-database candidate-selection strategy (Pure Random, Favor New Additions, Favor Older Additions) are database-owned configuration, outside this document's scope (see "Purpose & Scope" above).
 
 ## Notifications
 

@@ -1,4 +1,4 @@
-"""Tests for FR-033B's candidate-selection strategy architecture."""
+"""Tests for the candidate-selection strategy architecture."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from datetime import date, timedelta
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.domain.watch_item import MediaType, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
-from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.services.candidate_selection_strategy import (
@@ -21,13 +20,9 @@ from watch_party_manager.services.candidate_selection_strategy import (
     InfinitePoolStrategy,
     MIN_SUGGESTION_DATE_WEIGHT,
     NEUTRAL_WEIGHT,
-    RotationPoolStrategy,
-    SOFT_ROTATION_PRESENTED_WEIGHT,
     SUGGESTION_DATE_WEIGHT_HALF_LIFE_DAYS,
-    SoftRotationStrategy,
     build_candidate_selection_strategy,
 )
-from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
 
 DATABASE_ID = 1
@@ -40,9 +35,6 @@ class CandidateSelectionStrategyTestCase(unittest.TestCase):
         self.suggestion_service = SuggestionService(
             repository=JsonSuggestionRepository(root / "suggestions.json"),
             database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
-        )
-        self.rotation_service = RotationService(
-            self.suggestion_service, repository=JsonRotationRepository(root / "rotations.json")
         )
 
     def tearDown(self) -> None:
@@ -65,155 +57,6 @@ class CandidateSelectionStrategyTestCase(unittest.TestCase):
             id=item_id,
             journey=WatchItemJourney(suggestion_date=date.today() - timedelta(days=days)),
         )
-
-
-class RotationPoolStrategyTests(CandidateSelectionStrategyTestCase):
-    def test_candidate_pool_excludes_already_presented_items(self) -> None:
-        item_a = self._add("Alien")
-        item_b = self._add("The Matrix")
-        strategy = RotationPoolStrategy(rotation_service=self.rotation_service)
-        strategy.on_presented(DATABASE_ID, [item_a.id])
-
-        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
-
-        self.assertEqual(pool_ids, {item_b.id})
-
-    def test_candidate_pool_excludes_a_watched_item(self) -> None:
-        item_a = self._add("Alien")
-        item_b = self._add("The Matrix")
-        strategy = RotationPoolStrategy(rotation_service=self.rotation_service)
-        strategy.candidate_pool(DATABASE_ID)
-        self.suggestion_service.mark_suggestion_watched(item_a.id, date.today())
-
-        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
-
-        self.assertEqual(pool_ids, {item_b.id})
-
-    def test_weight_for_is_always_neutral(self) -> None:
-        item = self._add("Alien")
-        strategy = RotationPoolStrategy(rotation_service=self.rotation_service)
-
-        self.assertEqual(strategy.weight_for(item), NEUTRAL_WEIGHT)
-
-    def test_on_presented_records_presentation_via_rotation_service(self) -> None:
-        item = self._add("Alien")
-        strategy = RotationPoolStrategy(rotation_service=self.rotation_service)
-
-        strategy.on_presented(DATABASE_ID, [item.id])
-
-        rotation = self.rotation_service.get_open_rotation(DATABASE_ID)
-        refreshed = self.suggestion_service.get_suggestion(item.id)
-        self.assertIn(rotation.id, refreshed.journey.rotation_history)
-
-    def test_candidate_pool_triggers_automatic_fresh_rotation_when_exhausted(self) -> None:
-        item = self._add("Alien")
-        strategy = RotationPoolStrategy(rotation_service=self.rotation_service)
-        strategy.candidate_pool(DATABASE_ID)
-        strategy.on_presented(DATABASE_ID, [item.id])
-
-        pool = strategy.candidate_pool(DATABASE_ID)
-
-        # A fresh rotation re-includes the previously presented item.
-        self.assertEqual({candidate.id for candidate in pool}, {item.id})
-
-    def test_candidate_pool_rolls_over_when_a_requested_count_cannot_be_satisfied(self) -> None:
-        """Release-blocking rotation rollover fix: with no requested_count
-        given, a rotation with pending items left (even below what a vote
-        needs) is left alone -- see the exhaustion-only test above. Once
-        a requested_count is supplied, the same call rolls the rotation
-        forward instead, since it isn't fully exhausted but also can't
-        satisfy the request.
-        """
-        item_a = self._add("Alien")
-        item_b = self._add("The Matrix")
-        strategy = RotationPoolStrategy(rotation_service=self.rotation_service)
-        strategy.candidate_pool(DATABASE_ID)
-        strategy.on_presented(DATABASE_ID, [item_a.id])
-
-        no_count_pool = strategy.candidate_pool(DATABASE_ID)
-        self.assertEqual({candidate.id for candidate in no_count_pool}, {item_b.id})
-
-        with_count_pool = strategy.candidate_pool(DATABASE_ID, 2)
-        self.assertEqual({candidate.id for candidate in with_count_pool}, {item_a.id, item_b.id})
-
-
-class SoftRotationStrategyTests(CandidateSelectionStrategyTestCase):
-    def test_candidate_pool_includes_everything_including_presented_items(self) -> None:
-        item_a = self._add("Alien")
-        item_b = self._add("The Matrix")
-        strategy = SoftRotationStrategy(rotation_service=self.rotation_service, suggestion_source=self.suggestion_service)
-        strategy.on_presented(DATABASE_ID, [item_a.id])
-
-        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
-
-        self.assertEqual(pool_ids, {item_a.id, item_b.id})
-
-    def test_weight_for_is_neutral_before_presentation(self) -> None:
-        item = self._add("Alien")
-        strategy = SoftRotationStrategy(rotation_service=self.rotation_service, suggestion_source=self.suggestion_service)
-
-        self.assertEqual(strategy.weight_for(item), NEUTRAL_WEIGHT)
-
-    def test_weight_for_drops_after_presentation(self) -> None:
-        item = self._add("Alien")
-        strategy = SoftRotationStrategy(rotation_service=self.rotation_service, suggestion_source=self.suggestion_service)
-        strategy.on_presented(DATABASE_ID, [item.id])
-
-        refreshed = self.suggestion_service.get_suggestion(item.id)
-
-        self.assertEqual(strategy.weight_for(refreshed), SOFT_ROTATION_PRESENTED_WEIGHT)
-
-    def test_weight_for_is_never_zero(self) -> None:
-        item = self._add("Alien")
-        strategy = SoftRotationStrategy(rotation_service=self.rotation_service, suggestion_source=self.suggestion_service)
-        strategy.on_presented(DATABASE_ID, [item.id])
-
-        refreshed = self.suggestion_service.get_suggestion(item.id)
-
-        self.assertGreater(strategy.weight_for(refreshed), 0.0)
-
-    def test_candidate_pool_excludes_a_vote_winner(self) -> None:
-        # Rotation & Collection Health Audit bug fix: a Vote Winner must
-        # never be selectable again in any mode, including Soft Rotation
-        # (which otherwise excludes nothing) -- get_suggestions_for_
-        # database's own default only ever excludes Archived, so this
-        # exclusion must be explicit here.
-        item_a = self._add("Alien")
-        item_b = self._add("The Matrix")
-        self.suggestion_service.record_vote_win(item_a.id, date.today())
-        strategy = SoftRotationStrategy(rotation_service=self.rotation_service, suggestion_source=self.suggestion_service)
-
-        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
-
-        self.assertEqual(pool_ids, {item_b.id})
-
-    def test_candidate_pool_excludes_a_watched_item(self) -> None:
-        # Watched Button & Archive Workflow: a Watched item must never
-        # be selectable again either, for the exact same reason as a
-        # Vote Winner above.
-        item_a = self._add("Alien")
-        item_b = self._add("The Matrix")
-        self.suggestion_service.mark_suggestion_watched(item_a.id, date.today())
-        strategy = SoftRotationStrategy(rotation_service=self.rotation_service, suggestion_source=self.suggestion_service)
-
-        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
-
-        self.assertEqual(pool_ids, {item_b.id})
-
-    def test_candidate_pool_ignores_a_requested_count_and_never_rolls_over(self) -> None:
-        """Soft Rotation never excludes anything, so there is nothing for
-        a requested vote size to roll over -- passing requested_count
-        must not change the pool or create rotation state, preserving
-        this mode's existing behavior exactly.
-        """
-        item_a = self._add("Alien")
-        item_b = self._add("The Matrix")
-        strategy = SoftRotationStrategy(rotation_service=self.rotation_service, suggestion_source=self.suggestion_service)
-        strategy.on_presented(DATABASE_ID, [item_a.id])
-
-        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID, 5)}
-
-        self.assertEqual(pool_ids, {item_a.id, item_b.id})
 
 
 class InfinitePoolStrategyTests(CandidateSelectionStrategyTestCase):
@@ -252,22 +95,6 @@ class InfinitePoolStrategyTests(CandidateSelectionStrategyTestCase):
 
         self.assertEqual(strategy.weight_for(item), NEUTRAL_WEIGHT)
 
-    def test_on_presented_never_creates_rotation_state(self) -> None:
-        item = self._add("Alien")
-        strategy = InfinitePoolStrategy(suggestion_source=self.suggestion_service)
-
-        strategy.on_presented(DATABASE_ID, [item.id])
-
-        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
-
-    def test_candidate_pool_never_creates_rotation_state(self) -> None:
-        self._add("Alien")
-        strategy = InfinitePoolStrategy(suggestion_source=self.suggestion_service)
-
-        strategy.candidate_pool(DATABASE_ID)
-
-        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
-
     def test_candidate_pool_ignores_a_requested_count(self) -> None:
         item_a = self._add("Alien")
         item_b = self._add("The Matrix")
@@ -276,7 +103,6 @@ class InfinitePoolStrategyTests(CandidateSelectionStrategyTestCase):
         pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID, 5)}
 
         self.assertEqual(pool_ids, {item_a.id, item_b.id})
-        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
 
 
 class FavorNewAdditionsStrategyTests(CandidateSelectionStrategyTestCase):
@@ -317,22 +143,6 @@ class FavorNewAdditionsStrategyTests(CandidateSelectionStrategyTestCase):
         pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID, 5)}
 
         self.assertEqual(pool_ids, {item_a.id, item_b.id})
-
-    def test_candidate_pool_never_creates_rotation_state(self) -> None:
-        self._add("Alien")
-        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
-
-        strategy.candidate_pool(DATABASE_ID)
-
-        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
-
-    def test_on_presented_never_creates_rotation_state(self) -> None:
-        item = self._add("Alien")
-        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
-
-        strategy.on_presented(DATABASE_ID, [item.id])
-
-        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
 
     def test_weight_for_a_brand_new_suggestion_is_neutral(self) -> None:
         item = self._item_suggested_days_ago(1, days=0)
@@ -395,22 +205,6 @@ class FavorOlderAdditionsStrategyTests(CandidateSelectionStrategyTestCase):
 
         self.assertEqual(pool_ids, {item_b.id})
 
-    def test_candidate_pool_never_creates_rotation_state(self) -> None:
-        self._add("Alien")
-        strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
-
-        strategy.candidate_pool(DATABASE_ID)
-
-        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
-
-    def test_on_presented_never_creates_rotation_state(self) -> None:
-        item = self._add("Alien")
-        strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
-
-        strategy.on_presented(DATABASE_ID, [item.id])
-
-        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
-
     def test_weight_for_a_brand_new_suggestion_is_the_minimum(self) -> None:
         item = self._item_suggested_days_ago(1, days=0)
         strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
@@ -462,33 +256,19 @@ class CompositeWeightingTests(unittest.TestCase):
 
 
 class BuildCandidateSelectionStrategyTests(CandidateSelectionStrategyTestCase):
-    def test_rotation_pool_mode_builds_a_rotation_pool_strategy(self) -> None:
-        strategy = build_candidate_selection_strategy(
-            CandidateSelectionMode.ROTATION_POOL, self.rotation_service, self.suggestion_service
-        )
-        self.assertIsInstance(strategy, RotationPoolStrategy)
-
-    def test_soft_rotation_mode_builds_a_soft_rotation_strategy(self) -> None:
-        strategy = build_candidate_selection_strategy(
-            CandidateSelectionMode.SOFT_ROTATION, self.rotation_service, self.suggestion_service
-        )
-        self.assertIsInstance(strategy, SoftRotationStrategy)
-
     def test_infinite_pool_mode_builds_an_infinite_pool_strategy(self) -> None:
-        strategy = build_candidate_selection_strategy(
-            CandidateSelectionMode.INFINITE_POOL, self.rotation_service, self.suggestion_service
-        )
+        strategy = build_candidate_selection_strategy(CandidateSelectionMode.INFINITE_POOL, self.suggestion_service)
         self.assertIsInstance(strategy, InfinitePoolStrategy)
 
     def test_favor_new_additions_mode_builds_a_favor_new_additions_strategy(self) -> None:
         strategy = build_candidate_selection_strategy(
-            CandidateSelectionMode.FAVOR_NEW_ADDITIONS, self.rotation_service, self.suggestion_service
+            CandidateSelectionMode.FAVOR_NEW_ADDITIONS, self.suggestion_service
         )
         self.assertIsInstance(strategy, FavorNewAdditionsStrategy)
 
     def test_favor_older_additions_mode_builds_a_favor_older_additions_strategy(self) -> None:
         strategy = build_candidate_selection_strategy(
-            CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, self.rotation_service, self.suggestion_service
+            CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, self.suggestion_service
         )
         self.assertIsInstance(strategy, FavorOlderAdditionsStrategy)
 

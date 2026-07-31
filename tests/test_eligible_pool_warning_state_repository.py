@@ -1,6 +1,5 @@
-"""Tests for JsonEligiblePoolWarningStateRepository (Rotation-removal
-Phase 2): the Eligible Pool Warning's own armed/disarmed state,
-deliberately independent of rotations.json and every Rotation ID.
+"""Tests for JsonEligiblePoolWarningStateRepository: the Eligible Pool
+Warning's own per-database armed/disarmed state.
 """
 
 from __future__ import annotations

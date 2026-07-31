@@ -369,21 +369,19 @@ class BackupServiceTests(unittest.TestCase):
         self.assertEqual({"value": "before"}, json.loads(first.read_text()))
         self.assertFalse((self.data_directory / "zzz_second.json.tmp").exists())
 
-    # --- Rotation Context in Voting: VoteRound.rotation_id survives backup/restore ---
-
-    def test_a_vote_rounds_rotation_id_survives_backup_and_restore(self):
+    def test_a_vote_rounds_database_id_survives_backup_and_restore(self):
         # BackupService treats every data/*.json file generically (a raw
         # copy in and back out, see rglob("*.json") above) -- it has no
-        # per-file schema, so a new VoteRound field like rotation_id
-        # needs no backup-specific handling. This proves that generic
-        # mechanism actually preserves it end to end, through the real
+        # per-file schema, so a new VoteRound field needs no backup-
+        # specific handling. This proves that generic mechanism actually
+        # preserves one such field end to end, through the real
         # JsonVoteRepository, not just as an opaque JSON blob.
         from watch_party_manager.domain.vote import VoteRound
         from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 
         voting_path = self.data_directory / "voting.json"
         repository = JsonVoteRepository(voting_path)
-        repository.save([VoteRound(id=1, database_id=9, rotation_id=3)], next_round_id=2)
+        repository.save([VoteRound(id=1, database_id=9)], next_round_id=2)
 
         result = self.service.create_backup(created_at=self.created_at)
 
@@ -394,7 +392,6 @@ class BackupServiceTests(unittest.TestCase):
         self.service.restore_backup(result.archive_path, create_safety_backup=False)
 
         restored_round = repository.load().rounds[0]
-        self.assertEqual(restored_round.rotation_id, 3)
         self.assertEqual(restored_round.database_id, 9)
 
     # --- FR-032B: richer manifest metadata --------------------------------

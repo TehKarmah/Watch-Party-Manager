@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.vote import (
@@ -17,9 +15,7 @@ from watch_party_manager.domain.vote import (
 from watch_party_manager.domain.watch_item import MediaType, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 from watch_party_manager.domain.watch_party import WatchParty, WatchPartyStatus
-from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.vote_repository import VoteLoadResult
-from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.statistics_service import (
     StatisticsService,
     StatisticsSnapshot,
@@ -61,13 +57,6 @@ class FakeSuggestionSource:
             if database.database_id == database_id:
                 return database
         return None
-
-    def record_rotation_presentation(self, suggestion_id, rotation_id):
-        item = self.get_suggestion(suggestion_id)
-        if item is None:
-            return False
-        item.journey.record_rotation_entry(rotation_id)
-        return True
 
 
 class FakeVoteSource:
@@ -705,15 +694,6 @@ class SuggestionStatisticsTests(unittest.TestCase):
         self.assertFalse(result.is_retired)
         self.assertTrue(result.is_archived)
 
-    def test_rotations_participated_in_counts_rotation_history(self):
-        journey = WatchItemJourney(rotation_history=(1, 2, 3))
-        item = make_item(1, journey=journey)
-        service = self.make_service(items=[item])
-
-        result = service.suggestion_statistics(1)
-
-        self.assertEqual(result.rotations_participated_in, 3)
-
 
 # --- FR-034: Member statistics ----------------------------------------------------------
 
@@ -807,96 +787,17 @@ class MemberStatisticsTests(unittest.TestCase):
         self.assertEqual(result.votes_cast, 1)
 
 
-# --- FR-034: Rotation statistics --------------------------------------------------------
-
-
-class RotationStatisticsTestCase(unittest.TestCase):
-    def setUp(self) -> None:
-        self._temp_dir = tempfile.TemporaryDirectory()
-        root = Path(self._temp_dir.name)
-        self.suggestion_source = FakeSuggestionSource()
-        self.rotation_repository = JsonRotationRepository(root / "rotations.json")
-
-    def tearDown(self) -> None:
-        self._temp_dir.cleanup()
-
-    def make_service(self, items=None):
-        self.suggestion_source.items = list(items or [])
-        rotation_service = RotationService(self.suggestion_source, repository=self.rotation_repository)
-        return StatisticsService(self.suggestion_source, rotation_service=rotation_service), rotation_service
-
-
-class RotationStatisticsTests(RotationStatisticsTestCase):
-    def test_returns_none_when_rotation_service_is_not_configured(self):
-        service = StatisticsService(FakeSuggestionSource())
-
-        self.assertIsNone(service.rotation_statistics(1))
-
-    def test_a_database_with_no_rotation_yet_reports_gracefully(self):
-        service, _ = self.make_service()
-
-        result = service.rotation_statistics(1)
-
-        self.assertIsNone(result.current_rotation_id)
-        self.assertIsNone(result.current_progress)
-        self.assertEqual(result.total_rotations, 0)
-        self.assertEqual(result.completed_rotations, 0)
-        self.assertIsNone(result.average_completed_rotation_duration_hours)
-        self.assertIsNone(result.average_rotation_size)
-
-    def test_does_not_bootstrap_a_rotation_as_a_side_effect(self):
-        # Infinite Pool databases must never gain rotation state just
-        # from being asked about (FR-033B's guarantee).
-        service, rotation_service = self.make_service()
-
-        service.rotation_statistics(1)
-
-        self.assertIsNone(rotation_service.get_open_rotation(1))
-
-    def test_reports_the_current_open_rotation(self):
-        items = [make_item(1, database_id=1), make_item(2, database_id=1)]
-        service, rotation_service = self.make_service(items=items)
-        rotation = rotation_service.get_or_start_rotation(1)
-        rotation_service.record_presentation(1, [1])
-
-        result = service.rotation_statistics(1)
-
-        self.assertEqual(result.current_rotation_id, rotation.id)
-        self.assertEqual(result.current_progress.total, 2)
-        self.assertEqual(result.current_progress.presented, 1)
-        self.assertEqual(result.current_progress.remaining, 1)
-
-    def test_reports_completed_rotation_history(self):
-        items = [make_item(1, database_id=1)]
-        service, rotation_service = self.make_service(items=items)
-        rotation_service.get_or_start_rotation(1)
-        rotation_service.record_presentation(1, [1])
-        rotation_service.begin_next_rotation(1)
-
-        result = service.rotation_statistics(1)
-
-        self.assertEqual(result.total_rotations, 2)
-        self.assertEqual(result.completed_rotations, 1)
-
-    def test_average_rotation_size_across_all_rotations(self):
-        items = [make_item(1, database_id=1), make_item(2, database_id=1)]
-        service, rotation_service = self.make_service(items=items)
-        rotation_service.get_or_start_rotation(1)
-
-        result = service.rotation_statistics(1)
-
-        self.assertEqual(result.average_rotation_size, 2.0)
-
-
 # --- FR-034: Database statistics --------------------------------------------------------
 
 
-class DatabaseStatisticsTests(RotationStatisticsTestCase):
+class DatabaseStatisticsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.suggestion_source = FakeSuggestionSource()
+
     def make_full_service(self, items=None, databases=None):
         self.suggestion_source.items = list(items or [])
         self.suggestion_source.databases = list(databases or [])
-        rotation_service = RotationService(self.suggestion_source, repository=self.rotation_repository)
-        return StatisticsService(self.suggestion_source, rotation_service=rotation_service)
+        return StatisticsService(self.suggestion_source)
 
     def test_returns_none_for_an_unknown_database(self):
         service = self.make_full_service()
@@ -924,15 +825,6 @@ class DatabaseStatisticsTests(RotationStatisticsTestCase):
         self.assertEqual(result.watched_suggestions, 1)
         self.assertEqual(result.archived_suggestions, 2)
         self.assertEqual(result.retired_suggestions, 1)
-
-    def test_includes_rotation_statistics(self):
-        items = [make_item(1, database_id=1)]
-        service = self.make_full_service(items=items, databases=[make_database(1)])
-
-        result = service.database_statistics(1)
-
-        self.assertIsNotNone(result.rotation)
-        self.assertEqual(result.rotation.database_id, 1)
 
     def test_an_empty_database_reports_gracefully(self):
         service = self.make_full_service(databases=[make_database(1)])

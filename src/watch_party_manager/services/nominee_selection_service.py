@@ -57,14 +57,15 @@ class VoteHistorySource(Protocol):
 
 
 class NomineeSelectionService:
-    """Selects a diverse, rotation-aware set of nominees for a voting round.
+    """Selects a diverse set of nominees for a voting round, deprioritizing
+    recently nominated or recently won titles.
 
     Selection works in two stages:
       1. An initial pick, weighted away from (but never excluding) titles
          that recently won or were recently nominated.
       2. A greedy pass that fills the remaining slots by preferring
          candidates that add previously unseen genres or media types,
-         with the same rotation penalty subtracted from their score.
+         with the same recency penalty subtracted from their score.
 
     Only genre and media_type are used for diversity today, since those
     are the only structured fields WatchItem currently has. Metadata like
@@ -86,7 +87,7 @@ class NomineeSelectionService:
         Args:
             suggestion_service: Supplies the eligible suggestion pool for
                 a database.
-            vote_service: Supplies recent round history for rotation
+            vote_service: Supplies recent round history for recency
                 awareness.
             recent_rounds_considered: How many of the most recent closed
                 rounds count as "recent" for deprioritization purposes.
@@ -119,9 +120,9 @@ class NomineeSelectionService:
                 given, it determines the candidate pool and contributes a
                 per-candidate weight multiplier alongside this service's
                 own existing recent-nominee/winner weighting, and is
-                notified of the final selection afterward (e.g. so
-                Rotation Pool can record presentation). When omitted
-                (the default), behavior is identical to before FR-033B.
+                notified of the final selection afterward via
+                on_presented(). When omitted (the default), behavior is
+                identical to before FR-033B.
 
         Returns:
             - Exactly `count` nominees if the database has at least that
@@ -145,18 +146,18 @@ class NomineeSelectionService:
                 strategy.on_presented(database_id, [item.id for item in selected_all])
             return selected_all
 
-        recent_nominee_ids, recent_winner_ids = self._recent_rotation_context(database_id)
+        recent_nominee_ids, recent_winner_ids = self._recent_selection_context(database_id)
         chooser = rng if rng is not None else random.SystemRandom()
 
-        def rotation_penalty(item: WatchItem) -> float:
+        def recency_penalty(item: WatchItem) -> float:
             if item.id in recent_winner_ids:
                 return RECENT_WINNER_PENALTY
             if item.id in recent_nominee_ids:
                 return RECENT_NOMINEE_PENALTY
             return 0.0
 
-        def rotation_weight(item: WatchItem) -> float:
-            penalty = rotation_penalty(item)
+        def recency_weight(item: WatchItem) -> float:
+            penalty = recency_penalty(item)
             if penalty >= RECENT_WINNER_PENALTY:
                 base_weight = RECENT_WINNER_WEIGHT
             elif penalty >= RECENT_NOMINEE_PENALTY:
@@ -168,7 +169,7 @@ class NomineeSelectionService:
             return base_weight
 
         remaining = list(candidates)
-        weights = [rotation_weight(item) for item in remaining]
+        weights = [recency_weight(item) for item in remaining]
         first = chooser.choices(remaining, weights=weights, k=1)[0]
         selected = [first]
         remaining.remove(first)
@@ -181,7 +182,7 @@ class NomineeSelectionService:
                 new_genres = sum(1 for genre in item.genres if genre.lower() not in seen_genres)
                 new_media_type = 1 if item.media_type not in seen_media_types else 0
                 diversity_score = new_genres * 3 + new_media_type
-                score = diversity_score - rotation_penalty(item)
+                score = diversity_score - recency_penalty(item)
                 scored.append((score, chooser.random(), item))
             _, _, chosen = max(scored, key=lambda entry: (entry[0], entry[1]))
             selected.append(chosen)
@@ -214,13 +215,8 @@ class NomineeSelectionService:
         request, when known (e.g. /start_vote's pre-flight check -- see
         bot.perform_start_vote). Passing the same value here and to the
         select_nominees() call that follows guarantees both calls resolve
-        the identical rotation state and rollover decision (release-
-        blocking fix: a Rotation Pool database used to stay locked with
-        suggestions on Rotation Cooldown even when the current rotation
-        couldn't supply enough candidates for the request -- see
-        RotationService.resolve_rotation_for_requested_count). Omitted
-        (the default) preserves the original exhaustion-only rollover
-        behavior for callers with no specific vote size in mind.
+        an identical candidate pool. Omitted (the default) is equivalent
+        to passing no size hint.
         """
         return len(self._resolve_candidate_pool(database_id, strategy, requested_count=requested_count))
 
@@ -241,7 +237,7 @@ class NomineeSelectionService:
             else self._suggestion_service.get_suggestions_for_database(database_id)
         )
 
-    def _recent_rotation_context(self, database_id: int) -> Tuple[Set[int], Set[int]]:
+    def _recent_selection_context(self, database_id: int) -> Tuple[Set[int], Set[int]]:
         """Determine which suggestion IDs were recently nominated or won.
 
         Returns:

@@ -32,7 +32,6 @@ from watch_party_manager.domain.suggestion_database_configuration import (
 )
 from watch_party_manager.domain.vote import VoteVisibility
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
-from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
 )
@@ -43,8 +42,8 @@ from watch_party_manager.persistence.suggestion_repository import JsonSuggestion
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.config_service import ConfigService
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
-from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
+import watch_party_manager.bot as bot_module
 from watch_party_manager.services.vote_service import VoteService
 from watch_party_manager.setup_wizard_view import CandidateSelectionSelectComponent, VisibilitySelectComponent
 from watch_party_manager.start_vote_view import (
@@ -441,9 +440,6 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.rotation_service = RotationService(
-            self.suggestion_service, repository=JsonRotationRepository(Path(self._temp_dir.name) / "rotations.json")
-        )
         self.configuration_repository = SuggestionDatabaseConfigurationRepository(
             Path(self._temp_dir.name) / "suggestion_database_configurations.json"
         )
@@ -452,11 +448,27 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
                 guild_id=100,
                 database_id=self.database_id,
                 display_name="Sunday Watch Party",
-                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.ROTATION_POOL),
+                suggestion_rules=SuggestionRulesConfig(
+                    candidate_selection=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+                ),
             )
         )
+        # Records which mode perform_start_vote actually resolved and
+        # passed to build_candidate_selection_strategy, without changing
+        # its behavior -- the direct, robust way to prove an override
+        # took effect (or correctly fell back), replacing the removed
+        # RotationService side-channel this suite used to rely on.
+        self.modes_used: list[CandidateSelectionMode] = []
+        real_build_strategy = bot_module.build_candidate_selection_strategy
 
-    async def test_override_bypasses_the_configured_rotation_pool_mode(self) -> None:
+        def recording_build_strategy(mode, suggestion_source):
+            self.modes_used.append(mode)
+            return real_build_strategy(mode, suggestion_source)
+
+        bot_module.build_candidate_selection_strategy = recording_build_strategy
+        self.addCleanup(setattr, bot_module, "build_candidate_selection_strategy", real_build_strategy)
+
+    async def test_override_bypasses_the_configured_mode(self) -> None:
         await handle_customize_vote_submit(
             self._interaction(),
             self.vote_service,
@@ -466,16 +478,12 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
             default_nominee_count=self.default_nominee_count,
             nominee_count_text="3",
             duration_text=None,
-            rotation_service=self.rotation_service,
             suggestion_database_configuration_repository=self.configuration_repository,
             candidate_selection_override=CandidateSelectionMode.INFINITE_POOL,
         )
 
         self.assertIsNotNone(self.vote_service.get_open_round())
-        # Pure Random never creates rotation state -- if the override
-        # hadn't taken effect (silently falling back to the configured
-        # Balanced Random instead), a rotation record would exist here.
-        self.assertIsNone(self.rotation_service.get_open_rotation(self.database_id))
+        self.assertEqual(self.modes_used, [CandidateSelectionMode.INFINITE_POOL])
 
     async def test_override_never_persists_to_the_collections_own_configuration(self) -> None:
         await handle_customize_vote_submit(
@@ -487,13 +495,12 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
             default_nominee_count=self.default_nominee_count,
             nominee_count_text="3",
             duration_text=None,
-            rotation_service=self.rotation_service,
             suggestion_database_configuration_repository=self.configuration_repository,
             candidate_selection_override=CandidateSelectionMode.INFINITE_POOL,
         )
 
         saved = self.configuration_repository.get(100, self.database_id)
-        self.assertEqual(saved.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
+        self.assertEqual(saved.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
     async def test_no_override_falls_back_to_the_configured_mode(self) -> None:
         await handle_customize_vote_submit(
@@ -505,15 +512,14 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
             default_nominee_count=self.default_nominee_count,
             nominee_count_text="3",
             duration_text=None,
-            rotation_service=self.rotation_service,
             suggestion_database_configuration_repository=self.configuration_repository,
         )
 
         self.assertIsNotNone(self.vote_service.get_open_round())
-        # Balanced Random DOES create rotation state -- confirming the
-        # (unset) override correctly fell back to the collection's own
-        # configured mode rather than silently using something else.
-        self.assertIsNotNone(self.rotation_service.get_open_rotation(self.database_id))
+        # Confirms the (unset) override correctly fell back to the
+        # collection's own configured mode rather than silently using
+        # something else.
+        self.assertEqual(self.modes_used, [CandidateSelectionMode.FAVOR_OLDER_ADDITIONS])
 
     async def test_override_still_blocks_when_eligible_items_are_insufficient(self) -> None:
         # Vote Creation Validation: a Candidate Selection Mode override
@@ -530,7 +536,6 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
             default_nominee_count=self.default_nominee_count,
             nominee_count_text="10",
             duration_text=None,
-            rotation_service=self.rotation_service,
             suggestion_database_configuration_repository=self.configuration_repository,
             candidate_selection_override=CandidateSelectionMode.INFINITE_POOL,
         )
@@ -548,12 +553,11 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
             self.nominee_selection_service,
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
-            rotation_service=self.rotation_service,
             suggestion_database_configuration_repository=self.configuration_repository,
         )
 
         self.assertIsNotNone(self.vote_service.get_open_round())
-        self.assertIsNotNone(self.rotation_service.get_open_rotation(self.database_id))
+        self.assertEqual(self.modes_used, [CandidateSelectionMode.FAVOR_OLDER_ADDITIONS])
 
 
 class ConfigChangeAffectsFutureVotesTests(StartVoteFlowTestCase):
@@ -568,9 +572,6 @@ class ConfigChangeAffectsFutureVotesTests(StartVoteFlowTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.rotation_service = RotationService(
-            self.suggestion_service, repository=JsonRotationRepository(Path(self._temp_dir.name) / "rotations.json")
-        )
         self.configuration_repository = SuggestionDatabaseConfigurationRepository(
             Path(self._temp_dir.name) / "suggestion_database_configurations.json"
         )
@@ -584,9 +585,20 @@ class ConfigChangeAffectsFutureVotesTests(StartVoteFlowTestCase):
                 guild_id=100,
                 database_id=self.database_id,
                 display_name="Sunday Watch Party",
-                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.ROTATION_POOL),
+                suggestion_rules=SuggestionRulesConfig(
+                    candidate_selection=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+                ),
             )
         )
+        self.modes_used: list[CandidateSelectionMode] = []
+        real_build_strategy = bot_module.build_candidate_selection_strategy
+
+        def recording_build_strategy(mode, suggestion_source):
+            self.modes_used.append(mode)
+            return real_build_strategy(mode, suggestion_source)
+
+        bot_module.build_candidate_selection_strategy = recording_build_strategy
+        self.addCleanup(setattr, bot_module, "build_candidate_selection_strategy", real_build_strategy)
 
     async def test_a_config_change_is_used_by_the_next_use_defaults_vote(self) -> None:
         result = self.config_service.set_database_candidate_selection(
@@ -601,23 +613,18 @@ class ConfigChangeAffectsFutureVotesTests(StartVoteFlowTestCase):
             self.nominee_selection_service,
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
-            rotation_service=self.rotation_service,
             suggestion_database_configuration_repository=self.configuration_repository,
         )
 
         self.assertIsNotNone(self.vote_service.get_open_round())
-        # Pure Random (INFINITE_POOL) never creates rotation state -- if
-        # the /config change hadn't actually taken effect (silently still
-        # using the original Balanced Random), a rotation record would
-        # exist here.
-        self.assertIsNone(self.rotation_service.get_open_rotation(self.database_id))
+        self.assertEqual(self.modes_used, [CandidateSelectionMode.INFINITE_POOL])
 
     async def test_a_second_config_change_back_is_also_honored(self) -> None:
         self.config_service.set_database_candidate_selection(
             100, self.database_id, CandidateSelectionMode.INFINITE_POOL
         )
         self.config_service.set_database_candidate_selection(
-            100, self.database_id, CandidateSelectionMode.ROTATION_POOL
+            100, self.database_id, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
 
         await handle_start_vote_use_defaults(
@@ -627,13 +634,11 @@ class ConfigChangeAffectsFutureVotesTests(StartVoteFlowTestCase):
             self.nominee_selection_service,
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
-            rotation_service=self.rotation_service,
             suggestion_database_configuration_repository=self.configuration_repository,
         )
 
         self.assertIsNotNone(self.vote_service.get_open_round())
-        # Balanced Random (ROTATION_POOL) DOES create rotation state.
-        self.assertIsNotNone(self.rotation_service.get_open_rotation(self.database_id))
+        self.assertEqual(self.modes_used, [CandidateSelectionMode.FAVOR_OLDER_ADDITIONS])
 
 
 class CandidateCountResolutionConsistencyTests(StartVoteFlowTestCase):
@@ -644,9 +649,6 @@ class CandidateCountResolutionConsistencyTests(StartVoteFlowTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.rotation_service = RotationService(
-            self.suggestion_service, repository=JsonRotationRepository(Path(self._temp_dir.name) / "rotations.json")
-        )
         self.configuration_repository = SuggestionDatabaseConfigurationRepository(
             Path(self._temp_dir.name) / "suggestion_database_configurations.json"
         )
@@ -674,7 +676,6 @@ class CandidateCountResolutionConsistencyTests(StartVoteFlowTestCase):
             self.nominee_selection_service,
             wash_crew_role_id=WASH_CREW_ROLE_ID,
             default_nominee_count=self.default_nominee_count,
-            rotation_service=self.rotation_service,
             suggestion_database_configuration_repository=self.configuration_repository,
         )
 
@@ -691,7 +692,6 @@ class CandidateCountResolutionConsistencyTests(StartVoteFlowTestCase):
             default_nominee_count=self.default_nominee_count,
             nominee_count_text="4",
             duration_text=None,
-            rotation_service=self.rotation_service,
             suggestion_database_configuration_repository=self.configuration_repository,
         )
 
@@ -718,13 +718,13 @@ class ResolveCustomizeVoteDefaultCandidateSelectionTests(StartVoteFlowTestCase):
                 guild_id=100,
                 database_id=self.database_id,
                 display_name="Sunday Watch Party",
-                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.SOFT_ROTATION),
+                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS),
             )
         )
 
         result = resolve_customize_vote_default_candidate_selection(self.bot, guild_id=100, channel_id=200)
 
-        self.assertEqual(result, CandidateSelectionMode.SOFT_ROTATION)
+        self.assertEqual(result, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
     def test_falls_back_to_favor_new_additions_when_the_channel_matches_no_collection(self) -> None:
         result = resolve_customize_vote_default_candidate_selection(self.bot, guild_id=100, channel_id=999999)
@@ -744,7 +744,7 @@ class CustomizeVoteOverridesViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_has_two_selects_and_a_continue_button(self) -> None:
         view = CustomizeVoteOverridesView(
             self._noop,
-            default_candidate_selection=CandidateSelectionMode.ROTATION_POOL,
+            default_candidate_selection=CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
             default_visibility=GuildVoteVisibility.VISIBLE,
         )
         self.assertEqual(len(view.children), 3)
@@ -758,7 +758,7 @@ class CustomizeVoteOverridesViewTests(unittest.IsolatedAsyncioTestCase):
 
         view = CustomizeVoteOverridesView(
             on_continue,
-            default_candidate_selection=CandidateSelectionMode.SOFT_ROTATION,
+            default_candidate_selection=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
             default_visibility=GuildVoteVisibility.BLIND,
         )
         await view.children[2].callback(interaction=object())
@@ -767,7 +767,7 @@ class CustomizeVoteOverridesViewTests(unittest.IsolatedAsyncioTestCase):
         # preselected default is what gets forwarded -- matching
         # CandidateSelectionSelectComponent/VisibilitySelectComponent's
         # own documented "never touched" fallback.
-        self.assertEqual(received, [(CandidateSelectionMode.SOFT_ROTATION, GuildVoteVisibility.BLIND)])
+        self.assertEqual(received, [(CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, GuildVoteVisibility.BLIND)])
 
 
 class CustomizeVoteReminderTests(StartVoteFlowTestCase):
@@ -1340,7 +1340,6 @@ class CustomizeVoteFlowUiConsistencyTests(StartVoteFlowTestCase):
         self.bot.guild_configuration_repository = GuildConfigurationRepository(
             Path(self._temp_dir.name) / "guild_configurations.json"
         )
-        self.bot.rotation_service = None
         self.bot.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository(
             Path(self._temp_dir.name) / "suggestion_database_configurations.json"
         )

@@ -57,6 +57,7 @@ from watch_party_manager.persistence.suggestion_repository import JsonSuggestion
 from watch_party_manager.scheduler.scheduled_job import JobResult, JobStatus, ScheduledJob
 from watch_party_manager.scheduler.scheduler_service import SchedulerService
 from watch_party_manager.services.config_service import ConfigService
+from watch_party_manager.services.discord_ui_limits import find_oversized_view_component_fields
 from watch_party_manager.services.setup_wizard_service import SetupWizardService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.setup_wizard_view import (
@@ -543,7 +544,8 @@ class BuildChannelDestinationOptionsTests(unittest.TestCase):
         options = build_channel_destination_options(guild)
 
         thread_option = next(o for o in options if o.value == "2")
-        self.assertEqual(thread_option.label, "watch-party › watched-items")
+        self.assertEqual(thread_option.label, "watched-items")
+        self.assertEqual(thread_option.description, "Thread in #watch-party")
 
     def test_a_thread_created_earlier_in_the_same_session_appears_on_the_next_render(self) -> None:
         # The exact live-testing scenario: a collection's suggestion
@@ -618,7 +620,8 @@ class BuildChannelDestinationOptionsTests(unittest.TestCase):
         self.assertIn("2", [o.value for o in options])
         selected = next(o for o in options if o.value == "2")
         self.assertTrue(selected.default)
-        self.assertEqual(selected.label, "watch-party › watched-items")
+        self.assertEqual(selected.label, "watched-items")
+        self.assertEqual(selected.description, "Currently selected · Thread in #watch-party")
 
     def test_excludes_inaccessible_channels(self) -> None:
         channel = _FakeDestinationChannel(1, "secret", permissions=_FakePermissionSet(view_channel=False))
@@ -636,6 +639,207 @@ class BuildChannelDestinationOptionsTests(unittest.TestCase):
         options = build_channel_destination_options(guild, include_channels=False)
 
         self.assertEqual([o.value for o in options], ["2"])
+
+
+class BuildChannelDestinationOptionsLengthLimitTests(unittest.TestCase):
+    """Setup Wizard Step 6 select-option length failure fix: Discord
+    rejects the entire component payload (400 Bad Request, error 50035)
+    if any option's label/description/value exceeds 100 characters --
+    discord.py itself performs no client-side validation, so this must
+    be enforced here, on every option this function can ever produce,
+    regardless of how long the underlying Discord channel/thread name is
+    (Discord itself allows up to 100 characters for either).
+    """
+
+    def _assert_within_discord_limits(self, options) -> None:
+        # Serializes `options` into a real discord.ui.View and inspects
+        # the exact payload via to_components() -- not the Python
+        # SelectOption objects' own len() -- so this catches the astral-
+        # plane/UTF-16 undercounting bug a plain len(option.label) <= 100
+        # check would miss (see discord_ui_limits.py's module docstring:
+        # Discord counts length in UTF-16 code units, and Python's len()
+        # undercounts any character outside the Basic Multilingual Plane,
+        # e.g. most emoji, by half).
+        view = discord.ui.View()
+        view.add_item(discord.ui.Select(options=list(options)))
+        violations = find_oversized_view_component_fields(view)
+        self.assertEqual(violations, [])
+
+    def test_a_long_channel_name_never_produces_an_oversized_option(self) -> None:
+        channel = _FakeDestinationChannel(1, "x" * 100)
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild)
+
+        self._assert_within_discord_limits(options)
+
+    def test_a_long_thread_name_never_produces_an_oversized_option(self) -> None:
+        channel = _FakeDestinationChannel(1, "watch-party")
+        channel.threads = [_FakeThread(2, "y" * 100, channel)]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild)
+
+        self._assert_within_discord_limits(options)
+
+    def test_a_long_parent_channel_name_never_produces_an_oversized_thread_description(self) -> None:
+        # The exact failure mode reported live: a thread's description
+        # ("Thread in #<parent>") combines a fixed prefix with the
+        # parent channel's own name -- for a parent name near Discord's
+        # own 100-character channel-name limit, the naive concatenation
+        # alone would exceed SelectOption's 100-character description
+        # limit and 400 the whole render.
+        channel = _FakeDestinationChannel(1, "p" * 100)
+        thread = _FakeThread(2, "watched-items", channel)
+        channel.threads = [thread]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild)
+
+        thread_option = next(o for o in options if o.value == "2")
+        self.assertIsNotNone(thread_option.description)
+        self.assertLessEqual(len(thread_option.description), 100)
+        self._assert_within_discord_limits(options)
+
+    def test_a_long_retained_current_selection_description_is_safe(self) -> None:
+        # The "retained saved destination" fallback (a thread no longer
+        # visible via the live scan, e.g. WASH's permissions changed)
+        # builds its own description combining parent context with a
+        # "Currently selected" marker -- also must never exceed the limit.
+        channel = _FakeDestinationChannel(1, "p" * 100)
+        thread = _FakeThread(2, "z" * 100, channel, permissions=_FakePermissionSet(send_messages=False))
+        channel.threads = [thread]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild, selected_channel_id=2)
+
+        selected = next(o for o in options if o.value == "2")
+        self.assertTrue(selected.default)
+        self.assertIn("Currently selected", selected.description)
+        self._assert_within_discord_limits(options)
+
+    def test_an_emoji_heavy_parent_channel_name_never_produces_an_oversized_description(self) -> None:
+        # TASK D root cause: Discord measures SelectOption length in
+        # UTF-16 code units, the same way JavaScript's String.length
+        # does -- not Python's code-point-based len(). Most emoji (e.g.
+        # the clapperboard below, U+1F3AC) sit outside the Basic
+        # Multilingual Plane and are encoded as a UTF-16 surrogate pair,
+        # so they count as 2 units to Discord but only 1 to Python's
+        # len(). A parent channel name built entirely from such
+        # characters can be well within Discord's own 100-character
+        # channel-name limit (measured the same way) and still, once
+        # combined into "Thread in #<parent>" and truncated by Python
+        # character count, produce a description Discord's API rejects
+        # as over 100 -- exactly the live 400 (error 50035) this fix
+        # addresses. See discord_ui_limits.py's module docstring.
+        emoji_channel_name = "\U0001F3AC" * 90
+        channel = _FakeDestinationChannel(1, emoji_channel_name)
+        thread = _FakeThread(2, "watched-items", channel)
+        channel.threads = [thread]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild)
+
+        thread_option = next(o for o in options if o.value == "2")
+        self.assertIsNotNone(thread_option.description)
+        self._assert_within_discord_limits(options)
+
+    def test_an_emoji_heavy_retained_selection_description_is_safe(self) -> None:
+        # Same UTF-16-counting failure mode as above, but through the
+        # "retained saved destination" fallback path (build_safe_select_
+        # option's description= is a string already combining "Currently
+        # selected" with parent context before truncation).
+        emoji_channel_name = "\U0001F37F" * 90
+        channel = _FakeDestinationChannel(1, emoji_channel_name)
+        thread = _FakeThread(2, "z" * 100, channel, permissions=_FakePermissionSet(send_messages=False))
+        channel.threads = [thread]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild, selected_channel_id=2)
+
+        selected = next(o for o in options if o.value == "2")
+        self.assertTrue(selected.default)
+        self.assertIn("Currently selected", selected.description)
+        self._assert_within_discord_limits(options)
+
+    def test_an_emoji_heavy_thread_name_never_produces_an_oversized_label(self) -> None:
+        channel = _FakeDestinationChannel(1, "watch-party")
+        emoji_thread_name = "\U0001F4FA" * 90
+        channel.threads = [_FakeThread(2, emoji_thread_name, channel)]
+        guild = _FakeDestinationGuild(text_channels=[channel])
+
+        options = build_channel_destination_options(guild)
+
+        self._assert_within_discord_limits(options)
+
+    def test_more_than_25_usable_destinations_is_capped_at_25(self) -> None:
+        channels = [_FakeDestinationChannel(i, f"channel-{i}") for i in range(30)]
+        guild = _FakeDestinationGuild(text_channels=channels)
+
+        options = build_channel_destination_options(guild)
+
+        self.assertEqual(len(options), 25)
+
+    def test_more_than_25_destinations_still_keeps_the_selected_one(self) -> None:
+        channels = [_FakeDestinationChannel(i, f"channel-{i}") for i in range(30)]
+        guild = _FakeDestinationGuild(text_channels=channels)
+
+        options = build_channel_destination_options(guild, selected_channel_id=29)
+
+        self.assertEqual(len(options), 25)
+        self.assertTrue(any(o.value == "29" and o.default for o in options))
+
+    def test_many_long_named_destinations_together_never_raise(self) -> None:
+        # Combines every stress factor at once: more than 25 usable
+        # destinations, each with a channel name at Discord's own
+        # 100-character limit, some with equally long thread names --
+        # building the option list must never raise, and every resulting
+        # option must still satisfy Discord's limits.
+        channels = []
+        for i in range(30):
+            channel = _FakeDestinationChannel(i, f"{'c' * 90}-{i}")
+            channel.threads = [_FakeThread(1000 + i, f"{'t' * 90}-{i}", channel)]
+            channels.append(channel)
+        guild = _FakeDestinationGuild(text_channels=channels)
+
+        options = build_channel_destination_options(guild)
+
+        self.assertLessEqual(len(options), 25)
+        self._assert_within_discord_limits(options)
+
+
+class ExistingDatabaseSelectLengthLimitTests(unittest.TestCase):
+    """TASK D defense-in-depth: ExistingDatabaseSelect (the Suggestion
+    Database step's "choose an existing collection" picker) previously
+    built raw discord.SelectOption(label=name[:100], ...) directly,
+    instead of routing through build_safe_select_option() like every
+    other Setup Wizard option builder -- one of the option builders the
+    original TASK C audit missed. Python's len()-based slicing has the
+    same UTF-16-undercounting gap Watch Destination's
+    build_channel_destination_options had (see discord_ui_limits.py's
+    module docstring): a collection name built from emoji or other
+    astral-plane characters can be <=100 Python characters and still
+    exceed Discord's 100-unit limit.
+    """
+
+    def _assert_within_discord_limits(self, select: discord.ui.Select) -> None:
+        view = discord.ui.View()
+        view.add_item(select)
+        violations = find_oversized_view_component_fields(view)
+        self.assertEqual(violations, [])
+
+    def test_a_long_ascii_collection_name_is_safe(self) -> None:
+        from watch_party_manager.setup_wizard_view import ExistingDatabaseSelect
+
+        select = ExistingDatabaseSelect([(1, "m" * 150)], on_select=None)
+        self._assert_within_discord_limits(select)
+
+    def test_an_emoji_heavy_collection_name_is_safe(self) -> None:
+        from watch_party_manager.setup_wizard_view import ExistingDatabaseSelect
+
+        emoji_name = "\U0001F37F" * 90
+        select = ExistingDatabaseSelect([(1, emoji_name)], on_select=None)
+        self._assert_within_discord_limits(select)
 
 
 class BuildSetupStepHeaderTests(unittest.TestCase):
@@ -941,7 +1145,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 30)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 2, 15)
@@ -970,7 +1174,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         self.assertEqual(preserved.draft.watch_party_role_id, WATCH_PARTY_ROLE_ID)
         self.assertEqual(preserved.draft.home_channel_id, DESTINATION_CHANNEL_ID)
         self.assertEqual(preserved.draft.voting_candidate_count, 5)
-        self.assertEqual(preserved.draft.voting_candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
+        self.assertEqual(preserved.draft.voting_candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
         self.assertTrue(preserved.draft.reminder_enabled)
         self.assertEqual(preserved.draft.backup_interval_days, 2)
 
@@ -1019,7 +1223,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -1070,7 +1274,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -1116,7 +1320,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -1161,7 +1365,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -1224,7 +1428,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 3, 15)
@@ -1319,7 +1523,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
     async def test_voting_defaults_modal_reopened_after_back_shows_previously_saved_values(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.SOFT_ROTATION
+            state, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
         # Simulate returning to Voting Defaults later (e.g. via Back from
         # Reminder Defaults, or Review's edit-a-section) -- the modal must
@@ -1329,7 +1533,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
         intro_view: VotingDefaultsIntroView = interaction.response.sent_view
-        self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.SOFT_ROTATION)
+        self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
         self.assertEqual(intro_view.visibility_select.selected, GuildVoteVisibility.VISIBLE)
         configure_button = next(
             child for child in intro_view.children if getattr(child, "label", None) == "Set Voting Defaults"
@@ -1775,7 +1979,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -1802,19 +2006,19 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         save_interaction = FakeInteraction(guild=FakeGuild())
         await save_button.callback(interaction=save_interaction)
 
-        self.assertIn("Soft Rotation", save_interaction.response.edited_content)
+        self.assertIn("Favor Older Additions", save_interaction.response.edited_content)
 
     async def test_review_line_shows_the_friendly_candidate_selection_label(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.ROTATION_POOL
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_NEW_ADDITIONS
         )
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
         interaction = FakeInteraction()
 
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
-        self.assertIn("Balanced Random", interaction.response.sent_message)
+        self.assertIn("Favor New Additions", interaction.response.sent_message)
 
     async def test_settings_persist_through_a_repository_round_trip(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
@@ -1838,7 +2042,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.SOFT_ROTATION
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -1871,12 +2075,12 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
             GUILD_ID, database_result.database.database_id
         )
 
-        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
+        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
-    async def test_older_persisted_database_configuration_defaults_to_balanced_random(self) -> None:
+    async def test_older_persisted_database_configuration_defaults_to_favor_new_additions(self) -> None:
         # A database configuration saved before candidate_selection existed
         # (or one that never had this section touched) must still resolve
-        # to ROTATION_POOL / "Balanced Random", not error or show blank.
+        # to the configured default, not error or show blank.
         database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
@@ -1887,7 +2091,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.ROTATION_POOL
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_NEW_ADDITIONS
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -1918,7 +2122,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         database_configuration = config_service.get_database_configuration(
             GUILD_ID, database_result.database.database_id
         )
-        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
+        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
 
 
 class ReminderDefaultsSetupIntegrationTests(SetupCommandTestCase):
@@ -2125,9 +2329,10 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         reason = "Forbidden"
 
     class FakeHomeChannel:
-        def __init__(self, *, thread_id: int = 999, fail: bool = False) -> None:
+        def __init__(self, *, thread_id: int = 999, fail: bool = False, channel_id: int = 600) -> None:
             self._thread_id = thread_id
             self._fail = fail
+            self.id = channel_id
             self.created_with = None
 
         async def create_thread(self, *, name, type):
@@ -2181,7 +2386,8 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         option_values = [option.value for option in select.options]
         self.assertIn("701", option_values)
         thread_option = next(o for o in select.options if o.value == "701")
-        self.assertEqual(thread_option.label, "watch-party › movie-suggestions")
+        self.assertEqual(thread_option.label, "movie-suggestions")
+        self.assertEqual(thread_option.description, "Thread in #watch-party")
 
     async def test_saved_destination_is_preselected_when_returning_to_the_step(self) -> None:
         home_channel = _FakeDestinationChannel(self.HOME_CHANNEL_ID, "watch-party")
@@ -2276,6 +2482,269 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
 
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertTrue(persisted.draft.watch_destination_skipped)
+
+    async def test_skip_still_works_with_many_long_destination_names(self) -> None:
+        # Setup Wizard Step 6 select-option length failure fix: Skip must
+        # never depend on successfully building a destination option
+        # list -- confirmed here with a guild deliberately stacked with
+        # more than 25 usable destinations, several with 100-character
+        # names, the exact conditions that used to risk an invalid
+        # payload during this step's own initial render.
+        channels = []
+        for i in range(30):
+            channel = _FakeDestinationChannel(i, f"{'c' * 90}-{i}")
+            channel.threads = [_FakeThread(1000 + i, f"{'t' * 90}-{i}", channel)]
+            channels.append(channel)
+        guild = _FakeDestinationGuild(text_channels=channels)
+
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_home_channel(state, self.HOME_CHANNEL_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.WATCH_DESTINATION)
+        interaction = FakeInteraction(guild=guild)
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        skip_button = interaction.response.sent_view.children[2]
+        skip_interaction = FakeInteraction(guild=guild)
+        await skip_button.callback(interaction=skip_interaction)
+
+        self.assertIn("Step 7 of 10", skip_interaction.response.edited_content)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertTrue(persisted.draft.watch_destination_skipped)
+
+    async def test_newly_created_thread_appears_and_is_preselected_when_step_6_rerenders(self) -> None:
+        # Requirement: a thread created via "Create New Thread" must show
+        # up, marked as the current selection, the next time Step 6 is
+        # rendered (e.g. after navigating Back from Voting Defaults) --
+        # never missing just because it didn't exist at the time of an
+        # earlier render.
+        interaction = await self._render_step()
+        create_thread_button = interaction.response.sent_view.children[1]
+
+        fake_home_channel = self.FakeHomeChannel(thread_id=777)
+        create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await create_thread_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        name_modal.name_input._value = "Watched Item Archive"
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        # Now go back to Step 6 with a live guild that actually has the
+        # created thread (777) under the home channel, as it would after
+        # a real Discord API call.
+        home_channel = _FakeDestinationChannel(self.HOME_CHANNEL_ID, "watch-party")
+        home_channel.threads = [_FakeThread(777, "Watched Item Archive", home_channel)]
+        guild = _FakeDestinationGuild(text_channels=[home_channel])
+        persisted = self.wizard_repository.get(GUILD_ID)
+        rerendered_state = self.bot.setup_wizard_service.go_to_step(persisted, SetupWizardStep.WATCH_DESTINATION)
+        back_interaction = FakeInteraction(guild=guild)
+
+        await send_setup_wizard_step(back_interaction, self.bot, rerendered_state, edit=False)
+
+        select = back_interaction.response.sent_view.children[0]
+        option_values = [option.value for option in select.options]
+        self.assertIn("777", option_values)
+        created_option = next(o for o in select.options if o.value == "777")
+        self.assertTrue(created_option.default)
+
+    async def test_retrying_create_new_thread_with_the_same_name_does_not_create_a_duplicate(self) -> None:
+        # Setup Wizard Step 6 select-option length failure fix: if the
+        # thread was already created successfully (e.g. the response
+        # that should have advanced past this step never reached
+        # Discord, leaving the user looking at the same modal again),
+        # retrying with the identical name must reuse the existing
+        # thread rather than creating a second, orphaned one.
+        interaction = await self._render_step()
+        create_thread_button = interaction.response.sent_view.children[1]
+
+        fake_home_channel = self.FakeHomeChannel(thread_id=777)
+        # Simulate the first attempt's thread already existing under the
+        # home channel, as it would after a real (successful) Discord
+        # thread-creation call.
+        fake_home_channel.threads = [self.FakeThread(777)]
+        fake_home_channel.threads[0].name = "Watched Item Archive"
+        fake_home_channel.threads[0].archived = False
+
+        create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await create_thread_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        name_modal.name_input._value = "Watched Item Archive"
+
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        # create_thread must never have been called a second time --
+        # created_with stays None, confirming the existing thread (777)
+        # was reused instead.
+        self.assertIsNone(fake_home_channel.created_with)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.watch_destination_channel_id, 777)
+
+    async def test_the_real_production_sequence_with_ordinary_default_names_reveals_the_actual_offending_option(
+        self,
+    ) -> None:
+        # TASK E: reproduces the exact live flow using ONLY real, ordinary
+        # production data -- the modal's own default thread name
+        # ("Watched Item Archive"), nothing synthetic, long, or
+        # emoji-heavy. Proves the live 400 was never about channel/thread
+        # names: creating the thread correctly advances the wizard to
+        # Voting Defaults (Step 7, per SETUP_WIZARD_STEP_ORDER/
+        # _next_step -- confirmed empirically, not assumed), and it is
+        # THAT view's first render which violates Discord's limits, via a
+        # static, name-independent description string built outside
+        # build_safe_select_option() entirely (CandidateSelectionSelect
+        # Component -> CANDIDATE_SELECTION_HELP_TEXT, see
+        # domain/suggestion_database_configuration.py).
+        interaction = await self._render_step()
+        create_thread_button = interaction.response.sent_view.children[1]
+
+        fake_home_channel = self.FakeHomeChannel(thread_id=777)
+        create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await create_thread_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        self.assertEqual(name_modal.name_input.default, "Watched Item Archive")
+        name_modal.name_input._value = name_modal.name_input.default
+
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        view = submit_interaction.response.edited_view
+        self.assertIsInstance(view, VotingDefaultsIntroView)
+
+        # The exact JSON path from the live traceback:
+        # data.components.0.components.0.options.1.description
+        components = view.to_components()
+        offending_option = components[0]["components"][0]["options"][1]
+        self.assertEqual(offending_option["label"], "Favor Older Additions")
+        offending_description = offending_option["description"]
+        utf16_length = len(offending_description.encode("utf-16-le")) // 2
+        self.assertLessEqual(
+            utf16_length,
+            100,
+            msg=(
+                f"components[0].components[0].options[1].description is {utf16_length} Discord "
+                f"(UTF-16) length units, {len(offending_description)} Python len(): "
+                f"{offending_description!r}"
+            ),
+        )
+        self.assertEqual(find_oversized_view_component_fields(view), [])
+
+    async def test_post_create_step_6_rerender_with_an_emoji_home_channel_name_serializes_within_discord_limits(
+        self,
+    ) -> None:
+        # TASK D's exact reproduction recipe: render Step 6, click Create
+        # New Thread, submit a name, thread creation succeeds, then Step
+        # 6 is rebuilt with the created thread retained/selected (Back
+        # from Voting Defaults, or Review's "edit a section" jump, both
+        # land back here). Root cause (discord_ui_limits.py's module
+        # docstring): Discord measures SelectOption length in UTF-16 code
+        # units, not Python's code-point-based len() -- an emoji-heavy
+        # home channel name (a completely ordinary real-world choice,
+        # many Discord servers decorate channel names this way) combines
+        # with "Thread in #<parent>" into a description that was <=100
+        # Python characters after the old truncate_for_discord() but
+        # still well over 100 by Discord's own count, producing the live
+        # 400 Bad Request (error 50035) on
+        # data.components.0.components.0.options.1.description.
+        interaction = await self._render_step()
+        create_thread_button = interaction.response.sent_view.children[1]
+
+        fake_home_channel = self.FakeHomeChannel(thread_id=777)
+        create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await create_thread_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        name_modal.name_input._value = "Watched Item Archive"
+
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await name_modal.on_submit(interaction=submit_interaction)
+
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(persisted.draft.watch_destination_channel_id, 777)
+
+        # Rebuild Step 6 against a live guild where the created thread is
+        # visible under an emoji-heavy home/parent channel name.
+        emoji_home_channel_name = "\U0001F3AC" * 90
+        home_channel = _FakeDestinationChannel(self.HOME_CHANNEL_ID, emoji_home_channel_name)
+        home_channel.threads = [_FakeThread(777, "Watched Item Archive", home_channel)]
+        guild = _FakeDestinationGuild(text_channels=[home_channel])
+        rerendered_state = self.bot.setup_wizard_service.go_to_step(persisted, SetupWizardStep.WATCH_DESTINATION)
+        back_interaction = FakeInteraction(guild=guild)
+
+        await send_setup_wizard_step(back_interaction, self.bot, rerendered_state, edit=False)
+
+        view = back_interaction.response.sent_view
+        self.assertIsInstance(view, WatchDestinationStepView)
+        select = view.children[0]
+        created_option = next(o for o in select.options if o.value == "777")
+        self.assertTrue(created_option.default)
+
+        # The exact check TASK D requires: walk the real outgoing payload
+        # (view.to_components(), not the Python SelectOption objects)
+        # and confirm no option field violates Discord's limits.
+        violations = find_oversized_view_component_fields(view)
+        self.assertEqual(violations, [])
+
+    async def test_a_long_plain_ascii_thread_name_selected_after_creation_serializes_safely(self) -> None:
+        # Non-emoji long-name variant of the same rerender scenario, to
+        # keep both failure shapes (astral-character undercounting and
+        # ordinary long names) under regression coverage together.
+        interaction = await self._render_step()
+        create_thread_button = interaction.response.sent_view.children[1]
+
+        fake_home_channel = self.FakeHomeChannel(thread_id=777)
+        create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await create_thread_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        long_thread_name = "t" * 100
+        name_modal.name_input._value = long_thread_name
+
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await name_modal.on_submit(interaction=submit_interaction)
+        persisted = self.wizard_repository.get(GUILD_ID)
+
+        long_parent_channel_name = "p" * 100
+        home_channel = _FakeDestinationChannel(self.HOME_CHANNEL_ID, long_parent_channel_name)
+        home_channel.threads = [_FakeThread(777, long_thread_name, home_channel)]
+        guild = _FakeDestinationGuild(text_channels=[home_channel])
+        rerendered_state = self.bot.setup_wizard_service.go_to_step(persisted, SetupWizardStep.WATCH_DESTINATION)
+        back_interaction = FakeInteraction(guild=guild)
+
+        await send_setup_wizard_step(back_interaction, self.bot, rerendered_state, edit=False)
+
+        view = back_interaction.response.sent_view
+        violations = find_oversized_view_component_fields(view)
+        self.assertEqual(violations, [])
+
+    async def test_skip_still_works_after_a_thread_has_already_been_created(self) -> None:
+        # A thread created earlier in the same Step 6 visit (or an
+        # earlier one) must never block Skip on a later visit -- Skip
+        # must succeed independent of destination-option rendering.
+        interaction = await self._render_step()
+        create_thread_button = interaction.response.sent_view.children[1]
+
+        fake_home_channel = self.FakeHomeChannel(thread_id=777)
+        create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await create_thread_button.callback(interaction=create_interaction)
+        name_modal = create_interaction.response.sent_modal
+        name_modal.name_input._value = "Watched Item Archive"
+        submit_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
+        await name_modal.on_submit(interaction=submit_interaction)
+        persisted = self.wizard_repository.get(GUILD_ID)
+
+        home_channel = _FakeDestinationChannel(self.HOME_CHANNEL_ID, "\U0001F3AC" * 90)
+        home_channel.threads = [_FakeThread(777, "Watched Item Archive", home_channel)]
+        guild = _FakeDestinationGuild(text_channels=[home_channel])
+        rerendered_state = self.bot.setup_wizard_service.go_to_step(persisted, SetupWizardStep.WATCH_DESTINATION)
+        back_interaction = FakeInteraction(guild=guild)
+        await send_setup_wizard_step(back_interaction, self.bot, rerendered_state, edit=False)
+
+        skip_button = back_interaction.response.sent_view.children[2]
+        skip_interaction = FakeInteraction(guild=guild)
+        await skip_button.callback(interaction=skip_interaction)
+
+        self.assertIn("Step 7 of 10", skip_interaction.response.edited_content)
+        final = self.wizard_repository.get(GUILD_ID)
+        self.assertTrue(final.draft.watch_destination_skipped)
+        self.assertIsNone(final.draft.watch_destination_channel_id)
 
 
 class HomeChannelStepIntegrationTests(SetupCommandTestCase):
@@ -2598,9 +3067,10 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         reason = "Forbidden"
 
     class FakeHomeChannel:
-        def __init__(self, *, thread_id: int = 999, fail: bool = False) -> None:
+        def __init__(self, *, thread_id: int = 999, fail: bool = False, channel_id: int = 600) -> None:
             self._thread_id = thread_id
             self._fail = fail
+            self.id = channel_id
             self.created_with = None
 
         async def create_thread(self, *, name, type):
@@ -2949,7 +3419,6 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
             def __init__(self, suggestion_service, suggestion_database_configuration_repository, channel):
                 self.suggestion_service = suggestion_service
                 self.suggestion_database_configuration_repository = suggestion_database_configuration_repository
-                self.rotation_service = None
                 self.permission_service = None
                 self._channel = channel
 

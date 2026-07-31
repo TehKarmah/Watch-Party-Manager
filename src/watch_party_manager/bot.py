@@ -48,9 +48,7 @@ from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.suggestion_database_configuration import (
     CANDIDATE_SELECTION_DISPLAY_LABELS,
     CandidateSelectionMode,
-    SuggestionAdmissionMode,
 )
-from watch_party_manager.domain.rotation import Rotation
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_party import WatchParty, WatchPartyStatus
 from watch_party_manager.logger_config import configure_logging
@@ -147,7 +145,6 @@ from watch_party_manager.services.membership_service import (
     MembershipService,
 )
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
-from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.candidate_selection_strategy import build_candidate_selection_strategy
 from watch_party_manager.services.collection_eligibility_service import (
     CollectionEligibility,
@@ -169,6 +166,11 @@ from watch_party_manager.services.setup_wizard_service import (
     MIN_BACKUP_INTERVAL_DAYS,
     MIN_BACKUP_RETENTION_COUNT,
     SetupWizardService,
+)
+from watch_party_manager.services.discord_ui_limits import (
+    build_safe_select_option,
+    cap_select_options,
+    find_oversized_view_component_fields,
 )
 from watch_party_manager.services.duplicate_detection_service import (
     DuplicateCheckResult,
@@ -195,7 +197,6 @@ from watch_party_manager.services.suggestion_display_status import (
 from watch_party_manager.services.statistics_service import (
     DatabaseStatistics,
     MemberStatistics,
-    RotationStatistics,
     ServerStatistics,
     StatisticsService,
     StatisticsSnapshot,
@@ -340,12 +341,10 @@ class WatchPartyBot(commands.Bot):
         )
         self.vote_service = VoteService(self.suggestion_service)
         self.nominee_selection_service = NomineeSelectionService(self.suggestion_service, self.vote_service)
-        self.rotation_service = RotationService(self.suggestion_service)
         self.vote_completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
         self.watch_party_service = WatchPartyService(self.suggestion_service)
         self.statistics_service = StatisticsService(
             self.suggestion_service,
-            rotation_service=self.rotation_service,
             watch_party_source=self.watch_party_service,
         )
         self.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository()
@@ -376,7 +375,6 @@ class WatchPartyBot(commands.Bot):
                 self.suggestion_service,
                 self,
                 on_finalized=lambda result: sync_vote_completion_status_embeds(self, result),
-                rotation_service=self.rotation_service,
             ),
         )
         self.scheduler_host.scheduler_service.register_handler(
@@ -460,7 +458,7 @@ class WatchPartyBot(commands.Bot):
             )
             await send_help_response(interaction, response)
 
-        @self.tree.command(name="stats", description="Show server, member, suggestion, or rotation statistics.")
+        @self.tree.command(name="stats", description="Show server, member, suggestion, or collection statistics.")
         @discord.app_commands.describe(
             type="Which statistics to show (defaults to Server).",
             public="Post the statistics publicly instead of showing them only to you (WASH Crew only, except for your own Member statistics).",
@@ -471,7 +469,6 @@ class WatchPartyBot(commands.Bot):
                 discord.app_commands.Choice(name="Server", value="server"),
                 discord.app_commands.Choice(name="Member", value="member"),
                 discord.app_commands.Choice(name="Suggestion", value="suggestion"),
-                discord.app_commands.Choice(name="Rotation", value="rotation"),
                 discord.app_commands.Choice(name="Collection", value="database"),
             ]
         )
@@ -1253,7 +1250,6 @@ def build_vote_status_text(
     standings: Optional[List[StandingsEntry]],
     standings_error: Optional[str],
     candidates: Optional[List[WatchItem]] = None,
-    rotation_number: Optional[int] = None,
 ) -> str:
     """Build the /vote_status message for a round.
 
@@ -1269,10 +1265,6 @@ def build_vote_status_text(
             titles rather than internal suggestion numbers (Release
             Polish Batch 2, Priority 3). Optional so existing callers
             with no candidates in scope keep working.
-        rotation_number: The Rotation this round's candidates were drawn
-            from, if known (Rotation Context in Voting) -- see
-            resolve_rotation_number_for_round. None omits it, e.g. a
-            legacy round created before VoteRound.rotation_id existed.
 
     Returns:
         The formatted status text. Total votes cast is always shown,
@@ -1281,11 +1273,8 @@ def build_vote_status_text(
         round has enough Discord message metadata to build one (see
         build_vote_link); omitted entirely for legacy rounds that don't.
     """
-    round_line = f"Voting round {vote_round.id}"
-    if rotation_number is not None:
-        round_line = f"{round_line} • Rotation {rotation_number}"
     lines = [
-        round_line,
+        f"Voting round {vote_round.id}",
         f"Status: {vote_round.status.value.capitalize()}",
         f"Visibility: {vote_round.visibility.value.capitalize()}",
         f"Candidates: {candidate_count}",
@@ -1305,8 +1294,6 @@ def build_insufficient_candidates_message(
     collection_display_name: Optional[str],
     eligible_count: int,
     requested_count: int,
-    *,
-    rollover_occurred: bool = False,
 ) -> str:
     """Build /vote start's "not enough eligible watch items" message.
 
@@ -1330,20 +1317,13 @@ def build_insufficient_candidates_message(
         requested_count: The candidate count this vote actually asked
             for -- the same resolved value used for eligibility
             resolution and nominee selection alike.
-        rollover_occurred: Rotation rollover fix -- whether a rotation
-            rollover was attempted before this message was built (see
-            RotationService.resolve_rotation_for_requested_count). Only
-            mentioned when True: a rollover already happened and still
-            wasn't enough, so simply retrying won't help without adding
-            suggestions or reducing the candidate count.
     """
     collection_clause = f' for "{collection_display_name}"' if collection_display_name else ""
     is_are = "is" if eligible_count == 1 else "are"
-    rollover_clause = ", even after automatically starting a new rotation" if rollover_occurred else ""
     return (
         f"Not enough eligible watch items to start this vote{collection_clause}.\n\n"
         f"This vote requires {requested_count} candidates, but only {eligible_count} {is_are} "
-        f"currently available{rollover_clause}.\n\n"
+        f"currently available.\n\n"
         "Add more suggestions, reduce the candidate count, or review your Vote Winners and Retired items."
     )
 
@@ -1362,7 +1342,6 @@ def perform_start_vote(
     channel_id: Optional[int] = None,
     reminder_enabled: Optional[bool] = None,
     reminder_minutes_before_close: Optional[int] = None,
-    rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
     resolved_database_id: Optional[int] = None,
@@ -1404,15 +1383,13 @@ def perform_start_vote(
         reminder_minutes_before_close: FR-027: a per-round override of how
             many minutes before closing the reminder fires, or None to use
             the guild default.
-        rotation_service: FR-033B: used, together with
-            suggestion_database_configuration_repository, to resolve the
-            database's configured CandidateSelectionMode into a
-            CandidateSelectionStrategy passed to nominee_selection_service.
-            Optional -- when either is None (e.g. no database context, or
-            a test caller with no rotation service configured), nominee
-            selection proceeds exactly as it did before FR-033B.
-        suggestion_database_configuration_repository: FR-033B: see
-            rotation_service.
+        suggestion_database_configuration_repository: FR-033B: used to
+            resolve the database's configured CandidateSelectionMode into
+            a CandidateSelectionStrategy passed to
+            nominee_selection_service. Optional -- when None (e.g. no
+            database context, or a test caller with no repository
+            configured), nominee_selection_service falls back to its own
+            default behavior with no strategy applied.
         guild_configuration_repository: Release Polish Batch 2, Priority 6:
             used to resolve the guild's configured default visibility
             when visibility_str is None. Optional -- when unset (e.g. a
@@ -1495,21 +1472,19 @@ def perform_start_vote(
             )
 
     if resolution is not None:
-        # Rotation Cooldown Correctness: this collection's own open-round
-        # check must happen before anything below mutates rotation state
-        # (eligible_candidate_count can trigger a rollover;
-        # select_nominees marks candidates as presented -- both permanent,
-        # unrolled-back side effects). vote_service.create_round() below
-        # performs this exact same check, but only after those mutations
-        # already ran -- previously, starting a vote on a collection that
-        # already had one open would corrupt rotation state (candidates
-        # marked presented/on cooldown for a round that was then
-        # rejected and never created) instead of failing cleanly.
+        # This collection's own open-round check must happen before
+        # anything below mutates state (select_nominees marks candidates
+        # as presented -- a permanent, unrolled-back side effect).
+        # vote_service.create_round() below performs this exact same
+        # check, but only after that mutation already ran -- checking
+        # here first means starting a vote on a collection that already
+        # has one open fails cleanly instead of leaving candidates marked
+        # presented for a round that was then rejected and never created.
         if vote_service.get_open_round(resolution.database.database_id) is not None:
             return "A voting round is already open for this collection.", True
 
         strategy = None
-        if rotation_service is not None and suggestion_database_configuration_repository is not None:
+        if suggestion_database_configuration_repository is not None:
             database_configuration = suggestion_database_configuration_repository.get(
                 guild_id, resolution.database.database_id
             )
@@ -1522,31 +1497,10 @@ def perform_start_vote(
             # nominee selection only -- the collection's own configured
             # mode (read just above) is never written back to.
             mode = candidate_selection_override if candidate_selection_override is not None else configured_mode
-            strategy = build_candidate_selection_strategy(mode, rotation_service, suggestion_service)
+            strategy = build_candidate_selection_strategy(mode, suggestion_service)
 
-        # Rotation rollover fix: resolve eligibility for the actual
-        # requested vote size (count), not just a generic check, so a
-        # Rotation Pool database whose current rotation can't supply
-        # `count` candidates rolls over here -- before the insufficiency
-        # check below -- rather than staying locked with suggestions on
-        # Rotation Cooldown. Snapshot the open rotation's identity first
-        # so a rollover can be detected (its id changes) purely by
-        # comparison, with no separate flag threaded out of RotationService.
-        rotation_before = (
-            rotation_service.get_open_rotation(resolution.database.database_id)
-            if rotation_service is not None
-            else None
-        )
         eligible_count = nominee_selection_service.eligible_candidate_count(
             resolution.database.database_id, strategy, requested_count=count
-        )
-        rotation_after = (
-            rotation_service.get_open_rotation(resolution.database.database_id)
-            if rotation_service is not None
-            else None
-        )
-        rollover_occurred = (
-            rotation_before is not None and rotation_after is not None and rotation_before.id != rotation_after.id
         )
         # Vote Creation Validation: compare against the actual resolved
         # candidate count for this request (`count` -- the same value
@@ -1560,27 +1514,13 @@ def perform_start_vote(
         if eligible_count < count:
             collection_display_name = format_collection_display(resolution.database.name)
             return (
-                build_insufficient_candidates_message(
-                    collection_display_name, eligible_count, count, rollover_occurred=rollover_occurred
-                ),
+                build_insufficient_candidates_message(collection_display_name, eligible_count, count),
                 True,
             )
         candidates = nominee_selection_service.select_nominees(
             resolution.database.database_id, count, strategy=strategy
         )
-        # Rotation Context in Voting: record which Rotation these
-        # candidates actually came from (the one select_nominees just
-        # admitted/presented them into), so the active voting embed,
-        # /vote_status, and results can all show "Rotation Y" without
-        # re-deriving it from candidate journeys later.
-        open_rotation = (
-            rotation_service.get_open_rotation(resolution.database.database_id)
-            if rotation_service is not None
-            else None
-        )
-        rotation_id = open_rotation.id if open_rotation is not None else None
     else:
-        rotation_id = None
         # No database context (or no selection service configured): fall
         # back to a simple, non-database-scoped pool. Same rule as above
         # -- compare against the actual resolved candidate count, not a
@@ -1597,7 +1537,6 @@ def perform_start_vote(
         closes_at=closes_at,
         candidate_suggestion_ids=[candidate.id for candidate in candidates],
         database_id=(resolution.database.database_id if resolution is not None else None),
-        rotation_id=rotation_id,
         reminder_enabled=reminder_enabled,
         reminder_minutes_before_close=reminder_minutes_before_close,
     )
@@ -1940,8 +1879,14 @@ def build_channel_destination_options(
 
     Includes every text channel WASH can post in (when include_channels)
     and every active, unlocked thread WASH can post in (when
-    include_threads), each thread labeled with its parent channel for
-    context (e.g. "watch-party › watched-items"). Archived and locked
+    include_threads). A thread's label is its own name, kept short and
+    scannable; its parent channel is surfaced separately as the option's
+    description ("Thread in #watch-party") rather than crammed into the
+    label -- both fields are built through build_safe_select_option(), so
+    an arbitrarily long channel/thread name (Discord allows up to 100
+    characters each) can never combine into a label or description that
+    exceeds Discord's own 100-character limit and gets the whole render
+    rejected with a 400 (see discord_ui_limits.py). Archived and locked
     threads are never included. The already-saved destination
     (selected_channel_id), if it still resolves to a real channel/thread,
     is always included and marked as the pre-selected default even if it
@@ -1950,9 +1895,10 @@ def build_channel_destination_options(
     clearing the user's prior choice; Discord's SelectOption (unlike
     ChannelSelect) supports exactly this kind of explicit preselection.
 
-    Capped at 25 options (discord.ui.Select's own hard limit) -- the
-    currently selected destination is always kept within that cap even
-    if the guild has more usable destinations than that.
+    Capped at 25 options (discord.ui.Select's own hard limit, see
+    cap_select_options()) -- the currently selected destination is always
+    kept within that cap even if the guild has more usable destinations
+    than that.
     """
     if guild is None:
         return []
@@ -1967,13 +1913,13 @@ def build_channel_destination_options(
     options: dict[int, discord.SelectOption] = {}
     for channel in getattr(guild, "text_channels", None) or []:
         if include_channels and usable(channel):
-            options[channel.id] = discord.SelectOption(label=f"#{channel.name}"[:100], value=str(channel.id))
+            options[channel.id] = build_safe_select_option(f"#{channel.name}", str(channel.id))
         if include_threads:
             for thread in channel.threads:
                 if thread.archived or thread.locked or not usable(thread):
                     continue
-                options[thread.id] = discord.SelectOption(
-                    label=f"{channel.name} › {thread.name}"[:100], value=str(thread.id)
+                options[thread.id] = build_safe_select_option(
+                    thread.name, str(thread.id), description=f"Thread in #{channel.name}"
                 )
 
     if selected_channel_id is not None and selected_channel_id not in options:
@@ -1981,8 +1927,17 @@ def build_channel_destination_options(
         current = get_channel_or_thread(selected_channel_id) if get_channel_or_thread is not None else None
         if current is not None:
             parent = getattr(current, "parent", None)
-            label = f"{parent.name} › {current.name}" if parent is not None else f"#{current.name}"
-            options[selected_channel_id] = discord.SelectOption(label=label[:100], value=str(selected_channel_id))
+            # "Currently selected" leads (rather than trails) the parent
+            # channel's name specifically so it always survives
+            # build_safe_select_option's truncation even when the parent
+            # name alone is near Discord's own 100-character channel-name
+            # limit -- the identifying detail, not the parent context, is
+            # what must never silently disappear.
+            description = f"Currently selected · Thread in #{parent.name}" if parent is not None else "Currently selected"
+            label = current.name if parent is not None else f"#{current.name}"
+            options[selected_channel_id] = build_safe_select_option(
+                label, str(selected_channel_id), description=description
+            )
 
     ordered = list(options.values())
     selected_value = str(selected_channel_id) if selected_channel_id is not None else None
@@ -1993,7 +1948,7 @@ def build_channel_destination_options(
         if selected_option is not None:
             ordered.remove(selected_option)
             ordered.insert(0, selected_option)
-    return ordered[:25]
+    return cap_select_options(ordered)
 
 
 def build_admin_channel_overwrites(
@@ -2063,6 +2018,43 @@ async def send_setup_preparation_screen(
 
     view = SetupPreparationView(on_begin, on_cancel, requester_id=requester_id)
     await interaction.response.send_message(build_setup_preparation_text(), view=view, ephemeral=True)
+
+
+def _log_setup_wizard_view_if_unsafe(
+    view: discord.ui.View, *, state: "SetupWizardState", requester_id: Optional[int]
+) -> None:
+    """Last checkpoint before a /setup view is sent to Discord: walk the
+    exact outgoing payload (view.to_components(), not the Python
+    SelectOption objects) and, only if it would actually violate
+    Discord's component limits, log full per-option diagnostic detail --
+    row/component/option index, label/description/value (repr, Python
+    len(), and the UTF-16 length Discord itself enforces -- see
+    discord_ui_limits.py), and which option is `default`.
+
+    A no-op in the healthy case (every /setup render, always) so this
+    stays permanent, low-noise logging rather than a temporary dump --
+    discord.py itself performs zero client-side length validation, so
+    without this, an oversized field only ever surfaces as a bare
+    HTTPException 400 (error 50035) with no indication of which option,
+    field, or generated string caused it, often after an irreversible
+    action (e.g. creating a thread) already happened.
+    """
+    violations = find_oversized_view_component_fields(view)
+    if not violations:
+        return
+    logger.error(
+        "Setup Wizard view about to violate Discord's component limits -- step=%s guild_id=%s "
+        "watch_destination_channel_id=%s admin_channel_id=%s home_channel_id=%s view=%s "
+        "requester_id=%s violations=%s",
+        state.current_step,
+        state.guild_id,
+        state.draft.watch_destination_channel_id,
+        state.draft.admin_channel_id,
+        state.draft.home_channel_id,
+        type(view).__name__,
+        requester_id,
+        violations,
+    )
 
 
 async def send_setup_wizard_step(
@@ -2452,24 +2444,69 @@ async def send_setup_wizard_step(
                         ),
                     )
                     return
-                try:
-                    thread = await home_channel.create_thread(
-                        name=thread_name, type=discord.ChannelType.public_thread
-                    )
-                except (discord.Forbidden, discord.HTTPException) as exc:
-                    await modal_interaction.response.edit_message(
-                        content=body + f"\n\n⚠ Could not create the thread: {exc}",
-                        view=WatchDestinationStepView(
-                            build_channel_destination_options(
-                                modal_interaction.guild, selected_channel_id=state.draft.watch_destination_channel_id
+                # Retry safety: if this exact name already exists as an
+                # active thread directly under the home channel -- e.g.
+                # the previous attempt's thread was created successfully
+                # but the response that should have advanced past this
+                # step never reached Discord, leaving the user looking at
+                # this same modal/button again -- reuse it instead of
+                # creating a second, orphaned duplicate.
+                existing_thread = next(
+                    (
+                        candidate
+                        for candidate in getattr(home_channel, "threads", None) or []
+                        if candidate.name == thread_name and not getattr(candidate, "archived", False)
+                    ),
+                    None,
+                )
+                if existing_thread is not None:
+                    thread = existing_thread
+                else:
+                    try:
+                        thread = await home_channel.create_thread(
+                            name=thread_name, type=discord.ChannelType.public_thread
+                        )
+                    except (discord.Forbidden, discord.HTTPException) as exc:
+                        await modal_interaction.response.edit_message(
+                            content=body + f"\n\n⚠ Could not create the thread: {exc}",
+                            view=WatchDestinationStepView(
+                                build_channel_destination_options(
+                                    modal_interaction.guild, selected_channel_id=state.draft.watch_destination_channel_id
+                                ),
+                                on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
+                                requester_id=requester_id,
                             ),
-                            on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
-                            requester_id=requester_id,
-                        ),
-                    )
-                    return
+                        )
+                        return
                 updated = setup_wizard_service.set_watch_destination(state, thread.id)
-                await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
+                logger.info(
+                    "Setup Wizard: created Watched Item Archive thread (guild_id=%s thread_id=%s "
+                    "thread_name=%r parent_channel_id=%s draft_updated=%s next_step=%s)",
+                    state.guild_id,
+                    thread.id,
+                    thread_name,
+                    home_channel.id,
+                    updated.draft.watch_destination_channel_id == thread.id,
+                    updated.current_step,
+                )
+                try:
+                    await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
+                except Exception:
+                    # Narrow wrap around only the render-after-create call
+                    # (not thread creation itself, already handled above)
+                    # -- the thread was already created irreversibly by
+                    # this point, so a render failure here must never be
+                    # silently swallowed: re-raised unchanged after
+                    # logging, matching every other unhandled-interaction-
+                    # error path in this bot.
+                    logger.exception(
+                        "Setup Wizard: failed to render %s after creating the Watched Item Archive thread "
+                        "(guild_id=%s thread_id=%s)",
+                        updated.current_step,
+                        state.guild_id,
+                        thread.id,
+                    )
+                    raise
 
             await create_interaction.response.send_modal(
                 CreateThreadNameModal(on_name_submit, default="Watched Item Archive")
@@ -2742,6 +2779,7 @@ async def send_setup_wizard_step(
             requester_id=requester_id,
         )
 
+    _log_setup_wizard_view_if_unsafe(view, state=state, requester_id=requester_id)
     if edit:
         await interaction.response.edit_message(content=body, view=view)
     else:
@@ -3864,7 +3902,7 @@ class DatabaseGroup(discord.app_commands.Group):
         await interaction.response.send_message(message, ephemeral=ephemeral)
 
     @discord.app_commands.command(
-        name="health", description="Show a collection's rotation eligibility and pool health."
+        name="health", description="Show a collection's eligibility and pool health."
     )
     async def health(self, interaction: discord.Interaction) -> None:
         await handle_database_health(interaction, self.bot)
@@ -3944,7 +3982,6 @@ class VotingGroup(discord.app_commands.Group):
                 default_nominee_count=bot.default_nominee_count,
                 scheduler_service=bot.scheduler_host.scheduler_service,
                 guild_configuration_repository=bot.guild_configuration_repository,
-                rotation_service=bot.rotation_service,
                 suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
                 bot=bot,
             )
@@ -3975,7 +4012,6 @@ class VotingGroup(discord.app_commands.Group):
                         reminder_minutes_text=reminder_minutes_text,
                         scheduler_service=bot.scheduler_host.scheduler_service,
                         guild_configuration_repository=bot.guild_configuration_repository,
-                        rotation_service=bot.rotation_service,
                         suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
                         bot=bot,
                         candidate_selection_override=candidate_selection_override,
@@ -4375,7 +4411,6 @@ async def handle_start_vote_completion(
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
     reminder_enabled: Optional[bool] = None,
     reminder_minutes_before_close: Optional[int] = None,
-    rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
     resolved_database_id: Optional[int] = None,
     bot: Optional["WatchPartyBot"] = None,
@@ -4428,7 +4463,6 @@ async def handle_start_vote_completion(
                     guild_configuration_repository=guild_configuration_repository,
                     reminder_enabled=reminder_enabled,
                     reminder_minutes_before_close=reminder_minutes_before_close,
-                    rotation_service=rotation_service,
                     suggestion_database_configuration_repository=suggestion_database_configuration_repository,
                     resolved_database_id=database_id,
                     bot=bot,
@@ -4454,10 +4488,6 @@ async def handle_start_vote_completion(
 
         target_database_id = pre_resolution.database.database_id if pre_resolution.database is not None else None
 
-    rotation_before: Optional[Rotation] = None
-    if target_database_id is not None and rotation_service is not None:
-        rotation_before = rotation_service.get_open_rotation(target_database_id)
-
     message, ephemeral = perform_start_vote(
         vote_service=vote_service,
         suggestion_service=suggestion_service,
@@ -4472,28 +4502,17 @@ async def handle_start_vote_completion(
         channel_id=interaction.channel_id,
         reminder_enabled=reminder_enabled,
         reminder_minutes_before_close=reminder_minutes_before_close,
-        rotation_service=rotation_service,
         suggestion_database_configuration_repository=suggestion_database_configuration_repository,
         guild_configuration_repository=guild_configuration_repository,
         resolved_database_id=resolved_database_id,
         candidate_selection_override=candidate_selection_override,
     )
 
-    rotation_after: Optional[Rotation] = (
-        rotation_service.get_open_rotation(target_database_id)
-        if target_database_id is not None and rotation_service is not None
-        else None
-    )
-    rollover_occurred = (
-        rotation_before is not None and rotation_after is not None and rotation_before.id != rotation_after.id
-    )
-
     # Rotation & Collection Health goal 2/6: a successful vote start is
-    # exactly when eligibility was just freshly recomputed (a rollover
-    # may have just reclaimed everything there was to reclaim, and/or
-    # presenting new nominees just shrank the pool further) -- the
-    # natural moment to check whether the pool is now low, matching
-    # "the user should never have to discover" the pool needs topping up.
+    # exactly when eligibility was just freshly recomputed (presenting
+    # new nominees just shrank the pool further) -- the natural moment to
+    # check whether the pool is now low, matching "the user should never
+    # have to discover" the pool needs topping up.
     if not ephemeral and target_database_id is not None and bot is not None:
         database = suggestion_service.get_database(target_database_id)
         if database is not None:
@@ -4539,36 +4558,20 @@ async def handle_start_vote_completion(
             ),
             wash_crew_role_id=wash_crew_role_id,
         ),
-        rotation_service=rotation_service,
     )
     collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
-    rotation_number = resolve_rotation_number_for_round(rotation_service, vote_round)
     post_embed = build_voting_post_embed(
         vote_round,
         candidates,
         standings=None,
         standings_error=None,
         collection_name=collection_name,
-        rotation_number=rotation_number,
     )
     await interaction.response.send_message(embed=post_embed, view=view)
     sent_message = await interaction.original_response()
     vote_service.attach_message_reference(
         vote_round.id, interaction.guild_id, interaction.channel_id, sent_message.id
     )
-
-    # Rotation Refresh Notification: told only to whoever ran /vote start
-    # (a follow-up ephemeral message), never added to the public voting
-    # post itself -- every voter seeing "Starting Rotation 4" on the vote
-    # they're about to participate in would be clutter, not useful
-    # information for them.
-    if rollover_occurred and rotation_after is not None and rotation_service is not None:
-        await interaction.followup.send(
-            build_rotation_refresh_notification(
-                resolve_rotation_number(rotation_service, target_database_id, rotation_after)
-            ),
-            ephemeral=True,
-        )
 
     logger.info(
         "User %s started voting round %s with %s nominee(s) in database %s "
@@ -4591,7 +4594,6 @@ async def handle_start_vote_use_defaults(
     default_nominee_count: int,
     scheduler_service: Optional[SchedulerService] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
-    rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
     bot: Optional["WatchPartyBot"] = None,
 ) -> None:
@@ -4610,7 +4612,6 @@ async def handle_start_vote_use_defaults(
         default_nominee_count=default_nominee_count,
         scheduler_service=scheduler_service,
         guild_configuration_repository=guild_configuration_repository,
-        rotation_service=rotation_service,
         suggestion_database_configuration_repository=suggestion_database_configuration_repository,
         bot=bot,
     )
@@ -4629,7 +4630,6 @@ async def handle_customize_vote_submit(
     reminder_minutes_text: Optional[str] = None,
     scheduler_service: Optional[SchedulerService] = None,
     guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
-    rotation_service: Optional[RotationService] = None,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
     bot: Optional["WatchPartyBot"] = None,
     candidate_selection_override: Optional[CandidateSelectionMode] = None,
@@ -4675,7 +4675,6 @@ async def handle_customize_vote_submit(
         guild_configuration_repository=guild_configuration_repository,
         reminder_enabled=reminder_enabled,
         reminder_minutes_before_close=reminder_minutes_before_close,
-        rotation_service=rotation_service,
         suggestion_database_configuration_repository=suggestion_database_configuration_repository,
         bot=bot,
         candidate_selection_override=candidate_selection_override,
@@ -4686,7 +4685,6 @@ def perform_vote_status(
     vote_service: VoteService,
     suggestion_service: SuggestionService,
     database_id: Optional[int] = None,
-    rotation_service: Optional[RotationService] = None,
 ) -> str:
     """Core logic for /vote_status, kept free of Discord objects entirely.
 
@@ -4702,11 +4700,6 @@ def perform_vote_status(
             Optional so existing callers/tests without a resolved
             collection keep working unchanged (see
             VoteService.get_latest_round).
-        rotation_service: Used to resolve which Rotation the round's
-            candidates were drawn from (Rotation Context in Voting), for
-            display as "Round X • Rotation Y". Optional, defaulting to
-            None so existing callers/tests keep working unchanged; the
-            rotation number is simply omitted in that case.
 
     Returns:
         The status message, or a clear "no round exists" message.
@@ -4734,10 +4727,7 @@ def perform_vote_status(
         else suggestion_service.suggestion_count()
     )
     candidates = get_round_candidates(suggestion_service, vote_round)
-    rotation_number = resolve_rotation_number_for_round(rotation_service, vote_round)
-    return build_vote_status_text(
-        vote_round, candidate_count, standings, standings_error, candidates, rotation_number
-    )
+    return build_vote_status_text(vote_round, candidate_count, standings, standings_error, candidates)
 
 
 async def handle_vote_status(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
@@ -4763,7 +4753,6 @@ async def handle_vote_status(interaction: discord.Interaction, bot: "WatchPartyB
             vote_service=bot.vote_service,
             suggestion_service=bot.suggestion_service,
             database_id=database.database_id,
-            rotation_service=getattr(bot, "rotation_service", None),
         )
         await resolved_interaction.response.send_message(message, ephemeral=True)
 
@@ -4900,7 +4889,6 @@ def build_voting_view(
     suggestion_service: SuggestionService,
     candidates: List[WatchItem],
     permission_service: Optional[PermissionService] = None,
-    rotation_service: Optional[RotationService] = None,
 ) -> VotingView:
     """Build a voting view whose buttons use the shared vote handler."""
 
@@ -4913,7 +4901,6 @@ def build_voting_view(
             suggestion_service,
             suggestion_id,
             permission_service=permission_service,
-            rotation_service=rotation_service,
         )
 
     return VotingView(candidates, on_vote=on_vote_click)
@@ -4997,7 +4984,6 @@ def restore_persistent_voting_views(
             suggestion_service,
             candidates,
             permission_service=permission_service,
-            rotation_service=getattr(bot, "rotation_service", None),
         )
         bot.add_view(view, message_id=vote_round.message_id)
         logger.info(
@@ -5341,7 +5327,6 @@ def build_voting_post_embed(
     standings: Optional[List[StandingsEntry]],
     standings_error: Optional[str],
     collection_name: Optional[str] = None,
-    rotation_number: Optional[int] = None,
 ) -> discord.Embed:
     """Build the public voting post's embed for a round (Release Polish
     Batch 2, Priority 5).
@@ -5369,13 +5354,6 @@ def build_voting_post_embed(
             voting is centered on the collection, not the round number)
             -- see resolve_vote_collection_name. None falls back to a
             generic "Voting Is Open" title.
-        rotation_number: The Rotation this round's candidates were drawn
-            from, if known (Rotation Context in Voting; see
-            resolve_rotation_number_for_round) -- shown as "Round X •
-            Rotation Y" on the very first line of the description, so
-            both values are immediately visible without scrolling to the
-            fields row. Falls back to "Round X" alone when unresolvable
-            (a legacy round, or one with no database context).
 
     Returns:
         The embed. Total votes cast is always shown -- for a blind round
@@ -5384,7 +5362,7 @@ def build_voting_post_embed(
         visible round (never for blind, preserving that round's privacy).
     """
     description_lines = [
-        build_vote_round_line(vote_round, rotation_number),
+        build_vote_round_line(vote_round),
         f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
         "",
     ]
@@ -5405,7 +5383,6 @@ def build_current_voting_post_embed(
     vote_service: VoteService,
     suggestion_service: SuggestionService,
     vote_round: VoteRound,
-    rotation_service: Optional[RotationService] = None,
 ) -> discord.Embed:
     """Recompute and build a round's voting post embed from its current state.
 
@@ -5418,10 +5395,6 @@ def build_current_voting_post_embed(
         vote_service: Used to recompute standings.
         suggestion_service: Used to re-list the current nominees.
         vote_round: The round to build the post embed for.
-        rotation_service: Used to resolve which Rotation this round's
-            candidates were drawn from (Rotation Context in Voting), for
-            display as "Round X • Rotation Y". Omitted (embed shows only
-            "Round X") when not supplied.
 
     Returns:
         The embed (see build_voting_post_embed).
@@ -5431,10 +5404,7 @@ def build_current_voting_post_embed(
     standings = standings_result.standings if standings_result.success else None
     standings_error = None if standings_result.success else standings_result.message
     collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
-    rotation_number = resolve_rotation_number_for_round(rotation_service, vote_round)
-    return build_voting_post_embed(
-        vote_round, candidates, standings, standings_error, collection_name, rotation_number
-    )
+    return build_voting_post_embed(vote_round, candidates, standings, standings_error, collection_name)
 
 
 async def refresh_voting_post(
@@ -5442,7 +5412,6 @@ async def refresh_voting_post(
     vote_service: VoteService,
     suggestion_service: SuggestionService,
     vote_round: VoteRound,
-    rotation_service: Optional[RotationService] = None,
 ) -> None:
     """Update the public voting post after a vote, for visible rounds only.
 
@@ -5452,10 +5421,8 @@ async def refresh_voting_post(
         vote_service: Used to recompute standings.
         suggestion_service: Used to re-list the current nominees.
         vote_round: The round being voted in.
-        rotation_service: Used to show "Round X • Rotation Y" (Rotation
-            Context in Voting) -- see build_current_voting_post_embed.
     """
-    embed = build_current_voting_post_embed(vote_service, suggestion_service, vote_round, rotation_service)
+    embed = build_current_voting_post_embed(vote_service, suggestion_service, vote_round)
     await interaction.message.edit(embed=embed)
 
 
@@ -5465,7 +5432,6 @@ async def handle_nominee_vote(
     suggestion_service: SuggestionService,
     suggestion_id: int,
     permission_service: Optional[PermissionService] = None,
-    rotation_service: Optional[RotationService] = None,
 ) -> None:
     """Core logic for a nominee button click.
 
@@ -5478,8 +5444,6 @@ async def handle_nominee_vote(
         vote_service: The vote service to cast the vote through.
         suggestion_service: Used to re-list nominees when refreshing the post.
         suggestion_id: The nominee this button represents.
-        rotation_service: Threaded through to refresh_voting_post so the
-            refreshed post keeps showing "Round X • Rotation Y".
     """
     if permission_service is not None:
         permission = permission_service.require_watch_party_member(interaction.user)
@@ -5495,7 +5459,7 @@ async def handle_nominee_vote(
     # different collection's concurrently-open round.
     vote_round = vote_service.get_open_round_for_suggestion(suggestion_id)
     if vote_round is not None and vote_round.visibility == VoteVisibility.VISIBLE:
-        await refresh_voting_post(interaction, vote_service, suggestion_service, vote_round, rotation_service)
+        await refresh_voting_post(interaction, vote_service, suggestion_service, vote_round)
 
 
 # --- FR-023: /edit_vote -- WASH Crew administrative vote management -------------
@@ -5931,17 +5895,15 @@ async def handle_reschedule_vote_completion(
             guild_configuration_repository=guild_configuration_repository,
         )
 
-    rotation_service = getattr(bot, "rotation_service", None)
     if vote_round.channel_id is not None:
         collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
-        rotation_number = resolve_rotation_number_for_round(rotation_service, vote_round)
-        notice = build_vote_deadline_change_notice(vote_round, collection_name, rotation_number)
+        notice = build_vote_deadline_change_notice(vote_round, collection_name)
         channel = bot.get_channel(vote_round.channel_id)
         if channel is None:
             channel = await bot.fetch_channel(vote_round.channel_id)
         await channel.send(notice)
 
-    embed = build_current_voting_post_embed(vote_service, suggestion_service, vote_round, rotation_service)
+    embed = build_current_voting_post_embed(vote_service, suggestion_service, vote_round)
     await update_voting_message(bot, vote_round, embed=embed)
 
 
@@ -6034,7 +5996,6 @@ async def handle_end_vote_now_completion(
         suggestion_service,
         bot,
         result,
-        rotation_service=getattr(bot, "rotation_service", None),
     )
     await sync_vote_completion_status_embeds(bot, result)
 
@@ -6112,8 +6073,7 @@ async def handle_cancel_vote_now_completion(
             if suggestion_service is not None
             else None
         )
-        rotation_number = resolve_rotation_number_for_round(getattr(bot, "rotation_service", None), vote_round)
-        notice = build_vote_cancellation_notice(vote_round, collection_name, rotation_number)
+        notice = build_vote_cancellation_notice(vote_round, collection_name)
         channel = bot.get_channel(vote_round.channel_id)
         if channel is None:
             channel = await bot.fetch_channel(vote_round.channel_id)
@@ -6609,25 +6569,6 @@ async def sync_vote_completion_status_embeds(bot: "WatchPartyBot", result: VoteC
             await sync_suggestion_status_embed(bot, watch_item)
 
 
-def admit_suggestion_to_rotation(bot: "WatchPartyBot", database: SuggestionDatabase, watch_item: WatchItem) -> None:
-    """FR-033B Section 5: apply the database's configured admission mode.
-
-    Called for both new and reactivated suggestions, since a reactivated
-    item is also (re-)entering the candidate pool. NEXT_ROTATION (the
-    default) is a no-op here -- RotationService picks the item up
-    automatically the next time a rotation is (re)started.
-    """
-    if watch_item.id is None:
-        return
-    configuration = bot.suggestion_database_configuration_repository.get(database.guild_id, database.database_id)
-    admission_mode = (
-        configuration.suggestion_rules.admission_mode
-        if configuration is not None
-        else SuggestionAdmissionMode.NEXT_ROTATION
-    )
-    bot.rotation_service.admit_suggestion(database.database_id, watch_item.id, admission_mode)
-
-
 async def maybe_send_eligible_pool_warning(bot: "WatchPartyBot", database: SuggestionDatabase) -> None:
     """Send the Eligible Pool Warning when due, and only when due.
 
@@ -6683,7 +6624,6 @@ async def finish_add_or_reactivate(
         ack += f"\n{note}"
     await interaction.response.send_message(ack, ephemeral=True)
 
-    admit_suggestion_to_rotation(bot, database, watch_item)
     await maybe_send_eligible_pool_warning(bot, database)
 
 
@@ -7731,10 +7671,10 @@ async def perform_repair_suggestions(
 class SuggestionListStatusFilter(str, Enum):
     """Which suggestions /list should include.
 
-    Rotation-removal Phase 2: six filters, all resolved through
-    CollectionEligibilityService -- the same authoritative calculation
-    every other command uses -- so none of them can ever disagree with
-    what starting a vote would actually see. Every bucket below
+    All six filters are resolved through CollectionEligibilityService --
+    the same authoritative calculation every other command uses -- so
+    none of them can ever disagree with what starting a vote would
+    actually see. Every bucket below
     (available, in_active_vote, vote_winners, retired, watched) is
     already computed by CollectionEligibility itself; this filter only
     chooses which of those (already-identical) buckets to show, never
@@ -7774,9 +7714,8 @@ def resolve_suggestion_list_entries(
     """Pick which of CollectionEligibility's already-computed buckets a
     /list filter shows, paired with each item's display status -- known
     directly from which bucket it came from, since CollectionEligibility
-    itself already separates Available from In an Active Vote (Rotation-
-    removal Phase 2; no separate per-item VoteService lookup needed here
-    anymore).
+    itself already separates Available from In an Active Vote (no
+    separate per-item VoteService lookup needed here).
     """
     if status_filter is SuggestionListStatusFilter.ACTIVE:
         return [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.available] + [
@@ -7877,58 +7816,6 @@ def resolve_customize_vote_default_candidate_selection(
     return resolve_candidate_selection_mode(bot, guild_id, resolution.database.database_id)
 
 
-def resolve_rotation_number(rotation_service: RotationService, database_id: int, rotation: Rotation) -> int:
-    """The 1-based "Rotation N" number shown to users for `rotation`.
-
-    Rotation.id is a single counter shared across every collection in
-    the server (see RotationService._next_id), not a per-collection
-    sequence -- showing it directly would read as "Rotation 47" for a
-    brand-new collection's very first rotation. This instead counts
-    `rotation`'s position within *this* collection's own rotation
-    history (RotationService.list_rotations, oldest first), so a
-    collection's rotations are always numbered 1, 2, 3, ...
-    """
-    for index, candidate in enumerate(rotation_service.list_rotations(database_id), start=1):
-        if candidate.id == rotation.id:
-            return index
-    return len(rotation_service.list_rotations(database_id))
-
-
-def resolve_rotation_number_for_round(
-    rotation_service: Optional[RotationService], vote_round: VoteRound
-) -> Optional[int]:
-    """The 1-based "Rotation N" number a voting round's candidates were
-    drawn from (Rotation Context in Voting), for display alongside
-    "Round X" wherever a round is shown -- the active voting embed,
-    /vote_status, results, and vote-history text.
-
-    Returns None -- callers omit the rotation entirely rather than show
-    a placeholder -- when rotation_service is unavailable, or the round
-    has no database_id/rotation_id recorded (a legacy round created
-    before VoteRound.rotation_id existed, or one created outside any
-    collection context), or its rotation could no longer be found in
-    that collection's own history.
-    """
-    if rotation_service is None or vote_round.database_id is None or vote_round.rotation_id is None:
-        return None
-    for index, rotation in enumerate(rotation_service.list_rotations(vote_round.database_id), start=1):
-        if rotation.id == vote_round.rotation_id:
-            return index
-    return None
-
-
-def build_rotation_refresh_notification(rotation_number: int) -> str:
-    """A short, informational (not warning-toned) note that a completed
-    rotation was automatically refreshed -- shown alongside /vote start,
-    ephemerally to the WASH Crew member who ran it, whenever starting a
-    round rolled a legacy Balanced Random/Soft Rotation collection's
-    rotation forward. Purely informational bookkeeping for those two
-    modes' internal selection mechanism -- unrelated to Eligible Pool
-    reporting, which never surfaces this (Rotation-removal Phase 2).
-    """
-    return f"All eligible watch items have now been presented.\n\nStarting Rotation {rotation_number}."
-
-
 async def send_suggestion_list(
     interaction: discord.Interaction,
     bot: "WatchPartyBot",
@@ -7938,11 +7825,9 @@ async def send_suggestion_list(
     *,
     edit: bool = False,
 ) -> None:
-    """Rotation-removal Phase 2: every filter is resolved through
-    CollectionEligibilityService -- the same authoritative calculation
-    every other command uses -- computed entirely from WatchItemStatus
-    and VoteService, never RotationService, so /list never needs to
-    trigger or care about a rotation rollover any more.
+    """Every filter is resolved through CollectionEligibilityService --
+    the same authoritative calculation every other command uses --
+    computed entirely from WatchItemStatus and VoteService.
     """
     eligibility = bot.collection_eligibility_service.get_eligibility(database.database_id)
 
@@ -8069,26 +7954,20 @@ async def show_list_switch_collection_picker(
             await interaction.response.send_message(error_message, ephemeral=True)
 
 
-# --- Rotation & Collection Health: /database health -----------------------------------------
+# --- Collection Health: /database health -----------------------------------------
 #
 # Goal 5: uses CollectionEligibilityService.peek() exclusively -- never
-# resolve() -- so this command can never modify rotation state, matching
-# its own hard requirement. Collection selection reuses the exact same
-# thread-context-default-plus-Switch-Collection pattern /list uses (see
-# resolve_database_then/build_switch_collection_options above), rather
-# than a second, parallel implementation of "which collection?".
+# resolve() -- so this command can never modify eligibility state,
+# matching its own hard requirement. Collection selection reuses the
+# exact same thread-context-default-plus-Switch-Collection pattern
+# /list uses (see resolve_database_then/build_switch_collection_options
+# above), rather than a second, parallel implementation of "which
+# collection?".
 
 
 class NextVoteStatus(str, Enum):
-    """Rotation-removal Phase 2: the old third state, "Needs Rollover"
-    (not enough eligible right now, but enough active suggestions overall
-    that starting a vote would trigger an automatic rollover and
-    succeed), is gone -- a legacy Balanced Random/Soft Rotation
-    collection's internal rollover, when one is still needed, now always
-    happens silently inside actual vote creation (see
-    NomineeSelectionService.eligible_candidate_count); there is no longer
-    a meaningfully different outcome to warn an administrator about in
-    advance. READY now covers both of the old READY/NEEDS_ROLLOVER cases.
+    """Whether this collection currently has enough active suggestions to
+    start a vote.
     """
 
     READY = "Ready"
@@ -8154,26 +8033,6 @@ def build_collection_health_report(bot: "WatchPartyBot", database: SuggestionDat
         )
     )
 
-    # Rotation Progress remains a rotation *statistic* (Rotation-removal
-    # Phase 2 explicitly keeps historical/current rotation information for
-    # now -- see docs) -- shown only for a collection still actually using
-    # a legacy Balanced Random/Soft Rotation mode, which is the only case
-    # where RotationService tracks a rotation at all.
-    mode = resolve_candidate_selection_mode(bot, database.guild_id, database.database_id)
-    if mode not in (CandidateSelectionMode.ROTATION_POOL, CandidateSelectionMode.SOFT_ROTATION):
-        rotation_progress_line = None
-    else:
-        rotation = bot.rotation_service.get_open_rotation(database.database_id)
-        if rotation is None:
-            rotation_progress_line = "Rotation Progress: No rotation started yet"
-        else:
-            progress = bot.rotation_service.progress_for_rotation(rotation)
-            rotation_number = resolve_rotation_number(bot.rotation_service, database.database_id, rotation)
-            rotation_progress_line = (
-                f"Rotation {rotation_number} Progress: {progress.presented} of {progress.total} "
-                f"active items have been presented ({progress.completion_percentage:.0f}%)"
-            )
-
     # Formatting Polish: Eligible for Voting and In an Active Vote are
     # indented under Active Watch Items so the reconciliation identity
     # (Active = Eligible for Voting + In an Active Vote) reads directly
@@ -8192,8 +8051,6 @@ def build_collection_health_report(bot: "WatchPartyBot", database: SuggestionDat
         f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.WATCHED]} Watched: {len(eligibility.watched)}",
         "",
     ]
-    if rotation_progress_line is not None:
-        lines.append(rotation_progress_line)
     lines.append(f"Configured Candidate Count: {candidate_count}")
     lines.append("")
     lines.append(f"Next Vote: {NEXT_VOTE_STATUS_EMOJI[next_vote]} {next_vote.value}")
@@ -9697,7 +9554,7 @@ async def start_database_move(
     still usable) and duplicate-destination prevention (no other
     collection may already route there); it changes only the collection's
     configured suggestion_channel_id, never its database ID, suggestions,
-    statuses, vote history, rotation history, or statistics. Existing
+    statuses, vote history, or statistics. Existing
     Discord suggestion posts are untouched -- they keep whatever
     channel/message reference they already had -- only future
     suggestions post to the new destination.
@@ -10493,7 +10350,6 @@ class StatsType(str, Enum):
     SERVER = "server"
     MEMBER = "member"
     SUGGESTION = "suggestion"
-    ROTATION = "rotation"
     DATABASE = "database"
 
 
@@ -10503,10 +10359,6 @@ def format_optional_percentage(value: Optional[float]) -> str:
 
 def format_optional_hours(value: Optional[float]) -> str:
     return "not available" if value is None else f"{value:.1f}h"
-
-
-def format_optional_average(value: Optional[float]) -> str:
-    return "not available" if value is None else f"{value:.1f}"
 
 
 def format_optional_date(value: Optional[date]) -> str:
@@ -10602,43 +10454,7 @@ def build_suggestion_statistics_text(stats: SuggestionStatistics) -> str:
         f"Retired: {'Yes' if stats.is_retired else 'No'}"
         + (f" ({format_optional_timestamp(stats.retired_at)})" if stats.is_retired else ""),
         f"Currently archived: {'Yes' if stats.is_archived else 'No'}",
-        f"Rotations participated in: {stats.rotations_participated_in}",
     ]
-    return "\n".join(lines)
-
-
-def build_rotation_progress_lines(progress) -> list[str]:
-    """Shared rotation-progress formatting for both rotation and database statistics."""
-    return [
-        f"Total assigned: {format_count(progress.total, 'suggestion')}",
-        f"Presented: {format_count(progress.presented, 'suggestion')}",
-        f"Remaining: {format_count(progress.remaining, 'suggestion')}",
-        f"Retired: {format_count(progress.retired, 'suggestion')}",
-        f"Watched: {format_count(progress.watched, 'suggestion')}",
-        f"Completion: {progress.completion_percentage:.1f}%",
-    ]
-
-
-def build_rotation_statistics_text(stats: RotationStatistics, database_name: str) -> str:
-    """Format FR-034 Section 8's rotation statistics for Discord."""
-    lines = [f"**Rotation Statistics -- {database_name}**", ""]
-    if stats.current_rotation_id is not None:
-        lines.append(f"**Current Rotation #{stats.current_rotation_id}**")
-        lines.append(f"Started: {format_optional_timestamp(stats.current_rotation_started_at)}")
-        lines.extend(build_rotation_progress_lines(stats.current_progress))
-    else:
-        lines.append("**Current Rotation**")
-        lines.append("No rotation has been started for this collection yet.")
-    lines.extend(
-        [
-            "",
-            "**History**",
-            f"Total rotations: {stats.total_rotations}",
-            f"Completed rotations: {stats.completed_rotations}",
-            f"Average completed rotation duration: {format_optional_hours(stats.average_completed_rotation_duration_hours)}",
-            f"Average rotation size: {format_optional_average(stats.average_rotation_size)}",
-        ]
-    )
     return "\n".join(lines)
 
 
@@ -10652,14 +10468,6 @@ def build_database_statistics_text(stats: DatabaseStatistics) -> str:
         f"Watched suggestions: {format_count(stats.watched_suggestions, 'suggestion')}",
         f"Retired suggestions: {format_count(stats.retired_suggestions, 'suggestion')}",
     ]
-    if stats.rotation is not None:
-        lines.append("")
-        lines.append("**Current Rotation**")
-        if stats.rotation.current_rotation_id is not None:
-            lines.extend(build_rotation_progress_lines(stats.rotation.current_progress))
-        else:
-            lines.append("No rotation has been started for this collection yet.")
-        lines.append(f"Completed rotations: {stats.rotation.completed_rotations}")
     return "\n".join(lines)
 
 
@@ -10808,22 +10616,6 @@ async def send_suggestion_statistics(
     await send_paginated_stats(interaction, build_suggestion_statistics_text(stats), public)
 
 
-async def send_rotation_statistics(
-    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, channel_id: Optional[int], public: bool
-) -> None:
-    async def show(target_interaction: discord.Interaction, database: SuggestionDatabase) -> None:
-        stats = bot.statistics_service.rotation_statistics(database.database_id)
-        if stats is None:
-            await target_interaction.response.send_message(
-                "Rotation statistics aren't available right now -- the rotation service isn't configured.",
-                ephemeral=True,
-            )
-            return
-        await send_paginated_stats(target_interaction, build_rotation_statistics_text(stats, database.name), public)
-
-    await resolve_database_then(interaction, bot, guild_id, channel_id, show)
-
-
 async def send_database_statistics(
     interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, channel_id: Optional[int], public: bool
 ) -> None:
@@ -10870,7 +10662,7 @@ async def handle_stats(
         resolved_type = StatsType(stats_type)
     except ValueError:
         await interaction.response.send_message(
-            "Choose Server, Member, Suggestion, Rotation, or Collection.", ephemeral=True
+            "Choose Server, Member, Suggestion, or Collection.", ephemeral=True
         )
         return
 
@@ -10892,8 +10684,6 @@ async def handle_stats(
             )
             return
         await send_suggestion_statistics(interaction, bot, suggestion_query.strip(), public)
-    elif resolved_type is StatsType.ROTATION:
-        await send_rotation_statistics(interaction, bot, guild_id, channel_id, public)
     else:
         await send_database_statistics(interaction, bot, guild_id, channel_id, public)
 

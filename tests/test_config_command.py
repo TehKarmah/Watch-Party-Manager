@@ -417,8 +417,8 @@ class ConfigSectionNumberingTests(ConfigCommandTestCase):
         relative order here as it does in SETUP_WIZARD_STEP_ORDER --
         /config never reorders a step relative to another shared step,
         even though it also carries a couple of its own extra sections
-        (Watch Party Join Mode, Rotation Low-Pool Notification) the wizard
-        has no equivalent step for.
+        (Watch Party Join Mode, Eligible Pool Warning) the wizard has no
+        equivalent step for.
         """
         config_to_wizard_step = {
             ConfigSection.WASH_CREW_ROLE: SetupWizardStep.WASH_CREW_ROLE,
@@ -749,16 +749,16 @@ class SectionRenderingTests(ConfigCommandTestCase):
             interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
         )
         select_view = interaction.response.edited_view
-        select_view.candidate_selection_select._values = [CandidateSelectionMode.SOFT_ROTATION.value]
+        select_view.candidate_selection_select._values = [CandidateSelectionMode.FAVOR_OLDER_ADDITIONS.value]
 
         save_interaction = FakeInteraction()
         await select_view.children[1].callback(interaction=save_interaction)
 
-        self.assertIn("Soft Rotation", save_interaction.response.edited_content)
+        self.assertIn("Favor Older Additions", save_interaction.response.edited_content)
         database_configuration = self.suggestion_database_configuration_repository.get(
             GUILD_ID, database_result.database.database_id
         )
-        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
+        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
     async def test_two_databases_can_be_managed_independently(self) -> None:
         self._seed_completed_setup()

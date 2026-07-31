@@ -20,6 +20,8 @@ from typing import Awaitable, Callable, List, Tuple
 
 import discord
 
+from watch_party_manager.services.discord_ui_limits import build_safe_select_option
+
 SUGGESTION_SELECTION_VIEW_TIMEOUT_SECONDS = 120
 
 OnDatabaseSelected = Callable[[discord.Interaction, int], Awaitable[None]]
@@ -48,7 +50,7 @@ class ListDatabaseSelect(discord.ui.Select):
 
     def __init__(self, databases: List[Tuple[int, str]], on_select: OnDatabaseSelected) -> None:
         options = [
-            discord.SelectOption(label=name[:100], value=str(database_id))
+            build_safe_select_option(name, str(database_id))
             for database_id, name in databases[:25]
         ]
         super().__init__(
@@ -92,7 +94,7 @@ class DatabaseAdminSelect(discord.ui.Select):
         placeholder: str,
     ) -> None:
         select_options = [
-            discord.SelectOption(label=label[:100], description=description[:100], value=str(database_id))
+            build_safe_select_option(label, str(database_id), description=description)
             for database_id, label, description in options[:25]
         ]
         super().__init__(placeholder=placeholder, options=select_options, custom_id=custom_id)
@@ -124,7 +126,7 @@ class RemovalMatchSelect(discord.ui.Select):
 
     def __init__(self, matches: List[Tuple[int, str]], on_select: OnRemovalMatchSelected) -> None:
         options = [
-            discord.SelectOption(label=label[:100], value=str(suggestion_id))
+            build_safe_select_option(label, str(suggestion_id))
             for suggestion_id, label in matches[:25]
         ]
         super().__init__(

@@ -91,7 +91,7 @@ Start WASH:
 
 ### Resetting Local Data
 
-`scripts/reset_dev_data.ps1` is a **developer-only** utility for repeated fresh-install testing. It permanently deletes local WASH runtime data under `data/` -- guild configuration, suggestions, suggestion databases, votes, rotations, scheduled jobs, setup wizard state, migration `.bak` artifacts, and everything inside `data/backups/` -- while preserving the `data/` and `data/backups/` directories themselves.
+`scripts/reset_dev_data.ps1` is a **developer-only** utility for repeated fresh-install testing. It permanently deletes local WASH runtime data under `data/` -- guild configuration, suggestions, suggestion databases, votes, scheduled jobs, setup wizard state, migration `.bak` artifacts, and everything inside `data/backups/` -- while preserving the `data/` and `data/backups/` directories themselves.
 
 Run it from the repository root (or anywhere; it resolves paths relative to its own location):
 
@@ -192,7 +192,7 @@ Before a milestone handoff:
 
 ## 10. Planned Post-v1.0 Development Priorities
 
-Voting lifecycle completion, watch-item journey/rotation tracking, setup/configuration workflows, statistics, and backup/restore/import are implemented. Planned post-v1.0 priorities:
+Voting lifecycle completion, watch-item journey tracking, setup/configuration workflows, statistics, and backup/restore/import are implemented. Planned post-v1.0 priorities:
 
 1. Wire automatic execution of the existing scheduled-backup interval/retention settings.
 2. Build the richer Event Series/Discord Event scheduling foundation.

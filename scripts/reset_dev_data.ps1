@@ -34,7 +34,7 @@ $preservedBackupFileNames = @('.gitkeep', 'README.md')
 
 $knownRuntimeFileNames = @(
     'guild_configurations.json',
-    'rotations.json',
+    'rotations.json', # legacy artifact, no longer written -- cleaned up if still present
     'scheduled_jobs.json',
     'setup_wizard_state.json',
     'suggestion_database_configurations.json',
@@ -53,7 +53,7 @@ Write-Host 'This will PERMANENTLY DELETE local WASH runtime data under:' -Foregr
 Write-Host "  $dataDirectory" -ForegroundColor Yellow
 Write-Host ''
 Write-Host 'That includes guild configuration, suggestions, suggestion' -ForegroundColor Yellow
-Write-Host 'databases, votes, rotations, scheduled jobs, setup wizard state,' -ForegroundColor Yellow
+Write-Host 'databases, votes, scheduled jobs, setup wizard state,' -ForegroundColor Yellow
 Write-Host 'migration backup artifacts, and everything inside data/backups/.' -ForegroundColor Yellow
 Write-Host 'This cannot be undone.' -ForegroundColor Yellow
 Write-Host ''

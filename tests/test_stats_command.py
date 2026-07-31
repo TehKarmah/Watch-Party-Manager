@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 
 from watch_party_manager.bot import handle_stats
-from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
 )
@@ -15,7 +14,6 @@ from watch_party_manager.persistence.suggestion_database_repository import JsonS
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.permission_service import PermissionService
-from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.statistics_service import StatisticsService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import VoteService
@@ -77,13 +75,11 @@ class FakeBot:
         self,
         suggestion_service,
         statistics_service,
-        rotation_service,
         configuration_repository,
         wash_crew_role_id=WASH_CREW_ROLE_ID,
     ) -> None:
         self.suggestion_service = suggestion_service
         self.statistics_service = statistics_service
-        self.rotation_service = rotation_service
         self.suggestion_database_configuration_repository = configuration_repository
         self.permission_service = PermissionService(
             watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=wash_crew_role_id
@@ -103,17 +99,12 @@ class HandleStatsTestCase(unittest.IsolatedAsyncioTestCase):
         self.vote_service = VoteService(
             self.suggestion_service, repository=JsonVoteRepository(root / "voting.json")
         )
-        self.rotation_service = RotationService(
-            self.suggestion_service, repository=JsonRotationRepository(root / "rotations.json")
-        )
-        self.statistics_service = StatisticsService(
-            self.suggestion_service, rotation_service=self.rotation_service
-        )
+        self.statistics_service = StatisticsService(self.suggestion_service)
         self.configuration_repository = SuggestionDatabaseConfigurationRepository(
             root / "suggestion_database_configurations.json"
         )
         self.bot = FakeBot(
-            self.suggestion_service, self.statistics_service, self.rotation_service, self.configuration_repository
+            self.suggestion_service, self.statistics_service, self.configuration_repository
         )
         self.database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
@@ -157,7 +148,7 @@ class DefaultBehaviorTests(HandleStatsTestCase):
 
         await handle_stats(interaction, self.bot, "not_a_real_type", False, None)
 
-        self.assertIn("Choose Server, Member, Suggestion, Rotation, or Collection.", interaction.response.sent_message)
+        self.assertIn("Choose Server, Member, Suggestion, or Collection.", interaction.response.sent_message)
 
 
 class PrivacyTests(HandleStatsTestCase):
@@ -217,13 +208,6 @@ class PrivacyTests(HandleStatsTestCase):
         interaction = FakeInteraction(user=self._member())
 
         await handle_stats(interaction, self.bot, "suggestion", True, "Alien")
-
-        self.assertIn("WASH Crew role to post statistics publicly", interaction.response.sent_message)
-
-    async def test_rotation_statistics_public_posting_requires_crew(self) -> None:
-        interaction = FakeInteraction(user=self._member())
-
-        await handle_stats(interaction, self.bot, "rotation", True, None)
 
         self.assertIn("WASH Crew role to post statistics publicly", interaction.response.sent_message)
 
@@ -323,34 +307,6 @@ class SuggestionTypeTests(HandleStatsTestCase):
         self.assertIn("Multiple suggestions match", interaction.response.sent_message)
 
 
-class RotationTypeTests(HandleStatsTestCase):
-    async def test_reports_no_rotation_started_yet(self) -> None:
-        interaction = FakeInteraction()
-
-        await handle_stats(interaction, self.bot, "rotation", False, None)
-
-        self.assertIn("No rotation has been started for this collection yet.", interaction.response.sent_message)
-
-    async def test_reports_current_rotation_progress(self) -> None:
-        self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
-        self.rotation_service.get_or_start_rotation(self.database.database_id)
-        interaction = FakeInteraction()
-
-        await handle_stats(interaction, self.bot, "rotation", False, None)
-
-        self.assertIn("Rotation Statistics -- Movie Night", interaction.response.sent_message)
-        self.assertIn("Total assigned: 1 suggestion", interaction.response.sent_message)
-
-    async def test_shows_a_database_picker_when_multiple_databases_exist(self) -> None:
-        self.suggestion_service.create_database("Second Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID + 1)
-        interaction = FakeInteraction(channel_id=999999)
-
-        await handle_stats(interaction, self.bot, "rotation", False, None)
-
-        self.assertIsNotNone(interaction.response.sent_view)
-        self.assertIn("Which collection would you like to use?", interaction.response.sent_message)
-
-
 class DatabaseTypeTests(HandleStatsTestCase):
     async def test_reports_an_empty_database_gracefully(self) -> None:
         interaction = FakeInteraction()
@@ -368,6 +324,15 @@ class DatabaseTypeTests(HandleStatsTestCase):
 
         self.assertIn("Active suggestions: 1 suggestion", interaction.response.sent_message)
 
+    async def test_shows_a_database_picker_when_multiple_databases_exist(self) -> None:
+        self.suggestion_service.create_database("Second Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID + 1)
+        interaction = FakeInteraction(channel_id=999999)
+
+        await handle_stats(interaction, self.bot, "database", False, None)
+
+        self.assertIsNotNone(interaction.response.sent_view)
+        self.assertIn("Which collection would you like to use?", interaction.response.sent_message)
+
     async def test_no_database_available_reports_clearly(self) -> None:
         service = SuggestionService(
             repository=JsonSuggestionRepository(Path(self._temp_dir.name) / "empty_suggestions.json"),
@@ -378,7 +343,6 @@ class DatabaseTypeTests(HandleStatsTestCase):
         empty_bot = FakeBot(
             service,
             StatisticsService(service),
-            RotationService(service, repository=JsonRotationRepository(Path(self._temp_dir.name) / "empty_rotations.json")),
             SuggestionDatabaseConfigurationRepository(Path(self._temp_dir.name) / "empty_configurations.json"),
         )
         interaction = FakeInteraction()

@@ -23,7 +23,7 @@
 1. Introduction
 2. Watch Item Lifecycle
 3. Watch Item Suggestions
-4. Rotation Management
+4. Nominee Selection
 5. Voting
 6. Scheduling
 7. Watch History
@@ -61,8 +61,6 @@ Every Watch Item shows one of five statuses:
 
 A Watch Item may return to In an Active Vote, and from there back to Available, multiple times throughout its lifetime as voting rounds open and close.
 
-**Rotation-removal Phase 2: Rotation Cooldown is gone.** A legacy Balanced Random/Soft Rotation collection's internal rotation mechanism (see the Administration guide's "Nominee selection and rotation management" section) may still temporarily exclude a suggestion from its own next actual pick, but that exclusion is no longer a status this document -- or any user-facing surface -- reports; such a suggestion simply displays as Available.
-
 The complete history of every viewing is preserved.
 
 ---
@@ -90,7 +88,6 @@ Examples include:
 
 - Original suggester
 - Suggestion date
-- Rotation history
 - Number of voting appearances
 - Winning vote
 - Watch dates
@@ -104,9 +101,7 @@ The Journey is never deleted under normal operation.
 
 Community members may suggest Watch Items.
 
-Suggestions become eligible for inclusion during the next rotation refresh.
-
-New suggestions are never inserted into an active rotation.
+A new suggestion becomes eligible for voting immediately -- there is no admission delay.
 
 Duplicate suggestions are automatically detected.
 
@@ -114,27 +109,13 @@ If a Watch Item has already been watched, administrators may choose whether it s
 
 ---
 
-# 4. Rotation Management
+# 4. Nominee Selection
 
-A rotation represents the current pool of eligible Watch Items.
+The Eligible Pool is every suggestion that is neither currently nominated, a Vote Winner, Watched, nor Retired.
 
-Each rotation is a snapshot.
+When a vote starts, nominees are drawn from the Eligible Pool using the collection's configured selection mode: Pure Random (no preference or exclusion), Favor New Additions (leans toward recently-suggested items), or Favor Older Additions (leans toward suggestions that have waited the longest). No suggestion is ever permanently excluded by any mode.
 
-New suggestions remain outside the active rotation until the next refresh.
-
-Rotation generation uses the configured pull strategy.
-
-Version 1 includes Adaptive Balanced Pull.
-
-Rotation health is monitored to identify situations such as:
-
-- Low remaining Watch Items
-- Genre imbalance
-- Excessive repetition
-
-When the rotation approaches exhaustion, Watch Party Manager reminds the community to submit additional suggestions.
-
-The final vote before a rotation refresh is clearly identified.
+Eligible Pool health is monitored to identify a shrinking pool: the Eligible Pool Warning fires once the pool drops to or below a configured threshold, and re-arms once it rises back above it.
 
 ---
 
@@ -174,14 +155,14 @@ Each Event Series defines:
 
 Supported source types include:
 
-- Rotation Winner
+- Vote Winner
 - Manual Assignment
 - Birthday Pick
 - Holiday Pick
 
 Watch Party Manager may automatically create Discord Events when configured to do so.
 
-Manual Event Series support recurring community traditions without affecting the normal rotation.
+Manual Event Series support recurring community traditions without affecting normal voting.
 
 Examples include:
 
@@ -205,7 +186,6 @@ History records include:
 - Event type
 - Winning vote
 - Original suggester
-- Rotation statistics
 - Rewatch number
 
 Rewatchs do not create duplicate Watch Items.
@@ -223,7 +203,6 @@ Examples include:
 - Total Watch Items watched
 - Most watched genres
 - Suggestion success rates
-- Rotation statistics
 - Watch Item Journey statistics
 - Community milestones
 
@@ -236,7 +215,7 @@ Statistics are intended to preserve the story of the community rather than serve
 Administrative functions include:
 
 - Configuration
-- Rotation management
+- Nominee selection
 - Schedule management
 - Manual corrections
 - Import and export

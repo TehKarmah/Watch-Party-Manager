@@ -11,7 +11,11 @@ import unittest
 import discord
 
 from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, JoinMode
-from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+from watch_party_manager.domain.suggestion_database_configuration import (
+    CandidateSelectionMode,
+    NOMINEE_SELECTION_MODE_ORDER,
+)
+from watch_party_manager.services.discord_ui_limits import find_oversized_view_component_fields
 from watch_party_manager.setup_wizard_view import (
     SETUP_WIZARD_STEP_TIMEOUT_SECONDS,
     AdminChannelStepView,
@@ -556,6 +560,12 @@ class VisibilitySelectComponentTests(unittest.IsolatedAsyncioTestCase):
         select._values = [GuildVoteVisibility.BLIND.value]
         self.assertEqual(select.selected, GuildVoteVisibility.BLIND)
 
+    async def test_every_option_serializes_within_discord_limits(self) -> None:
+        select = VisibilitySelectComponent(default=GuildVoteVisibility.VISIBLE)
+        view = discord.ui.View()
+        view.add_item(select)
+        self.assertEqual(find_oversized_view_component_fields(view), [])
+
 
 class CandidateSelectionSelectComponentTests(unittest.IsolatedAsyncioTestCase):
     async def test_displays_all_three_modes_with_favor_new_additions_recommended(self) -> None:
@@ -585,15 +595,34 @@ class CandidateSelectionSelectComponentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(select.selected, CandidateSelectionMode.INFINITE_POOL)
 
     async def test_selected_reflects_a_made_choice(self) -> None:
-        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.ROTATION_POOL)
-        select._values = [CandidateSelectionMode.SOFT_ROTATION.value]
-        self.assertEqual(select.selected, CandidateSelectionMode.SOFT_ROTATION)
+        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+        select._values = [CandidateSelectionMode.FAVOR_OLDER_ADDITIONS.value]
+        self.assertEqual(select.selected, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
+
+    async def test_every_option_serializes_within_discord_limits(self) -> None:
+        # TASK E regression: CANDIDATE_SELECTION_HELP_TEXT[FAVOR_OLDER_
+        # ADDITIONS] was a static, name-independent 104-character
+        # description -- 4 over Discord's 100 (UTF-16) unit limit --
+        # built via a raw discord.SelectOption(...) that bypassed
+        # build_safe_select_option() entirely (see domain/suggestion_
+        # database_configuration.py). This is the live production bug:
+        # it reproduces with zero dependency on any channel/thread name,
+        # on every guild, every time this component renders. This one
+        # component is shared by /setup's Voting Defaults step, /config's
+        # Nominee Selection screen, and /vote start's Customize This Vote
+        # (see CandidateSelectionSelectComponent's own docstring) -- a
+        # single test here guards all three call sites at once.
+        for default in NOMINEE_SELECTION_MODE_ORDER:
+            select = CandidateSelectionSelectComponent(default=default)
+            view = discord.ui.View()
+            view.add_item(select)
+            self.assertEqual(find_oversized_view_component_fields(view), [])
 
 
 class VotingDefaultsIntroViewTests(unittest.IsolatedAsyncioTestCase):
     def _make_view(self, on_configure=_noop, **kwargs) -> "VotingDefaultsIntroView":
         defaults = dict(
-            default_candidate_selection=CandidateSelectionMode.ROTATION_POOL,
+            default_candidate_selection=CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
             default_visibility=GuildVoteVisibility.VISIBLE,
         )
         defaults.update(kwargs)
@@ -629,11 +658,11 @@ class VotingDefaultsIntroViewTests(unittest.IsolatedAsyncioTestCase):
 
         view = self._make_view(
             on_configure,
-            default_candidate_selection=CandidateSelectionMode.SOFT_ROTATION,
+            default_candidate_selection=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
             default_visibility=GuildVoteVisibility.BLIND,
         )
         await view.children[2].callback(interaction=object())
-        self.assertEqual(calls, [(CandidateSelectionMode.SOFT_ROTATION, GuildVoteVisibility.BLIND)])
+        self.assertEqual(calls, [(CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, GuildVoteVisibility.BLIND)])
 
     async def test_visibility_options_have_clear_explanations(self) -> None:
         view = self._make_view()
@@ -882,7 +911,7 @@ class RequesterScopedInteractionCheckTests(unittest.IsolatedAsyncioTestCase):
                 _noop,
                 _noop,
                 _noop,
-                default_candidate_selection=CandidateSelectionMode.ROTATION_POOL,
+                default_candidate_selection=CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
                 default_visibility=GuildVoteVisibility.VISIBLE,
                 requester_id=42,
             ),

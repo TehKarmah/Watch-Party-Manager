@@ -2,10 +2,10 @@
 
 FR-034: extends the pre-existing server-wide StatisticsSnapshot/snapshot()
 (kept unchanged -- /about's expanded Configuration section and /stats
-both depend on its exact shape) with four
+both depend on its exact shape) with three
 additional, independently callable statistic types: server (a richer
 voting/watch-party view alongside the original snapshot), suggestion,
-member, rotation, and database. Every method here recomputes its result
+member, and database. Every method here recomputes its result
 from the underlying repositories/services on each call -- nothing is
 cached or incrementally maintained, per this milestone's explicit "no
 running counters" constraint.
@@ -18,13 +18,11 @@ from datetime import date, datetime
 from statistics import mean
 from typing import Optional, Protocol, Sequence
 
-from watch_party_manager.domain.rotation import RotationStatus
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus, VoteVisibility
 from watch_party_manager.domain.watch_item import WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_party import WatchParty, WatchPartyStatus
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository, VoteLoadResult
-from watch_party_manager.services.rotation_service import RotationProgress, RotationService
 
 
 class SuggestionStatisticsSource(Protocol):
@@ -154,35 +152,13 @@ class SuggestionStatistics:
     is_retired: bool
     retired_at: Optional[datetime]
     is_archived: bool
-    rotations_participated_in: int
     days_until_first_nomination: Optional[int]
     days_until_watched: Optional[int]
 
 
 @dataclass(frozen=True, slots=True)
-class RotationStatistics:
-    """FR-034 Section 8: one database's rotation activity.
-
-    current_progress mirrors RotationService.RotationProgress exactly
-    (reused, not duplicated) and is None only when no rotation has ever
-    been started for this database (e.g. an Infinite Pool database, or
-    one that's never had a vote). average_* fields are None when there's
-    no rotation history to average at all.
-    """
-
-    database_id: int
-    current_rotation_id: Optional[int]
-    current_rotation_started_at: Optional[datetime]
-    current_progress: Optional[RotationProgress]
-    total_rotations: int
-    completed_rotations: int
-    average_completed_rotation_duration_hours: Optional[float]
-    average_rotation_size: Optional[float]
-
-
-@dataclass(frozen=True, slots=True)
 class DatabaseStatistics:
-    """FR-034 Section 9: one database's suggestion + rotation summary."""
+    """FR-034 Section 9: one database's suggestion summary."""
 
     database_id: int
     database_name: str
@@ -190,7 +166,6 @@ class DatabaseStatistics:
     archived_suggestions: int
     watched_suggestions: int
     retired_suggestions: int
-    rotation: Optional[RotationStatistics]
 
 
 class StatisticsService:
@@ -205,22 +180,18 @@ class StatisticsService:
         self,
         suggestion_source: SuggestionStatisticsSource,
         vote_source: VoteStatisticsSource | None = None,
-        rotation_service: RotationService | None = None,
         watch_party_source: WatchPartyStatisticsSource | None = None,
     ) -> None:
         """Initialize the service.
 
-        rotation_service/watch_party_source are optional, matching this
-        project's established "gracefully degrade when a dependency
-        isn't configured" pattern (see NomineeSelectionService's
-        optional strategy, VoteService's optional reminder settings):
-        rotation-dependent statistics report None/empty rather than
-        raising when rotation_service is omitted, and watch-party counts
-        report zero when watch_party_source is omitted.
+        watch_party_source is optional, matching this project's
+        established "gracefully degrade when a dependency isn't
+        configured" pattern (see NomineeSelectionService's optional
+        strategy, VoteService's optional reminder settings): watch-party
+        counts report zero when watch_party_source is omitted.
         """
         self._suggestion_source = suggestion_source
         self._vote_source = vote_source if vote_source is not None else JsonVoteRepository()
-        self._rotation_service = rotation_service
         self._watch_party_source = watch_party_source
 
     def snapshot(self, guild_id: int | None = None) -> StatisticsSnapshot:
@@ -422,7 +393,6 @@ class StatisticsService:
             is_retired=journey.retired_at is not None,
             retired_at=journey.retired_at,
             is_archived=watch_item.status == WatchItemStatus.ARCHIVED,
-            rotations_participated_in=len(journey.rotation_history),
             days_until_first_nomination=days_until_first_nomination,
             days_until_watched=days_until_watched,
         )
@@ -460,49 +430,6 @@ class StatisticsService:
             has_submission_history=bool(submitted),
         )
 
-    # --- FR-034: Rotation statistics --------------------------------------------------
-
-    def rotation_statistics(self, database_id: int) -> Optional[RotationStatistics]:
-        """Return FR-034 Section 8's statistics for one database's rotations.
-
-        Returns None only when rotation_service wasn't configured (see
-        __init__). A database that has never started a rotation (e.g.
-        Infinite Pool, or one with no votes yet) is a valid, graceful
-        result -- not None -- with every count at zero and every average
-        at None; this method never bootstraps rotation state as a side
-        effect of being read (see RotationService.get_open_rotation vs.
-        get_or_start_rotation).
-        """
-        if self._rotation_service is None:
-            return None
-
-        rotations = self._rotation_service.list_rotations(database_id)
-        current_rotation = self._rotation_service.get_open_rotation(database_id)
-        current_progress = (
-            self._rotation_service.progress_for_rotation(current_rotation)
-            if current_rotation is not None
-            else None
-        )
-
-        completed = [rotation for rotation in rotations if rotation.status == RotationStatus.COMPLETED]
-        durations_hours = [
-            (rotation.completed_at - rotation.started_at).total_seconds() / 3600
-            for rotation in completed
-            if rotation.completed_at is not None
-        ]
-        sizes = [len(rotation.assigned_suggestion_ids) for rotation in rotations]
-
-        return RotationStatistics(
-            database_id=database_id,
-            current_rotation_id=current_rotation.id if current_rotation is not None else None,
-            current_rotation_started_at=current_rotation.started_at if current_rotation is not None else None,
-            current_progress=current_progress,
-            total_rotations=len(rotations),
-            completed_rotations=len(completed),
-            average_completed_rotation_duration_hours=mean(durations_hours) if durations_hours else None,
-            average_rotation_size=mean(sizes) if sizes else None,
-        )
-
     # --- FR-034: Database statistics --------------------------------------------------
 
     def database_statistics(self, database_id: int) -> Optional[DatabaseStatistics]:
@@ -526,7 +453,6 @@ class StatisticsService:
             archived_suggestions=len(archived),
             watched_suggestions=sum(1 for item in items if item.status == WatchItemStatus.VOTE_WINNER),
             retired_suggestions=sum(1 for item in archived if item.journey.retired_at is not None),
-            rotation=self.rotation_statistics(database_id),
         )
 
     def _watch_parties(self, guild_id: int | None) -> Sequence[WatchParty]:

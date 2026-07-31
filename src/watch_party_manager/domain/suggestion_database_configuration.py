@@ -38,38 +38,21 @@ from watch_party_manager.domain.guild_configuration import (
 
 class CandidateSelectionMode(str, Enum):
     """How nominees are chosen for a voting round (FR-033B; user-facing
-    name is "Nominee Selection" as of Rotation-removal Phase 1 -- see
-    NOMINEE_SELECTION_DISPLAY_LABELS/CANDIDATE_SELECTION_DISPLAY_LABELS
-    below).
+    name is "Nominee Selection").
 
-    ROTATION_POOL excludes a suggestion from selection once presented,
-    until a fresh rotation begins. SOFT_ROTATION keeps presented
-    suggestions eligible but weights them down. Both require
-    RotationService and are being phased out (Rotation-removal Phase 1:
-    they remain fully functional for any collection still configured to
-    use them, but are no longer offered as a new choice -- see
-    NOMINEE_SELECTION_MODE_ORDER). See services/candidate_selection_strategy.py
-    for the algorithms.
+    Rotation Removal: this is now a closed set of three rotation-free
+    modes -- every eligible suggestion is always immediately selectable,
+    with no suggestion ever excluded or held back based on presentation
+    history. See services/candidate_selection_strategy.py for the
+    algorithms.
 
-    INFINITE_POOL ("Pure Random"), FAVOR_NEW_ADDITIONS ("Favor New
-    Additions"), and FAVOR_OLDER_ADDITIONS ("Favor Older Additions") are
-    the three modes now offered. All three are rotation-free: every
-    eligible suggestion is always immediately selectable, with
-    FAVOR_NEW_ADDITIONS/FAVOR_OLDER_ADDITIONS weighting by
-    WatchItemJourney.suggestion_date (permanent metadata) instead of
-    rotation-presentation history. FAVOR_NEW_ADDITIONS is the new default
-    for newly created collections, replacing ROTATION_POOL in that role.
-
-    Superseded RANDOM/BALANCED_RANDOM values (pre-FR-033B) never drove
-    any selection behavior -- both are migrated to ROTATION_POOL on load
-    (see SuggestionDatabaseConfigurationRepository's schema migration)
-    rather than to a differently-behaving mode, since mapping them to
-    SOFT_ROTATION or INFINITE_POOL would silently change an existing
-    server's future selection behavior for a setting nothing ever read.
+    INFINITE_POOL ("Pure Random"): every eligible suggestion, neutral
+    weight. FAVOR_NEW_ADDITIONS ("Favor New Additions") and
+    FAVOR_OLDER_ADDITIONS ("Favor Older Additions") weight by
+    WatchItemJourney.suggestion_date (permanent metadata). FAVOR_NEW_
+    ADDITIONS is the default for newly created collections.
     """
 
-    ROTATION_POOL = "rotation_pool"
-    SOFT_ROTATION = "soft_rotation"
     INFINITE_POOL = "infinite_pool"
     FAVOR_NEW_ADDITIONS = "favor_new_additions"
     FAVOR_OLDER_ADDITIONS = "favor_older_additions"
@@ -79,13 +62,8 @@ class CandidateSelectionMode(str, Enum):
 # (Setup Wizard, /config, and any summary text) -- kept here, next to the
 # enum itself, so every caller (setup_wizard_view.py, bot.py's /config
 # and setup summaries) shows the exact same wording rather than each
-# inventing its own. ROTATION_POOL/SOFT_ROTATION keep their existing
-# labels for as long as they exist (Rotation-removal Phase 1 does not
-# rename or remove them -- see the enum's own docstring); they are simply
-# no longer offered as a new choice (see NOMINEE_SELECTION_MODE_ORDER).
+# inventing its own.
 CANDIDATE_SELECTION_DISPLAY_LABELS: dict[CandidateSelectionMode, str] = {
-    CandidateSelectionMode.ROTATION_POOL: "Balanced Random",
-    CandidateSelectionMode.SOFT_ROTATION: "Soft Rotation",
     CandidateSelectionMode.INFINITE_POOL: "Pure Random",
     CandidateSelectionMode.FAVOR_NEW_ADDITIONS: "Favor New Additions",
     CandidateSelectionMode.FAVOR_OLDER_ADDITIONS: "Favor Older Additions",
@@ -103,12 +81,6 @@ CANDIDATE_SELECTION_DISPLAY_LABELS: dict[CandidateSelectionMode, str] = {
 # hard limit), rather than needing a separate, longer variant that could
 # drift out of sync with this one.
 CANDIDATE_SELECTION_HELP_TEXT: dict[CandidateSelectionMode, str] = {
-    CandidateSelectionMode.ROTATION_POOL: (
-        "Prioritizes suggestions that have appeared in fewer recent votes, giving every one a fair chance."
-    ),
-    CandidateSelectionMode.SOFT_ROTATION: (
-        "Prefers new suggestions; previously shown ones stay eligible, just at a lower chance."
-    ),
     CandidateSelectionMode.INFINITE_POOL: (
         "Chooses completely at random from eligible suggestions, with no preference or exclusion."
     ),
@@ -116,50 +88,17 @@ CANDIDATE_SELECTION_HELP_TEXT: dict[CandidateSelectionMode, str] = {
         "Leans toward suggestions added recently; older ones stay eligible, just at a lower chance."
     ),
     CandidateSelectionMode.FAVOR_OLDER_ADDITIONS: (
-        "Leans toward suggestions that have waited the longest; newer ones stay eligible, just at a lower chance."
+        "Leans toward suggestions waiting the longest; newer ones stay eligible, just at a lower chance."
     ),
 }
 
-# Rotation-removal Phase 1: the modes actually offered as a new Nominee
-# Selection choice, in display order -- ROTATION_POOL and SOFT_ROTATION
-# are deliberately excluded (existing collections configured to use
-# either keep working unchanged; see CandidateSelectionStrategy) so a
-# WASH Crew member can never newly pick a mode this project is phasing
-# out. FAVOR_NEW_ADDITIONS is first/default, replacing ROTATION_POOL's
-# old "(Recommended)" position.
+# The Nominee Selection choices in display order, FAVOR_NEW_ADDITIONS
+# first as the default.
 NOMINEE_SELECTION_MODE_ORDER: tuple[CandidateSelectionMode, ...] = (
     CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
     CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
     CandidateSelectionMode.INFINITE_POOL,
 )
-
-
-class SuggestionAdmissionMode(str, Enum):
-    """When a newly created (or reactivated) suggestion joins a rotation.
-
-    NEXT_ROTATION leaves a new suggestion unassigned to any in-progress
-    rotation -- it's picked up automatically the next time a fresh
-    rotation begins. JOIN_CURRENT_ROTATION immediately assigns it to
-    whichever rotation is currently open, expanding it live. Only
-    meaningful for databases still using CandidateSelectionMode.
-    ROTATION_POOL or SOFT_ROTATION -- INFINITE_POOL, FAVOR_NEW_ADDITIONS,
-    and FAVOR_OLDER_ADDITIONS have no rotation concept to join, so a new
-    suggestion is simply eligible immediately under any of them,
-    regardless of this setting.
-
-    Rotation-removal Phase 1 ("New Suggestions... should become eligible
-    immediately"): SuggestionRulesConfig.admission_mode's default changed
-    from NEXT_ROTATION to JOIN_CURRENT_ROTATION, moving the two remaining
-    rotation-based modes' own behavior as close to "immediate eligibility"
-    as their rotation lifecycle allows, without deleting either mode or
-    this field yet. This enum and field become entirely meaningless once
-    RotationService/ROTATION_POOL/SOFT_ROTATION are removed in a later
-    phase -- TODO(rotation-removal): delete SuggestionAdmissionMode, this
-    field, and every reference to it once that happens.
-    """
-
-    NEXT_ROTATION = "next_rotation"
-    JOIN_CURRENT_ROTATION = "join_current_rotation"
 
 
 @dataclass(slots=True)
@@ -229,16 +168,10 @@ class VotingOverridesConfig:
 
 @dataclass(slots=True)
 class SuggestionRulesConfig:
-    """Rules governing how suggestions are entered and rotated.
+    """Rules governing how suggestions are entered and selected.
 
-    Rotation-removal Phase 1: candidate_selection's default changed from
-    ROTATION_POOL to FAVOR_NEW_ADDITIONS (a newly created collection now
-    gets a rotation-free mode by default; ROTATION_POOL/SOFT_ROTATION
-    remain fully usable but must be explicitly chosen -- see
-    NOMINEE_SELECTION_MODE_ORDER). admission_mode's default changed from
-    NEXT_ROTATION to JOIN_CURRENT_ROTATION for the same reason (see that
-    enum's own docstring) -- new suggestions become eligible immediately
-    under every mode now.
+    A new suggestion becomes eligible for nomination immediately upon
+    creation -- there is no admission delay or mode to configure.
     """
 
     allow_imdb_links: bool = True
@@ -247,7 +180,6 @@ class SuggestionRulesConfig:
     rejection_threshold: int = 2
     allow_resuggestion: bool = True
     candidate_selection: CandidateSelectionMode = CandidateSelectionMode.FAVOR_NEW_ADDITIONS
-    admission_mode: SuggestionAdmissionMode = SuggestionAdmissionMode.JOIN_CURRENT_ROTATION
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
@@ -259,9 +191,6 @@ class SuggestionRulesConfig:
             raise ValueError("rejection_threshold must be a positive integer")
         self.candidate_selection = _coerce_enum(  # type: ignore[assignment]
             self.candidate_selection, CandidateSelectionMode, "candidate_selection"
-        )
-        self.admission_mode = _coerce_enum(  # type: ignore[assignment]
-            self.admission_mode, SuggestionAdmissionMode, "admission_mode"
         )
         _validate_extra_fields(self.extra_fields)
 
@@ -299,20 +228,20 @@ class SuggestionDatabaseArchiveConfig:
 
 @dataclass(slots=True)
 class SuggestionDatabaseNotificationOverridesConfig:
-    """Per-database notification overrides for the Rotation Low-Pool
-    Notification (Rotation & Collection Health; formerly the interval-based
-    Low Pool Reminder, FR-033B Section 7).
+    """Per-database notification overrides for the Eligible Pool Warning
+    (Rotation & Collection Health; formerly the interval-based Low Pool
+    Reminder, FR-033B Section 7).
 
     low_suggestion_pool_alerts/low_suggestion_pool_threshold default to
     None, meaning "inherit Guild Configuration"
     (AdministrativeNotificationsConfig.low_suggestion_pool /
     low_suggestion_pool_threshold) -- the guild-level Destination
     (Admin Channel or Watch Party Home Channel) has no per-database
-    override, since the new notification deliberately never posts to a
+    override, since the notification deliberately never posts to a
     collection's own suggestion thread. The old destination_channel_id and
     minimum_interval_hours fields (a raw per-database channel override and
-    a resend-interval, respectively) had no equivalent in the new,
-    once-per-rotation/guild-destination design and were removed; a
+    a resend-interval, respectively) had no equivalent in the current,
+    threshold-crossing/guild-destination design and were removed; a
     configuration file saved before this change that still has those keys
     loads without error -- their values are preserved verbatim in
     extra_fields (never interpreted, never re-validated) rather than

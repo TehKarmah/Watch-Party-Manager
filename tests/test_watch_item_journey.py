@@ -18,7 +18,6 @@ class WatchItemJourneyModelTests(unittest.TestCase):
 
         self.assertIsNone(journey.original_suggester)
         self.assertIsNone(journey.suggestion_date)
-        self.assertEqual(journey.rotation_history, ())
         self.assertEqual(journey.voting_appearances, 0)
         self.assertIsNone(journey.winning_vote)
         self.assertEqual(journey.watch_dates, ())
@@ -33,16 +32,14 @@ class WatchItemJourneyModelTests(unittest.TestCase):
         self.assertEqual(journey.original_suggester, "Ada")
         self.assertEqual(journey.suggestion_date, date(2026, 7, 8))
 
-    def test_journey_tracks_rotations_votes_and_watch_dates(self) -> None:
+    def test_journey_tracks_votes_and_watch_dates(self) -> None:
         journey = WatchItemJourney()
 
-        journey.record_rotation_entry(3)
         journey.record_vote_appearance()
         journey.record_winning_vote("The Matrix")
         journey.record_watch_date(date(2026, 7, 9))
         journey.record_rewatch()
 
-        self.assertEqual(journey.rotation_history, (3,))
         self.assertEqual(journey.voting_appearances, 1)
         self.assertEqual(journey.winning_vote, "The Matrix")
         self.assertEqual(journey.watch_dates, (date(2026, 7, 9),))
@@ -54,23 +51,6 @@ class WatchItemJourneyModelTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             WatchItemJourney(rewatch_count=-1)
-
-    def test_journey_validates_rotation_entries(self) -> None:
-        with self.assertRaises(TypeError):
-            WatchItemJourney(rotation_history=("3",))
-
-        with self.assertRaises(ValueError):
-            WatchItemJourney(rotation_history=(0,))
-
-        with self.assertRaises(ValueError):
-            WatchItemJourney(rotation_history=(-2,))
-
-        journey = WatchItemJourney()
-        with self.assertRaises(TypeError):
-            journey.record_rotation_entry("3")
-
-        with self.assertRaises(ValueError):
-            journey.record_rotation_entry(0)
 
     def test_journey_validates_watch_dates(self) -> None:
         with self.assertRaises(TypeError):
@@ -163,42 +143,22 @@ class RemoveRejectionTests(unittest.TestCase):
         self.assertEqual(journey.rejected_by_discord_user_ids, (2,))
 
 
-class RecordRotationEntryIdempotencyTests(unittest.TestCase):
-    def test_recording_the_same_rotation_twice_does_not_duplicate_it(self) -> None:
-        journey = WatchItemJourney()
-        journey.record_rotation_entry(3)
-
-        journey.record_rotation_entry(3)
-
-        self.assertEqual(journey.rotation_history, (3,))
-
-    def test_recording_a_different_rotation_appends_it(self) -> None:
-        journey = WatchItemJourney()
-        journey.record_rotation_entry(3)
-
-        journey.record_rotation_entry(4)
-
-        self.assertEqual(journey.rotation_history, (3, 4))
-
-
 class RetirementTests(unittest.TestCase):
     def test_defaults_have_no_retirement_recorded(self) -> None:
         journey = WatchItemJourney()
 
         self.assertIsNone(journey.retired_at)
         self.assertIsNone(journey.retirement_reason)
-        self.assertIsNone(journey.retired_from_rotation_id)
         self.assertIsNone(journey.retired_from_vote_round_id)
 
     def test_record_retirement_sets_all_fields(self) -> None:
         journey = WatchItemJourney()
         retired_at = utc_now()
 
-        journey.record_retirement(retired_at, "rejection_threshold_reached", rotation_id=5, vote_round_id=2)
+        journey.record_retirement(retired_at, "rejection_threshold_reached", vote_round_id=2)
 
         self.assertEqual(journey.retired_at, retired_at)
         self.assertEqual(journey.retirement_reason, "rejection_threshold_reached")
-        self.assertEqual(journey.retired_from_rotation_id, 5)
         self.assertEqual(journey.retired_from_vote_round_id, 2)
 
     def test_record_retirement_works_without_optional_context(self) -> None:
@@ -206,7 +166,6 @@ class RetirementTests(unittest.TestCase):
 
         journey.record_retirement(utc_now(), "rejection_threshold_reached")
 
-        self.assertIsNone(journey.retired_from_rotation_id)
         self.assertIsNone(journey.retired_from_vote_round_id)
 
     def test_record_retirement_rejects_a_naive_datetime(self) -> None:
@@ -214,12 +173,6 @@ class RetirementTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             journey.record_retirement(datetime.now(), "reason")
-
-    def test_record_retirement_rejects_a_non_positive_rotation_id(self) -> None:
-        journey = WatchItemJourney()
-
-        with self.assertRaises(ValueError):
-            journey.record_retirement(utc_now(), "reason", rotation_id=0)
 
     def test_record_retirement_rejects_a_non_positive_vote_round_id(self) -> None:
         journey = WatchItemJourney()

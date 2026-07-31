@@ -119,7 +119,7 @@ Examples of work suitable for automation include:
 - Voting
 - Scheduling
 - Statistics
-- Rotation management
+- Nominee selection
 - Discord event creation
 - Historical record keeping
 

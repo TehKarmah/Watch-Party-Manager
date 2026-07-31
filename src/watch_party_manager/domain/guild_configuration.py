@@ -56,8 +56,7 @@ class TieBehavior(str, Enum):
 
 
 class EligiblePoolWarningDestination(str, Enum):
-    """Where the Eligible Pool Warning (Rotation-removal Phase 2, formerly
-    the Rotation Low-Pool notification) posts -- never a collection's
+    """Where the Eligible Pool Warning posts -- never a collection's own
     suggestion thread (that option is deliberately not offered; see the
     warning service's module docstring)."""
 
@@ -214,11 +213,9 @@ class WatchNotificationsConfig:
 class AdministrativeNotificationsConfig:
     """low_suggestion_pool/low_suggestion_pool_threshold/
     low_suggestion_pool_destination together configure the Eligible Pool
-    Warning (Rotation-removal Phase 2, formerly the Rotation Low-Pool
-    notification, which itself replaced the older, interval-based Low
-    Pool Reminder). Field names are unchanged across that rename -- they
-    were already rotation-agnostic -- so an existing guild's saved values
-    load exactly as before.
+    Warning (formerly the older, interval-based Low Pool Reminder).
+    Field names are unchanged across that rename, so an existing guild's
+    saved values load exactly as before.
 
     low_suggestion_pool_threshold defaults to None ("auto": eligible
     items at or below the guild's configured candidate_count times the

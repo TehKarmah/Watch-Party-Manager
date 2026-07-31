@@ -11,7 +11,6 @@ class WatchItemJourney:
 
     original_suggester: Optional[str] = None
     suggestion_date: Optional[date] = None
-    rotation_history: Tuple[int, ...] = field(default_factory=tuple)
     voting_appearances: int = 0
     winning_vote: Optional[str] = None
     watch_dates: Tuple[date, ...] = field(default_factory=tuple)
@@ -22,14 +21,12 @@ class WatchItemJourney:
     rejected_by_discord_user_ids: Tuple[int, ...] = field(default_factory=tuple)
     retired_at: Optional[datetime] = None
     retirement_reason: Optional[str] = None
-    retired_from_rotation_id: Optional[int] = None
     retired_from_vote_round_id: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.original_suggester = self._normalize_optional_text(self.original_suggester)
         self.winning_vote = self._normalize_optional_text(self.winning_vote)
         self._validate_non_negative_counts()
-        self.rotation_history = self._normalize_rotations(self.rotation_history)
         self.watch_dates = self._normalize_watch_dates(self.watch_dates)
         if self.last_nominated_date is not None:
             self._validate_watch_date(self.last_nominated_date)
@@ -44,8 +41,6 @@ class WatchItemJourney:
     def _validate_retirement_fields(self) -> None:
         if self.retired_at is not None and self.retired_at.tzinfo is None:
             raise ValueError("retired_at must be timezone-aware when provided")
-        if self.retired_from_rotation_id is not None:
-            self._validate_rotation_number(self.retired_from_rotation_id)
         if self.retired_from_vote_round_id is not None and self.retired_from_vote_round_id <= 0:
             raise ValueError("retired_from_vote_round_id must be a positive integer when provided")
 
@@ -65,30 +60,9 @@ class WatchItemJourney:
         return trimmed or None
 
     @staticmethod
-    def _validate_rotation_number(rotation_number: int) -> None:
-        if isinstance(rotation_number, bool) or not isinstance(rotation_number, int):
-            raise TypeError("rotation_number must be an integer")
-        if rotation_number <= 0:
-            raise ValueError("rotation_number must be greater than zero")
-
-    @staticmethod
     def _validate_watch_date(watch_date: date) -> None:
         if isinstance(watch_date, bool) or not isinstance(watch_date, date):
             raise TypeError("watch_date must be a datetime.date instance")
-
-    @staticmethod
-    def _normalize_rotations(rotations: Tuple[int, ...] | list[int] | None) -> Tuple[int, ...]:
-        if not rotations:
-            return ()
-
-        normalized: list[int] = []
-        for rotation in rotations:
-            if rotation is None:
-                continue
-            WatchItemJourney._validate_rotation_number(rotation)
-            normalized.append(int(rotation))
-
-        return tuple(normalized)
 
     @staticmethod
     def _normalize_watch_dates(watch_dates: Tuple[date, ...] | list[date] | None) -> Tuple[date, ...]:
@@ -130,28 +104,11 @@ class WatchItemJourney:
 
         return tuple(normalized)
 
-    def record_rotation_entry(self, rotation_number: int) -> None:
-        """Record that this item was presented (nominated) within a rotation.
-
-        Idempotent per rotation_number -- FR-033B's selection strategies
-        may call this more than once for the same rotation (e.g. a
-        candidate that's already marked presented gets selected again
-        after a rotation is later reset), and rotation_history is used as
-        a set-like "has this ever been presented" signal by
-        SoftRotationStrategy, so silent duplicates would only bloat the
-        record without changing behavior.
-        """
-        self._validate_rotation_number(rotation_number)
-        if rotation_number in self.rotation_history:
-            return
-        self.rotation_history = (*self.rotation_history, int(rotation_number))
-
     def record_retirement(
         self,
         retired_at: datetime,
         reason: str,
         *,
-        rotation_id: Optional[int] = None,
         vote_round_id: Optional[int] = None,
     ) -> None:
         """Record a distinct "retired" lifecycle event (FR-033B Section 8).
@@ -159,19 +116,15 @@ class WatchItemJourney:
         Retirement is deliberately separate from plain archival: it's
         reserved for suggestions that leave the pool via the "I WILL NOT
         WATCH" rejection threshold (see SuggestionService.reject_suggestion),
-        never presented-status, but still countable toward rotation
-        completion. rotation_id/vote_round_id are optional context about
+        never presented-status. vote_round_id is optional context about
         where the retirement happened, when known.
         """
         if retired_at.tzinfo is None:
             raise ValueError("retired_at must be timezone-aware")
-        if rotation_id is not None:
-            self._validate_rotation_number(rotation_id)
         if vote_round_id is not None and vote_round_id <= 0:
             raise ValueError("vote_round_id must be a positive integer when provided")
         self.retired_at = retired_at
         self.retirement_reason = self._normalize_optional_text(reason)
-        self.retired_from_rotation_id = rotation_id
         self.retired_from_vote_round_id = vote_round_id
 
     def record_vote_appearance(self, nominated_date: Optional[date] = None) -> None:

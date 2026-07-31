@@ -7,15 +7,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.domain.vote import VoteVisibility
-from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
-from watch_party_manager.services.candidate_selection_strategy import RotationPoolStrategy
+from watch_party_manager.services.candidate_selection_strategy import InfinitePoolStrategy
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
-from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import VoteService
 
@@ -104,7 +102,7 @@ class NomineeSelectionServiceTests(unittest.TestCase):
         selected = self.selector.select_nominees(self.database_id, 2, rng=random.Random(1))
         self.assertEqual(len(selected), 2)
 
-    # --- Rotation: recent winners and nominees -------------------------------
+    # --- Recency: recent winners and nominees -------------------------------
 
     def _close_round_with_winner(self, candidate_ids, winner_id, voter_id) -> None:
         created = self.vote_service.create_round(
@@ -186,10 +184,10 @@ class NomineeSelectionServiceTests(unittest.TestCase):
             )
             self.vote_service.close_round(other_round.vote_round.id)
 
-        recent_nominee_ids, recent_winner_ids = selector._recent_rotation_context(self.database_id)
+        recent_nominee_ids, recent_winner_ids = selector._recent_selection_context(self.database_id)
         self.assertNotIn(old_winner, recent_winner_ids)
 
-    def test_other_database_history_does_not_affect_this_database_rotation(self) -> None:
+    def test_other_database_history_does_not_affect_this_databases_selection(self) -> None:
         other_database_id = self.suggestion_service.create_database(
             "Other Watch Party", guild_id=100, channel_id=201
         ).database.database_id
@@ -213,7 +211,7 @@ class NomineeSelectionServiceTests(unittest.TestCase):
         )
         self.vote_service.close_round(round_b.vote_round.id)
 
-        nominee_ids, _ = self.selector._recent_rotation_context(self.database_id)
+        nominee_ids, _ = self.selector._recent_selection_context(self.database_id)
 
         self.assertEqual(nominee_ids, set(ids[:2]))
         self.assertTrue(nominee_ids.isdisjoint(other_ids))
@@ -305,10 +303,9 @@ class NomineeSelectionServiceTests(unittest.TestCase):
         self.assertEqual(self.selector.eligible_candidate_count(self.database_id, strategy), 0)
 
     def test_eligible_candidate_count_passes_requested_count_through_to_the_strategy(self) -> None:
-        # Rotation rollover fix: eligible_candidate_count must forward
-        # its own requested_count straight to the strategy's
-        # candidate_pool(), the same way select_nominees does, so a
-        # Rotation Pool strategy can decide whether to roll over.
+        # eligible_candidate_count must forward its own requested_count
+        # straight to the strategy's candidate_pool(), the same way
+        # select_nominees does.
         item_a = self.suggestion_service.get_suggestion(self._suggest("A"))
         strategy = FakeCandidateSelectionStrategy(pool=[item_a])
 
@@ -327,19 +324,12 @@ class NomineeSelectionServiceTests(unittest.TestCase):
 
     def test_select_nominees_and_eligible_candidate_count_agree_when_given_the_same_requested_count(self) -> None:
         # The pre-check (eligible_candidate_count) and the final
-        # selection (select_nominees) must resolve the identical
-        # rotation state and rollover decision when given the same
-        # requested_count -- this is what makes /start_vote's pre-flight
-        # check trustworthy.
+        # selection (select_nominees) must resolve an identical candidate
+        # pool when given the same requested_count -- this is what makes
+        # /start_vote's pre-flight check trustworthy.
         for title in ("A", "B", "C"):
             self._suggest(title)
-        rotation_service = RotationService(
-            self.suggestion_service, repository=JsonRotationRepository(Path(self._temp_dir.name) / "rotations.json")
-        )
-        strategy = RotationPoolStrategy(rotation_service=rotation_service)
-        strategy.candidate_pool(self.database_id)
-        first_item = self.suggestion_service.get_suggestions_for_database(self.database_id)[0]
-        strategy.on_presented(self.database_id, [first_item.id])
+        strategy = InfinitePoolStrategy(suggestion_source=self.suggestion_service)
 
         count = self.selector.eligible_candidate_count(self.database_id, strategy, requested_count=3)
         selected = self.selector.select_nominees(self.database_id, 3, rng=random.Random(1), strategy=strategy)

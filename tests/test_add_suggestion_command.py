@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from dataclasses import replace
 from pathlib import Path
 
 from datetime import date
@@ -19,18 +18,14 @@ from watch_party_manager.bot import (
 )
 from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, GuildConfiguration
 from watch_party_manager.domain.suggestion_database_configuration import (
-    CandidateSelectionMode,
-    SuggestionAdmissionMode,
     SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
-    SuggestionRulesConfig,
 )
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
 )
-from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.services.collection_eligibility_service import CollectionEligibilityService
@@ -40,7 +35,6 @@ from watch_party_manager.services.eligible_pool_warning_service import EligibleP
 from watch_party_manager.persistence.eligible_pool_warning_state_repository import (
     JsonEligiblePoolWarningStateRepository,
 )
-from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_service import SuggestionService
 
@@ -316,7 +310,6 @@ class FakeBot:
         suggestion_service,
         configuration_repository,
         wash_crew_role_id=WASH_CREW_ROLE_ID,
-        rotation_repository=None,
         guild_configuration_repository=None,
     ) -> None:
         self.suggestion_service = suggestion_service
@@ -326,7 +319,6 @@ class FakeBot:
             watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=wash_crew_role_id
         )
         self.wash_crew_role_id = wash_crew_role_id
-        self.rotation_service = RotationService(suggestion_service, repository=rotation_repository)
         self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, None)
         self.guild_configuration_repository = guild_configuration_repository or FakeGuildConfigurationRepository()
         self.eligible_pool_warning_service = EligiblePoolWarningService(
@@ -393,7 +385,6 @@ class HandleAddSuggestionTestCase(unittest.IsolatedAsyncioTestCase):
         self.bot = FakeBot(
             self.suggestion_service,
             self.configuration_repository,
-            rotation_repository=JsonRotationRepository(root / "rotations.json"),
         )
         self.database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
@@ -469,13 +460,12 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
         await handle_add_suggestion(interaction, self.bot, "Alien", None, 1979)
 
         self.assertTrue(interaction.response.sent_ephemeral)
-        # Just the confirmation post: the Rotation Low-Pool notification
+        # Just the confirmation post: the Eligible Pool Warning
         # (Rotation & Collection Health) posts to the guild's configured
         # Admin/Home Channel, never a collection's own suggestion channel
         # -- and no guild configuration is saved in this test class, so
         # it has no destination to resolve and never fires. See
-        # AdmissionModeAndLowPoolReminderTests for the notification
-        # actually firing.
+        # LowPoolNotificationTests for the notification actually firing.
         self.assertEqual(1, len(self.confirmation_channel.sent))
 
     async def test_ephemeral_ack_links_to_the_post_when_added_from_outside_its_destination(self) -> None:
@@ -611,9 +601,9 @@ class AddWithDestinationTests(HandleAddSuggestionTestCase):
 
         # Just 1: the reactivation edits the existing post rather than
         # sending a new one (no guild configuration is saved in this
-        # test class, so the Rotation Low-Pool notification has no
-        # destination to resolve and never fires -- see
-        # AdmissionModeAndLowPoolReminderTests for it actually firing).
+        # test class, so the Eligible Pool Warning has no destination to
+        # resolve and never fires -- see LowPoolNotificationTests for it
+        # actually firing).
         self.assertEqual(1, len(self.confirmation_channel.sent))
 
 
@@ -748,13 +738,12 @@ class AddWithInaccessibleDestinationTests(HandleAddSuggestionTestCase):
         self.assertNotIn("RuntimeError", message)
 
 
-class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
-    """FR-033B Section 5's admission modes, plus the Rotation Low-Pool
-    notification (Rotation & Collection Health), exercised through the
-    real /add flow. This is the one class in this file with an Admin
-    Channel configured, so the notification can actually fire -- every
-    other class's FakeGuildConfigurationRepository reports no guild
-    configuration at all, so it never does (see AddWithDestinationTests).
+class LowPoolNotificationTests(HandleAddSuggestionTestCase):
+    """The Eligible Pool Warning, exercised through the real /add flow.
+    This is the one class in this file with an Admin Channel configured,
+    so the notification can actually fire -- every other class's
+    FakeGuildConfigurationRepository reports no guild configuration at
+    all, so it never does (see AddWithDestinationTests).
     """
 
     ADMIN_CHANNEL_ID = 888
@@ -767,12 +756,6 @@ class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
                 database_id=self.database.database_id,
                 display_name="Movie Night",
                 channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=777),
-                # This class exercises admission modes and the Rotation
-                # Low-Pool Notification, both rotation-specific concepts --
-                # Rotation-removal Phase 1 changed the default mode to
-                # Favor New Additions, which never creates rotation state,
-                # so this must opt into a rotation-based mode explicitly.
-                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.ROTATION_POOL),
             )
         )
         guild_configuration = GuildConfiguration(
@@ -780,66 +763,15 @@ class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
             guild_name="Test Guild",
             channels=GuildChannelsConfig(admin_channel_id=self.ADMIN_CHANNEL_ID),
         )
-        rotation_path = Path(self._temp_dir.name) / "rotations.json"
         self.bot = FakeBot(
             self.suggestion_service,
             self.configuration_repository,
-            rotation_repository=JsonRotationRepository(rotation_path),
             guild_configuration_repository=FakeGuildConfigurationRepository(guild_configuration),
         )
         self.confirmation_channel = FakeChannel(777)
         self.admin_channel = FakeChannel(self.ADMIN_CHANNEL_ID)
         self.bot.register_channel(self.confirmation_channel)
         self.bot.register_channel(self.admin_channel)
-
-    def _set_admission_mode(self, mode: SuggestionAdmissionMode) -> None:
-        existing = self.configuration_repository.get(GUILD_ID, self.database.database_id)
-        updated = replace(existing, suggestion_rules=replace(existing.suggestion_rules, admission_mode=mode))
-        self.configuration_repository.save(updated)
-
-    async def test_next_rotation_leaves_a_new_suggestion_out_of_the_open_rotation(self) -> None:
-        self._set_admission_mode(SuggestionAdmissionMode.NEXT_ROTATION)
-        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
-
-        await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
-
-        item = self.suggestion_service.get_suggestions_for_database(self.database.database_id)[0]
-        rotation = self.bot.rotation_service.get_open_rotation(self.database.database_id)
-        self.assertNotIn(item.id, rotation.assigned_suggestion_ids)
-
-    async def test_join_current_rotation_admits_the_new_suggestion_immediately(self) -> None:
-        self._set_admission_mode(SuggestionAdmissionMode.JOIN_CURRENT_ROTATION)
-        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
-
-        await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
-
-        item = self.suggestion_service.get_suggestions_for_database(self.database.database_id)[0]
-        rotation = self.bot.rotation_service.get_open_rotation(self.database.database_id)
-        self.assertIn(item.id, rotation.assigned_suggestion_ids)
-
-    async def test_join_current_rotation_is_now_the_default_admission_mode(self) -> None:
-        # Rotation-removal Phase 1: SuggestionRulesConfig's admission_mode
-        # default moved from Next Rotation to Join Current Rotation, as the
-        # "begin transitioning toward immediate eligibility" step for
-        # collections still using a legacy rotation-based selection mode.
-        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
-
-        await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
-
-        item = self.suggestion_service.get_suggestions_for_database(self.database.database_id)[0]
-        rotation = self.bot.rotation_service.get_open_rotation(self.database.database_id)
-        self.assertIn(item.id, rotation.assigned_suggestion_ids)
-
-    async def test_low_pool_notification_never_bootstraps_a_rotation(self) -> None:
-        # Rotation-removal Phase 2: the Eligible Pool Warning never
-        # touches RotationService at all -- confirms no rotation gets
-        # created as a side effect of evaluating it, regardless of
-        # whether the warning itself fires.
-        self._set_admission_mode(SuggestionAdmissionMode.NEXT_ROTATION)
-
-        await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
-
-        self.assertIsNone(self.bot.rotation_service.get_open_rotation(self.database.database_id))
 
     def _seed_low_pool_condition(self) -> None:
         """9 pre-existing suggestions -- comfortably below the default

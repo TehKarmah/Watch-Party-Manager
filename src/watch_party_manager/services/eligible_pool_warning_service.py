@@ -1,28 +1,19 @@
-"""Rotation-removal Phase 2: the Eligible Pool Warning.
+"""The Eligible Pool Warning.
 
-Replaces the older Rotation Low-Pool notification. Two behavioral changes
-from that predecessor:
+  - The threshold is a flat multiple of the guild's configured candidate
+    count (eligible_items <= candidate_count * multiplier, default
+    multiplier 5).
+  - Deduplication is threshold-crossing-based: once the eligible pool
+    drops to or below the threshold, this fires once and "arms" -- it
+    stays silent on every subsequent evaluation while still at or below
+    threshold, automatically re-arms the moment the pool rises back
+    above threshold, and fires again the next time it drops below. See
+    persistence/eligible_pool_warning_state_repository.py, which
+    persists only that one per-database armed/disarmed flag.
 
-  - The threshold is now a flat multiple of the guild's configured
-    candidate count (eligible_items <= candidate_count * multiplier,
-    default multiplier 5) rather than the old
-    max(10% of Active Watch Items, two configured voting rounds) formula.
-    Simpler, and no longer needs "Active Watch Items" (a concept that
-    itself no longer distinguishes Rotation Cooldown) to compute.
-  - Deduplication is threshold-crossing-based, not Rotation-ID-based:
-    once the eligible pool drops to or below the threshold, this fires
-    once and "arms" -- it stays silent on every subsequent evaluation
-    while still at or below threshold, automatically re-arms the moment
-    the pool rises back above threshold, and fires again the next time it
-    drops below. See persistence/eligible_pool_warning_state_repository.py,
-    which persists only that one per-database armed/disarmed flag --
-    deliberately independent of RotationService and rotation ids, so nothing
-    here needs to change when RotationService is eventually removed.
-
-Kept outside CollectionEligibilityService, mirroring the old service's own
-reasoning: composing guild configuration, database configuration, and
-eligibility into a single yes/no-plus-message decision is its own
-cross-cutting concern.
+Kept outside CollectionEligibilityService: composing guild configuration,
+database configuration, and eligibility into a single yes/no-plus-message
+decision is its own cross-cutting concern.
 """
 
 from __future__ import annotations
@@ -119,10 +110,9 @@ class EligiblePoolWarningService:
         self._armed_database_ids: Set[int] = set(warning_state_repository.load())
 
     def evaluate(self, *, guild_id: int, database_id: int) -> EligiblePoolWarningDecision:
-        """Decide whether to warn for one database right now. Never
-        mutates rotation state (there is none left to mutate here) --
-        purely reads eligibility and this service's own armed/disarmed
-        flag.
+        """Decide whether to warn for one database right now. Purely
+        reads eligibility and this service's own armed/disarmed flag --
+        never mutates anything else.
         """
         guild_configuration = self._guild_configuration_repository.get(guild_id)
         database_configuration = self._suggestion_database_configuration_repository.get(guild_id, database_id)

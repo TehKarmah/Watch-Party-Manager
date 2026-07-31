@@ -115,19 +115,6 @@ Stores:
 
 ---
 
-## Rotation
-
-Represents a snapshot of eligible Watch Items.
-
-Stores:
-
-- Rotation number
-- Creation date
-- Rotation status
-- Eligible Watch Items
-
----
-
 ## Vote
 
 Represents a single voting event.
@@ -185,7 +172,6 @@ Stores:
 - Event type
 - Rewatch number
 - Winning vote
-- Rotation information
 
 A Watch Item may have multiple Watch Records.
 
@@ -212,7 +198,6 @@ The following relationships exist between major entities.
 - One Server contains many Members.
 - One Server contains many Watch Items.
 - One Watch Item may have many Watch Records.
-- One Rotation contains many Watch Items.
 - One Vote contains multiple candidate Watch Items.
 - One Event Series creates many Scheduled Events.
 - One Scheduled Event may produce one Watch Record.
@@ -239,7 +224,6 @@ Normal operation should never delete:
 - Watch Records
 - Suggestions
 - Vote history
-- Rotation history
 - Audit history
 
 Instead, records transition between active and historical states while remaining available for reporting and statistics.

@@ -1,19 +1,7 @@
-"""Rotation-removal Phase 2: the one authoritative implementation of
-"what suggestions are eligible right now?", now computed entirely from
-WatchItemStatus and VoteService -- never RotationService.
-
-Before Phase 2, this module answered eligibility mode-aware-ly (a
-Balanced Random collection's already-presented suggestions were bucketed
-separately as "Rotation Cooldown"). That bucket is gone: the five
-authoritative, user-facing states are now Available, In an Active Vote,
-Vote Winner, Watched, Retired, and RotationService's own internal
-exclusion (still real, still governing what a legacy Balanced Random/Soft
-Rotation collection's *next actual vote* selects -- see
-candidate_selection_strategy.py and NomineeSelectionService, neither of
-which changed) is simply invisible here: a suggestion it's temporarily
-excluding still reports as part of the eligible pool. Making that
-internal mechanism's effect on reporting disappear is exactly what
-"RotationService becomes an implementation detail" means for this phase.
+"""The one authoritative implementation of "what suggestions are eligible
+right now?", computed entirely from WatchItemStatus and VoteService. The
+five authoritative, user-facing states are Available, In an Active Vote,
+Vote Winner, Watched, and Retired.
 
 Eligible Pool: "available" is the pool the Eligible Pool Warning and
 every other user-facing count is based on (see
@@ -48,7 +36,7 @@ class CollectionEligibility:
     """The authoritative breakdown of one collection's suggestions.
 
     available: the Eligible Pool -- selectable for a future vote right
-        now. Neither mode- nor rotation-aware; see module docstring.
+        now. Mode-agnostic; see module docstring.
     in_active_vote: currently nominated in this collection's open voting
         round (empty whenever no round is open).
     vote_winners / retired / watched: terminal-state suggestions,
@@ -91,9 +79,8 @@ class CollectionEligibilityService:
 
     def get_eligibility(self, database_id: int) -> CollectionEligibility:
         """Read-only snapshot of current eligibility. Never mutates
-        anything -- rotation state (rollover, cooldown, presentation) is
-        no longer part of this computation at all, so there is nothing
-        here left to advance as a side effect of merely checking.
+        anything -- there is nothing here to advance as a side effect of
+        merely checking.
         """
         all_items = self._suggestion_service.get_suggestions_for_database(database_id, include_archived=True)
         retired = tuple(item for item in all_items if item.status is WatchItemStatus.ARCHIVED)

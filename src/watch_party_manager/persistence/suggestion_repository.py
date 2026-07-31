@@ -156,7 +156,6 @@ class JsonSuggestionRepository:
         return {
             "original_suggester": journey.original_suggester,
             "suggestion_date": journey.suggestion_date.isoformat() if journey.suggestion_date else None,
-            "rotation_history": list(journey.rotation_history),
             "voting_appearances": journey.voting_appearances,
             "winning_vote": journey.winning_vote,
             "watch_dates": [watch_date.isoformat() for watch_date in journey.watch_dates],
@@ -167,7 +166,6 @@ class JsonSuggestionRepository:
             "rejected_by_discord_user_ids": list(journey.rejected_by_discord_user_ids),
             "retired_at": journey.retired_at.isoformat() if journey.retired_at else None,
             "retirement_reason": journey.retirement_reason,
-            "retired_from_rotation_id": journey.retired_from_rotation_id,
             "retired_from_vote_round_id": journey.retired_from_vote_round_id,
         }
 
@@ -223,7 +221,6 @@ def _deserialize_journey(entry: Optional[dict]) -> WatchItemJourney:
     return WatchItemJourney(
         original_suggester=entry.get("original_suggester"),
         suggestion_date=date.fromisoformat(suggestion_date_raw) if suggestion_date_raw else None,
-        rotation_history=tuple(entry.get("rotation_history", ())),
         voting_appearances=entry.get("voting_appearances", 0),
         winning_vote=entry.get("winning_vote"),
         watch_dates=tuple(date.fromisoformat(value) for value in entry.get("watch_dates", ())),
@@ -234,7 +231,6 @@ def _deserialize_journey(entry: Optional[dict]) -> WatchItemJourney:
         rejected_by_discord_user_ids=tuple(entry.get("rejected_by_discord_user_ids", ())),
         retired_at=datetime.fromisoformat(retired_at_raw) if retired_at_raw else None,
         retirement_reason=entry.get("retirement_reason"),
-        retired_from_rotation_id=entry.get("retired_from_rotation_id"),
         retired_from_vote_round_id=entry.get("retired_from_vote_round_id"),
     )
 

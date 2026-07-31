@@ -112,7 +112,6 @@ class FakeBot:
         self.suggestion_service = suggestion_service
         self.suggestion_database_configuration_repository = None
         self.permission_service = permission_service
-        self.rotation_service = None
         self.config_service = config_service or FakeConfigService()
         self._channels: dict[int, FakeChannel] = {}
 

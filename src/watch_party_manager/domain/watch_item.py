@@ -28,12 +28,12 @@ class MetadataProvider(str, Enum):
 class WatchItemStatus(str, Enum):
     """Lifecycle states for a watch item.
 
-    Persisted states only. "Available" and "Rotation Cooldown" (the two
+    Persisted states only. "Available" and "In an Active Vote" (the two
     non-terminal display statuses shown to admins) are not separate
-    members here -- Rotation Cooldown is derived at display time from
-    rotation state (see RotationService.is_in_rotation_cooldown) rather
-    than persisted, since it reverts to Available automatically the
-    moment a new rotation begins. SUGGESTED covers both.
+    members here -- In an Active Vote is derived at display time from
+    VoteService.get_open_round_for_suggestion() rather than persisted,
+    since it must automatically revert to Available the moment its round
+    closes. SUGGESTED covers both.
 
     WATCHED is reachable from any other status via the dedicated
     Watched button/action only -- winning a vote or being retired never

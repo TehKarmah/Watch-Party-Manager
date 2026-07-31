@@ -30,7 +30,6 @@ from watch_party_manager.persistence.suggestion_database_repository import (
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.permission_service import PermissionService
-from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_completion_service import VoteCompletionResult
 from watch_party_manager.services.vote_service import VoteService
@@ -205,11 +204,10 @@ def make_discord_forbidden() -> discord.Forbidden:
 
 class FakeBot:
     def __init__(
-        self, suggestion_service: SuggestionService, channel: FakeChannel, *, rotation_service=None, vote_service=None
+        self, suggestion_service: SuggestionService, channel: FakeChannel, *, vote_service=None
     ) -> None:
         self.suggestion_service = suggestion_service
         self.suggestion_database_configuration_repository = None
-        self.rotation_service = rotation_service
         self.vote_service = vote_service
         self.permission_service = None
         self._channel = channel
@@ -545,40 +543,6 @@ class SyncVoteCompletionStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
         await sync_vote_completion_status_embeds(bot, result)
 
         self.assertEqual("🏆 Vote Winner\nWon: July 28, 2026", self._status_of(winner_message.edited_embed))
-
-
-class RotationCooldownAutomaticallyRevertsTests(unittest.TestCase):
-    """End-to-end coverage for Requirement 6: Rotation Cooldown is
-    computed, not persisted, so it automatically reverts to Available
-    once a fresh rotation begins -- no explicit "clear cooldown" step.
-    """
-
-    def setUp(self) -> None:
-        self._temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self._temp_dir.cleanup)
-        root = Path(self._temp_dir.name)
-        self.suggestion_service = SuggestionService(
-            repository=JsonSuggestionRepository(root / "suggestions.json"),
-            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
-        )
-        from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
-
-        self.rotation_service = RotationService(
-            self.suggestion_service, repository=JsonRotationRepository(root / "rotations.json")
-        )
-        self.database = self.suggestion_service.create_database("Movies", GUILD_ID, CHANNEL_ID).database
-
-    def test_presented_item_enters_cooldown_then_reverts_on_a_fresh_rotation(self) -> None:
-        item = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
-
-        self.rotation_service.get_or_start_rotation(self.database.database_id)
-        self.rotation_service.record_presentation(self.database.database_id, [item.id])
-        presented_item = self.suggestion_service.get_suggestion(item.id)
-        self.assertTrue(self.rotation_service.is_in_rotation_cooldown(presented_item))
-
-        self.rotation_service.begin_next_rotation(self.database.database_id)
-        refreshed_item = self.suggestion_service.get_suggestion(item.id)
-        self.assertFalse(self.rotation_service.is_in_rotation_cooldown(refreshed_item))
 
 
 class FakeRole:

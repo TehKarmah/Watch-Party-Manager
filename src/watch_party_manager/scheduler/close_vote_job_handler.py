@@ -28,7 +28,6 @@ from typing import Awaitable, Callable, Optional
 from watch_party_manager.services.vote_completion_announcer import (
     DiscordChannelMessenger,
     ResultsMessageRecorder,
-    RotationLookup,
     SuggestionLookup,
     finalize_vote_completion,
 )
@@ -58,7 +57,6 @@ class CloseVoteJobHandler:
         *,
         logger: Optional[logging.Logger] = None,
         on_finalized: Optional[OnVoteCompletionFinalized] = None,
-        rotation_service: Optional[RotationLookup] = None,
     ) -> None:
         """Initialize the handler.
 
@@ -84,11 +82,6 @@ class CloseVoteJobHandler:
                 callback rather than a direct call, since this scheduler
                 package must not import from bot.py (bot.py already
                 imports from here).
-            rotation_service: Used to resolve the round's "Rotation Y"
-                number (Rotation Context in Voting) for the results
-                announcement and closed-post text. Defaults to None so
-                existing callers/tests keep working unchanged; the
-                rotation number is simply omitted in that case.
         """
         self._vote_completion_service = vote_completion_service
         self._vote_service = vote_service
@@ -96,7 +89,6 @@ class CloseVoteJobHandler:
         self._messenger = messenger
         self._logger = logger or logging.getLogger(__name__)
         self._on_finalized = on_finalized
-        self._rotation_service = rotation_service
 
     async def execute(self, job: ScheduledJob) -> JobExecutionResult:
         """Execute one claimed close_vote job.
@@ -143,7 +135,6 @@ class CloseVoteJobHandler:
             self._suggestion_service,
             self._messenger,
             result,
-            rotation_service=self._rotation_service,
         )
 
         if self._on_finalized is not None:

@@ -55,7 +55,7 @@ Use `/database list` to review databases available to the current server.
 
 ### Move a database's suggestion destination
 
-Run `/database move`, choose the collection from the picker that appears, then choose its new destination using the exact same Create New Thread/Use Current Thread/Use Existing Thread choice `/database add` offers. Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, rotation history, statistics, and every other setting are untouched. Existing Discord suggestion posts are never moved or edited; only suggestions added after the move post to the new destination. The chosen destination must not already be routed to another collection, must not be WASH's configured Home Channel, and a failure after a new thread is created (e.g. a duplicate destination) automatically deletes that thread rather than leaving it orphaned.
+Run `/database move`, choose the collection from the picker that appears, then choose its new destination using the exact same Create New Thread/Use Current Thread/Use Existing Thread choice `/database add` offers. Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, statistics, and every other setting are untouched. Existing Discord suggestion posts are never moved or edited; only suggestions added after the move post to the new destination. The chosen destination must not already be routed to another collection, must not be WASH's configured Home Channel, and a failure after a new thread is created (e.g. a duplicate destination) automatically deletes that thread rather than leaving it orphaned.
 
 **Context Resolution Audit (bug fix):** every command that resolves "which collection applies here" (`/add`, `/list`, `/vote start`, `/stats`, and `/database add`'s own duplicate-channel check) shares one implementation, `resolve_database_for_channel`, itself built on the same single-channel resolver (`resolve_collection_channel_id`) `/database list` and `/config` already used for display. Previously, a moved collection's *original* channel kept resolving alongside its new one -- running a command from the old location could still silently reach the collection that had just been moved away from it. A collection's original channel now stops resolving the moment it's moved; only its current destination does, and that destination is also immediately free for a different collection to move into. This takes effect immediately (no restart needed) and survives one, since nothing about it is cached in memory -- resolution is always computed fresh from the same persisted records `/database list`/`/config` already read.
 
@@ -121,7 +121,7 @@ Active Watch Items = Eligible for Voting + In an Active Vote -- Vote Winners, Re
 
 All Watch Items shows every status at once, for a full-collection view.
 
-Eligible for Voting, In an Active Vote, Active Watch Items, and All Watch Items are all resolved through `CollectionEligibilityService` -- the same authoritative eligibility calculation every other command uses (see "Nominee selection and rotation management" below) -- so `/list` can never disagree with what starting a vote would actually see. **Rotation-removal Phase 2:** this calculation is computed entirely from each suggestion's own status and `VoteService`, never `RotationService` -- `/list` no longer triggers, checks, or reports a rotation rollover at all. Vote Winners, Retired, and Watched are terminal buckets, so checking any of those filters alone is always side-effect-free. When run inside a collection's own thread, `/list` automatically uses that collection; a **Switch Collection** button (shown whenever more than one collection exists) lets a member view a different one without re-running the command with different context.
+Eligible for Voting, In an Active Vote, Active Watch Items, and All Watch Items are all resolved through `CollectionEligibilityService` -- the same authoritative eligibility calculation every other command uses (see "Nominee selection" below) -- so `/list` can never disagree with what starting a vote would actually see. This calculation is computed entirely from each suggestion's own status and `VoteService`. Vote Winners, Retired, and Watched are terminal buckets, so checking any of those filters alone is always side-effect-free. When run inside a collection's own thread, `/list` automatically uses that collection; a **Switch Collection** button (shown whenever more than one collection exists) lets a member view a different one without re-running the command with different context.
 
 ### Suggestion status model
 
@@ -132,8 +132,6 @@ Every suggestion shows one of five statuses, both in `/list` and on its own publ
 - 🏆 **Vote Winner** -- won a voting round. This replaces the older, never-actually-produced "Watched" status: WASH knows a suggestion won a vote, not that the group actually watched it. Whenever a Vote Winner is displayed with a recorded win date, an additional `Won: <Month D, YYYY>` line appears right below it (date only, never a time) -- the actual date `/vote start`'s vote completion recorded. A Vote Winner from before this milestone, with no recorded win date, simply omits that line rather than showing a placeholder.
 - 🗄️ **Retired** -- archived, whether by `/remove`, an "I WILL NOT WATCH" rejection threshold, or WASH Crew directly setting it via `/edit_suggestion`.
 - ✅ **Watched** -- explicitly confirmed watched, via the watch-history workflow.
-
-**Rotation-removal Phase 2: Rotation Cooldown is gone.** A suggestion a legacy Balanced Random/Soft Rotation collection's internal rotation state is temporarily excluding from its next pick (see "Nominee selection and rotation management" below) now simply displays as Available, exactly like any other non-terminal, non-nominated suggestion -- `RotationService` still governs which suggestions that collection's *next actual vote* selects, but that mechanism no longer surfaces anywhere in the user experience. This means an "Available" suggestion in a legacy collection is not always guaranteed to be nominated on the very next vote -- WASH's internal selection logic is trusted to handle that without the user needing to track it.
 
 WASH Crew may always override a suggestion's status directly through `/edit_suggestion`'s Change Status action (Available, Vote Winner, or Retired -- In an Active Vote is never a directly settable option, since it's computed). Whenever a suggestion's status changes, its existing public confirmation post is edited in place to reflect the new status -- it is never recreated.
 
@@ -157,14 +155,7 @@ IMDb-derived fields (title, release year, IMDb link, director, etc.) are read-on
 
 ### New suggestion admission
 
-**Rotation-removal Phase 1:** new suggestions are now eligible immediately, regardless of nominee selection mode. Favor New Additions, Favor Older Additions, and Pure Random never create or check rotation state at all, so a suggestion added to a database using one of them is selectable the moment it's saved.
-
-For a database still using one of the two legacy rotation-based modes (Balanced Random or Soft Rotation), `suggestion_rules.admission_mode` still controls when a newly added (or reactivated) suggestion joins the current rotation:
-
-- **Next Rotation** -- the suggestion is saved immediately but does not join whichever rotation is currently in progress. It's picked up automatically the next time a fresh rotation begins for that database.
-- **Join Current Rotation** (the default as of Rotation-removal Phase 1, moving legacy collections toward the same immediate-eligibility behavior the new modes have by construction) -- the suggestion is added to the in-progress rotation immediately, as unpresented, expanding the active pool live.
-
-This setting only has a visible effect for databases using the Balanced Random or Soft Rotation nominee-selection modes (see "Nominee selection and rotation management" below) -- Pure Random, Favor New Additions, and Favor Older Additions have no rotation concept for it to interact with.
+A new suggestion is eligible for voting immediately, regardless of nominee-selection mode -- there is no admission delay or mode to configure. A reactivated suggestion (via `/add`) becomes eligible the same way.
 
 ### Known limitation: identical titles within one database
 
@@ -191,61 +182,40 @@ The target database is resolved the same contextual, automatic-then-picker way `
 
 Only one open round is supported by the current voting service behavior.
 
-### Nominee selection and rotation management
+### Nominee selection
 
 Each database's `suggestion_rules.candidate_selection` setting chooses how `/vote start` picks nominees from that database's eligible suggestions. It's configured through the Setup Wizard's Voting Defaults step (where, during first-time setup, exactly one collection exists so far) or, afterward, through `/config`'s Collections section -- select the collection, then its Nominee Selection setting; both show and save the exact same value, chosen from a Discord dropdown rather than typed.
 
-**Rotation-removal Phase 1:** the Setup Wizard and `/config` now offer three modes for new choices, under friendlier names; the underlying value in parentheses is what's actually persisted:
+Three modes are offered, under friendlier names; the underlying value in parentheses is what's actually persisted:
 
-- **Favor New Additions** (`favor_new_additions`, the recommended and default choice) -- weights eligible suggestions using each one's permanent suggestion date, favoring recently-added ones. Older suggestions stay eligible, just at a lower chance. Creates no rotation state; a suggestion is eligible immediately from the moment it's added. *Leans toward suggestions added recently; older ones stay eligible, just at a lower chance.*
-- **Favor Older Additions** (`favor_older_additions`) -- the mirror image of Favor New Additions: weights toward suggestions that have waited the longest, while newer ones stay eligible at a lower chance. Also creates no rotation state. *Leans toward suggestions that have waited the longest; newer ones stay eligible, just at a lower chance.*
-- **Pure Random** (`infinite_pool`) -- every eligible suggestion is always available; no rotation state is created or tracked for a database using this mode. *Chooses completely at random from eligible suggestions, with no preference or exclusion.*
+- **Favor New Additions** (`favor_new_additions`, the recommended and default choice) -- weights eligible suggestions using each one's permanent suggestion date, favoring recently-added ones. Older suggestions stay eligible, just at a lower chance. *Leans toward suggestions added recently; older ones stay eligible, just at a lower chance.*
+- **Favor Older Additions** (`favor_older_additions`) -- the mirror image of Favor New Additions: weights toward suggestions that have waited the longest, while newer ones stay eligible at a lower chance. *Leans toward suggestions that have waited the longest; newer ones stay eligible, just at a lower chance.*
+- **Pure Random** (`infinite_pool`) -- every eligible suggestion is always available with equal weight. *Chooses completely at random from eligible suggestions, with no preference or exclusion.*
 
-Two older, rotation-based modes still exist and remain fully functional for any collection already configured with one of them, but are no longer offered when configuring a collection for the first time:
-
-- **Balanced Random** (`rotation_pool`) -- every eligible suggestion belongs to a rotation. Once presented in a vote, a suggestion is excluded from selection until the rotation is exhausted and a fresh one begins automatically. *Prioritizes suggestions that have appeared in fewer recent votes, giving every one a fair chance.*
-- **Soft Rotation** (`soft_rotation`) -- unpresented suggestions are strongly preferred, but a previously presented suggestion remains technically eligible at a much lower selection weight rather than being excluded outright. *Prefers new suggestions; previously shown ones stay eligible, just at a lower chance.*
+No mode ever permanently excludes a suggestion from selection.
 
 The italicized sentence after each mode is the exact wording shown as that option's description everywhere it's chosen -- the Setup Wizard, `/config`'s Nominee Selection screen, and `/vote start`'s Customize This Vote -- so an administrator never has to already understand the underlying algorithm to pick one.
 
-A server that never explicitly sets this now defaults to Favor New Additions/`favor_new_additions` -- SuggestionRulesConfig's own documented default as of Rotation-removal Phase 1. A server configured before this change keeps whatever mode it already had saved (most commonly Balanced Random/`rotation_pool`, the previous default) -- this change only affects newly configured collections.
+A server that never explicitly sets this defaults to Favor New Additions/`favor_new_additions` -- `SuggestionRulesConfig`'s own documented default.
 
 Within whichever pool a mode produces, WASH still applies its existing genre/media-type diversity pass and its existing deprioritization of recently nominated or recently won suggestions -- nominee-selection mode and diversity are independent, layered concerns.
 
-**Rotation lifecycle (internal, legacy modes only).** Rotation-removal Phase 2: this entire subsection describes `RotationService`, which now only ever runs for a collection still configured with Balanced Random or Soft Rotation -- and only to decide that collection's own actual nominee pool at vote-creation time. None of it is reported to users anywhere any more (see "Suggestion status model" above); it's kept here as an implementation reference, not a user-facing feature.
-
-A rotation tracks an identifier, its start and completion time, which suggestions were assigned to it, and which of those have been presented. A rotation completes once every assigned suggestion has reached one of: presented, Vote Winner, retired, or administratively archived/removed. Retired suggestions (see below) count toward completing a rotation but are never counted as presented. Rotation state is stored in its own JSON file under `data/` and is therefore covered automatically by `/backup`, `/restore`, and bot restarts, the same as every other repository.
-
-A rotation also completes early -- before every assigned suggestion has reached one of those states -- whenever `/vote start` needs more candidates than the current rotation has left to present. Rather than blocking the vote until the rotation is fully exhausted, WASH starts a fresh rotation immediately, returning every non-Vote-Winner, non-Retired suggestion to that collection's real candidate pool, and proceeds with the refreshed pool -- never a stale one. This only happens when doing so would actually help -- a rotation is never restarted while it can already supply the requested number of candidates, and a genuinely small collection is reported as having too few eligible suggestions rather than restarting pointlessly. See "Rotation Refresh Notification" below for the one place this is still surfaced to a WASH Crew member.
-
-**Retired suggestions.** A suggestion reaching the "I WILL NOT WATCH" rejection threshold is *retired*, a distinct lifecycle from a WASH Crew-initiated `/remove` archive: WASH records a retirement date, reason, and (when known) the rotation it retired from. Retired suggestions leave the active rotation and are excluded from further selection, but remain visible through `/list status:Retired` and may later be reactivated through `/add`, exactly like any other archived suggestion.
+**Retired suggestions.** A suggestion reaching the "I WILL NOT WATCH" rejection threshold is *retired*, a distinct lifecycle from a WASH Crew-initiated `/remove` archive: WASH records a retirement date and reason. Retired suggestions are excluded from further selection, but remain visible through `/list status:Retired` and may later be reactivated through `/add`, exactly like any other archived suggestion.
 
 ### Rotation & Collection Health
 
-`CollectionEligibilityService` is the one authoritative implementation of "what suggestions are eligible right now" for a collection -- every command that needs an eligibility answer (`/vote start`, `/list`, `/database health`, and the Eligible Pool Warning below) calls it rather than computing its own. **Rotation-removal Phase 2:** it's computed entirely from each suggestion's own status and `VoteService` -- it no longer touches `RotationService` or the nominee-selection strategies at all, so there is nothing left for it to bootstrap, advance, or roll over. Its single `get_eligibility()` operation is always read-only.
+`CollectionEligibilityService` is the one authoritative implementation of "what suggestions are eligible right now" for a collection -- every command that needs an eligibility answer (`/vote start`, `/list`, `/database health`, and the Eligible Pool Warning below) calls it rather than computing its own. It's computed entirely from each suggestion's own status and `VoteService`. Its single `get_eligibility()` operation is always read-only.
 
 It reports the same reconciled buckets for a collection: **Available** (the Eligible Pool -- selectable right now), **In an Active Vote** (currently nominated in this collection's open round), **Vote Winners**, **Retired**, and **Watched**. These always reconcile: Active = Available + In an Active Vote, and Total = Active + Vote Winners + Retired + Watched.
 
-`/database health` (WASH Crew only) reports this breakdown for one collection: Collection Name, Total Watch Items, Active Watch Items, Eligible for Voting, In an Active Vote, Vote Winners, Retired, Watched, the collection's own current Rotation number and progress when it's still using a legacy Balanced Random/Soft Rotation mode (e.g. "Rotation 4 Progress: 18 of 27 active items have been presented" -- omitted entirely for the three modes with no rotation concept), the guild's Configured Candidate Count, a **Next Vote** status, and a **Low Pool Status**. Eligible for Voting and In an Active Vote are shown indented beneath Active Watch Items, so the reconciliation identity (Active Watch Items = Eligible for Voting + In an Active Vote) is visible directly in the layout, not just stated in a parenthetical. Collection selection works exactly like `/list`'s -- automatic from thread context, with a **Switch Collection** button when more than one collection exists. Checking health is always side-effect-free.
-
-**Rotation numbering.** The rotation number shown (e.g. "Rotation 4"), when shown at all, is this specific collection's own 1st/2nd/3rd/... rotation, not the raw internal rotation record ID -- that ID is a single counter shared across every collection on the server, so showing it directly would read as an arbitrarily large, confusing number for a collection's very first rotation. `/database health` is the only place a rotation number is shown; it's deliberately not added to every voting-related embed, to avoid clutter members don't need.
+`/database health` (WASH Crew only) reports this breakdown for one collection: Collection Name, Total Watch Items, Active Watch Items, Eligible for Voting, In an Active Vote, Vote Winners, Retired, Watched, the guild's Configured Candidate Count, a **Next Vote** status, and a **Low Pool Status**. Eligible for Voting and In an Active Vote are shown indented beneath Active Watch Items, so the reconciliation identity (Active Watch Items = Eligible for Voting + In an Active Vote) is visible directly in the layout, not just stated in a parenthetical. Collection selection works exactly like `/list`'s -- automatic from thread context, with a **Switch Collection** button when more than one collection exists. Checking health is always side-effect-free.
 
 **Next Vote** is one of:
 
-- **Ready** -- the collection has enough Active Watch Items overall to satisfy the configured candidate count. **Rotation-removal Phase 2:** the old third state, "Needs Rollover," is gone -- a legacy collection's internal rollover, when one is still needed, now always happens silently inside actual vote creation, so there is no longer a meaningfully different outcome to warn about in advance. Ready now covers both of the old Ready/Needs Rollover cases.
+- **Ready** -- the collection has enough Active Watch Items overall to satisfy the configured candidate count.
 - **Insufficient Suggestions** -- the collection doesn't have enough Active Watch Items to satisfy the candidate count; more suggestions need to be added.
 
 **Low Pool Status** is one of **Healthy**, **Almost Complete**, or **Insufficient**, using the same threshold the Eligible Pool Warning below evaluates against -- Collection Health and the warning can never disagree about what "low" means.
-
-### Rotation Refresh Notification
-
-Whenever `/vote start` actually rolls a legacy collection's completed rotation over (see "Rotation lifecycle (internal, legacy modes only)" above), WASH says so plainly, rather than leaving a WASH Crew member to notice the pool composition changed on its own:
-
-> All eligible watch items have now been presented.
->
-> Starting Rotation 4.
-
-This is purely informational, never warning-toned -- rolling a rotation over is normal, expected behavior, not a problem. It's sent as a follow-up message visible only to the WASH Crew member who ran `/vote start`, after the public voting post itself -- the public post never mentions it, so every other voter sees a clean voting post with no rotation bookkeeping in it. **Rotation-removal Phase 2:** this notification is now exclusively a `/vote start` thing -- `/list` and `/database health` never roll a rotation over (or mention one) at all, since their own eligibility reporting no longer touches `RotationService`.
 
 ### Eligible Pool Warning
 
@@ -255,9 +225,9 @@ WASH can proactively notify WASH Crew when a collection's eligible pool is runni
 - **Threshold** -- the number of eligible suggestions at or below which the warning fires. Defaults to the guild's configured candidate count times **5** (e.g. a candidate count of 3 gives a threshold of 15); a server may instead set a fixed custom threshold, or restore the automatic default.
 - **Destination** -- the Admin Channel (default) or the Watch Party Home Channel.
 
-The threshold is checked against the **Eligible Pool** (the same count `/database health`'s "Eligible for Voting" line shows) -- **Rotation-removal Phase 2** replaced the old, rotation-size-relative formula (the larger of 10% of Active Watch Items or two configured voting rounds) with this flat multiple, since it no longer needs "Active Watch Items" to scale against; the calculation is now the same regardless of collection size or nominee-selection mode.
+The threshold is checked against the **Eligible Pool** (the same count `/database health`'s "Eligible for Voting" line shows) -- a flat multiple of the configured candidate count, the same regardless of collection size or nominee-selection mode.
 
-**Re-arm behavior.** The warning dedups on threshold crossing, not on a Rotation ID: it fires once when the eligible pool drops to or at the threshold, stays silent on every later check while still at or below it, automatically re-arms the moment the pool rises back above the threshold, and fires again the next time it drops back down. This state is tracked independently of `RotationService` (see `persistence/eligible_pool_warning_state_repository.py`), so it's unaffected by -- and imposes no constraint on -- rotation removal in a later phase.
+**Re-arm behavior.** The warning dedups on threshold crossing: it fires once when the eligible pool drops to or at the threshold, stays silent on every later check while still at or below it, automatically re-arms the moment the pool rises back above the threshold, and fires again the next time it drops back down. This state is tracked in its own per-database file (see `persistence/eligible_pool_warning_state_repository.py`).
 
 It's evaluated after a successful `/vote start` or `/add`, the moments a database's pool most naturally changes. The message names the collection, the eligible items remaining, and the warning threshold:
 
@@ -270,9 +240,8 @@ It's evaluated after a successful `/vote start` or `/add`, the moments a databas
 
 ### Known limitations: nominee selection
 
-- **Retirement's originating rotation is usually unset.** The retirement record's rotation reference is only populated when rejection happens through the `/reject` command; the suggestion post's own "I WILL NOT WATCH" button (the primary way members reject a suggestion) doesn't yet carry rotation context through to it, so `retired_from_rotation_id` is `None` in the common case. The field itself is still recorded and available for a future milestone to populate more completely.
-- **WASH still doesn't know when a group actually watches its winner.** A voting round's winner(s) are marked Vote Winner automatically (see "Suggestion status model" above) -- the same lifecycle point a rotation completes through -- but that only records that a vote was won, not that the watch party actually happened. Confirming an actual viewing is left to a future watch-history milestone.
-- **Likes, cooldowns, genre/runtime/franchise weighting, and statistics are not implemented.** The weighting architecture (`CompositeWeighting`/`WeightingFactor` in `services/candidate_selection_strategy.py`) exists specifically so a future milestone can add these without redesigning Soft Rotation or the selection pipeline, but no such factor exists yet beyond "has this been presented before."
+- **WASH still doesn't know when a group actually watches its winner.** A voting round's winner(s) are marked Vote Winner automatically (see "Suggestion status model" above), but that only records that a vote was won, not that the watch party actually happened. Confirming an actual viewing is left to a future watch-history milestone.
+- **Likes, genre/runtime/franchise weighting, and statistics are not implemented.** The weighting architecture (`CompositeWeighting`/`WeightingFactor` in `services/candidate_selection_strategy.py`) exists specifically so a future milestone can add these without redesigning the selection pipeline, but no such factor exists yet beyond recency (Favor New/Older Additions).
 
 ## 5. Voting Operations
 
@@ -439,20 +408,19 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 
 ## 10. Statistics & Reporting
 
-`/stats [type] [public] [suggestion]` exposes read-only statistics derived entirely from existing historical data -- nothing is cached or incrementally counted; every value is recalculated from the suggestion, voting, rotation, and watch-party repositories each time the command runs.
+`/stats [type] [public] [suggestion]` exposes read-only statistics derived entirely from existing historical data -- nothing is cached or incrementally counted; every value is recalculated from the suggestion, voting, and watch-party repositories each time the command runs.
 
 ### Statistic types
 
 - **Server** (the default) -- watch parties, voting rounds (open/closed/cancelled, blind/visible, ties), participation, average candidates per round, and average vote duration.
 - **Member** -- the requesting member's own suggestions submitted/watched/retired, votes cast, participation percentage, and winning suggestions. There is no way to target another member's statistics, by design.
-- **Suggestion** -- one suggestion's created date, submitter, current status, nomination history (count, first/last nominated), watch/retirement history, and rotations participated in. `suggestion` accepts the same reference-number-or-exact-title matching `/remove` and `/edit_suggestion` use; multiple matches show a picker.
-- **Rotation** -- the target collection's current rotation progress (presented/remaining/retired/watched/completion) plus historical rotation count, average duration, and average size. Collection selection follows `/list`'s automatic-then-picker pattern.
-- **Collection** -- one collection's active/archived/watched/retired suggestion counts alongside its current rotation summary.
+- **Suggestion** -- one suggestion's created date, submitter, current status, nomination history (count, first/last nominated), and watch/retirement history. `suggestion` accepts the same reference-number-or-exact-title matching `/remove` and `/edit_suggestion` use; multiple matches show a picker.
+- **Collection** -- one collection's active/archived/watched/retired suggestion counts.
 
 ### Privacy
 
 - Every Watch Party member may use `/stats`; every response is ephemeral by default, for every member including WASH Crew.
-- WASH Crew may set `public:true` to post Server, Suggestion, Rotation, or Collection statistics publicly -- the same pattern `/list` already uses.
+- WASH Crew may set `public:true` to post Server, Suggestion, or Collection statistics publicly -- the same pattern `/list` already uses.
 - **Member statistics are the one exception**: any member (not just WASH Crew) may set `public:true` to post their *own* member statistics publicly, since that's a self-consenting disclosure of their own data rather than an aggregate view. WASH Crew cannot retrieve or post another member's statistics under any circumstance -- there is no parameter to target one.
 - A member's statistics remain fully available even after they leave the Watch Party role, since they're derived from Discord user IDs recorded on suggestions and votes, never from live role membership.
 
@@ -462,7 +430,7 @@ Member and suggestion statistics that depend on "who submitted this" or "when wa
 
 ## 11. Planned Post-v1.0 Administration
 
-Guided setup (`/setup`, rerunnable), rotation administration, and statistics/reporting are implemented -- see the sections above. Planned post-v1.0 enhancements include:
+Guided setup (`/setup`, rerunnable), nominee selection, and statistics/reporting are implemented -- see the sections above. Planned post-v1.0 enhancements include:
 
 - Existing, newly created, or deferred watch-history destinations
 - Event-series administration (the richer recurring-schedule/Discord Event model `docs/04-Data-Model.md` describes; scheduled watch parties today are a simpler, single-occurrence foundation -- see `domain/watch_party.py`)

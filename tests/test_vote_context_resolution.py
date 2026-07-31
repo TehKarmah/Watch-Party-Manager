@@ -24,7 +24,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import handle_edit_vote, handle_vote_status
 from watch_party_manager.domain.vote import VoteVisibility
-from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
 )
@@ -32,7 +31,6 @@ from watch_party_manager.persistence.suggestion_database_repository import JsonS
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.permission_service import PermissionService
-from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_completion_service import VoteCompletionService
 from watch_party_manager.services.vote_service import VoteService
@@ -104,9 +102,6 @@ class FakeBot:
         )
         self.vote_service = VoteService(
             self.suggestion_service, repository=JsonVoteRepository(root / "voting.json")
-        )
-        self.rotation_service = RotationService(
-            self.suggestion_service, repository=JsonRotationRepository(root / "rotations.json")
         )
         self.vote_completion_service = VoteCompletionService(self.vote_service, self.suggestion_service)
         self.permission_service = PermissionService(
@@ -214,38 +209,13 @@ class HandleVoteStatusContextResolutionTests(VoteContextResolutionTestCase):
 
         self.assertIn("server", interaction.response.sent_message.lower())
 
-    async def test_shows_the_rotation_number_the_round_was_drawn_from(self) -> None:
-        # Rotation Context in Voting: /vote_status must show "Rotation Y"
-        # alongside "Round X" whenever the round has one recorded, the
-        # same information the active voting embed shows.
-        database = self.bot.suggestion_service.create_database(
-            "Movies", guild_id=GUILD_ID, channel_id=201
-        ).database
-        candidates = [
-            self.bot.suggestion_service.suggest(title, database_id=database.database_id).watch_item
-            for title in ("A", "B")
-        ]
-        rotation = self.bot.rotation_service.get_or_start_rotation(database.database_id)
-        vote_round = self.bot.vote_service.create_round(
-            visibility=VoteVisibility.VISIBLE,
-            candidate_suggestion_ids=[candidate.id for candidate in candidates],
-            database_id=database.database_id,
-            rotation_id=rotation.id,
-        ).vote_round
-        interaction = FakeInteraction(user=self._crew_member(), channel_id=201)
-
-        await handle_vote_status(interaction, self.bot)
-
-        self.assertIn(f"Voting round {vote_round.id} • Rotation 1", interaction.response.sent_message)
-
-    async def test_omits_the_rotation_number_when_the_round_has_none_recorded(self) -> None:
+    async def test_shows_the_round_id(self) -> None:
         database, vote_round = self._make_collection_with_open_round("Movies", channel_id=201)
         interaction = FakeInteraction(user=self._crew_member(), channel_id=201)
 
         await handle_vote_status(interaction, self.bot)
 
         self.assertIn(f"Voting round {vote_round.id}", interaction.response.sent_message)
-        self.assertNotIn("Rotation", interaction.response.sent_message)
 
 
 class HandleEditVoteContextResolutionTests(VoteContextResolutionTestCase):

@@ -90,13 +90,6 @@ class VoteOpenedTitleTests(unittest.TestCase):
         self.assertEqual(embed.title, "🎬 Movie Suggestions Voting Is Open")
         self.assertEqual(embed.description.splitlines()[0], "Round: 1")
 
-    def test_opened_embed_description_includes_the_rotation_when_known(self) -> None:
-        embed = build_voting_post_embed(
-            VoteRound(id=1), [], standings=None, standings_error=None, collection_name="Movie Suggestions", rotation_number=2
-        )
-
-        self.assertEqual(embed.description.splitlines()[0], "Round: 1 • Rotation 2")
-
     def test_opened_embed_title_falls_back_without_a_collection(self) -> None:
         embed = build_voting_post_embed(VoteRound(id=1), [], standings=None, standings_error=None)
 

@@ -35,7 +35,6 @@ from typing import Any, Callable, Optional, Union
 from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, TieBehavior
 from watch_party_manager.domain.suggestion_database_configuration import (
     CandidateSelectionMode,
-    SuggestionAdmissionMode,
     SuggestionDatabaseArchiveConfig,
     SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
@@ -52,21 +51,41 @@ DEFAULT_SUGGESTION_DATABASE_CONFIGURATIONS_PATH = Path("data/suggestion_database
 
 # This module's own schema version, independent of Guild Configuration's
 # CURRENT_SCHEMA_VERSION -- the two documents have separate lifecycles.
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def _migrate_v1_to_v2(entry: dict[str, Any]) -> dict[str, Any]:
     """FR-033B: candidate_selection's legacy random/balanced_random values
-    never drove any selection behavior -- both migrate to the new
-    default (rotation_pool) rather than to a differently-behaving new
-    mode, since mapping either to soft_rotation or infinite_pool would
-    silently change an existing server's future selection behavior for a
-    setting nothing ever read.
+    never drove any selection behavior -- both migrate directly to the
+    current default (favor_new_additions) rather than to a
+    differently-behaving mode, since a setting nothing ever read should
+    not silently change an existing server's future selection behavior.
     """
     rules = entry.get("suggestion_rules")
     if isinstance(rules, dict) and rules.get("candidate_selection") in ("random", "balanced_random"):
-        rules["candidate_selection"] = CandidateSelectionMode.ROTATION_POOL.value
+        rules["candidate_selection"] = CandidateSelectionMode.FAVOR_NEW_ADDITIONS.value
     entry["schema_version"] = 2
+    return entry
+
+
+def _migrate_v2_to_v3(entry: dict[str, Any]) -> dict[str, Any]:
+    """Rotation Removal: the rotation_pool and soft_rotation candidate
+    selection modes no longer exist, and suggestion admission is always
+    immediate, so admission_mode is meaningless. A collection still
+    configured for either legacy mode moves to favor_new_additions (the
+    current default) rather than a differently-behaving mode, for the
+    same "don't silently change existing behavior for a removed setting"
+    reasoning as _migrate_v1_to_v2. admission_mode is simply dropped --
+    there is nothing left to preserve it as, and _split_known no longer
+    treats it as a known field, so it also will not resurface as a stray
+    extra_fields entry.
+    """
+    rules = entry.get("suggestion_rules")
+    if isinstance(rules, dict):
+        if rules.get("candidate_selection") in ("rotation_pool", "soft_rotation"):
+            rules["candidate_selection"] = CandidateSelectionMode.FAVOR_NEW_ADDITIONS.value
+        rules.pop("admission_mode", None)
+    entry["schema_version"] = 3
     return entry
 
 
@@ -82,7 +101,10 @@ class SuggestionDatabaseConfigurationRepository:
     need to manage either.
     """
 
-    _MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {1: _migrate_v1_to_v2}
+    _MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {
+        1: _migrate_v1_to_v2,
+        2: _migrate_v2_to_v3,
+    }
 
     def __init__(
         self, file_path: Union[Path, str] = DEFAULT_SUGGESTION_DATABASE_CONFIGURATIONS_PATH
@@ -276,12 +298,10 @@ class SuggestionDatabaseConfigurationRepository:
     def _migrate(self, raw_entry: dict[str, Any]) -> dict[str, Any]:
         """Apply sequential schema migrations to a raw persisted entry.
 
-        No migrations are registered yet -- CURRENT_SCHEMA_VERSION is 1,
-        the only version this project has ever written. This is the
-        designated seam for future migrations: register a callable in
-        _MIGRATIONS keyed by the version it upgrades *from*, and it will
-        be applied here, one version at a time, until the entry reaches
-        CURRENT_SCHEMA_VERSION. A missing schema_version is treated as
+        Register a callable in _MIGRATIONS keyed by the version it
+        upgrades *from*, and it will be applied here, one version at a
+        time, until the entry reaches CURRENT_SCHEMA_VERSION. A missing
+        schema_version is treated as
         version 1. A version newer than CURRENT_SCHEMA_VERSION is
         rejected outright (FutureSchemaVersionError) rather than guessed
         at. Migrations run on a deep copy, so a failed or partial
@@ -424,7 +444,6 @@ class SuggestionDatabaseConfigurationRepository:
                         "rejection_threshold": c.suggestion_rules.rejection_threshold,
                         "allow_resuggestion": c.suggestion_rules.allow_resuggestion,
                         "candidate_selection": c.suggestion_rules.candidate_selection.value,
-                        "admission_mode": c.suggestion_rules.admission_mode.value,
                     },
                 ),
                 "watch_history": cls._merge(
@@ -539,10 +558,7 @@ class SuggestionDatabaseConfigurationRepository:
                 rejection_threshold=rules.get("rejection_threshold", 2),
                 allow_resuggestion=rules.get("allow_resuggestion", True),
                 candidate_selection=CandidateSelectionMode(
-                    rules.get("candidate_selection", CandidateSelectionMode.ROTATION_POOL.value)
-                ),
-                admission_mode=SuggestionAdmissionMode(
-                    rules.get("admission_mode", SuggestionAdmissionMode.NEXT_ROTATION.value)
+                    rules.get("candidate_selection", CandidateSelectionMode.FAVOR_NEW_ADDITIONS.value)
                 ),
                 extra_fields=cls._split_known(
                     rules,
@@ -553,7 +569,6 @@ class SuggestionDatabaseConfigurationRepository:
                         "rejection_threshold",
                         "allow_resuggestion",
                         "candidate_selection",
-                        "admission_mode",
                     },
                 ),
             ),

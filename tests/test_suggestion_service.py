@@ -1565,65 +1565,11 @@ class RejectSuggestionTests(unittest.TestCase):
         journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
         self.assertIsNone(journey.retired_at)
 
-    def test_the_rotation_id_is_recorded_when_provided(self) -> None:
-        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
-
-        self.suggestion_service.reject_suggestion(
-            self.matrix.id, discord_user_id=2, rejection_threshold=2, rotation_id=7
-        )
-
-        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
-        self.assertEqual(journey.retired_from_rotation_id, 7)
-
-    def test_the_rotation_id_defaults_to_none(self) -> None:
-        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
-
-        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2, rejection_threshold=2)
-
-        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
-        self.assertIsNone(journey.retired_from_rotation_id)
-
     def test_a_wash_crew_archive_via_archive_suggestion_is_not_a_retirement(self) -> None:
         self.suggestion_service.archive_suggestion(self.matrix.id)
 
         journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
         self.assertIsNone(journey.retired_at)
-
-
-class RecordRotationPresentationTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self._temp_dir = tempfile.TemporaryDirectory()
-        root = Path(self._temp_dir.name)
-        self.suggestion_service = SuggestionService(
-            repository=JsonSuggestionRepository(root / "suggestions.json"),
-            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
-        )
-        self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
-
-    def tearDown(self) -> None:
-        self._temp_dir.cleanup()
-
-    def test_records_the_rotation_id_onto_the_journey(self) -> None:
-        updated = self.suggestion_service.record_rotation_presentation(self.matrix.id, 5)
-
-        self.assertTrue(updated)
-        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
-        self.assertIn(5, journey.rotation_history)
-
-    def test_returns_false_for_an_unknown_suggestion(self) -> None:
-        updated = self.suggestion_service.record_rotation_presentation(999, 5)
-
-        self.assertFalse(updated)
-
-    def test_persists_the_update(self) -> None:
-        self.suggestion_service.record_rotation_presentation(self.matrix.id, 5)
-
-        root = Path(self._temp_dir.name)
-        reloaded = SuggestionService(
-            repository=JsonSuggestionRepository(root / "suggestions.json"),
-            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
-        )
-        self.assertIn(5, reloaded.get_suggestion(self.matrix.id).journey.rotation_history)
 
 
 class GetSuggestionsForDatabaseArchivingTests(unittest.TestCase):

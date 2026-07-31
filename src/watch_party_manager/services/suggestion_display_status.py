@@ -1,15 +1,7 @@
 """Derives a suggestion's admin-facing display status.
 
-Rotation-removal Phase 2: the authoritative runtime states are now five --
-Available, In an Active Vote, Vote Winner, Watched, Retired. Rotation
-Cooldown no longer exists as a display concept anywhere in the user
-experience; RotationService (still alive internally for legacy Balanced
-Random/Soft Rotation collections' actual nominee selection -- see that
-service's own module docstring) never influences what status is shown.
-An item a legacy strategy is still internally excluding from its next
-pick simply displays as Available, exactly like any other non-terminal,
-non-nominated suggestion -- the exclusion is purely an implementation
-detail of nominee selection now, invisible to the user.
+The authoritative runtime states are five -- Available, In an Active
+Vote, Vote Winner, Watched, Retired.
 
 Only three statuses are persisted on WatchItemStatus (SUGGESTED,
 VOTE_WINNER, ARCHIVED). In an Active Vote is computed fresh every time,

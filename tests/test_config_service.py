@@ -534,10 +534,10 @@ class ManageDatabasesSectionTests(ConfigServiceTestCase):
     def test_candidate_selection_is_saved_for_the_specific_database(self) -> None:
         self._seed_completed_setup()
         database = self._create_database()
-        result = self.service.set_database_candidate_selection(GUILD_ID, database.database_id, CandidateSelectionMode.SOFT_ROTATION)
+        result = self.service.set_database_candidate_selection(GUILD_ID, database.database_id, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
         self.assertTrue(result.success)
         database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, database.database_id)
-        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
+        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
     def test_candidate_selection_for_one_database_does_not_affect_another(self) -> None:
         self._seed_completed_setup()
@@ -550,13 +550,13 @@ class ManageDatabasesSectionTests(ConfigServiceTestCase):
         second_mode = (
             second_configuration.suggestion_rules.candidate_selection
             if second_configuration is not None
-            else CandidateSelectionMode.ROTATION_POOL
+            else CandidateSelectionMode.FAVOR_NEW_ADDITIONS
         )
-        self.assertEqual(second_mode, CandidateSelectionMode.ROTATION_POOL)
+        self.assertEqual(second_mode, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
 
     def test_candidate_selection_for_unknown_database_is_rejected(self) -> None:
         self._seed_completed_setup()
-        result = self.service.set_database_candidate_selection(GUILD_ID, 999999, CandidateSelectionMode.SOFT_ROTATION)
+        result = self.service.set_database_candidate_selection(GUILD_ID, 999999, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
         self.assertFalse(result.success)
 
 
@@ -654,12 +654,12 @@ class VotingDefaultsSectionTests(ConfigServiceTestCase):
         # configuration.
         self._seed_completed_setup()
         database = self._create_database()
-        self.service.set_database_candidate_selection(GUILD_ID, database.database_id, CandidateSelectionMode.SOFT_ROTATION)
+        self.service.set_database_candidate_selection(GUILD_ID, database.database_id, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
         self.service.set_voting_defaults(GUILD_ID, 5, 14, GuildVoteVisibility.VISIBLE)
 
         database_configuration = self.suggestion_database_configuration_repository.get(GUILD_ID, database.database_id)
-        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
+        self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
 
 class ReminderDefaultsSectionTests(ConfigServiceTestCase):

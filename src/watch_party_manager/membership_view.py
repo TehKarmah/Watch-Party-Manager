@@ -23,6 +23,8 @@ from typing import Awaitable, Callable, List, Tuple
 
 import discord
 
+from watch_party_manager.services.discord_ui_limits import build_safe_select_option
+
 PENDING_SELECT_VIEW_TIMEOUT_SECONDS = 300
 
 OnMembershipApprovalDecision = Callable[[discord.Interaction, int], Awaitable[None]]
@@ -99,7 +101,7 @@ class PendingRequestSelect(discord.ui.Select):
 
     def __init__(self, requests: List[Tuple[int, str]], on_select: OnPendingRequestSelected) -> None:
         options = [
-            discord.SelectOption(label=label[:100], value=str(request_id))
+            build_safe_select_option(label, str(request_id))
             for request_id, label in requests[:25]
         ]
         super().__init__(

@@ -52,7 +52,7 @@ class SetupWizardRepositoryTests(unittest.TestCase):
             voting_candidate_count=4,
             voting_duration_minutes=10,
             voting_visibility=GuildVoteVisibility.VISIBLE,
-            voting_candidate_selection=CandidateSelectionMode.ROTATION_POOL,
+            voting_candidate_selection=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
             reminder_enabled=True,
             reminder_minutes_before_close=48 * 60,
             backup_interval_days=2,
@@ -82,7 +82,7 @@ class SetupWizardRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.draft.voting_candidate_count, 4)
         self.assertEqual(loaded.draft.voting_duration_minutes, 10)
         self.assertEqual(loaded.draft.voting_visibility, GuildVoteVisibility.VISIBLE)
-        self.assertEqual(loaded.draft.voting_candidate_selection, CandidateSelectionMode.ROTATION_POOL)
+        self.assertEqual(loaded.draft.voting_candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
         self.assertTrue(loaded.draft.reminder_enabled)
         self.assertEqual(loaded.draft.reminder_minutes_before_close, 48 * 60)
         self.assertEqual(loaded.draft.backup_interval_days, 2)

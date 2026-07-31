@@ -78,7 +78,6 @@ class FakeBot:
     def __init__(self, suggestion_service, wash_crew_role_id=WASH_CREW_ROLE_ID) -> None:
         self.suggestion_service = suggestion_service
         self.suggestion_database_configuration_repository = None
-        self.rotation_service = None
         self.wash_crew_role_id = wash_crew_role_id
 
 
@@ -279,7 +278,7 @@ class ChangeStatusActionTests(EditSuggestionTestCase):
         self.assertIn("🟢 Available", select_interaction.response.sent_message)
         self.assertNotIn("Suggested", select_interaction.response.sent_message)
 
-    async def test_status_dropdown_never_offers_rotation_cooldown(self) -> None:
+    async def test_status_dropdown_only_offers_settable_statuses(self) -> None:
         button_interaction = await self._open_change_status()
         select = button_interaction.response.edited_view.children[0]
         offered_values = {option.value for option in select.options}

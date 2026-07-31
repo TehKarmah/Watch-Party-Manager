@@ -55,7 +55,7 @@ Examples include:
 
 - Discord communication
 - Scheduling
-- Rotation management
+- Nominee selection
 - Voting
 - Statistics
 - Database access
@@ -84,7 +84,7 @@ Examples include:
 - Voting policies
 - Recurring Event Series
 - Reminder schedules
-- Rotation behavior
+- Nominee selection behavior
 - Assistant name
 - Channel assignments
 - Permission roles
@@ -123,7 +123,7 @@ The Discord Interface translates user actions into requests for the Watch Party 
 Responsible for:
 
 - Watch Item lifecycle
-- Rotation management
+- Nominee selection
 - Voting logic
 - Scheduling decisions
 - Statistics generation

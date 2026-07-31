@@ -332,13 +332,13 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 2.8 Nominee selection mode and its help text
 
-- **Objective:** Confirm all three nominee-selection modes are selectable from the dropdown, each with a plain-language description, and that **Favor New Additions** is the pre-filled default (Rotation-removal Phase 1).
+- **Objective:** Confirm all three nominee-selection modes are selectable from the dropdown, each with a plain-language description, and that **Favor New Additions** is the pre-filled default.
 - **Preconditions:** Reached the Voting Defaults step (before pressing **Set Voting Defaults**).
 - **Steps:**
   1. Open the nominee-selection dropdown; confirm it lists exactly **Favor New Additions (Recommended)**, **Favor Older Additions**, and **Pure Random**, with **Favor New Additions (Recommended)** preselected.
   2. Confirm each option shows a short description beneath its label: Favor New Additions -- "Leans toward suggestions added recently; older ones stay eligible, just at a lower chance."; Favor Older Additions -- "Leans toward suggestions that have waited the longest; newer ones stay eligible, just at a lower chance."; Pure Random -- "Chooses completely at random from eligible suggestions, with no preference or exclusion."
   3. Select each mode in turn, press **Set Voting Defaults**, and confirm the modal opens (candidate count/duration/visibility only -- nominee selection is not one of its fields).
-- **Expected Result:** All three modes are selectable from the dropdown with the exact descriptions above; the chosen mode is saved correctly regardless of which one was picked. (Balanced Random and Soft Rotation still exist and remain selectable for a collection already configured with one of them via `/config`, but are no longer offered here -- see [Administration](05-Administration.md)'s "Nominee selection and rotation management" section.)
+- **Expected Result:** All three modes are selectable from the dropdown with the exact descriptions above; the chosen mode is saved correctly regardless of which one was picked -- see [Administration](05-Administration.md)'s "Nominee selection" section.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -522,7 +522,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   8. Run `/database move` again from inside a thread; confirm **Use Current Thread** is enabled and, when chosen, moves the collection's destination to that same thread with no further prompts.
   9. Run `/database move` again from a plain text channel, including WASH's own Home Channel; confirm **Use Current Thread** stays disabled in both cases.
   10. Attempt to route a collection's suggestion destination to WASH's configured Home Channel (e.g. via `/config` -> Collections -> Suggestion Destination, if reachable, or by any other means available); confirm it's clearly rejected and nothing changes.
-- **Expected Result:** Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, rotation history, and statistics are all unchanged (spot-check via `/stats type:Collection` or `/config` -> Collections before and after); existing Discord suggestion posts are never moved; only suggestions added after the move appear in the new destination; a duplicate destination is rejected cleanly; **Use Current Thread** behaves identically to `/database add`'s version (same enable/disable rule) but never renames the collection; WASH's Home Channel is never accepted as a destination, from any path.
+- **Expected Result:** Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, and statistics are all unchanged (spot-check via `/stats type:Collection` or `/config` -> Collections before and after); existing Discord suggestion posts are never moved; only suggestions added after the move appear in the new destination; a duplicate destination is rejected cleanly; **Use Current Thread** behaves identically to `/database add`'s version (same enable/disable rule) but never renames the collection; WASH's Home Channel is never accepted as a destination, from any path.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -575,19 +575,17 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 3.4e `/database health` (Rotation & Collection Health)
 
-- **Objective:** Confirm `/database health` reports an accurate, reconciled eligibility breakdown for a collection, resolves its collection the same way `/list` does, and never itself changes rotation state (Rotation-removal Phase 2: it never touches rotation state for reporting purposes at all any more).
-- **Preconditions:** A Balanced Random (Rotation Pool) collection with a mix of Eligible, In an Active Vote, Vote Winner, and Retired suggestions (run a vote round or two, and retire at least one suggestion, if needed); a second collection in the same server.
+- **Objective:** Confirm `/database health` reports an accurate, reconciled eligibility breakdown for a collection, resolves its collection the same way `/list` does, and never itself changes any state.
+- **Preconditions:** A collection with a mix of Eligible, In an Active Vote, Vote Winner, and Retired suggestions (run a vote round or two, and retire at least one suggestion, if needed); a second collection in the same server.
 - **Steps:**
   1. From inside the collection's own thread, run `/database health`; confirm it resolves to that collection automatically with no picker.
-  2. Confirm the report shows: Collection Name, Total Watch Items, Active Watch Items, Eligible for Voting, In an Active Vote, Vote Winners, Retired, Watched, the collection's own current Rotation number and progress (e.g. "Rotation 4 Progress: N of M active items have been presented"), Configured Candidate Count, a **Next Vote** status, and a **Low Pool Status**. Confirm Eligible for Voting and In an Active Vote are shown visually nested/indented beneath Active Watch Items.
+  2. Confirm the report shows: Collection Name, Total Watch Items, Active Watch Items, Eligible for Voting, In an Active Vote, Vote Winners, Retired, Watched, Configured Candidate Count, a **Next Vote** status, and a **Low Pool Status**. Confirm Eligible for Voting and In an Active Vote are shown visually nested/indented beneath Active Watch Items.
   3. Confirm the numbers reconcile: Active Watch Items = Eligible for Voting + In an Active Vote, and Total = Active Watch Items + Vote Winners + Retired + Watched.
-  3b. Trigger a second rotation for this collection (e.g. via Test 5.5b) and confirm the shown rotation number increases to 2 for this collection specifically, unaffected by any rotations that have happened for a different collection in the same server.
   4. Click **Switch Collection** and confirm it shows the report for the other collection instead, in place.
   5. Run `/database health` from a channel not tied to either collection; confirm WASH shows a picker instead of guessing.
   6. Immediately after, run `/list status:Eligible for Voting` and separately `/vote start` against the same collection; confirm the eligible count reported by `/database health` matches exactly what `/list` shows and what `/vote start` actually nominates from.
-  7. Run `/database health` again right after step 6; confirm nothing about the collection's rotation state changed as a result of having checked health (no rollover was triggered merely by running this command).
-  8. Switch this same collection to Pure Random (or Favor New Additions/Favor Older Additions) via `/config` and run `/database health` again; confirm the Rotation Progress line is omitted entirely (not shown as "N/A") for these three modes.
-- **Expected Result:** `/database health` never disagrees with `/list`/`/vote start`'s own eligibility count; its collection selection matches `/list`'s (auto-resolve in thread, Switch Collection button, picker when ambiguous); checking health is always side-effect-free -- it never bootstraps or advances a rotation; Rotation Progress only appears for a collection still using a legacy rotation-based mode.
+  7. Run `/database health` again right after step 6; confirm nothing about the collection changed as a result of having checked health.
+- **Expected Result:** `/database health` never disagrees with `/list`/`/vote start`'s own eligibility count; its collection selection matches `/list`'s (auto-resolve in thread, Switch Collection button, picker when ambiguous); checking health is always side-effect-free.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -596,7 +594,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm behavior is well-defined when more than one suggestion database exists -- WASH resolves the database from context (channel/thread), never from a server-wide "active" pointer.
 - **Preconditions:** At least two active suggestion databases in the same server, each tied to a different channel.
 - **Steps:**
-  1. Run `/add`, `/list`, `/vote start`, or `/stats type:Rotation`/`type:Database` inside one database's configured channel or thread; confirm WASH uses that database automatically, with no prompt.
+  1. Run `/add`, `/list`, `/vote start`, or `/stats type:Database` inside one database's configured channel or thread; confirm WASH uses that database automatically, with no prompt.
   2. Run the same command in a channel not tied to either database; confirm WASH asks "Which collection would you like to use?" with a picker listing both instead of guessing.
   3. Run `/config` -> **Collections**; confirm both collections are listed and each is directly, independently editable (destinations and nominee selection) -- neither is reported as "Invalid" for being simultaneously active.
 - **Expected Result:** WASH never silently guesses between multiple databases; a matching channel resolves automatically, and an unmatched channel always shows a picker.
@@ -723,9 +721,9 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   1. Run `/list status:In an Active Vote`; confirm it shows exactly the suggestions currently nominated in the open round, each leading with 🗳️.
   2. From inside the collection's own thread, run `/list` with no other context; confirm it automatically uses that collection with no picker.
   3. Click **Switch Collection**; confirm it shows the other collection's list in place, without re-running the command.
-  4. Run `/list status:Eligible for Voting` and separately start `/vote start`; confirm the eligible count and the actual nominee pool never disagree. **Rotation-removal Phase 2:** `/list` never rolls over any rotation or shows the Rotation Refresh Notification any more -- that notification now only ever appears alongside `/vote start` itself (see Test 5.5b).
-  5. Run `/list status:Vote Winners` (or `Retired`) on a collection that has never had a vote; confirm this never creates rotation state (checking a terminal-status filter alone must never bootstrap a rotation).
-- **Expected Result:** In an Active Vote lists exactly the expected suggestions; thread auto-resolve and Switch Collection both work as described; Eligible for Voting always matches what `/vote start` would actually nominate from; Vote Winners/Retired never trigger any rotation bootstrap; `/list` itself never mentions rotation state at all, for any filter.
+  4. Run `/list status:Eligible for Voting` and separately start `/vote start`; confirm the eligible count and the actual nominee pool never disagree.
+  5. Run `/list status:Vote Winners` (or `Retired`) on a collection that has never had a vote; confirm this never changes any state (checking a terminal-status filter alone must never mutate anything).
+- **Expected Result:** In an Active Vote lists exactly the expected suggestions; thread auto-resolve and Switch Collection both work as described; Eligible for Voting always matches what `/vote start` would actually nominate from; Vote Winners/Retired never trigger any side effect; `/list` is always read-only.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -781,7 +779,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 4.12 Eligible Pool Warning
 
-- **Objective:** Confirm WASH proactively notifies WASH Crew when a collection's eligible pool drops to or below the configured threshold (default: configured candidate count × 5), fires once and suppresses duplicates while it stays at or below the threshold, re-arms once the pool rises back above it, and respects its configured Enabled/Threshold/Destination settings -- for every nominee-selection mode equally, with no dependency on rotation state.
+- **Objective:** Confirm WASH proactively notifies WASH Crew when a collection's eligible pool drops to or below the configured threshold (default: configured candidate count × 5), fires once and suppresses duplicates while it stays at or below the threshold, re-arms once the pool rises back above it, and respects its configured Enabled/Threshold/Destination settings -- for every nominee-selection mode equally.
 - **Preconditions:** A collection with a known configured candidate count (e.g. 3, giving a default threshold of 15); Eligible Pool Warning enabled via `/config` (Test 3.2), with a known destination (Admin Channel by default).
 - **Steps:**
   1. Reduce the collection's eligible count to or below the threshold (e.g. `/remove` suggestions, or mark some Vote Winner/Watched), then run `/add` or `/vote start`.
@@ -792,18 +790,18 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   6. Via `/config`, disable the warning; repeat step 1's conditions; confirm nothing is posted.
   7. Re-enable it and switch its destination to the Watch Party Home Channel; confirm the next warning posts there instead of the Admin Channel.
   8. Repeat steps 1-2 on a Pure Random (or Favor New Additions/Favor Older Additions) collection; confirm the warning fires there too, on the same terms -- no mode is exempt.
-- **Expected Result:** The warning fires only when the eligible count is genuinely at or below the threshold, stays silent on repeat checks while it remains there, automatically re-arms once the pool rises back above the threshold, and fires again on the next drop; Enabled/Disabled and Destination are both respected; every nominee-selection mode behaves identically, since the warning never depends on rotation state.
+- **Expected Result:** The warning fires only when the eligible count is genuinely at or below the threshold, stays silent on repeat checks while it remains there, automatically re-arms once the pool rises back above the threshold, and fires again on the next drop; Enabled/Disabled and Destination are both respected; every nominee-selection mode behaves identically.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.13 New-suggestion admission mode
+### 4.13 New-suggestion immediate eligibility
 
-- **Objective:** Confirm the Next Rotation vs. Join Current Rotation setting behaves as configured.
-- **Preconditions:** An in-progress rotation (start a vote so one exists) on a database using Rotation Pool or Soft Rotation.
+- **Objective:** Confirm a newly added suggestion is immediately eligible for voting, regardless of nominee-selection mode.
+- **Preconditions:** A voting round already open for a collection (so there's an active pool to compare against).
 - **Steps:**
-  1. With admission mode set to **Next Rotation**, `/add` a new suggestion; confirm it is saved but not selectable until the current rotation completes and a fresh one begins.
-  2. Switch to **Join Current Rotation** via `/config`; `/add` another suggestion; confirm it immediately joins the in-progress rotation as unpresented.
-- **Expected Result:** Matches [Administration](05-Administration.md)'s "New suggestion admission" section exactly; the setting has no observable effect on a database using Pure Random.
+  1. `/add` a new suggestion to that collection.
+  2. Run `/list status:Eligible for Voting`; confirm the new suggestion appears immediately.
+- **Expected Result:** Matches [Administration](05-Administration.md)'s "New suggestion admission" section exactly -- there is no admission delay for any mode.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -824,14 +822,14 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 ### 5.1b `/vote start` -- Customize This Vote's Nominee Selection Mode override
 
 - **Objective:** Confirm Customize This Vote can override the target collection's Nominee Selection Mode for one round only, without changing the collection's own saved setting, and that the same mode descriptions and visibility explanation from Setup/`/config` appear here too.
-- **Preconditions:** A Balanced Random (Rotation Pool) collection with several eligible suggestions.
+- **Preconditions:** A collection configured with **Favor Older Additions** and several eligible suggestions.
 - **Steps:**
-  1. Run `/vote start` -> **Customize This Vote**; confirm a dropdown appears (Nominee Selection Mode) with the same three options and descriptions as Test 2.8. Because Balanced Random is no longer one of the three offered options, none of them shows as preselected (Rotation-removal Phase 1: the dropdown only offers Favor New Additions, Favor Older Additions, and Pure Random) -- confirm a **Continue to Vote Settings** button is present regardless.
+  1. Run `/vote start` -> **Customize This Vote**; confirm a dropdown appears (Nominee Selection Mode) with the same three options and descriptions as Test 2.8, with **Favor Older Additions** preselected. Confirm a **Continue to Vote Settings** button is present.
   2. Confirm the message body also explains Visible/Blind (same wording as Test 2.7).
-  3. Without touching the dropdown, press **Continue to Vote Settings** directly; confirm the familiar candidate count/duration/visibility/reminder modal opens (no nominee-selection field in it), then submit it and confirm the round is created using the collection's actual configured mode (Balanced Random) -- an untouched dropdown must never silently switch the round to whichever option Discord shows first.
+  3. Without touching the dropdown, press **Continue to Vote Settings** directly; confirm the familiar candidate count/duration/visibility/reminder modal opens (no nominee-selection field in it), then submit it and confirm the round is created using the collection's actual configured mode (Favor Older Additions) -- an untouched dropdown must never silently switch the round to a different mode.
   4. Repeat `/vote start` -> **Customize This Vote**, this time selecting **Pure Random** before pressing **Continue to Vote Settings**; submit the modal and confirm the round is created successfully using Pure Random for this round only.
-  5. Run `/config` -> **Collections** -> this collection -> **Nominee Selection**; confirm it still shows **Balanced Random**, unchanged by either override just used.
-- **Expected Result:** The override applies to that one round's nominee selection only; an untouched dropdown preserves the collection's actual configured mode even though that mode isn't one of the three shown; the collection's own configured Nominee Selection Mode is never modified by Customize This Vote.
+  5. Run `/config` -> **Collections** -> this collection -> **Nominee Selection**; confirm it still shows **Favor Older Additions**, unchanged by either override just used.
+- **Expected Result:** The override applies to that one round's nominee selection only; the collection's own configured Nominee Selection Mode is never modified by Customize This Vote.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -879,23 +877,20 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   1. Set the database's mode to **Favor New Additions**; add suggestions on different days (or simulate differing suggestion dates); run several rounds; confirm recently-added suggestions are chosen noticeably more often, while older ones remain selectable.
   2. Switch to **Favor Older Additions**; confirm the preference reverses -- the longest-waiting suggestions are chosen noticeably more often.
   3. Switch to **Pure Random**; confirm no exclusion/weighting is applied at all.
-  4. Using `/config` -> **Collections** on a collection still configured with a legacy mode, set it to **Balanced Random**; run several rounds; confirm a presented suggestion is not re-nominated until the rotation completes.
-  5. Switch that same collection to **Soft Rotation**; confirm presented suggestions can reappear but are less frequent than fresh ones.
-- **Expected Result:** Behavior matches [Administration](05-Administration.md)'s "Nominee selection and rotation management" section for each mode.
+- **Expected Result:** Behavior matches [Administration](05-Administration.md)'s "Nominee selection" section for each mode.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 5.5b Rotation rollover when the current rotation can't supply enough candidates
+### 5.5b Insufficient candidates is reported clearly
 
-- **Objective:** Confirm a Balanced Random (Rotation Pool) collection whose internal rotation can't currently supply enough real candidates still succeeds by rolling over automatically, entirely internally, rather than reporting an insufficient-candidates error -- and that this rollover stays invisible to `/list` and every suggestion's own displayed status.
-- **Preconditions:** A Balanced Random collection with exactly 3 suggestions.
+- **Objective:** Confirm a collection with fewer eligible suggestions than the requested candidate count reports a clear "not enough eligible suggestions" error rather than silently starting a smaller round.
+- **Preconditions:** A collection with exactly 3 suggestions.
 - **Steps:**
   1. Run `/vote start` with a candidate count of 2; confirm it succeeds and note which 2 suggestions were nominated.
   2. Let the round complete (or use `/vote edit` -> **End Now**).
-  3. Confirm `/list status:Eligible for Voting` shows all 3 suggestions as 🟢 Available -- **Rotation-removal Phase 2:** it never distinguishes a presented-but-not-nominated suggestion from any other Available one, so no suggestion appears "different" here even though the collection's internal rotation has only 1 of the 3 left unpresented.
-  4. Run `/vote start` again with a candidate count of 2.
-  5. After the public voting post appears, confirm a separate ephemeral follow-up message (visible only to you) reads "All eligible watch items have now been presented." followed by "Starting Rotation 2." -- and confirm the public voting post itself does **not** mention the rotation at all.
-- **Expected Result:** The second `/vote start` succeeds (does not report "not enough eligible suggestions"), automatically starting a fresh rotation internally; Vote Winner and Retired suggestions are never made eligible by this rollover. The Rotation Refresh Notification (step 5) fires exactly once, privately, naming the correct new rotation number -- this is the *only* place any rollover is ever mentioned to a user. Repeating the same request a third time in a row (with nothing else changed) behaves the same way -- no duplicate or orphaned rotation is created, and no further Rotation Refresh Notification fires since no further rollover happens.
+  3. Confirm `/list status:Eligible for Voting` shows all non-winning suggestions as 🟢 Available.
+  4. Run `/vote start` with a candidate count of 4 (more than the collection's remaining eligible suggestions).
+- **Expected Result:** `/vote start` reports a clear "not enough eligible suggestions" error naming the requested and actual counts, and does not create a round.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -1097,15 +1092,15 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 8.3 Suggestion, Rotation, and Database statistics
+### 8.3 Suggestion and Database statistics
 
-- **Objective:** Confirm the remaining three statistic types work and respect the public-posting rule.
+- **Objective:** Confirm the remaining two statistic types work and respect the public-posting rule.
 - **Preconditions:** WASH Crew role; an existing suggestion and database.
 - **Steps:**
   1. Run `/stats type:Suggestion suggestion:<reference or title>`.
-  2. Run `/stats type:Rotation` and `/stats type:Database`.
+  2. Run `/stats type:Database`.
   3. Repeat one with `public:true` as WASH Crew, then attempt it as a regular member and confirm it's rejected.
-- **Expected Result:** Each type reports the fields documented in [Administration](05-Administration.md) Section 10; public posting for these three types is WASH Crew only.
+- **Expected Result:** Each type reports the fields documented in [Administration](05-Administration.md) Section 10; public posting for these two types is WASH Crew only.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

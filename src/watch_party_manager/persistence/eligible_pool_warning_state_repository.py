@@ -1,16 +1,10 @@
-"""JSON-backed persistence for the Eligible Pool Warning's re-arm state
-(Rotation-removal Phase 2).
+"""JSON-backed persistence for the Eligible Pool Warning's re-arm state.
 
-Deliberately its own tiny file (data/eligible_pool_warning_state.json),
-decoupled from rotations.json -- the old Rotation Low-Pool notification
-deduplicated by recording which rotation_id a notification was already
-sent for, tying its dedup state to RotationService's own lifecycle. This
-phase explicitly replaces that with a simple per-database "already
-warned, not yet re-armed" flag that depends on nothing rotation-related,
-so a database's warning state never needs to move again once
-RotationService itself is eventually deleted. Nothing here needs special
-handling by BackupService: it already sweeps every *.json file under
-data/, so this state survives backup/restore/restart for free.
+Deliberately its own tiny file (data/eligible_pool_warning_state.json): a
+simple per-database "already warned, not yet re-armed" flag, threshold-
+crossing dedup rather than keyed to any external lifecycle. Nothing here
+needs special handling by BackupService: it already sweeps every *.json
+file under data/, so this state survives backup/restore/restart for free.
 """
 
 from __future__ import annotations

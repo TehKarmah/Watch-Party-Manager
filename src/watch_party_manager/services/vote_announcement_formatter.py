@@ -74,19 +74,10 @@ def format_vote_title(collection_name: Optional[str], suffix: str) -> str:
     return suffix
 
 
-def build_vote_round_line(vote_round: VoteRound, rotation_number: Optional[int] = None) -> str:
+def build_vote_round_line(vote_round: VoteRound) -> str:
     """Build the round-number line shown as secondary information
-    beneath every collection-centric vote title (Requirement 1), and,
-    when known, the specific Rotation its candidates were drawn from
-    (Rotation Context in Voting) -- callers resolve rotation_number via
-    bot.py's resolve_rotation_number_for_round, since that requires a
-    live RotationService this formatting-only module doesn't depend on.
-    Omitted entirely (never a placeholder) when rotation_number is None
-    -- a legacy round created before VoteRound.rotation_id existed, or
-    one with no database_id/rotation_id recorded.
+    beneath every collection-centric vote title (Requirement 1).
     """
-    if rotation_number is not None:
-        return f"Round: {vote_round.id} • Rotation {rotation_number}"
     return f"Round: {vote_round.id}"
 
 
@@ -172,9 +163,7 @@ def build_suggestion_link(watch_item: WatchItem) -> Optional[str]:
     return build_discord_message_link(watch_item.guild_id, watch_item.channel_id, watch_item.message_id)
 
 
-def build_vote_deadline_change_notice(
-    vote_round: VoteRound, collection_name: Optional[str] = None, rotation_number: Optional[int] = None
-) -> str:
+def build_vote_deadline_change_notice(vote_round: VoteRound, collection_name: Optional[str] = None) -> str:
     """Build the public notice announcing a round's deadline changed.
 
     Posted by /edit_vote's "Change End Time" action (including Shorten
@@ -186,16 +175,13 @@ def build_vote_deadline_change_notice(
         collection_name: The round's collection, if known (Requirement
             1) -- see resolve_vote_collection_name. None falls back to a
             generic, round-centric title.
-        rotation_number: The Rotation this round's candidates were drawn
-            from, if known (Rotation Context in Voting) -- see
-            build_vote_round_line.
 
     Returns:
         The notice text, including a link to the original post when available.
     """
     lines = [
         f"**{format_vote_title(collection_name, 'Voting — Updated')}**",
-        build_vote_round_line(vote_round, rotation_number),
+        build_vote_round_line(vote_round),
         f"Voting now ends: {format_datetime_for_display(vote_round.closes_at)}",
     ]
     link = build_vote_link(vote_round)
@@ -204,9 +190,7 @@ def build_vote_deadline_change_notice(
     return "\n".join(lines)
 
 
-def build_vote_cancellation_notice(
-    vote_round: VoteRound, collection_name: Optional[str] = None, rotation_number: Optional[int] = None
-) -> str:
+def build_vote_cancellation_notice(vote_round: VoteRound, collection_name: Optional[str] = None) -> str:
     """Build the public notice announcing a round was cancelled.
 
     Posted by /edit_vote's "Cancel Vote" action, after
@@ -218,16 +202,13 @@ def build_vote_cancellation_notice(
         collection_name: The round's collection, if known (Requirement
             1) -- see resolve_vote_collection_name. None falls back to a
             generic, round-centric title.
-        rotation_number: The Rotation this round's candidates were drawn
-            from, if known (Rotation Context in Voting) -- see
-            build_vote_round_line.
 
     Returns:
         The notice text, including a link to the original post when available.
     """
     lines = [
         f"**{format_vote_title(collection_name, 'Voting — Cancelled')}**",
-        build_vote_round_line(vote_round, rotation_number),
+        build_vote_round_line(vote_round),
         "Cancelled by WASH Crew.",
     ]
     link = build_vote_link(vote_round)
@@ -390,7 +371,6 @@ def build_vote_completion_announcement(
     total_votes_cast: int,
     original_vote_link: Optional[str] = None,
     collection_name: Optional[str] = None,
-    rotation_number: Optional[int] = None,
 ) -> str:
     """Build the single canonical results announcement for a just-completed round.
 
@@ -425,16 +405,13 @@ def build_vote_completion_announcement(
             or None for a legacy round created before rounds recorded
             their collection -- falls back to a generic, round-centric
             title (Requirement 1).
-        rotation_number: The Rotation this round's candidates were drawn
-            from, if known (Rotation Context in Voting) -- see
-            build_vote_round_line.
 
     Returns:
         The announcement text.
     """
     lines = [
         f"**{format_vote_title(collection_name, 'Voting — Results')}**",
-        build_vote_round_line(vote_round, rotation_number),
+        build_vote_round_line(vote_round),
     ]
     lines.append(_build_winner_summary_line(winning_items, total_votes_cast))
     lines.append(f"Total votes cast: {total_votes_cast}")
@@ -464,7 +441,6 @@ def build_closed_voting_post_text(
     total_votes_cast: int,
     results_link: Optional[str] = None,
     collection_name: Optional[str] = None,
-    rotation_number: Optional[int] = None,
 ) -> str:
     """Build the original voting post's text once the round has completed.
 
@@ -495,7 +471,7 @@ def build_closed_voting_post_text(
     """
     lines = [
         f"**{format_vote_title(collection_name, 'Voting — Closed')}**",
-        build_vote_round_line(vote_round, rotation_number),
+        build_vote_round_line(vote_round),
         _build_winner_summary_line(winning_items, total_votes_cast),
         f"Total votes cast: {total_votes_cast}",
     ]

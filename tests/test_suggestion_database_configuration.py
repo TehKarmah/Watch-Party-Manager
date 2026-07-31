@@ -11,7 +11,6 @@ from watch_party_manager.domain.suggestion_database_configuration import (
     CANDIDATE_SELECTION_HELP_TEXT,
     NOMINEE_SELECTION_MODE_ORDER,
     CandidateSelectionMode,
-    SuggestionAdmissionMode,
     SuggestionDatabaseArchiveConfig,
     SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
@@ -242,11 +241,6 @@ class VotingOverridesConfigTests(unittest.TestCase):
 
 class SuggestionRulesConfigTests(unittest.TestCase):
     def test_defaults_match_the_documented_specification(self) -> None:
-        # Rotation-removal Phase 1: candidate_selection's default moved
-        # from ROTATION_POOL to FAVOR_NEW_ADDITIONS, and admission_mode's
-        # from NEXT_ROTATION to JOIN_CURRENT_ROTATION -- a newly created
-        # collection now gets a rotation-free mode with immediate
-        # suggestion eligibility by default.
         rules = SuggestionRulesConfig()
 
         self.assertTrue(rules.allow_imdb_links)
@@ -255,7 +249,6 @@ class SuggestionRulesConfigTests(unittest.TestCase):
         self.assertEqual(rules.rejection_threshold, 2)
         self.assertTrue(rules.allow_resuggestion)
         self.assertEqual(rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
-        self.assertEqual(rules.admission_mode, SuggestionAdmissionMode.JOIN_CURRENT_ROTATION)
 
     def test_requires_at_least_one_input_method(self) -> None:
         with self.assertRaises(ValueError):
@@ -282,20 +275,12 @@ class SuggestionRulesConfigTests(unittest.TestCase):
         self.assertEqual(rules.rejection_threshold, 5)
 
     def test_coerces_a_raw_string_candidate_selection(self) -> None:
-        rules = SuggestionRulesConfig(candidate_selection="soft_rotation")
-        self.assertEqual(rules.candidate_selection, CandidateSelectionMode.SOFT_ROTATION)
+        rules = SuggestionRulesConfig(candidate_selection="favor_older_additions")
+        self.assertEqual(rules.candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
     def test_rejects_an_unsupported_candidate_selection(self) -> None:
         with self.assertRaises(ValueError):
             SuggestionRulesConfig(candidate_selection="not_a_real_mode")
-
-    def test_coerces_a_raw_string_admission_mode(self) -> None:
-        rules = SuggestionRulesConfig(admission_mode="join_current_rotation")
-        self.assertEqual(rules.admission_mode, SuggestionAdmissionMode.JOIN_CURRENT_ROTATION)
-
-    def test_rejects_an_unsupported_admission_mode(self) -> None:
-        with self.assertRaises(ValueError):
-            SuggestionRulesConfig(admission_mode="not_a_real_mode")
 
 
 class SuggestionDatabaseWatchHistoryConfigTests(unittest.TestCase):
@@ -373,13 +358,12 @@ class SuggestionDatabasePermissionsConfigTests(unittest.TestCase):
 
 
 class NomineeSelectionModeOrderTests(unittest.TestCase):
-    """Rotation-removal Phase 1: NOMINEE_SELECTION_MODE_ORDER is the
-    single source of truth for which modes are offered as a new choice
-    (Setup Wizard, /config, Customize This Vote) -- the two legacy
-    rotation-based modes remain functional but are deliberately excluded.
+    """NOMINEE_SELECTION_MODE_ORDER is the single source of truth for
+    which modes are offered as a choice (Setup Wizard, /config,
+    Customize This Vote), in display order.
     """
 
-    def test_offers_exactly_the_three_new_modes_in_recommended_first_order(self) -> None:
+    def test_offers_exactly_the_three_modes_in_recommended_first_order(self) -> None:
         self.assertEqual(
             NOMINEE_SELECTION_MODE_ORDER,
             (
@@ -389,14 +373,28 @@ class NomineeSelectionModeOrderTests(unittest.TestCase):
             ),
         )
 
-    def test_excludes_the_two_legacy_rotation_based_modes(self) -> None:
-        self.assertNotIn(CandidateSelectionMode.ROTATION_POOL, NOMINEE_SELECTION_MODE_ORDER)
-        self.assertNotIn(CandidateSelectionMode.SOFT_ROTATION, NOMINEE_SELECTION_MODE_ORDER)
-
     def test_every_offered_mode_has_a_display_label_and_help_text(self) -> None:
         for mode in NOMINEE_SELECTION_MODE_ORDER:
             self.assertIn(mode, CANDIDATE_SELECTION_DISPLAY_LABELS)
             self.assertIn(mode, CANDIDATE_SELECTION_HELP_TEXT)
+
+    def test_every_help_text_fits_a_discord_select_option_description(self) -> None:
+        # TASK E regression: CANDIDATE_SELECTION_HELP_TEXT[FAVOR_OLDER_
+        # ADDITIONS] was a static 104-character string -- 4 over Discord's
+        # 100-unit SelectOption description limit -- despite this dict's
+        # own module comment documenting the "<=100 characters" intent.
+        # It is rendered directly into a discord.SelectOption(...) by
+        # CandidateSelectionSelectComponent without going through
+        # build_safe_select_option() (a deliberate, permanent design: see
+        # that component's own docstring), so this dict is the actual
+        # source of truth Discord's limit must be enforced against, not
+        # just the component that consumes it. Measured in UTF-16 units,
+        # the same way Discord's API measures string length.
+        for mode, help_text in CANDIDATE_SELECTION_HELP_TEXT.items():
+            utf16_length = len(help_text.encode("utf-16-le")) // 2
+            self.assertLessEqual(
+                utf16_length, 100, msg=f"{mode}: {utf16_length} Discord length units: {help_text!r}"
+            )
 
 
 class CandidateSelectionModeTests(unittest.TestCase):
@@ -405,12 +403,10 @@ class CandidateSelectionModeTests(unittest.TestCase):
             self.assertIn(mode, CANDIDATE_SELECTION_DISPLAY_LABELS)
             self.assertIn(mode, CANDIDATE_SELECTION_HELP_TEXT)
 
-    def test_five_modes_exist(self) -> None:
+    def test_three_modes_exist(self) -> None:
         self.assertEqual(
             {member.value for member in CandidateSelectionMode},
             {
-                "rotation_pool",
-                "soft_rotation",
                 "infinite_pool",
                 "favor_new_additions",
                 "favor_older_additions",

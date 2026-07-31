@@ -1,5 +1,5 @@
-"""Tests for EligiblePoolWarningService (Rotation-removal Phase 2), which
-replaced the older Rotation Low-Pool notification.
+"""Tests for EligiblePoolWarningService, which replaced the older
+interval-based Low Pool Reminder.
 """
 
 from __future__ import annotations
@@ -319,10 +319,9 @@ class DestinationTests(EligiblePoolWarningServiceTestCase):
 
 
 class ThresholdCrossingRearmTests(EligiblePoolWarningServiceTestCase):
-    """Rotation-removal Phase 2's own dedup behavior: below threshold
-    notifies once, staying below suppresses duplicates, rising above
-    re-arms, and dropping below again notifies again -- none of it keyed
-    on a Rotation ID.
+    """Threshold-crossing dedup: below threshold notifies once, staying
+    below suppresses duplicates, rising above re-arms, and dropping below
+    again notifies again.
     """
 
     def test_fires_the_first_time_it_drops_below_threshold(self) -> None:
@@ -412,10 +411,8 @@ class ThresholdCrossingRearmTests(EligiblePoolWarningServiceTestCase):
         self.assertFalse(decision.should_send)
 
     def test_does_not_depend_on_any_rotation_state(self) -> None:
-        # No RotationService is even constructed anywhere in this test
-        # file -- CollectionEligibilityService here is wired with
-        # vote_service=None, and EligiblePoolWarningService never
-        # references rotation ids at all.
+        # CollectionEligibilityService here is wired with vote_service=None,
+        # and EligiblePoolWarningService never references rotation state at all.
         self._save_guild_configuration(voting_defaults=VotingDefaultsConfig(candidate_count=3))
         self._add_many(10)
 

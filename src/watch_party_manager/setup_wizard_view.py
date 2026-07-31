@@ -26,6 +26,7 @@ from watch_party_manager.domain.suggestion_database_configuration import (
     NOMINEE_SELECTION_MODE_ORDER,
     CandidateSelectionMode,
 )
+from watch_party_manager.services.discord_ui_limits import build_safe_select_option
 
 SETUP_WIZARD_STEP_TIMEOUT_SECONDS = 900
 
@@ -62,8 +63,7 @@ _DESTINATION_CHANNEL_TYPES = [
 # so the dropdown's wording can never drift from that single source of
 # truth. "(Recommended)" is presentation-only, appended here rather than
 # baked into the shared label -- it marks NOMINEE_SELECTION_MODE_ORDER's
-# first entry (FAVOR_NEW_ADDITIONS as of Rotation-removal Phase 1),
-# whichever mode that happens to be.
+# first entry (FAVOR_NEW_ADDITIONS), whichever mode that happens to be.
 _NOMINEE_SELECTION_SELECT_LABELS: dict[CandidateSelectionMode, str] = {
     mode: (
         f"{CANDIDATE_SELECTION_DISPLAY_LABELS[mode]} (Recommended)"
@@ -497,7 +497,7 @@ class SuggestionDatabaseChoiceView(SetupWizardStepView):
 class ExistingDatabaseSelect(discord.ui.Select):
     def __init__(self, databases: List[Tuple[int, str]], on_select: OnExistingDatabaseSelected) -> None:
         options = [
-            discord.SelectOption(label=name[:100], value=str(database_id))
+            build_safe_select_option(name, str(database_id))
             for database_id, name in databases[:25]
         ]
         super().__init__(placeholder="Choose a collection", options=options, custom_id="wpm_setup_database_select")

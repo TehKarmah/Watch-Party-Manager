@@ -14,6 +14,8 @@ from typing import Awaitable, Callable, List, Tuple
 
 import discord
 
+from watch_party_manager.services.discord_ui_limits import build_safe_select_option
+
 WATCH_PARTY_SELECTION_VIEW_TIMEOUT_SECONDS = 120
 
 OnWatchPartySelected = Callable[[discord.Interaction, int], Awaitable[None]]
@@ -37,7 +39,7 @@ class WatchPartySelect(discord.ui.Select):
         placeholder: str,
     ) -> None:
         select_options = [
-            discord.SelectOption(label=label[:100], description=description[:100], value=str(watch_party_id))
+            build_safe_select_option(label, str(watch_party_id), description=description)
             for watch_party_id, label, description in options[:25]
         ]
         super().__init__(placeholder=placeholder, options=select_options, custom_id=custom_id)

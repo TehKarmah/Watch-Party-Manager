@@ -21,17 +21,17 @@ A pull method that attempts to create varied voting options by considering facto
 
 ---
 
+### Eligible Pool
+
+The current set of Watch Items available for voting -- every suggestion that is neither currently nominated, nor a Vote Winner, Watched, nor Retired.
+
+---
+
 ### Event Series
 
 A recurring schedule used to create Watch Party events.
 
 Examples include weekly movie night, monthly special events, and television watch parties.
-
----
-
-### Rotation
-
-The current pool of eligible Watch Items available for voting.
 
 ---
 
@@ -43,7 +43,7 @@ A movie, television series, or other media item managed by Watch Party Manager.
 
 ### Watch Item Journey
 
-The complete history of a Watch Item, including suggestion, rotation appearances, votes, scheduled events, and watch records.
+The complete history of a Watch Item, including suggestion, votes, scheduled events, and watch records.
 
 ---
 

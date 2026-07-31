@@ -53,7 +53,7 @@ GUILD_ID = 100
 CHANNEL_ID = 200
 
 
-class RotationStatusConsistencyTestCase(unittest.TestCase):
+class SuggestionStatusConsistencyTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._temp_dir.cleanup)
@@ -90,7 +90,7 @@ class RotationStatusConsistencyTestCase(unittest.TestCase):
         return None
 
 
-class OriginalPostMatchesListTests(RotationStatusConsistencyTestCase):
+class OriginalPostMatchesListTests(SuggestionStatusConsistencyTestCase):
     def test_eligible_item_agrees_between_post_and_list(self) -> None:
         item = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
 
@@ -155,7 +155,7 @@ class OriginalPostMatchesListTests(RotationStatusConsistencyTestCase):
         self.assertNotIn("status set to Available", result.message)
 
 
-class DuplicateWarningAndRemovalSelectorInActiveVoteTests(RotationStatusConsistencyTestCase):
+class DuplicateWarningAndRemovalSelectorInActiveVoteTests(SuggestionStatusConsistencyTestCase):
     def test_duplicate_match_line_reports_the_real_in_an_active_vote_status(self) -> None:
         item = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
         other = self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id).watch_item

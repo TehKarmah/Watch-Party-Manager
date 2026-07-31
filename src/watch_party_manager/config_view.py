@@ -25,6 +25,7 @@ import discord
 
 from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, JoinMode
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+from watch_party_manager.services.discord_ui_limits import build_safe_select_option
 from watch_party_manager.setup_wizard_view import (
     _JOIN_MODE_OPTIONS,
     CandidateSelectionSelectComponent,
@@ -84,7 +85,7 @@ class ConfigSectionSelect(discord.ui.Select):
     ) -> None:
         descriptions = descriptions or {}
         options = [
-            discord.SelectOption(label=label, value=value, description=descriptions.get(value))
+            build_safe_select_option(label, value, description=descriptions.get(value))
             for value, label in section_options
         ]
         super().__init__(placeholder="Choose a section to edit...", options=options, custom_id="wpm_config_section_select")
@@ -242,7 +243,7 @@ class ConfigDatabaseSelect(discord.ui.Select):
     ) -> None:
         descriptions = descriptions or {}
         options = [
-            discord.SelectOption(label=name[:100], value=str(database_id), description=descriptions.get(database_id))
+            build_safe_select_option(name, str(database_id), description=descriptions.get(database_id))
             for database_id, name in databases[:25]
         ]
         super().__init__(placeholder="Choose a collection", options=options, custom_id="wpm_config_database_select")
@@ -623,7 +624,7 @@ class ConfigReminderDefaultsChoiceView(discord.ui.View):
         self.add_item(BackToMenuButton(on_back))
 
 
-# --- Eligible Pool Warning (Rotation-removal Phase 2) ------------------------------------
+# --- Eligible Pool Warning ------------------------------------
 
 
 class EligiblePoolWarningThresholdModal(discord.ui.Modal):
