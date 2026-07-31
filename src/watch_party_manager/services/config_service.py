@@ -205,7 +205,7 @@ class ConfigService:
         else:
             lines.append(
                 f"Collections: Configured ({len(active_databases)} active of {len(databases)} total -- "
-                "select below to edit each collection's destination and candidate selection)"
+                "select below to edit each collection's destination and nominee selection)"
             )
 
         watch_destination_channel_id = configuration.channels.watch_history_channel_id
@@ -534,7 +534,7 @@ class ConfigService:
         )
         label = CANDIDATE_SELECTION_DISPLAY_LABELS[candidate_selection]
         return ConfigUpdateResult(
-            True, f'Candidate selection for "{database.name}" updated to {label}.', self.get_configuration(guild_id)
+            True, f'Nominee selection for "{database.name}" updated to {label}.', self.get_configuration(guild_id)
         )
 
     def _save_database_channel(

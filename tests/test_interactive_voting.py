@@ -11,6 +11,11 @@ from watch_party_manager.bot import (
     perform_start_vote,
     resolve_rotation_number_for_round,
 )
+from watch_party_manager.domain.suggestion_database_configuration import (
+    CandidateSelectionMode,
+    SuggestionDatabaseConfiguration,
+    SuggestionRulesConfig,
+)
 from watch_party_manager.domain.vote import VoteVisibility
 from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
@@ -775,6 +780,18 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
         configuration_repository = SuggestionDatabaseConfigurationRepository(
             Path(self._temp_dir.name) / "suggestion_database_configurations.json"
         )
+        # Rotation-removal Phase 1 changed the default nominee-selection
+        # mode to Favor New Additions, which creates no rotation state --
+        # this test is specifically about rotation numbering, so it must
+        # opt into a rotation-based mode explicitly.
+        configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=100,
+                database_id=self.database_id,
+                display_name="Sunday Watch Party",
+                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.ROTATION_POOL),
+            )
+        )
         self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
         self.suggestion_service.suggest("Inception", database_id=self.database_id)
         self.suggestion_service.suggest("The Dark Knight", database_id=self.database_id)
@@ -819,6 +836,18 @@ class StartVoteWithSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         configuration_repository = SuggestionDatabaseConfigurationRepository(
             Path(self._temp_dir.name) / "suggestion_database_configurations.json"
+        )
+        # Rotation-removal Phase 1 changed the default nominee-selection
+        # mode to Favor New Additions, which creates no rotation state --
+        # this test is specifically about rotation numbering, so it must
+        # opt into a rotation-based mode explicitly.
+        configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=100,
+                database_id=self.database_id,
+                display_name="Sunday Watch Party",
+                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.ROTATION_POOL),
+            )
         )
         self.suggestion_service.suggest("The Matrix", database_id=self.database_id)
         self.suggestion_service.suggest("Inception", database_id=self.database_id)

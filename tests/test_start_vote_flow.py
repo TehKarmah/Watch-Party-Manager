@@ -726,15 +726,15 @@ class ResolveCustomizeVoteDefaultCandidateSelectionTests(StartVoteFlowTestCase):
 
         self.assertEqual(result, CandidateSelectionMode.SOFT_ROTATION)
 
-    def test_falls_back_to_rotation_pool_when_the_channel_matches_no_collection(self) -> None:
+    def test_falls_back_to_favor_new_additions_when_the_channel_matches_no_collection(self) -> None:
         result = resolve_customize_vote_default_candidate_selection(self.bot, guild_id=100, channel_id=999999)
 
-        self.assertEqual(result, CandidateSelectionMode.ROTATION_POOL)
+        self.assertEqual(result, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
 
-    def test_falls_back_to_rotation_pool_with_no_guild_id(self) -> None:
+    def test_falls_back_to_favor_new_additions_with_no_guild_id(self) -> None:
         result = resolve_customize_vote_default_candidate_selection(self.bot, guild_id=None, channel_id=200)
 
-        self.assertEqual(result, CandidateSelectionMode.ROTATION_POOL)
+        self.assertEqual(result, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
 
 
 class CustomizeVoteOverridesViewTests(unittest.IsolatedAsyncioTestCase):
@@ -1360,7 +1360,7 @@ class CustomizeVoteFlowUiConsistencyTests(StartVoteFlowTestCase):
         interaction = await self._open_customize_screen()
 
         message = interaction.response.sent_message
-        self.assertIn("Candidate Selection Mode", message)
+        self.assertIn("Nominee Selection Mode", message)
         self.assertIn("Vote Visibility", message)
 
     async def test_instructional_text_does_not_claim_visibility_is_in_the_modal(self) -> None:

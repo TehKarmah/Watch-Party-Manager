@@ -16,6 +16,11 @@ from watch_party_manager.bot import (
     handle_start_vote_use_defaults,
     resolve_rotation_number,
 )
+from watch_party_manager.domain.suggestion_database_configuration import (
+    CandidateSelectionMode,
+    SuggestionDatabaseConfiguration,
+    SuggestionRulesConfig,
+)
 from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
@@ -187,6 +192,19 @@ class EndToEndNotificationTestCase(unittest.IsolatedAsyncioTestCase):
         self.database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
+        # Rotation-removal Phase 1 changed the default nominee-selection
+        # mode to Favor New Additions, which creates no rotation state --
+        # this fixture is documented above as "a Balanced Random
+        # collection" and needs an actual rollover to occur, so it must
+        # opt into a rotation-based mode explicitly.
+        self.configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=GUILD_ID,
+                database_id=self.database.database_id,
+                display_name="Movie Night",
+                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.ROTATION_POOL),
+            )
+        )
         self.eligibility_service = CollectionEligibilityService(self.suggestion_service, self.rotation_service)
 
         class FakeBot:

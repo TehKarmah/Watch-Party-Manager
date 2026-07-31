@@ -252,7 +252,7 @@ class ManagementActionTests(DatabaseManageCommandTestCase):
         await edit_button.callback(interaction=action_interaction)
 
         self.assertIn("Suggestion Destination", action_interaction.response.edited_content)
-        self.assertIn("Candidate Selection", action_interaction.response.edited_content)
+        self.assertIn("Nominee Selection", action_interaction.response.edited_content)
 
     async def test_edit_collections_back_button_returns_to_the_management_menu(self) -> None:
         select_interaction = await self._reach_management_menu()

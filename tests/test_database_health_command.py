@@ -202,6 +202,7 @@ class CollectionSelectionTests(DatabaseHealthCommandTestCase):
 
 class ReportContentTests(DatabaseHealthCommandTestCase):
     async def test_reconciliation_identities_hold(self) -> None:
+        self._set_candidate_selection(CandidateSelectionMode.ROTATION_POOL)
         item_a = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
         item_b = self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id).watch_item
         item_c = self.suggestion_service.suggest("Inception", database_id=self.database.database_id).watch_item
@@ -228,6 +229,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
         # color-coded indicators at all -- these must match /list's own
         # SUGGESTION_DISPLAY_STATUS_EMOJI exactly, not a new visual
         # system invented just for this command.
+        self._set_candidate_selection(CandidateSelectionMode.ROTATION_POOL)
         item_a = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
         item_b = self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id).watch_item
         item_c = self.suggestion_service.suggest("Inception", database_id=self.database.database_id).watch_item
@@ -280,6 +282,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
         self.assertIn("Next Vote: 🟢 Ready", interaction.response.sent_message)
 
     async def test_next_vote_needs_rollover_when_active_covers_it_but_eligible_does_not(self) -> None:
+        self._set_candidate_selection(CandidateSelectionMode.ROTATION_POOL)
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
             GuildConfiguration(guild_id=GUILD_ID, guild_name="Test", voting_defaults=VotingDefaultsConfig(candidate_count=2))
         )
@@ -401,6 +404,7 @@ class MultipleCollectionsAndRestartTests(DatabaseHealthCommandTestCase):
         self.assertIn("Total Watch Items: 2", second_interaction.response.sent_message)
 
     async def test_health_report_survives_a_simulated_restart(self) -> None:
+        self._set_candidate_selection(CandidateSelectionMode.ROTATION_POOL)
         item = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
         self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
         self.bot.rotation_service.record_presentation(self.database.database_id, [item.id])

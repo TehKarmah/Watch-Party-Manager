@@ -19,9 +19,11 @@ from watch_party_manager.bot import (
 )
 from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, GuildConfiguration
 from watch_party_manager.domain.suggestion_database_configuration import (
+    CandidateSelectionMode,
     SuggestionAdmissionMode,
     SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
+    SuggestionRulesConfig,
 )
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
@@ -762,6 +764,12 @@ class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
                 database_id=self.database.database_id,
                 display_name="Movie Night",
                 channels=SuggestionDatabaseChannelsConfig(suggestion_channel_id=777),
+                # This class exercises admission modes and the Rotation
+                # Low-Pool Notification, both rotation-specific concepts --
+                # Rotation-removal Phase 1 changed the default mode to
+                # Favor New Additions, which never creates rotation state,
+                # so this must opt into a rotation-based mode explicitly.
+                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.ROTATION_POOL),
             )
         )
         guild_configuration = GuildConfiguration(
@@ -786,7 +794,8 @@ class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
         updated = replace(existing, suggestion_rules=replace(existing.suggestion_rules, admission_mode=mode))
         self.configuration_repository.save(updated)
 
-    async def test_next_rotation_default_leaves_a_new_suggestion_out_of_the_open_rotation(self) -> None:
+    async def test_next_rotation_leaves_a_new_suggestion_out_of_the_open_rotation(self) -> None:
+        self._set_admission_mode(SuggestionAdmissionMode.NEXT_ROTATION)
         self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
 
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
@@ -805,10 +814,28 @@ class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
         rotation = self.bot.rotation_service.get_open_rotation(self.database.database_id)
         self.assertIn(item.id, rotation.assigned_suggestion_ids)
 
+    async def test_join_current_rotation_is_now_the_default_admission_mode(self) -> None:
+        # Rotation-removal Phase 1: SuggestionRulesConfig's admission_mode
+        # default moved from Next Rotation to Join Current Rotation, as the
+        # "begin transitioning toward immediate eligibility" step for
+        # collections still using a legacy rotation-based selection mode.
+        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
+
+        await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
+
+        item = self.suggestion_service.get_suggestions_for_database(self.database.database_id)[0]
+        rotation = self.bot.rotation_service.get_open_rotation(self.database.database_id)
+        self.assertIn(item.id, rotation.assigned_suggestion_ids)
+
     async def test_low_pool_notification_never_bootstraps_a_rotation(self) -> None:
         # No rotation exists yet (no vote has ever run) -- the
         # notification must never create one merely to check pool size,
-        # so it simply doesn't fire yet.
+        # so it simply doesn't fire yet. Explicit Next Rotation (no
+        # longer the default as of Rotation-removal Phase 1) keeps the
+        # add itself from bootstrapping a rotation too, isolating the
+        # notification's own no-bootstrap guarantee from admission's.
+        self._set_admission_mode(SuggestionAdmissionMode.NEXT_ROTATION)
+
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
 
         self.assertEqual(0, len(self.admin_channel.sent))

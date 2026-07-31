@@ -558,26 +558,26 @@ class VisibilitySelectComponentTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CandidateSelectionSelectComponentTests(unittest.IsolatedAsyncioTestCase):
-    async def test_displays_all_three_modes_with_balanced_random_recommended(self) -> None:
-        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.ROTATION_POOL)
+    async def test_displays_all_three_modes_with_favor_new_additions_recommended(self) -> None:
+        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
         self.assertEqual(
             [option.value for option in select.options],
             [
-                CandidateSelectionMode.ROTATION_POOL.value,
-                CandidateSelectionMode.SOFT_ROTATION.value,
+                CandidateSelectionMode.FAVOR_NEW_ADDITIONS.value,
+                CandidateSelectionMode.FAVOR_OLDER_ADDITIONS.value,
                 CandidateSelectionMode.INFINITE_POOL.value,
             ],
         )
         self.assertEqual(
             [option.label for option in select.options],
-            ["Balanced Random (Recommended)", "Soft Rotation", "Pure Random"],
+            ["Favor New Additions (Recommended)", "Favor Older Additions", "Pure Random"],
         )
 
     async def test_default_option_matches_the_requested_default(self) -> None:
-        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.SOFT_ROTATION)
+        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
         defaults = {option.value: option.default for option in select.options}
-        self.assertTrue(defaults[CandidateSelectionMode.SOFT_ROTATION.value])
-        self.assertFalse(defaults[CandidateSelectionMode.ROTATION_POOL.value])
+        self.assertTrue(defaults[CandidateSelectionMode.FAVOR_OLDER_ADDITIONS.value])
+        self.assertFalse(defaults[CandidateSelectionMode.FAVOR_NEW_ADDITIONS.value])
         self.assertFalse(defaults[CandidateSelectionMode.INFINITE_POOL.value])
 
     async def test_selected_falls_back_to_default_when_never_touched(self) -> None:

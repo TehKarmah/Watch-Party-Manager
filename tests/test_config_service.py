@@ -371,7 +371,7 @@ class ManageDatabasesSectionTests(ConfigServiceTestCase):
         database = self._create_database()
         configuration = self.service.get_database_configuration(GUILD_ID, database.database_id)
         self.assertIsNone(configuration.channels.suggestion_channel_id)
-        self.assertEqual(configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
+        self.assertEqual(configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
 
     def test_multiple_simultaneously_active_databases_are_both_directly_editable(self) -> None:
         # Unlike the old model, having more than one active database is

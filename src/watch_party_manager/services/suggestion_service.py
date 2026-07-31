@@ -11,6 +11,7 @@ from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, W
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 from watch_party_manager.services.suggestion_display_status import (
     RotationCooldownLookup,
+    VoteRoundLookup,
     display_status_label,
     resolve_display_status,
 )
@@ -537,6 +538,7 @@ class SuggestionService:
         suggestion_id: int,
         status: WatchItemStatus,
         rotation_service: Optional[RotationCooldownLookup] = None,
+        vote_service: Optional[VoteRoundLookup] = None,
     ) -> SuggestionResult:
         """Directly set a suggestion's status (/edit_suggestion's Change
         Status action).
@@ -555,6 +557,8 @@ class SuggestionService:
         suggestion back to SUGGESTED while it's still on cooldown must
         report Rotation Cooldown, not Available) -- optional, defaulting
         to None so existing callers/tests keep working unchanged.
+        vote_service resolves In an Active Vote the same way
+        (Rotation-removal Phase 1).
         """
         watch_item = self.get_suggestion(suggestion_id)
         if watch_item is None:
@@ -562,7 +566,7 @@ class SuggestionService:
 
         watch_item.status = status
         self._save()
-        display_status = resolve_display_status(watch_item, rotation_service)
+        display_status = resolve_display_status(watch_item, rotation_service, vote_service)
         status_label = display_status_label(display_status)
         return SuggestionResult(
             success=True, message=f'"{watch_item.title}" status set to {status_label}.', watch_item=watch_item

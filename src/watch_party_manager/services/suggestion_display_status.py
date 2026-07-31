@@ -11,6 +11,16 @@ enum member. It's computed fresh every time from
 RotationService.is_in_rotation_cooldown(), since it must automatically
 revert to Available the moment a fresh rotation begins (see that
 method's docstring), with no persisted "clear cooldown" step required.
+
+Rotation-removal Phase 1: In an Active Vote is computed the same way --
+fresh every time, from VoteService.get_open_round_for_suggestion() rather
+than RotationService -- and is preferred over Rotation Cooldown when a
+suggestion is both (a suggestion currently nominated in an open round is
+usually also on Rotation Cooldown under the rotation-based strategies,
+since selection marks it presented before the round closes; showing "In
+an Active Vote" is the more useful, mode-independent fact). Rotation
+Cooldown itself is deliberately left in place for this phase -- see
+RotationService's own module docstring for the removal plan.
 """
 
 from __future__ import annotations
@@ -26,6 +36,7 @@ class SuggestionDisplayStatus(str, Enum):
     """One of the statuses shown on a suggestion's embed/listing."""
 
     AVAILABLE = "available"
+    IN_ACTIVE_VOTE = "in_active_vote"
     ROTATION_COOLDOWN = "rotation_cooldown"
     VOTE_WINNER = "vote_winner"
     RETIRED = "retired"
@@ -42,6 +53,7 @@ class SuggestionDisplayStatus(str, Enum):
 # prefix a bare emoji without repeating the status word per item.
 SUGGESTION_DISPLAY_STATUS_EMOJI: dict[SuggestionDisplayStatus, str] = {
     SuggestionDisplayStatus.AVAILABLE: "🟢",
+    SuggestionDisplayStatus.IN_ACTIVE_VOTE: "🗳️",
     SuggestionDisplayStatus.ROTATION_COOLDOWN: "🟡",
     SuggestionDisplayStatus.VOTE_WINNER: "🏆",
     SuggestionDisplayStatus.RETIRED: "🗄️",
@@ -50,6 +62,7 @@ SUGGESTION_DISPLAY_STATUS_EMOJI: dict[SuggestionDisplayStatus, str] = {
 
 _SUGGESTION_DISPLAY_STATUS_WORDS: dict[SuggestionDisplayStatus, str] = {
     SuggestionDisplayStatus.AVAILABLE: "Available",
+    SuggestionDisplayStatus.IN_ACTIVE_VOTE: "In an Active Vote",
     SuggestionDisplayStatus.ROTATION_COOLDOWN: "Rotation Cooldown",
     SuggestionDisplayStatus.VOTE_WINNER: "Vote Winner",
     SuggestionDisplayStatus.RETIRED: "Retired",
@@ -121,11 +134,31 @@ class RotationCooldownLookup:
     def is_in_rotation_cooldown(self, watch_item: WatchItem) -> bool: ...
 
 
-def compute_display_status(watch_item: WatchItem, *, in_rotation_cooldown: bool) -> SuggestionDisplayStatus:
+class VoteRoundLookup:
+    """The subset of VoteService this module needs to detect In an Active
+    Vote (Rotation-removal Phase 1) -- deliberately Protocol-based and
+    minimal, matching RotationCooldownLookup's own convention, so this
+    module never depends on VoteService's full concrete type.
+    """
+
+    def get_open_round_for_suggestion(self, suggestion_id: int): ...
+
+
+def compute_display_status(
+    watch_item: WatchItem, *, in_rotation_cooldown: bool, in_active_vote: bool = False
+) -> SuggestionDisplayStatus:
     """Pure computation: given whether an item is currently on Rotation
-    Cooldown, resolve its full display status. Split from
-    resolve_display_status() so tests never need a real RotationService
-    just to exercise this decision table.
+    Cooldown and/or nominated in an open voting round, resolve its full
+    display status. Split from resolve_display_status() so tests never
+    need a real RotationService/VoteService just to exercise this
+    decision table.
+
+    in_active_vote defaults to False so existing callers that only know
+    about rotation cooldown keep working unchanged. In an Active Vote
+    takes priority over Rotation Cooldown when both are true (the common
+    case under the rotation-based strategies, since a nominee is marked
+    presented before its round closes) -- it's the more useful,
+    selection-mode-independent fact to show.
     """
     if watch_item.status is WatchItemStatus.WATCHED:
         return SuggestionDisplayStatus.WATCHED
@@ -133,23 +166,39 @@ def compute_display_status(watch_item: WatchItem, *, in_rotation_cooldown: bool)
         return SuggestionDisplayStatus.RETIRED
     if watch_item.status is WatchItemStatus.VOTE_WINNER:
         return SuggestionDisplayStatus.VOTE_WINNER
+    if in_active_vote:
+        return SuggestionDisplayStatus.IN_ACTIVE_VOTE
     if in_rotation_cooldown:
         return SuggestionDisplayStatus.ROTATION_COOLDOWN
     return SuggestionDisplayStatus.AVAILABLE
 
 
 def resolve_display_status(
-    watch_item: WatchItem, rotation_service: Optional[RotationCooldownLookup]
+    watch_item: WatchItem,
+    rotation_service: Optional[RotationCooldownLookup],
+    vote_service: Optional[VoteRoundLookup] = None,
 ) -> SuggestionDisplayStatus:
     """Convenience wrapper: resolve Rotation Cooldown from a real
-    RotationService (or skip that check entirely when none is
-    configured -- matching every other rotation_service-optional call
-    site in bot.py) before delegating to compute_display_status().
+    RotationService and In an Active Vote from a real VoteService (or
+    skip either check entirely when not configured -- matching every
+    other optional-service call site in bot.py) before delegating to
+    compute_display_status().
+
+    vote_service defaults to None so existing callers that don't pass one
+    keep working unchanged (In an Active Vote simply never applies for
+    them, exactly as before this phase).
     """
     in_rotation_cooldown = (
         rotation_service.is_in_rotation_cooldown(watch_item) if rotation_service is not None else False
     )
-    return compute_display_status(watch_item, in_rotation_cooldown=in_rotation_cooldown)
+    in_active_vote = (
+        watch_item.id is not None
+        and vote_service is not None
+        and vote_service.get_open_round_for_suggestion(watch_item.id) is not None
+    )
+    return compute_display_status(
+        watch_item, in_rotation_cooldown=in_rotation_cooldown, in_active_vote=bool(in_active_vote)
+    )
 
 
 def display_status_label(status: SuggestionDisplayStatus) -> str:

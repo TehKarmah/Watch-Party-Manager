@@ -1674,15 +1674,17 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
     Voting Defaults, exercised end-to-end through the wizard.
     """
 
-    async def test_voting_defaults_dropdown_defaults_to_balanced_random(self) -> None:
+    async def test_voting_defaults_dropdown_defaults_to_favor_new_additions(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
         intro_view: VotingDefaultsIntroView = interaction.response.sent_view
-        self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.ROTATION_POOL)
-        self.assertEqual(CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.ROTATION_POOL], "Balanced Random")
+        self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+        self.assertEqual(
+            CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.FAVOR_NEW_ADDITIONS], "Favor New Additions"
+        )
 
     async def test_visibility_is_collected_on_the_setup_view_not_the_modal(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
@@ -1698,7 +1700,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         self.assertIn("shown", descriptions[GuildVoteVisibility.VISIBLE.value].lower())
         self.assertIn("hidden", descriptions[GuildVoteVisibility.BLIND.value].lower())
 
-    async def test_dropdown_displays_all_three_candidate_selection_modes(self) -> None:
+    async def test_dropdown_displays_all_three_nominee_selection_modes(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
         interaction = FakeInteraction()
@@ -1709,8 +1711,8 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         self.assertEqual(
             option_values,
             {
-                CandidateSelectionMode.ROTATION_POOL.value,
-                CandidateSelectionMode.SOFT_ROTATION.value,
+                CandidateSelectionMode.FAVOR_NEW_ADDITIONS.value,
+                CandidateSelectionMode.FAVOR_OLDER_ADDITIONS.value,
                 CandidateSelectionMode.INFINITE_POOL.value,
             },
         )

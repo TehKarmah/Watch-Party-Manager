@@ -330,15 +330,15 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 2.8 Candidate selection mode and its help text
+### 2.8 Nominee selection mode and its help text
 
-- **Objective:** Confirm all three candidate-selection modes are selectable from the dropdown, each with a plain-language description, and that **Balanced Random** is the pre-filled default.
+- **Objective:** Confirm all three nominee-selection modes are selectable from the dropdown, each with a plain-language description, and that **Favor New Additions** is the pre-filled default (Rotation-removal Phase 1).
 - **Preconditions:** Reached the Voting Defaults step (before pressing **Set Voting Defaults**).
 - **Steps:**
-  1. Open the candidate-selection dropdown; confirm it lists exactly **Balanced Random (Recommended)**, **Soft Rotation**, and **Pure Random**, with **Balanced Random (Recommended)** preselected.
-  2. Confirm each option shows a short description beneath its label: Balanced Random -- "Prioritizes suggestions that have appeared in fewer recent votes, giving every one a fair chance."; Soft Rotation -- "Prefers new suggestions; previously shown ones stay eligible, just at a lower chance."; Pure Random -- "Chooses completely at random from eligible suggestions, with no preference or exclusion."
-  3. Select each mode in turn, press **Set Voting Defaults**, and confirm the modal opens (candidate count/duration/visibility only -- candidate selection is not one of its fields).
-- **Expected Result:** All three modes are selectable from the dropdown with the exact descriptions above; the chosen mode is saved correctly regardless of which one was picked.
+  1. Open the nominee-selection dropdown; confirm it lists exactly **Favor New Additions (Recommended)**, **Favor Older Additions**, and **Pure Random**, with **Favor New Additions (Recommended)** preselected.
+  2. Confirm each option shows a short description beneath its label: Favor New Additions -- "Leans toward suggestions added recently; older ones stay eligible, just at a lower chance."; Favor Older Additions -- "Leans toward suggestions that have waited the longest; newer ones stay eligible, just at a lower chance."; Pure Random -- "Chooses completely at random from eligible suggestions, with no preference or exclusion."
+  3. Select each mode in turn, press **Set Voting Defaults**, and confirm the modal opens (candidate count/duration/visibility only -- nominee selection is not one of its fields).
+- **Expected Result:** All three modes are selectable from the dropdown with the exact descriptions above; the chosen mode is saved correctly regardless of which one was picked. (Balanced Random and Soft Rotation still exist and remain selectable for a collection already configured with one of them via `/config`, but are no longer offered here -- see [Administration](05-Administration.md)'s "Nominee selection and rotation management" section.)
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -387,7 +387,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Compare every listed value against what was actually selected in Tests 2.2-2.10.
   3. Click **Back** once, confirm it returns to the immediately preceding step.
   4. Return to Review and click **Save**.
-- **Expected Result:** Every section (roles, join mode, admin channel, home channel, suggestion database, Watched Item Archive, voting defaults including candidate selection, reminders, backup) is shown accurately, using natural-language duration (e.g. "4 hours" or "3 days", never "72 hours"). The Automatic Backups line reads "Automatic Backups: Disabled" if you chose Disable in Test 2.10b, or "Automatic Backups: Every N day(s), keep M" (matching the configured interval/retention) if you chose Enable. Save marks setup complete and shows a final completion summary matching the same values, including the same Automatic Backups line.
+- **Expected Result:** Every section (roles, join mode, admin channel, home channel, suggestion database, Watched Item Archive, voting defaults including nominee selection, reminders, backup) is shown accurately, using natural-language duration (e.g. "4 hours" or "3 days", never "72 hours"). The Automatic Backups line reads "Automatic Backups: Disabled" if you chose Disable in Test 2.10b, or "Automatic Backups: Every N day(s), keep M" (matching the configured interval/retention) if you chose Enable. Save marks setup complete and shows a final completion summary matching the same values, including the same Automatic Backups line.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -597,7 +597,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/add`, `/list`, `/vote start`, or `/stats type:Rotation`/`type:Database` inside one database's configured channel or thread; confirm WASH uses that database automatically, with no prompt.
   2. Run the same command in a channel not tied to either database; confirm WASH asks "Which collection would you like to use?" with a picker listing both instead of guessing.
-  3. Run `/config` -> **Collections**; confirm both collections are listed and each is directly, independently editable (destinations and candidate selection) -- neither is reported as "Invalid" for being simultaneously active.
+  3. Run `/config` -> **Collections**; confirm both collections are listed and each is directly, independently editable (destinations and nominee selection) -- neither is reported as "Invalid" for being simultaneously active.
 - **Expected Result:** WASH never silently guesses between multiple databases; a matching channel resolves automatically, and an unmatched channel always shows a picker.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -831,17 +831,17 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 5.1b `/vote start` -- Customize This Vote's Candidate Selection Mode override
+### 5.1b `/vote start` -- Customize This Vote's Nominee Selection Mode override
 
-- **Objective:** Confirm Customize This Vote can override the target collection's Candidate Selection Mode for one round only, without changing the collection's own saved setting, and that the same mode descriptions and visibility explanation from Setup/`/config` appear here too.
+- **Objective:** Confirm Customize This Vote can override the target collection's Nominee Selection Mode for one round only, without changing the collection's own saved setting, and that the same mode descriptions and visibility explanation from Setup/`/config` appear here too.
 - **Preconditions:** A Balanced Random (Rotation Pool) collection with several eligible suggestions.
 - **Steps:**
-  1. Run `/vote start` -> **Customize This Vote**; confirm a dropdown appears (Candidate Selection Mode) with the same three options and descriptions as Test 2.8, preselected to the collection's actual configured mode (Balanced Random, from this test's precondition), plus a **Continue to Vote Settings** button.
+  1. Run `/vote start` -> **Customize This Vote**; confirm a dropdown appears (Nominee Selection Mode) with the same three options and descriptions as Test 2.8. Because Balanced Random is no longer one of the three offered options, none of them shows as preselected (Rotation-removal Phase 1: the dropdown only offers Favor New Additions, Favor Older Additions, and Pure Random) -- confirm a **Continue to Vote Settings** button is present regardless.
   2. Confirm the message body also explains Visible/Blind (same wording as Test 2.7).
-  3. Select **Pure Random**, then press **Continue to Vote Settings**; confirm the familiar candidate count/duration/visibility/reminder modal opens (no candidate-selection field in it).
-  4. Submit the modal; confirm the round is created successfully.
-  5. Run `/config` -> **Collections** -> this collection -> **Candidate Selection**; confirm it still shows **Balanced Random**, unchanged by the override just used.
-- **Expected Result:** The override applies to that one round's nominee selection only; the collection's own configured Candidate Selection Mode is never modified by Customize This Vote.
+  3. Without touching the dropdown, press **Continue to Vote Settings** directly; confirm the familiar candidate count/duration/visibility/reminder modal opens (no nominee-selection field in it), then submit it and confirm the round is created using the collection's actual configured mode (Balanced Random) -- an untouched dropdown must never silently switch the round to whichever option Discord shows first.
+  4. Repeat `/vote start` -> **Customize This Vote**, this time selecting **Pure Random** before pressing **Continue to Vote Settings**; submit the modal and confirm the round is created successfully using Pure Random for this round only.
+  5. Run `/config` -> **Collections** -> this collection -> **Nominee Selection**; confirm it still shows **Balanced Random**, unchanged by either override just used.
+- **Expected Result:** The override applies to that one round's nominee selection only; an untouched dropdown preserves the collection's actual configured mode even though that mode isn't one of the three shown; the collection's own configured Nominee Selection Mode is never modified by Customize This Vote.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -881,15 +881,17 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 5.5 Candidate selection modes affect nominee choice
+### 5.5 Nominee selection modes affect nominee choice
 
-- **Objective:** Confirm each candidate-selection mode visibly changes nomination behavior over multiple rounds.
+- **Objective:** Confirm each nominee-selection mode visibly changes nomination behavior over multiple rounds.
 - **Preconditions:** A database with more eligible suggestions than the candidate count; WASH Crew access to `/config`.
 - **Steps:**
-  1. Set the database's mode to **Balanced Random**; run several rounds; confirm a presented suggestion is not re-nominated until the rotation completes.
-  2. Switch to **Soft Rotation**; confirm presented suggestions can reappear but are less frequent than fresh ones.
+  1. Set the database's mode to **Favor New Additions**; add suggestions on different days (or simulate differing suggestion dates); run several rounds; confirm recently-added suggestions are chosen noticeably more often, while older ones remain selectable.
+  2. Switch to **Favor Older Additions**; confirm the preference reverses -- the longest-waiting suggestions are chosen noticeably more often.
   3. Switch to **Pure Random**; confirm no exclusion/weighting is applied at all.
-- **Expected Result:** Behavior matches [Administration](05-Administration.md)'s "Candidate selection and rotation management" section for each mode.
+  4. Using `/config` -> **Collections** on a collection still configured with a legacy mode, set it to **Balanced Random**; run several rounds; confirm a presented suggestion is not re-nominated until the rotation completes.
+  5. Switch that same collection to **Soft Rotation**; confirm presented suggestions can reappear but are less frequent than fresh ones.
+- **Expected Result:** Behavior matches [Administration](05-Administration.md)'s "Nominee selection and rotation management" section for each mode.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

@@ -140,9 +140,10 @@ class RotationLowPoolNotificationService:
 
         Never bootstraps or advances a rotation merely to calculate
         low-pool status (see CollectionEligibilityService.peek). For
-        Infinite Pool databases (no rotation concept -- RotationService
-        never creates a rotation record for one), there is no rotation
-        id to dedup against, so this never fires for them; a documented
+        Infinite Pool, Favor New Additions, and Favor Older Additions
+        databases (no rotation concept -- RotationService never creates a
+        rotation record for any of them), there is no rotation id to
+        dedup against, so this never fires for them; a documented
         limitation, not an oversight (see docs).
         """
         guild_configuration = self._guild_configuration_repository.get(guild_id)

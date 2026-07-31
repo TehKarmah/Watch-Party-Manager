@@ -278,7 +278,7 @@ class DatabaseSettingSelect(discord.ui.Select):
         options = [
             discord.SelectOption(label="Suggestion Post Destination", value=DATABASE_SETTING_SUGGESTION_DESTINATION),
             discord.SelectOption(label="Watched Item Archive", value=DATABASE_SETTING_WATCH_DESTINATION),
-            discord.SelectOption(label="Candidate Selection", value=DATABASE_SETTING_CANDIDATE_SELECTION),
+            discord.SelectOption(label="Nominee Selection", value=DATABASE_SETTING_CANDIDATE_SELECTION),
         ]
         super().__init__(
             placeholder="Choose a setting to edit...", options=options, custom_id="wpm_config_database_setting_select"
@@ -317,7 +317,7 @@ class ConfigDatabaseCandidateSelectionView(discord.ui.View):
         self.add_item(
             ConfigureStepButton(
                 self._handle_save,
-                label="Save Candidate Selection",
+                label="Save Nominee Selection",
                 custom_id="wpm_config_database_candidate_selection_save",
             )
         )

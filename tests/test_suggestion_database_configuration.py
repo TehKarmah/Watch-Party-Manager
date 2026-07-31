@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 
 from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, TieBehavior
 from watch_party_manager.domain.suggestion_database_configuration import (
+    CANDIDATE_SELECTION_DISPLAY_LABELS,
+    CANDIDATE_SELECTION_HELP_TEXT,
+    NOMINEE_SELECTION_MODE_ORDER,
     CandidateSelectionMode,
     SuggestionAdmissionMode,
     SuggestionDatabaseArchiveConfig,
@@ -239,6 +242,11 @@ class VotingOverridesConfigTests(unittest.TestCase):
 
 class SuggestionRulesConfigTests(unittest.TestCase):
     def test_defaults_match_the_documented_specification(self) -> None:
+        # Rotation-removal Phase 1: candidate_selection's default moved
+        # from ROTATION_POOL to FAVOR_NEW_ADDITIONS, and admission_mode's
+        # from NEXT_ROTATION to JOIN_CURRENT_ROTATION -- a newly created
+        # collection now gets a rotation-free mode with immediate
+        # suggestion eligibility by default.
         rules = SuggestionRulesConfig()
 
         self.assertTrue(rules.allow_imdb_links)
@@ -246,8 +254,8 @@ class SuggestionRulesConfigTests(unittest.TestCase):
         self.assertTrue(rules.require_unique_active_titles)
         self.assertEqual(rules.rejection_threshold, 2)
         self.assertTrue(rules.allow_resuggestion)
-        self.assertEqual(rules.candidate_selection, CandidateSelectionMode.ROTATION_POOL)
-        self.assertEqual(rules.admission_mode, SuggestionAdmissionMode.NEXT_ROTATION)
+        self.assertEqual(rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+        self.assertEqual(rules.admission_mode, SuggestionAdmissionMode.JOIN_CURRENT_ROTATION)
 
     def test_requires_at_least_one_input_method(self) -> None:
         with self.assertRaises(ValueError):
@@ -362,6 +370,61 @@ class SuggestionDatabasePermissionsConfigTests(unittest.TestCase):
         )
         self.assertEqual(permissions.moderator_role_ids, (5,))
         self.assertFalse(permissions.use_guild_watch_party_role)
+
+
+class NomineeSelectionModeOrderTests(unittest.TestCase):
+    """Rotation-removal Phase 1: NOMINEE_SELECTION_MODE_ORDER is the
+    single source of truth for which modes are offered as a new choice
+    (Setup Wizard, /config, Customize This Vote) -- the two legacy
+    rotation-based modes remain functional but are deliberately excluded.
+    """
+
+    def test_offers_exactly_the_three_new_modes_in_recommended_first_order(self) -> None:
+        self.assertEqual(
+            NOMINEE_SELECTION_MODE_ORDER,
+            (
+                CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
+                CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
+                CandidateSelectionMode.INFINITE_POOL,
+            ),
+        )
+
+    def test_excludes_the_two_legacy_rotation_based_modes(self) -> None:
+        self.assertNotIn(CandidateSelectionMode.ROTATION_POOL, NOMINEE_SELECTION_MODE_ORDER)
+        self.assertNotIn(CandidateSelectionMode.SOFT_ROTATION, NOMINEE_SELECTION_MODE_ORDER)
+
+    def test_every_offered_mode_has_a_display_label_and_help_text(self) -> None:
+        for mode in NOMINEE_SELECTION_MODE_ORDER:
+            self.assertIn(mode, CANDIDATE_SELECTION_DISPLAY_LABELS)
+            self.assertIn(mode, CANDIDATE_SELECTION_HELP_TEXT)
+
+
+class CandidateSelectionModeTests(unittest.TestCase):
+    def test_every_mode_has_a_display_label_and_help_text(self) -> None:
+        for mode in CandidateSelectionMode:
+            self.assertIn(mode, CANDIDATE_SELECTION_DISPLAY_LABELS)
+            self.assertIn(mode, CANDIDATE_SELECTION_HELP_TEXT)
+
+    def test_five_modes_exist(self) -> None:
+        self.assertEqual(
+            {member.value for member in CandidateSelectionMode},
+            {
+                "rotation_pool",
+                "soft_rotation",
+                "infinite_pool",
+                "favor_new_additions",
+                "favor_older_additions",
+            },
+        )
+
+    def test_favor_new_and_older_additions_have_distinct_friendly_labels(self) -> None:
+        self.assertEqual(
+            "Favor New Additions", CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.FAVOR_NEW_ADDITIONS]
+        )
+        self.assertEqual(
+            "Favor Older Additions",
+            CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.FAVOR_OLDER_ADDITIONS],
+        )
 
 
 if __name__ == "__main__":

@@ -1510,7 +1510,7 @@ def perform_start_vote(
             configured_mode = (
                 database_configuration.suggestion_rules.candidate_selection
                 if database_configuration is not None
-                else CandidateSelectionMode.ROTATION_POOL
+                else CandidateSelectionMode.FAVOR_NEW_ADDITIONS
             )
             # A Customize This Vote override applies to this round's
             # nominee selection only -- the collection's own configured
@@ -1864,14 +1864,14 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
     candidate_selection_label = (
         CANDIDATE_SELECTION_DISPLAY_LABELS[draft.voting_candidate_selection]
         if draft.voting_candidate_selection is not None
-        else CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.ROTATION_POOL]
+        else CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.FAVOR_NEW_ADDITIONS]
     )
     lines.append(
         "Voting Defaults: "
         f"{configuration.voting_defaults.candidate_count} candidates, "
         f"{format_duration_minutes(configuration.voting_defaults.duration_minutes)}, "
         f"{configuration.voting_defaults.visibility.value.capitalize()}, "
-        f"candidate selection: {candidate_selection_label}"
+        f"nominee selection: {candidate_selection_label}"
     )
     if configuration.notifications.vote.vote_ending_reminder:
         lines.append(
@@ -2494,7 +2494,7 @@ async def send_setup_wizard_step(
         default_candidate_selection = (
             state.draft.voting_candidate_selection
             if state.draft.voting_candidate_selection is not None
-            else CandidateSelectionMode.ROTATION_POOL
+            else CandidateSelectionMode.FAVOR_NEW_ADDITIONS
         )
         default_visibility = (
             state.draft.voting_visibility
@@ -2549,7 +2549,7 @@ async def send_setup_wizard_step(
             requester_id=requester_id,
         )
         body += (
-            "\n\nChoose the server's default candidate selection mode and visibility below -- each option "
+            "\n\nChoose the server's default nominee selection mode and visibility below -- each option "
             "explains its own behavior when opened -- then press **Set Voting Defaults** to configure the "
             "default candidate count and vote duration."
         )
@@ -3075,7 +3075,7 @@ async def send_config_manage_databases(
     ]
     candidate_selection_descriptions = {
         database.database_id: (
-            "Candidate Selection: "
+            "Nominee Selection: "
             + CANDIDATE_SELECTION_DISPLAY_LABELS[
                 bot.config_service.get_database_configuration(guild_id, database.database_id).suggestion_rules.candidate_selection
             ]
@@ -3085,7 +3085,7 @@ async def send_config_manage_databases(
     view = ConfigDatabaseSectionView(
         options, on_database_selected, on_back_to_menu, descriptions=candidate_selection_descriptions
     )
-    body = header + "\n\nSelect a collection to manage its own destination and candidate selection."
+    body = header + "\n\nSelect a collection to manage its own destination and nominee selection."
     if edit:
         await interaction.response.edit_message(content=body, view=view)
     else:
@@ -3134,7 +3134,7 @@ async def send_config_database_settings_menu(
         f'**WASH Configuration -- "{collection_name}" Settings**\n\n'
         f"Suggestion Destination: <#{suggestion_destination}>\n"
         f"Watched Item Archive: {f'<#{watch_destination}>' if watch_destination else 'Not configured (no per-collection override or server default set)'}\n"
-        f"Candidate Selection: {candidate_selection_label}"
+        f"Nominee Selection: {candidate_selection_label}"
     )
 
     async def on_setting_chosen(select_interaction: discord.Interaction, setting: str) -> None:
@@ -3243,9 +3243,9 @@ async def send_config_database_candidate_selection(
     database_configuration = config_service.get_database_configuration(guild_id, database_id)
     current = database_configuration.suggestion_rules.candidate_selection
     body = (
-        f'**WASH Configuration -- "{collection_name}" Candidate Selection**\n\n'
+        f'**WASH Configuration -- "{collection_name}" Nominee Selection**\n\n'
         f"Current value -- {CANDIDATE_SELECTION_DISPLAY_LABELS[current]}\n\n"
-        "Choose the candidate selection mode below, then press Save."
+        "Choose the nominee selection mode below, then press Save."
     )
 
     async def on_save(save_interaction: discord.Interaction, candidate_selection: CandidateSelectionMode) -> None:
@@ -3348,9 +3348,9 @@ async def send_config_voting_defaults_modal(
 ) -> None:
     """Guild-wide default nominee count, vote duration, and visibility.
 
-    Candidate selection is per-database (Contextual Database Resolution)
+    Nominee selection is per-database (Contextual Database Resolution)
     and lives under Manage Databases -> a specific database ->
-    Candidate Selection instead -- it is no longer bundled here, since
+    Nominee Selection instead -- it is no longer bundled here, since
     bundling it into this guild-wide section is exactly the "which
     database does this apply to?" ambiguity this model removes.
 
@@ -3995,7 +3995,7 @@ class VotingGroup(discord.app_commands.Group):
                 default_visibility=default_visibility,
             )
             await choice_interaction.response.send_message(
-                "Optionally override this vote's Candidate Selection Mode and/or Vote Visibility below -- "
+                "Optionally override this vote's Nominee Selection Mode and/or Vote Visibility below -- "
                 "both apply to this round only and never change the collection's or guild's own configured "
                 "setting. Then continue to the rest of this vote's settings (candidate count and duration).",
                 view=overrides_view,
@@ -6225,7 +6225,11 @@ def build_original_suggestion_link(item: WatchItem) -> Optional[str]:
     return f"[Original Suggestion]({message_url})"
 
 
-def build_duplicate_match_line(match: DuplicateMatch, rotation_service: Optional[RotationService] = None) -> str:
+def build_duplicate_match_line(
+    match: DuplicateMatch,
+    rotation_service: Optional[RotationService] = None,
+    vote_service: Optional[VoteService] = None,
+) -> str:
     """One matched existing item's line/block within an /add duplicate
     warning.
 
@@ -6239,7 +6243,9 @@ def build_duplicate_match_line(match: DuplicateMatch, rotation_service: Optional
 
     rotation_service resolves the real Rotation Cooldown status (rather
     than always reporting Available) -- optional, defaulting to None so
-    existing callers/tests keep working unchanged.
+    existing callers/tests keep working unchanged. vote_service resolves
+    In an Active Vote the same way (Rotation-removal Phase 1) -- also
+    optional, same reasoning.
     """
     item = match.watch_item
     if match.category is DuplicateMatchCategory.VOTE_WINNER:
@@ -6249,7 +6255,7 @@ def build_duplicate_match_line(match: DuplicateMatch, rotation_service: Optional
     original_suggestion_link = build_original_suggestion_link(item)
     if original_suggestion_link is not None:
         parts.append(original_suggestion_link)
-    display_status = resolve_display_status(item, rotation_service)
+    display_status = resolve_display_status(item, rotation_service, vote_service)
     parts.append(f"status: {display_status_label(display_status)}")
     return " | ".join(parts)
 
@@ -6290,6 +6296,7 @@ def decide_add_suggestion_outcome(
     *,
     is_crew: bool,
     rotation_service: Optional[RotationService] = None,
+    vote_service: Optional[VoteService] = None,
 ) -> AddSuggestionDecision:
     """Turn a duplicate check into what /add should do next (Sections 2-3).
 
@@ -6303,6 +6310,8 @@ def decide_add_suggestion_outcome(
     rotation_service resolves each matched item's real Rotation Cooldown
     status (rather than always reporting Available) -- optional,
     defaulting to None so existing callers/tests keep working unchanged.
+    vote_service resolves In an Active Vote the same way (Rotation-removal
+    Phase 1) -- also optional, same reasoning.
     """
     if duplicate_result.has_definite_match:
         active_matches = [
@@ -6312,14 +6321,15 @@ def decide_add_suggestion_outcome(
             match = active_matches[0]
             return AddSuggestionDecision(
                 AddSuggestionOutcomeKind.BLOCKED_ACTIVE,
-                "🔴 That title is already in this collection.\n" + build_duplicate_match_line(match, rotation_service),
+                "🔴 That title is already in this collection.\n"
+                + build_duplicate_match_line(match, rotation_service, vote_service),
                 matched_item=match.watch_item,
             )
 
         match = duplicate_result.definite_matches[0]
         detail = (
             f"This title has {_ARCHIVE_CATEGORY_LABELS[match.category]}:\n"
-            + build_duplicate_match_line(match, rotation_service)
+            + build_duplicate_match_line(match, rotation_service, vote_service)
         )
         if not is_crew:
             return AddSuggestionDecision(
@@ -6331,7 +6341,7 @@ def decide_add_suggestion_outcome(
 
     if duplicate_result.has_possible_only:
         lines = "\n".join(
-            build_duplicate_match_line(match, rotation_service) for match in duplicate_result.matches
+            build_duplicate_match_line(match, rotation_service, vote_service) for match in duplicate_result.matches
         )
         detail = (
             "This title matches existing item(s) with no confirmed release year, "
@@ -6376,6 +6386,7 @@ async def post_suggestion_confirmation(
         database_name=database.name,
         suggested_by=getattr(interaction.user, "mention", str(interaction.user)),
         rotation_service=bot.rotation_service,
+        vote_service=getattr(bot, "vote_service", None),
     )
     view = build_suggestion_view(
         bot.suggestion_service,
@@ -6453,6 +6464,7 @@ async def post_watched_item_archive(bot: "WatchPartyBot", watch_item: WatchItem)
         database_name=database.name if database is not None else "Unknown collection",
         suggested_by=suggested_by,
         rotation_service=bot.rotation_service,
+        vote_service=getattr(bot, "vote_service", None),
     )
 
     try:
@@ -6520,6 +6532,7 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
         database_name=database.name,
         suggested_by=suggested_by,
         rotation_service=bot.rotation_service,
+        vote_service=getattr(bot, "vote_service", None),
     )
     view = build_suggestion_view(
         bot.suggestion_service,
@@ -6686,7 +6699,7 @@ async def maybe_send_low_pool_notification(bot: "WatchPartyBot", database: Sugge
     mode = (
         configuration.suggestion_rules.candidate_selection
         if configuration is not None
-        else CandidateSelectionMode.ROTATION_POOL
+        else CandidateSelectionMode.FAVOR_NEW_ADDITIONS
     )
     decision = bot.rotation_low_pool_notification_service.evaluate(
         guild_id=database.guild_id,
@@ -6774,7 +6787,10 @@ async def handle_add_suggestion(
             title=final_title, release_year=final_release_year, imdb_url=resolved.imdb_url, existing_items=existing_items
         )
         decision = decide_add_suggestion_outcome(
-            duplicate_result, is_crew=is_crew, rotation_service=getattr(bot, "rotation_service", None)
+            duplicate_result,
+            is_crew=is_crew,
+            rotation_service=getattr(bot, "rotation_service", None),
+            vote_service=getattr(bot, "vote_service", None),
         )
 
         async def create_new_suggestion(create_interaction: discord.Interaction) -> None:
@@ -7636,13 +7652,16 @@ def build_suggestion_confirmation_embed(
     database_name: str,
     suggested_by: str,
     rotation_service: Optional[RotationService] = None,
+    vote_service: Optional[VoteService] = None,
 ):
     """Build the public /add confirmation as a compact record-style embed.
 
     rotation_service is optional (defaults to None, meaning Rotation
     Cooldown is never shown) so existing callers/tests that construct
     this without one keep working unchanged -- see
-    suggestion_display_status.resolve_display_status.
+    suggestion_display_status.resolve_display_status. vote_service is the
+    same for In an Active Vote (Rotation-removal Phase 1), which takes
+    priority over Rotation Cooldown whenever both would apply.
 
     Deliberately built without EmbedFactory's default footer/timestamp
     (unlike most other WASH embeds): this post is edited in place
@@ -7680,7 +7699,7 @@ def build_suggestion_confirmation_embed(
     embed.add_field(name="Suggested By", value=suggested_by, inline=True)
     embed.add_field(name="Collection", value=format_collection_display(database_name), inline=True)
     embed.add_field(name="Reference", value=watch_item.reference, inline=True)
-    display_status = resolve_display_status(watch_item, rotation_service)
+    display_status = resolve_display_status(watch_item, rotation_service, vote_service)
     embed.add_field(
         name="Status", value=format_display_status_with_won_date(watch_item, display_status), inline=True
     )
@@ -7832,22 +7851,60 @@ _ROLLOVER_SENSITIVE_LIST_FILTERS = frozenset(
 )
 
 
+def _list_entry_status(
+    item: WatchItem, default_status: SuggestionDisplayStatus, vote_service: Optional[VoteService]
+) -> SuggestionDisplayStatus:
+    """The status one /list entry should actually show: In an Active Vote
+    (Rotation-removal Phase 1) takes priority over whatever bucket the
+    item came from, mirroring resolve_display_status's own precedence,
+    when it's currently nominated in an open voting round. Only Eligible/
+    Rotation Cooldown items can ever be a vote candidate -- Vote Winner/
+    Retired/Watched items are always passed their own terminal status
+    unchanged, so this is a cheap no-op check for those callers.
+    """
+    if (
+        vote_service is not None
+        and item.id is not None
+        and vote_service.get_open_round_for_suggestion(item.id) is not None
+    ):
+        return SuggestionDisplayStatus.IN_ACTIVE_VOTE
+    return default_status
+
+
 def resolve_suggestion_list_entries(
-    eligibility: "CollectionEligibility", status_filter: SuggestionListStatusFilter
+    eligibility: "CollectionEligibility",
+    status_filter: SuggestionListStatusFilter,
+    vote_service: Optional[VoteService] = None,
 ) -> List[Tuple[WatchItem, SuggestionDisplayStatus]]:
     """Pick which of CollectionEligibility's already-computed buckets a
     /list filter shows, paired with each item's display status (known
     directly from which bucket it came from -- no separate rotation
     lookup needed per item).
+
+    vote_service is optional (defaults to None, meaning In an Active Vote
+    is never shown -- existing callers/tests keep working unchanged) --
+    when given, overrides Available/Rotation Cooldown to In an Active
+    Vote for any item currently nominated in an open round (Rotation-
+    removal Phase 1).
     """
     if status_filter is SuggestionListStatusFilter.ACTIVE:
-        return [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.eligible] + [
-            (item, SuggestionDisplayStatus.ROTATION_COOLDOWN) for item in eligibility.rotation_cooldown
+        return [
+            (item, _list_entry_status(item, SuggestionDisplayStatus.AVAILABLE, vote_service))
+            for item in eligibility.eligible
+        ] + [
+            (item, _list_entry_status(item, SuggestionDisplayStatus.ROTATION_COOLDOWN, vote_service))
+            for item in eligibility.rotation_cooldown
         ]
     if status_filter is SuggestionListStatusFilter.ELIGIBLE:
-        return [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.eligible]
+        return [
+            (item, _list_entry_status(item, SuggestionDisplayStatus.AVAILABLE, vote_service))
+            for item in eligibility.eligible
+        ]
     if status_filter is SuggestionListStatusFilter.ROTATION_COOLDOWN:
-        return [(item, SuggestionDisplayStatus.ROTATION_COOLDOWN) for item in eligibility.rotation_cooldown]
+        return [
+            (item, _list_entry_status(item, SuggestionDisplayStatus.ROTATION_COOLDOWN, vote_service))
+            for item in eligibility.rotation_cooldown
+        ]
     if status_filter is SuggestionListStatusFilter.VOTE_WINNER:
         return [(item, SuggestionDisplayStatus.VOTE_WINNER) for item in eligibility.vote_winners]
     if status_filter is SuggestionListStatusFilter.RETIRED:
@@ -7856,8 +7913,14 @@ def resolve_suggestion_list_entries(
         return [(item, SuggestionDisplayStatus.WATCHED) for item in eligibility.watched]
     # ALL
     return (
-        [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.eligible]
-        + [(item, SuggestionDisplayStatus.ROTATION_COOLDOWN) for item in eligibility.rotation_cooldown]
+        [
+            (item, _list_entry_status(item, SuggestionDisplayStatus.AVAILABLE, vote_service))
+            for item in eligibility.eligible
+        ]
+        + [
+            (item, _list_entry_status(item, SuggestionDisplayStatus.ROTATION_COOLDOWN, vote_service))
+            for item in eligibility.rotation_cooldown
+        ]
         + [(item, SuggestionDisplayStatus.VOTE_WINNER) for item in eligibility.vote_winners]
         + [(item, SuggestionDisplayStatus.RETIRED) for item in eligibility.retired]
         + [(item, SuggestionDisplayStatus.WATCHED) for item in eligibility.watched]
@@ -7911,7 +7974,7 @@ def resolve_candidate_selection_mode(
 ) -> CandidateSelectionMode:
     configuration = bot.suggestion_database_configuration_repository.get(guild_id, database_id)
     if configuration is None:
-        return CandidateSelectionMode.ROTATION_POOL
+        return CandidateSelectionMode.FAVOR_NEW_ADDITIONS
     return configuration.suggestion_rules.candidate_selection
 
 
@@ -7924,17 +7987,18 @@ def resolve_customize_vote_default_candidate_selection(
     sensible starting point before the collection itself is finally
     resolved (and, if ambiguous, chosen) later in
     handle_start_vote_completion. Falls back to the recommended default
-    (Balanced Random) whenever the channel context is unknown, ambiguous,
-    or matches no collection -- the dropdown's preselected value is only
-    a convenience, never a decision that's actually acted on here.
+    (Favor New Additions) whenever the channel context is unknown,
+    ambiguous, or matches no collection -- the dropdown's preselected
+    value is only a convenience, never a decision that's actually acted
+    on here.
     """
     if guild_id is None or channel_id is None:
-        return CandidateSelectionMode.ROTATION_POOL
+        return CandidateSelectionMode.FAVOR_NEW_ADDITIONS
     resolution = bot.suggestion_service.resolve_database_for_channel(
         guild_id, channel_id, bot.suggestion_database_configuration_repository
     )
     if resolution.database is None:
-        return CandidateSelectionMode.ROTATION_POOL
+        return CandidateSelectionMode.FAVOR_NEW_ADDITIONS
     return resolve_candidate_selection_mode(bot, guild_id, resolution.database.database_id)
 
 
@@ -8025,7 +8089,7 @@ async def send_suggestion_list(
     else:
         eligibility = bot.collection_eligibility_service.peek(database.database_id, mode)
 
-    entries = resolve_suggestion_list_entries(eligibility, status_filter)
+    entries = resolve_suggestion_list_entries(eligibility, status_filter, getattr(bot, "vote_service", None))
     # Deterministic ordering: by stable suggestion ID (assignment order),
     # never re-sorted by anything that could change between pages.
     entries = sorted(entries, key=lambda entry: entry[0].id or 0)
@@ -8991,19 +9055,23 @@ def perform_remove_suggestion(
 
 
 def build_removal_option_label(
-    item: WatchItem, suggestion_service: SuggestionService, rotation_service: Optional[RotationService] = None
+    item: WatchItem,
+    suggestion_service: SuggestionService,
+    rotation_service: Optional[RotationService] = None,
+    vote_service: Optional[VoteService] = None,
 ) -> str:
     """Build one /remove selector option's label: reference, title, year,
     database, and status (Section 6's "Show a selector including...").
 
     rotation_service resolves the real Rotation Cooldown status (rather
     than always reporting Available) -- optional, defaulting to None so
-    existing callers/tests keep working unchanged.
+    existing callers/tests keep working unchanged. vote_service resolves
+    In an Active Vote the same way (Rotation-removal Phase 1).
     """
     database = suggestion_service.get_database(item.database_id) if item.database_id is not None else None
     database_name = database.name if database is not None else "Unknown collection"
     year_part = f" ({item.release_year})" if item.release_year else ""
-    display_status = resolve_display_status(item, rotation_service)
+    display_status = resolve_display_status(item, rotation_service, vote_service)
     status_part = display_status_label(display_status)
     return f"{item.reference} {item.title}{year_part} -- {database_name} -- {status_part}"
 
@@ -9017,7 +9085,9 @@ async def send_removal_confirmation(interaction: discord.Interaction, bot: "Watc
     for genuinely broken records) -- this reuses archive_suggestion()
     instead, which preserves identity, journey, and history.
     """
-    summary = build_removal_option_label(item, bot.suggestion_service, getattr(bot, "rotation_service", None))
+    summary = build_removal_option_label(
+        item, bot.suggestion_service, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
+    )
 
     async def on_confirm(confirm_interaction: discord.Interaction) -> None:
         result = bot.suggestion_service.archive_suggestion(item.id)
@@ -9060,7 +9130,12 @@ async def handle_remove_suggestion(interaction: discord.Interaction, bot: "Watch
         await send_removal_confirmation(select_interaction, bot, item)
 
     options = [
-        (item.id, build_removal_option_label(item, bot.suggestion_service, getattr(bot, "rotation_service", None)))
+        (
+            item.id,
+            build_removal_option_label(
+                item, bot.suggestion_service, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
+            ),
+        )
         for item in matches
     ]
     view = RemovalMatchSelectView(options, on_select)
@@ -9073,7 +9148,10 @@ async def handle_remove_suggestion(interaction: discord.Interaction, bot: "Watch
 
 
 def build_edit_suggestion_summary(
-    item: WatchItem, suggestion_service: SuggestionService, rotation_service: Optional[RotationService] = None
+    item: WatchItem,
+    suggestion_service: SuggestionService,
+    rotation_service: Optional[RotationService] = None,
+    vote_service: Optional[VoteService] = None,
 ) -> str:
     """Build the read-only IMDb-metadata summary shown alongside
     /edit_suggestion's action picker (Requirement 8: OMDb-derived fields
@@ -9084,13 +9162,15 @@ def build_edit_suggestion_summary(
     title card, so this is the more useful (and clickable) top link.
     Falls back to the raw IMDb URL only for a legacy suggestion with no
     confirmation post to link to, since that's otherwise the only way to
-    reach its IMDb page from here at all.
+    reach its IMDb page from here at all. vote_service resolves In an
+    Active Vote alongside rotation_service's Rotation Cooldown
+    (Rotation-removal Phase 1).
     """
     database = suggestion_service.get_database(item.database_id) if item.database_id is not None else None
     database_name = database.name if database is not None else "Unknown collection"
     year_part = f" ({item.release_year})" if item.release_year else ""
     imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
-    display_status = resolve_display_status(item, rotation_service)
+    display_status = resolve_display_status(item, rotation_service, vote_service)
     lines = [
         f"{item.reference} {item.title}{year_part}",
         f"Collection: {database_name}",
@@ -9140,7 +9220,7 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
 
         async def on_status_selected(select_interaction: discord.Interaction, new_status: WatchItemStatus) -> None:
             result = bot.suggestion_service.set_suggestion_status(
-                item.id, new_status, getattr(bot, "rotation_service", None)
+                item.id, new_status, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
             )
             await select_interaction.response.send_message(result.message, ephemeral=True)
             if result.success:
@@ -9148,7 +9228,12 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
 
         view = ChangeStatusSelectView(on_status_selected, current_status=current_item.status)
         await button_interaction.response.edit_message(
-            content=build_edit_suggestion_summary(current_item, bot.suggestion_service, bot.rotation_service)
+            content=build_edit_suggestion_summary(
+                current_item,
+                bot.suggestion_service,
+                bot.rotation_service,
+                getattr(bot, "vote_service", None),
+            )
             + "\n\nChoose the new status:",
             view=view,
         )
@@ -9212,14 +9297,18 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
                 match = duplicate_result.definite_matches[0]
                 await select_interaction.response.send_message(
                     "This move would duplicate an existing suggestion:\n"
-                    + build_duplicate_match_line(match, getattr(bot, "rotation_service", None)),
+                    + build_duplicate_match_line(
+                        match, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
+                    ),
                     ephemeral=True,
                 )
                 return
 
             if duplicate_result.has_possible_only:
                 lines = "\n".join(
-                    build_duplicate_match_line(match, getattr(bot, "rotation_service", None))
+                    build_duplicate_match_line(
+                        match, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
+                    )
                     for match in duplicate_result.matches
                 )
                 message = f"This move might duplicate existing item(s):\n{lines}"
@@ -9251,7 +9340,9 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
             placeholder="Choose a destination collection...",
         )
         await button_interaction.response.edit_message(
-            content=build_edit_suggestion_summary(item, bot.suggestion_service, bot.rotation_service)
+            content=build_edit_suggestion_summary(
+                item, bot.suggestion_service, bot.rotation_service, getattr(bot, "vote_service", None)
+            )
             + "\n\nMove to which collection?",
             view=view,
         )
@@ -9261,7 +9352,11 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
 
     view = EditSuggestionActionView(on_change_status, on_move_collection, on_cancel)
     await interaction.response.send_message(
-        build_edit_suggestion_summary(item, bot.suggestion_service, bot.rotation_service), view=view, ephemeral=True
+        build_edit_suggestion_summary(
+            item, bot.suggestion_service, bot.rotation_service, getattr(bot, "vote_service", None)
+        ),
+        view=view,
+        ephemeral=True,
     )
 
 
@@ -10858,9 +10953,14 @@ async def send_suggestion_statistics(
 
     if len(matches) > 1:
         options = [
-        (item.id, build_removal_option_label(item, bot.suggestion_service, getattr(bot, "rotation_service", None)))
-        for item in matches
-    ]
+            (
+                item.id,
+                build_removal_option_label(
+                    item, bot.suggestion_service, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
+                ),
+            )
+            for item in matches
+        ]
 
         async def on_select(select_interaction: discord.Interaction, suggestion_id: int) -> None:
             stats = bot.statistics_service.suggestion_statistics(suggestion_id)

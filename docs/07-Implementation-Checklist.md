@@ -21,7 +21,7 @@ This checklist tracks implemented foundations against the Version 1 specificatio
 | FR-015 | Implement backup, restore, import, and export | Complete foundation | Manual backup, validated restore (select or upload, with a pre-restore summary and confirmation), safety backups, single-suggestion-database backup/restore (merge or replace), suggestion-database reset, factory reset, and cross-instance import (merge or replace, typed-confirmation-gated) are implemented. Configurable scheduled backup *execution* is not. |
 | FR-016 | Implement migration support | Not started | Required before persistent format changes become necessary. |
 
-FR-017 and later (membership workflows, IMDb link normalization/duplicate detection, candidate selection & rotation, statistics, and this documentation pass) are implemented but not yet individually broken out into this table -- see `project_state.md`'s Functional Requirement Status for the current, area-based summary.
+FR-017 and later (membership workflows, IMDb link normalization/duplicate detection, nominee selection & rotation, statistics, and this documentation pass) are implemented but not yet individually broken out into this table -- see `project_state.md`'s Functional Requirement Status for the current, area-based summary.
 
 ## Cross-Cutting Foundations
 

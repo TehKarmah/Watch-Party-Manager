@@ -6,18 +6,24 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from datetime import date
+from datetime import date, timedelta
 
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+from watch_party_manager.domain.watch_item import MediaType, WatchItem, WatchItemStatus
+from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.services.candidate_selection_strategy import (
     CompositeWeighting,
+    FavorNewAdditionsStrategy,
+    FavorOlderAdditionsStrategy,
     InfinitePoolStrategy,
+    MIN_SUGGESTION_DATE_WEIGHT,
     NEUTRAL_WEIGHT,
     RotationPoolStrategy,
     SOFT_ROTATION_PRESENTED_WEIGHT,
+    SUGGESTION_DATE_WEIGHT_HALF_LIFE_DAYS,
     SoftRotationStrategy,
     build_candidate_selection_strategy,
 )
@@ -46,6 +52,19 @@ class CandidateSelectionStrategyTestCase(unittest.TestCase):
         result = self.suggestion_service.suggest(title, database_id=DATABASE_ID, guild_id=100)
         self.assertTrue(result.success)
         return result.watch_item
+
+    def _item_suggested_days_ago(self, item_id: int, days: int) -> WatchItem:
+        """A WatchItem with the given id, aged `days` from today via its
+        journey's suggestion_date -- weight_for takes a WatchItem directly
+        (never re-fetching from the repository), so this is the simplest
+        way to exercise the suggestion-date weighting curve deterministically.
+        """
+        return WatchItem(
+            title=f"Item {item_id}",
+            media_type=MediaType.MOVIE,
+            id=item_id,
+            journey=WatchItemJourney(suggestion_date=date.today() - timedelta(days=days)),
+        )
 
 
 class RotationPoolStrategyTests(CandidateSelectionStrategyTestCase):
@@ -260,6 +279,168 @@ class InfinitePoolStrategyTests(CandidateSelectionStrategyTestCase):
         self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
 
 
+class FavorNewAdditionsStrategyTests(CandidateSelectionStrategyTestCase):
+    def test_candidate_pool_includes_every_eligible_suggestion(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
+
+        self.assertEqual(pool_ids, {item_a.id, item_b.id})
+
+    def test_candidate_pool_excludes_a_vote_winner(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.suggestion_service.record_vote_win(item_a.id, date.today())
+        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
+
+        self.assertEqual(pool_ids, {item_b.id})
+
+    def test_candidate_pool_excludes_a_watched_item(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.suggestion_service.mark_suggestion_watched(item_a.id, date.today())
+        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
+
+        self.assertEqual(pool_ids, {item_b.id})
+
+    def test_candidate_pool_ignores_a_requested_count(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID, 5)}
+
+        self.assertEqual(pool_ids, {item_a.id, item_b.id})
+
+    def test_candidate_pool_never_creates_rotation_state(self) -> None:
+        self._add("Alien")
+        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        strategy.candidate_pool(DATABASE_ID)
+
+        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
+
+    def test_on_presented_never_creates_rotation_state(self) -> None:
+        item = self._add("Alien")
+        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        strategy.on_presented(DATABASE_ID, [item.id])
+
+        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
+
+    def test_weight_for_a_brand_new_suggestion_is_neutral(self) -> None:
+        item = self._item_suggested_days_ago(1, days=0)
+        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        self.assertAlmostEqual(strategy.weight_for(item), NEUTRAL_WEIGHT)
+
+    def test_weight_for_decays_as_the_suggestion_ages(self) -> None:
+        newer = self._item_suggested_days_ago(1, days=1)
+        older = self._item_suggested_days_ago(2, days=SUGGESTION_DATE_WEIGHT_HALF_LIFE_DAYS * 3)
+        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        self.assertGreater(strategy.weight_for(newer), strategy.weight_for(older))
+
+    def test_weight_for_approaches_but_never_reaches_the_minimum(self) -> None:
+        ancient = self._item_suggested_days_ago(1, days=SUGGESTION_DATE_WEIGHT_HALF_LIFE_DAYS * 50)
+        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        weight = strategy.weight_for(ancient)
+
+        self.assertGreater(weight, MIN_SUGGESTION_DATE_WEIGHT)
+        self.assertAlmostEqual(weight, MIN_SUGGESTION_DATE_WEIGHT, places=6)
+
+    def test_weight_for_falls_back_to_neutral_when_suggestion_date_is_unset(self) -> None:
+        # A legacy/imported record predating this field must never be
+        # penalized just because its suggestion_date is unknown.
+        item = WatchItem(title="Legacy", media_type=MediaType.MOVIE, id=1, journey=WatchItemJourney())
+        strategy = FavorNewAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        self.assertEqual(strategy.weight_for(item), NEUTRAL_WEIGHT)
+
+
+class FavorOlderAdditionsStrategyTests(CandidateSelectionStrategyTestCase):
+    def test_candidate_pool_includes_every_eligible_suggestion(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
+
+        self.assertEqual(pool_ids, {item_a.id, item_b.id})
+
+    def test_candidate_pool_excludes_a_vote_winner(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.suggestion_service.record_vote_win(item_a.id, date.today())
+        strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
+
+        self.assertEqual(pool_ids, {item_b.id})
+
+    def test_candidate_pool_excludes_a_watched_item(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.suggestion_service.mark_suggestion_watched(item_a.id, date.today())
+        strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        pool_ids = {item.id for item in strategy.candidate_pool(DATABASE_ID)}
+
+        self.assertEqual(pool_ids, {item_b.id})
+
+    def test_candidate_pool_never_creates_rotation_state(self) -> None:
+        self._add("Alien")
+        strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        strategy.candidate_pool(DATABASE_ID)
+
+        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
+
+    def test_on_presented_never_creates_rotation_state(self) -> None:
+        item = self._add("Alien")
+        strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        strategy.on_presented(DATABASE_ID, [item.id])
+
+        self.assertIsNone(self.rotation_service.get_open_rotation(DATABASE_ID))
+
+    def test_weight_for_a_brand_new_suggestion_is_the_minimum(self) -> None:
+        item = self._item_suggested_days_ago(1, days=0)
+        strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        self.assertAlmostEqual(strategy.weight_for(item), MIN_SUGGESTION_DATE_WEIGHT, places=6)
+
+    def test_weight_for_grows_as_the_suggestion_ages(self) -> None:
+        # The mirror image of FavorNewAdditionsStrategy's decay test.
+        newer = self._item_suggested_days_ago(1, days=1)
+        older = self._item_suggested_days_ago(2, days=SUGGESTION_DATE_WEIGHT_HALF_LIFE_DAYS * 3)
+        strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        self.assertLess(strategy.weight_for(newer), strategy.weight_for(older))
+
+    def test_weight_for_approaches_but_never_reaches_neutral(self) -> None:
+        ancient = self._item_suggested_days_ago(1, days=SUGGESTION_DATE_WEIGHT_HALF_LIFE_DAYS * 50)
+        strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        weight = strategy.weight_for(ancient)
+
+        self.assertLess(weight, NEUTRAL_WEIGHT)
+        self.assertAlmostEqual(weight, NEUTRAL_WEIGHT, places=6)
+
+    def test_weight_for_falls_back_to_neutral_when_suggestion_date_is_unset(self) -> None:
+        item = WatchItem(title="Legacy", media_type=MediaType.MOVIE, id=1, journey=WatchItemJourney())
+        strategy = FavorOlderAdditionsStrategy(suggestion_source=self.suggestion_service)
+
+        self.assertEqual(strategy.weight_for(item), NEUTRAL_WEIGHT)
+
+
 class CompositeWeightingTests(unittest.TestCase):
     def test_multiplies_every_factor_together(self) -> None:
         class HalfWeighting:
@@ -298,6 +479,18 @@ class BuildCandidateSelectionStrategyTests(CandidateSelectionStrategyTestCase):
             CandidateSelectionMode.INFINITE_POOL, self.rotation_service, self.suggestion_service
         )
         self.assertIsInstance(strategy, InfinitePoolStrategy)
+
+    def test_favor_new_additions_mode_builds_a_favor_new_additions_strategy(self) -> None:
+        strategy = build_candidate_selection_strategy(
+            CandidateSelectionMode.FAVOR_NEW_ADDITIONS, self.rotation_service, self.suggestion_service
+        )
+        self.assertIsInstance(strategy, FavorNewAdditionsStrategy)
+
+    def test_favor_older_additions_mode_builds_a_favor_older_additions_strategy(self) -> None:
+        strategy = build_candidate_selection_strategy(
+            CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, self.rotation_service, self.suggestion_service
+        )
+        self.assertIsInstance(strategy, FavorOlderAdditionsStrategy)
 
 
 if __name__ == "__main__":

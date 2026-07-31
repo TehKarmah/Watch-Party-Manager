@@ -32,6 +32,7 @@ from watch_party_manager.persistence.suggestion_database_configuration_repositor
 )
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
+from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.collection_eligibility_service import (
     CollectionEligibility,
     CollectionEligibilityService,
@@ -40,6 +41,7 @@ from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_display_status import SuggestionDisplayStatus
 from watch_party_manager.services.suggestion_service import SuggestionService
+from watch_party_manager.services.vote_service import VoteService
 from watch_party_manager.suggestion_selection_view import ListDatabaseSelectView
 
 GUILD_ID = 100
@@ -123,6 +125,90 @@ class ResolveSuggestionListEntriesTests(unittest.TestCase):
             {"active", "eligible", "rotation_cooldown", "vote_winner", "retired", "watched", "all"},
             {member.value for member in SuggestionListStatusFilter},
         )
+
+
+class _FakeVoteService:
+    """Rotation-removal Phase 1: minimal VoteRoundLookup stand-in --
+    reports the given items as currently nominated in an open round.
+    """
+
+    def __init__(self, nominated_ids) -> None:
+        self._nominated_ids = set(nominated_ids)
+
+    def get_open_round_for_suggestion(self, suggestion_id: int):
+        return object() if suggestion_id in self._nominated_ids else None
+
+
+class ResolveSuggestionListEntriesInActiveVoteTests(unittest.TestCase):
+    """Rotation-removal Phase 1: In an Active Vote overrides Available/
+    Rotation Cooldown for any item vote_service reports as currently
+    nominated -- a no-op when vote_service is omitted (existing callers
+    keep working unchanged).
+    """
+
+    def setUp(self) -> None:
+        self.eligible_item = make_item(1)
+        self.cooldown_item = make_item(2)
+        self.winner_item = make_item(3, status=WatchItemStatus.VOTE_WINNER)
+        self.eligibility = CollectionEligibility(
+            database_id=1,
+            mode=CandidateSelectionMode.ROTATION_POOL,
+            eligible=(self.eligible_item,),
+            rotation_cooldown=(self.cooldown_item,),
+            vote_winners=(self.winner_item,),
+            retired=(),
+            watched=(),
+        )
+
+    def test_no_vote_service_leaves_active_bucket_statuses_unchanged(self) -> None:
+        entries = resolve_suggestion_list_entries(self.eligibility, SuggestionListStatusFilter.ACTIVE)
+        items_and_statuses = {(item.id, status) for item, status in entries}
+        self.assertEqual(
+            {
+                (self.eligible_item.id, SuggestionDisplayStatus.AVAILABLE),
+                (self.cooldown_item.id, SuggestionDisplayStatus.ROTATION_COOLDOWN),
+            },
+            items_and_statuses,
+        )
+
+    def test_a_nominated_eligible_item_shows_in_an_active_vote(self) -> None:
+        vote_service = _FakeVoteService(nominated_ids=[self.eligible_item.id])
+
+        entries = resolve_suggestion_list_entries(
+            self.eligibility, SuggestionListStatusFilter.ELIGIBLE, vote_service
+        )
+
+        self.assertEqual([(self.eligible_item, SuggestionDisplayStatus.IN_ACTIVE_VOTE)], entries)
+
+    def test_a_nominated_cooldown_item_shows_in_an_active_vote(self) -> None:
+        vote_service = _FakeVoteService(nominated_ids=[self.cooldown_item.id])
+
+        entries = resolve_suggestion_list_entries(
+            self.eligibility, SuggestionListStatusFilter.ROTATION_COOLDOWN, vote_service
+        )
+
+        self.assertEqual([(self.cooldown_item, SuggestionDisplayStatus.IN_ACTIVE_VOTE)], entries)
+
+    def test_a_non_nominated_item_is_unaffected_by_a_vote_service(self) -> None:
+        vote_service = _FakeVoteService(nominated_ids=[])
+
+        entries = resolve_suggestion_list_entries(
+            self.eligibility, SuggestionListStatusFilter.ELIGIBLE, vote_service
+        )
+
+        self.assertEqual([(self.eligible_item, SuggestionDisplayStatus.AVAILABLE)], entries)
+
+    def test_vote_winner_is_never_shown_as_in_an_active_vote(self) -> None:
+        # A terminal status (Vote Winner/Retired/Watched) can never be an
+        # actual vote candidate again -- resolve_suggestion_list_entries
+        # never even checks vote_service for these buckets.
+        vote_service = _FakeVoteService(nominated_ids=[self.winner_item.id])
+
+        entries = resolve_suggestion_list_entries(
+            self.eligibility, SuggestionListStatusFilter.VOTE_WINNER, vote_service
+        )
+
+        self.assertEqual([(self.winner_item, SuggestionDisplayStatus.VOTE_WINNER)], entries)
 
 
 class BuildSuggestionEntryLineTests(unittest.TestCase):
@@ -290,6 +376,20 @@ class HandleListSuggestionsTestCase(unittest.IsolatedAsyncioTestCase):
     def _crew_member(self) -> FakeMember:
         return FakeMember([WASH_CREW_ROLE_ID])
 
+    def _set_candidate_selection(self, database_id: int, mode: CandidateSelectionMode) -> None:
+        # Rotation-removal Phase 1 changed the default nominee-selection
+        # mode to Favor New Additions, which creates no rotation state --
+        # a test that manually drives RotationService (Rotation Cooldown,
+        # rollover) must opt into a rotation-based mode explicitly.
+        self.configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=GUILD_ID,
+                database_id=database_id,
+                display_name="Movie Night",
+                suggestion_rules=SuggestionRulesConfig(candidate_selection=mode),
+            )
+        )
+
 
 class ListPermissionTests(HandleListSuggestionsTestCase):
     async def test_non_watch_party_member_is_rejected(self) -> None:
@@ -448,6 +548,7 @@ class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
         database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
+        self._set_candidate_selection(database.database_id, CandidateSelectionMode.ROTATION_POOL)
         item_a = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
         self.suggestion_service.suggest("The Matrix", database_id=database.database_id)
         self.suggestion_service.suggest("Inception", database_id=database.database_id)
@@ -466,6 +567,7 @@ class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
         database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
+        self._set_candidate_selection(database.database_id, CandidateSelectionMode.ROTATION_POOL)
         item_a = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
         self.suggestion_service.suggest("The Matrix", database_id=database.database_id)
         self.suggestion_service.suggest("Inception", database_id=database.database_id)
@@ -543,6 +645,7 @@ class ListFilteringAndPaginationTests(HandleListSuggestionsTestCase):
         database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
+        self._set_candidate_selection(database.database_id, CandidateSelectionMode.ROTATION_POOL)
         item_a = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
         for title in ("The Matrix", "Inception", "Arrival"):
             self.suggestion_service.suggest(title, database_id=database.database_id)
@@ -660,6 +763,7 @@ class ListEligibilityParityTests(HandleListSuggestionsTestCase):
         database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
+        self._set_candidate_selection(database.database_id, CandidateSelectionMode.ROTATION_POOL)
         item_a = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
         self.suggestion_service.suggest("The Matrix", database_id=database.database_id)
         self.suggestion_service.suggest("Inception", database_id=database.database_id)
@@ -748,6 +852,7 @@ class ListEligibilityParityTests(HandleListSuggestionsTestCase):
         database = self.suggestion_service.create_database(
             "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).database
+        self._set_candidate_selection(database.database_id, CandidateSelectionMode.ROTATION_POOL)
         item_a = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
         self.suggestion_service.suggest("The Matrix", database_id=database.database_id)
         self.suggestion_service.suggest("Inception", database_id=database.database_id)
@@ -782,6 +887,86 @@ class ListEligibilityParityTests(HandleListSuggestionsTestCase):
         await handle_list_suggestions(interaction, self.bot, "vote_winner", False)
 
         self.assertIsNone(self.bot.rotation_service.get_open_rotation(database.database_id))
+
+
+class ListInActiveVoteEndToEndTests(HandleListSuggestionsTestCase):
+    """Rotation-removal Phase 1, end to end: a suggestion currently
+    nominated in a real open voting round shows as In an Active Vote on
+    /list, taking priority over whichever bucket it came from.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.bot.vote_service = VoteService(
+            self.suggestion_service, repository=JsonVoteRepository(Path(self._temp_dir.name) / "voting.json")
+        )
+
+    async def test_a_nominated_suggestion_shows_in_an_active_vote_on_the_eligible_filter(self) -> None:
+        database = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        item = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
+        other = self.suggestion_service.suggest("The Matrix", database_id=database.database_id).watch_item
+        self.bot.vote_service.create_round(candidate_suggestion_ids=[item.id, other.id])
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "eligible", False)
+
+        message = interaction.response.sent_message
+        self.assertIn("🗳️ Alien", message)
+        self.assertNotIn("🟢 Alien", message)
+
+    async def test_a_nominated_suggestion_still_shows_in_an_active_vote_when_also_in_cooldown(self) -> None:
+        # In an Active Vote takes priority over Rotation Cooldown --
+        # mirrors resolve_display_status's own precedence rule.
+        database = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        self.configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=GUILD_ID,
+                database_id=database.database_id,
+                display_name="Movie Night",
+                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.ROTATION_POOL),
+            )
+        )
+        item = self.suggestion_service.suggest("Alien", database_id=database.database_id).watch_item
+        other = self.suggestion_service.suggest("The Matrix", database_id=database.database_id).watch_item
+        # Enough pending suggestions left after presentation (3, matching
+        # the default configured candidate count) that /list's own
+        # rollover-before-reporting never kicks in and reclaims item back
+        # to eligibility -- this test is about display-status precedence,
+        # not the rollover behavior covered elsewhere.
+        self.suggestion_service.suggest("Inception", database_id=database.database_id)
+        self.suggestion_service.suggest("Arrival", database_id=database.database_id)
+        self.bot.rotation_service.get_or_start_rotation(database.database_id)
+        self.bot.rotation_service.record_presentation(database.database_id, [item.id])
+        self.bot.vote_service.create_round(candidate_suggestion_ids=[item.id, other.id])
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "rotation_cooldown", False)
+
+        # The item is still returned by the Rotation Cooldown filter (its
+        # eligibility bucket is unaffected), but displayed as In an Active
+        # Vote rather than Rotation Cooldown.
+        message = interaction.response.sent_message
+        self.assertIn("🗳️ Alien", message)
+        self.assertNotIn("🟡 Alien", message)
+
+    async def test_without_a_vote_service_attribute_the_item_shows_its_ordinary_status(self) -> None:
+        # FakeBot fixtures across the suite don't all define vote_service
+        # -- send_suggestion_list must read it defensively (getattr) so
+        # /list keeps working unchanged for them.
+        del self.bot.vote_service
+        database = self.suggestion_service.create_database(
+            "Movie Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).database
+        self.suggestion_service.suggest("Alien", database_id=database.database_id)
+        interaction = FakeInteraction()
+
+        await handle_list_suggestions(interaction, self.bot, "eligible", False)
+
+        self.assertIn("🟢 Alien", interaction.response.sent_message)
 
 
 class ListSwitchCollectionTests(HandleListSuggestionsTestCase):

@@ -37,13 +37,28 @@ from watch_party_manager.domain.guild_configuration import (
 
 
 class CandidateSelectionMode(str, Enum):
-    """How nominees are chosen for a voting round (FR-033B).
+    """How nominees are chosen for a voting round (FR-033B; user-facing
+    name is "Nominee Selection" as of Rotation-removal Phase 1 -- see
+    NOMINEE_SELECTION_DISPLAY_LABELS/CANDIDATE_SELECTION_DISPLAY_LABELS
+    below).
 
-    ROTATION_POOL (the default) excludes a suggestion from selection once
-    presented, until a fresh rotation begins. SOFT_ROTATION keeps
-    presented suggestions eligible but weights them down. INFINITE_POOL
-    applies no rotation-based exclusion or weighting at all. See
-    services/candidate_selection_strategy.py for the algorithms.
+    ROTATION_POOL excludes a suggestion from selection once presented,
+    until a fresh rotation begins. SOFT_ROTATION keeps presented
+    suggestions eligible but weights them down. Both require
+    RotationService and are being phased out (Rotation-removal Phase 1:
+    they remain fully functional for any collection still configured to
+    use them, but are no longer offered as a new choice -- see
+    NOMINEE_SELECTION_MODE_ORDER). See services/candidate_selection_strategy.py
+    for the algorithms.
+
+    INFINITE_POOL ("Pure Random"), FAVOR_NEW_ADDITIONS ("Favor New
+    Additions"), and FAVOR_OLDER_ADDITIONS ("Favor Older Additions") are
+    the three modes now offered. All three are rotation-free: every
+    eligible suggestion is always immediately selectable, with
+    FAVOR_NEW_ADDITIONS/FAVOR_OLDER_ADDITIONS weighting by
+    WatchItemJourney.suggestion_date (permanent metadata) instead of
+    rotation-presentation history. FAVOR_NEW_ADDITIONS is the new default
+    for newly created collections, replacing ROTATION_POOL in that role.
 
     Superseded RANDOM/BALANCED_RANDOM values (pre-FR-033B) never drove
     any selection behavior -- both are migrated to ROTATION_POOL on load
@@ -56,34 +71,37 @@ class CandidateSelectionMode(str, Enum):
     ROTATION_POOL = "rotation_pool"
     SOFT_ROTATION = "soft_rotation"
     INFINITE_POOL = "infinite_pool"
+    FAVOR_NEW_ADDITIONS = "favor_new_additions"
+    FAVOR_OLDER_ADDITIONS = "favor_older_additions"
 
 
 # The single source of truth for how each mode is labeled in Discord UI
-# (Setup Wizard, /config, and any summary text) -- ROTATION_POOL is
-# presented as "Balanced Random" since it's the recommended, default
-# choice that avoids immediate repeats without excluding anything
-# permanently; INFINITE_POOL as "Pure Random" since it applies no
-# weighting or exclusion at all. Kept here, next to the enum itself,
-# so every caller (setup_wizard_view.py, bot.py's /config and setup
-# summaries) shows the exact same wording rather than each inventing
-# its own.
+# (Setup Wizard, /config, and any summary text) -- kept here, next to the
+# enum itself, so every caller (setup_wizard_view.py, bot.py's /config
+# and setup summaries) shows the exact same wording rather than each
+# inventing its own. ROTATION_POOL/SOFT_ROTATION keep their existing
+# labels for as long as they exist (Rotation-removal Phase 1 does not
+# rename or remove them -- see the enum's own docstring); they are simply
+# no longer offered as a new choice (see NOMINEE_SELECTION_MODE_ORDER).
 CANDIDATE_SELECTION_DISPLAY_LABELS: dict[CandidateSelectionMode, str] = {
     CandidateSelectionMode.ROTATION_POOL: "Balanced Random",
     CandidateSelectionMode.SOFT_ROTATION: "Soft Rotation",
     CandidateSelectionMode.INFINITE_POOL: "Pure Random",
+    CandidateSelectionMode.FAVOR_NEW_ADDITIONS: "Favor New Additions",
+    CandidateSelectionMode.FAVOR_OLDER_ADDITIONS: "Favor Older Additions",
 }
 
 # UI Polish: a one-sentence, plain-language explanation for each mode,
 # shown everywhere a WASH Crew member is asked to choose one (the
 # Setup Wizard's and /vote start Customize This Vote's dropdown option
-# descriptions, /config's Candidate Selection screen, and the Expanded
+# descriptions, /config's Nominee Selection screen, and the Expanded
 # Help/Administration docs) so nobody has to already understand the
-# underlying rotation algorithm to make an informed choice. Kept here,
-# next to CANDIDATE_SELECTION_DISPLAY_LABELS, for the same single-
-# source-of-truth reason. Each string is deliberately <=100 characters
-# so it also fits verbatim in a Discord SelectOption's description
-# field (Discord's own hard limit), rather than needing a separate,
-# longer variant that could drift out of sync with this one.
+# underlying algorithm to make an informed choice. Kept here, next to
+# CANDIDATE_SELECTION_DISPLAY_LABELS, for the same single-source-of-truth
+# reason. Each string is deliberately <=100 characters so it also fits
+# verbatim in a Discord SelectOption's description field (Discord's own
+# hard limit), rather than needing a separate, longer variant that could
+# drift out of sync with this one.
 CANDIDATE_SELECTION_HELP_TEXT: dict[CandidateSelectionMode, str] = {
     CandidateSelectionMode.ROTATION_POOL: (
         "Prioritizes suggestions that have appeared in fewer recent votes, giving every one a fair chance."
@@ -94,18 +112,50 @@ CANDIDATE_SELECTION_HELP_TEXT: dict[CandidateSelectionMode, str] = {
     CandidateSelectionMode.INFINITE_POOL: (
         "Chooses completely at random from eligible suggestions, with no preference or exclusion."
     ),
+    CandidateSelectionMode.FAVOR_NEW_ADDITIONS: (
+        "Leans toward suggestions added recently; older ones stay eligible, just at a lower chance."
+    ),
+    CandidateSelectionMode.FAVOR_OLDER_ADDITIONS: (
+        "Leans toward suggestions that have waited the longest; newer ones stay eligible, just at a lower chance."
+    ),
 }
+
+# Rotation-removal Phase 1: the modes actually offered as a new Nominee
+# Selection choice, in display order -- ROTATION_POOL and SOFT_ROTATION
+# are deliberately excluded (existing collections configured to use
+# either keep working unchanged; see CandidateSelectionStrategy) so a
+# WASH Crew member can never newly pick a mode this project is phasing
+# out. FAVOR_NEW_ADDITIONS is first/default, replacing ROTATION_POOL's
+# old "(Recommended)" position.
+NOMINEE_SELECTION_MODE_ORDER: tuple[CandidateSelectionMode, ...] = (
+    CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
+    CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
+    CandidateSelectionMode.INFINITE_POOL,
+)
 
 
 class SuggestionAdmissionMode(str, Enum):
     """When a newly created (or reactivated) suggestion joins a rotation.
 
-    NEXT_ROTATION (the default) leaves a new suggestion unassigned to any
-    in-progress rotation -- it's picked up automatically the next time a
-    fresh rotation begins. JOIN_CURRENT_ROTATION immediately assigns it
-    to whichever rotation is currently open, expanding it live. Only
-    meaningful for databases using CandidateSelectionMode.ROTATION_POOL
-    or SOFT_ROTATION -- INFINITE_POOL has no rotation concept to join.
+    NEXT_ROTATION leaves a new suggestion unassigned to any in-progress
+    rotation -- it's picked up automatically the next time a fresh
+    rotation begins. JOIN_CURRENT_ROTATION immediately assigns it to
+    whichever rotation is currently open, expanding it live. Only
+    meaningful for databases still using CandidateSelectionMode.
+    ROTATION_POOL or SOFT_ROTATION -- INFINITE_POOL, FAVOR_NEW_ADDITIONS,
+    and FAVOR_OLDER_ADDITIONS have no rotation concept to join, so a new
+    suggestion is simply eligible immediately under any of them,
+    regardless of this setting.
+
+    Rotation-removal Phase 1 ("New Suggestions... should become eligible
+    immediately"): SuggestionRulesConfig.admission_mode's default changed
+    from NEXT_ROTATION to JOIN_CURRENT_ROTATION, moving the two remaining
+    rotation-based modes' own behavior as close to "immediate eligibility"
+    as their rotation lifecycle allows, without deleting either mode or
+    this field yet. This enum and field become entirely meaningless once
+    RotationService/ROTATION_POOL/SOFT_ROTATION are removed in a later
+    phase -- TODO(rotation-removal): delete SuggestionAdmissionMode, this
+    field, and every reference to it once that happens.
     """
 
     NEXT_ROTATION = "next_rotation"
@@ -179,15 +229,25 @@ class VotingOverridesConfig:
 
 @dataclass(slots=True)
 class SuggestionRulesConfig:
-    """Rules governing how suggestions are entered and rotated."""
+    """Rules governing how suggestions are entered and rotated.
+
+    Rotation-removal Phase 1: candidate_selection's default changed from
+    ROTATION_POOL to FAVOR_NEW_ADDITIONS (a newly created collection now
+    gets a rotation-free mode by default; ROTATION_POOL/SOFT_ROTATION
+    remain fully usable but must be explicitly chosen -- see
+    NOMINEE_SELECTION_MODE_ORDER). admission_mode's default changed from
+    NEXT_ROTATION to JOIN_CURRENT_ROTATION for the same reason (see that
+    enum's own docstring) -- new suggestions become eligible immediately
+    under every mode now.
+    """
 
     allow_imdb_links: bool = True
     allow_manual_titles: bool = True
     require_unique_active_titles: bool = True
     rejection_threshold: int = 2
     allow_resuggestion: bool = True
-    candidate_selection: CandidateSelectionMode = CandidateSelectionMode.ROTATION_POOL
-    admission_mode: SuggestionAdmissionMode = SuggestionAdmissionMode.NEXT_ROTATION
+    candidate_selection: CandidateSelectionMode = CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+    admission_mode: SuggestionAdmissionMode = SuggestionAdmissionMode.JOIN_CURRENT_ROTATION
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:

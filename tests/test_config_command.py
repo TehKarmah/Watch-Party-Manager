@@ -528,8 +528,8 @@ class SectionRenderingTests(ConfigCommandTestCase):
 
         select = interaction.response.sent_view.children[0]
         descriptions_by_value = {option.value: option.description for option in select.options}
-        self.assertEqual(descriptions_by_value[str(movies.database_id)], "Candidate Selection: Balanced Random")
-        self.assertEqual(descriptions_by_value[str(tv_shows.database_id)], "Candidate Selection: Pure Random")
+        self.assertEqual(descriptions_by_value[str(movies.database_id)], "Nominee Selection: Favor New Additions")
+        self.assertEqual(descriptions_by_value[str(tv_shows.database_id)], "Nominee Selection: Pure Random")
 
     async def test_manage_databases_section_with_no_databases_shows_back_only(self) -> None:
         self._seed_completed_setup()
@@ -568,7 +568,7 @@ class SectionRenderingTests(ConfigCommandTestCase):
         await send_config_database_settings_menu(interaction, self.bot, GUILD_ID, database_id, on_back)
 
         self.assertIn(f"<#{DESTINATION_CHANNEL_ID}>", interaction.response.edited_content)
-        self.assertIn("Balanced Random", interaction.response.edited_content)
+        self.assertIn("Favor New Additions", interaction.response.edited_content)
 
     async def test_choosing_suggestion_destination_shows_the_channel_picker(self) -> None:
         self._seed_completed_setup()
@@ -634,7 +634,7 @@ class SectionRenderingTests(ConfigCommandTestCase):
         self.assertIsInstance(setting_interaction.response.edited_view, ConfigDatabaseCandidateSelectionView)
         self.assertEqual(
             setting_interaction.response.edited_view.candidate_selection_select.selected,
-            CandidateSelectionMode.ROTATION_POOL,
+            CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
         )
 
     async def test_selecting_a_suggestion_destination_saves_immediately(self) -> None:

@@ -23,6 +23,7 @@ from watch_party_manager.domain.guild_configuration import GuildVoteVisibility, 
 from watch_party_manager.domain.suggestion_database_configuration import (
     CANDIDATE_SELECTION_DISPLAY_LABELS,
     CANDIDATE_SELECTION_HELP_TEXT,
+    NOMINEE_SELECTION_MODE_ORDER,
     CandidateSelectionMode,
 )
 
@@ -57,14 +58,19 @@ _DESTINATION_CHANNEL_TYPES = [
 ]
 
 # Reuses CANDIDATE_SELECTION_DISPLAY_LABELS (the same mapping /about,
-# /config, and every other candidate-selection display already draws
-# from) so the dropdown's wording can never drift from that single
-# source of truth. "(Recommended)" is presentation-only, appended here
-# rather than baked into the shared label.
-_CANDIDATE_SELECTION_SELECT_LABELS: dict[CandidateSelectionMode, str] = {
-    CandidateSelectionMode.ROTATION_POOL: f"{CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.ROTATION_POOL]} (Recommended)",
-    CandidateSelectionMode.SOFT_ROTATION: CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.SOFT_ROTATION],
-    CandidateSelectionMode.INFINITE_POOL: CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.INFINITE_POOL],
+# /config, and every other nominee-selection display already draws from)
+# so the dropdown's wording can never drift from that single source of
+# truth. "(Recommended)" is presentation-only, appended here rather than
+# baked into the shared label -- it marks NOMINEE_SELECTION_MODE_ORDER's
+# first entry (FAVOR_NEW_ADDITIONS as of Rotation-removal Phase 1),
+# whichever mode that happens to be.
+_NOMINEE_SELECTION_SELECT_LABELS: dict[CandidateSelectionMode, str] = {
+    mode: (
+        f"{CANDIDATE_SELECTION_DISPLAY_LABELS[mode]} (Recommended)"
+        if index == 0
+        else CANDIDATE_SELECTION_DISPLAY_LABELS[mode]
+    )
+    for index, mode in enumerate(NOMINEE_SELECTION_MODE_ORDER)
 }
 
 
@@ -1023,19 +1029,15 @@ class CandidateSelectionSelectComponent(discord.ui.Select):
     def __init__(self, *, default: CandidateSelectionMode) -> None:
         options = [
             discord.SelectOption(
-                label=_CANDIDATE_SELECTION_SELECT_LABELS[mode],
+                label=_NOMINEE_SELECTION_SELECT_LABELS[mode],
                 value=mode.value,
                 description=CANDIDATE_SELECTION_HELP_TEXT[mode],
                 default=mode is default,
             )
-            for mode in (
-                CandidateSelectionMode.ROTATION_POOL,
-                CandidateSelectionMode.SOFT_ROTATION,
-                CandidateSelectionMode.INFINITE_POOL,
-            )
+            for mode in NOMINEE_SELECTION_MODE_ORDER
         ]
         super().__init__(
-            placeholder="Choose the candidate selection mode",
+            placeholder="Choose the nominee selection mode",
             options=options,
             custom_id="wpm_setup_voting_candidate_selection_select",
         )

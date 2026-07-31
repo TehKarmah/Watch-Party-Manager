@@ -21,15 +21,33 @@ Three concrete strategies satisfy FR-033B Section 1:
     Infinite Pool database never gets rotation records created for it
     (FR-033B Section 14: "Infinite Pool: ... no rotation state required").
 
+Rotation-removal Phase 1 adds two more, coexisting alongside the three
+above rather than replacing them yet (see RotationService's own module
+docstring for the removal plan):
+  - FavorNewAdditionsStrategy / FavorOlderAdditionsStrategy: like
+    InfinitePoolStrategy, neither touches RotationService or excludes
+    anything based on presentation history -- every suggestion is always
+    immediately selectable. Unlike InfinitePoolStrategy, each applies a
+    smooth weighting curve driven by WatchItemJourney.suggestion_date
+    (permanent metadata recorded once at suggestion time, entirely
+    independent of rotation state) instead of neutral weight for
+    everyone. These, together with InfinitePoolStrategy ("Pure Random"),
+    are the three modes now offered as Nominee Selection choices; the
+    two rotation-based strategies above remain fully functional for any
+    collection still configured to use them, but are no longer offered
+    as a new choice (see domain/suggestion_database_configuration.py).
+
 Section 9's future weighting architecture (Likes, cooldowns, genre
 diversity, etc.) plugs in via WeightingFactor: any new factor is just
 another entry in a CompositeWeighting's factor tuple, multiplied in
-without changing any strategy's shape.
+without changing any strategy's shape -- exactly how the two new
+suggestion-date factors below plug in.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import List, Optional, Protocol, Sequence, runtime_checkable
 
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
@@ -41,6 +59,15 @@ from watch_party_manager.services.rotation_service import RotationService
 # technically eligible," so they must always retain some chance.
 SOFT_ROTATION_PRESENTED_WEIGHT = 0.1
 NEUTRAL_WEIGHT = 1.0
+
+# Rotation-removal Phase 1: the floor Favor New/Older Additions' weighting
+# curve decays toward -- never zero, mirroring SOFT_ROTATION_PRESENTED_
+# WEIGHT's own "never fully exclude" philosophy, just applied to
+# suggestion age instead of presentation history.
+MIN_SUGGESTION_DATE_WEIGHT = 0.1
+# How many days it takes the recency score below to halve. Tunable --
+# not exposed as user configuration in this phase.
+SUGGESTION_DATE_WEIGHT_HALF_LIFE_DAYS = 30
 
 
 @runtime_checkable
@@ -195,6 +222,129 @@ class InfinitePoolStrategy:
         return None
 
 
+def _suggestion_date_recency_score(watch_item: WatchItem, *, today: Optional[date] = None) -> Optional[float]:
+    """How recently `watch_item` was suggested, as a smooth 0-1 score
+    that halves every SUGGESTION_DATE_WEIGHT_HALF_LIFE_DAYS (1.0 the day
+    it's suggested, 0.5 after one half-life, 0.25 after two, ...,
+    asymptotically approaching but never reaching 0).
+
+    Returns None -- callers fall back to NEUTRAL_WEIGHT rather than
+    guessing -- when journey.suggestion_date is unset (a legacy/imported
+    record predating this field, or a fixture that never set it).
+    `today` is only ever overridden by tests; production callers always
+    use the real current date.
+    """
+    suggestion_date = watch_item.journey.suggestion_date
+    if suggestion_date is None:
+        return None
+    reference_date = today if today is not None else date.today()
+    age_days = max((reference_date - suggestion_date).days, 0)
+    return 2.0 ** (-age_days / SUGGESTION_DATE_WEIGHT_HALF_LIFE_DAYS)
+
+
+class _FavorNewAdditionsWeighting:
+    """WeightingFactor: boosts recently-suggested items, decaying
+    smoothly toward MIN_SUGGESTION_DATE_WEIGHT as they age -- never
+    fully excluded, just heavily deprioritized once old (mirrors
+    _PresentedWeighting's own "never zero" philosophy, applied to
+    suggestion age instead of presentation history). Uses only
+    WatchItemJourney.suggestion_date -- permanent metadata, no
+    RotationService dependency (Rotation-removal Phase 1).
+    """
+
+    def weight(self, watch_item: WatchItem) -> float:
+        recency = _suggestion_date_recency_score(watch_item)
+        if recency is None:
+            return NEUTRAL_WEIGHT
+        return MIN_SUGGESTION_DATE_WEIGHT + (NEUTRAL_WEIGHT - MIN_SUGGESTION_DATE_WEIGHT) * recency
+
+
+class _FavorOlderAdditionsWeighting:
+    """WeightingFactor: the inverse of _FavorNewAdditionsWeighting --
+    boosts suggestions that have sat in the pool the longest, so a
+    collection's backlog doesn't languish forever unselected. Same
+    half-life curve and None-handling, just applied to (1 - recency)
+    instead of recency.
+    """
+
+    def weight(self, watch_item: WatchItem) -> float:
+        recency = _suggestion_date_recency_score(watch_item)
+        if recency is None:
+            return NEUTRAL_WEIGHT
+        return MIN_SUGGESTION_DATE_WEIGHT + (NEUTRAL_WEIGHT - MIN_SUGGESTION_DATE_WEIGHT) * (1.0 - recency)
+
+
+def _non_terminal_suggestions(
+    suggestion_source: RotationPoolSuggestionSource, database_id: int
+) -> List[WatchItem]:
+    """Every suggestion still selectable in principle -- excludes Vote
+    Winner and Watched (a suggestion must never be nominated again once
+    either has happened; see SoftRotationStrategy's identical exclusion
+    for the full rationale), shared by every rotation-free strategy
+    (Rotation-removal Phase 1) so this filter is defined exactly once.
+    """
+    return [
+        item
+        for item in suggestion_source.get_suggestions_for_database(database_id)
+        if item.status not in (WatchItemStatus.VOTE_WINNER, WatchItemStatus.WATCHED)
+    ]
+
+
+@dataclass
+class FavorNewAdditionsStrategy:
+    """Rotation-removal Phase 1: "Favor New Additions" -- every eligible
+    suggestion is always immediately selectable (no rotation concept at
+    all, exactly like InfinitePoolStrategy), weighted toward recently-
+    suggested items via WatchItemJourney.suggestion_date rather than
+    rotation-presentation history.
+    """
+
+    suggestion_source: RotationPoolSuggestionSource
+    weighting: CompositeWeighting = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.weighting is None:
+            self.weighting = CompositeWeighting(factors=(_FavorNewAdditionsWeighting(),))
+
+    def candidate_pool(self, database_id: int, requested_count: Optional[int] = None) -> List[WatchItem]:
+        # requested_count is intentionally unused -- there is no rotation
+        # to roll over, mirroring InfinitePoolStrategy exactly.
+        return _non_terminal_suggestions(self.suggestion_source, database_id)
+
+    def weight_for(self, watch_item: WatchItem) -> float:
+        return self.weighting.weight(watch_item)
+
+    def on_presented(self, database_id: int, suggestion_ids: Sequence[int]) -> None:
+        # No rotation state to record presentation into -- this mode
+        # never touches RotationService.
+        return None
+
+
+@dataclass
+class FavorOlderAdditionsStrategy:
+    """Rotation-removal Phase 1: "Favor Older Additions" -- the inverse
+    weighting of FavorNewAdditionsStrategy, otherwise identical (every
+    eligible suggestion always immediately selectable, no rotation
+    concept).
+    """
+
+    suggestion_source: RotationPoolSuggestionSource
+    weighting: CompositeWeighting = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.weighting is None:
+            self.weighting = CompositeWeighting(factors=(_FavorOlderAdditionsWeighting(),))
+
+    def candidate_pool(self, database_id: int, requested_count: Optional[int] = None) -> List[WatchItem]:
+        return _non_terminal_suggestions(self.suggestion_source, database_id)
+
+    def weight_for(self, watch_item: WatchItem) -> float:
+        return self.weighting.weight(watch_item)
+
+    def on_presented(self, database_id: int, suggestion_ids: Sequence[int]) -> None:
+        return None
+
+
 def build_candidate_selection_strategy(
     mode: CandidateSelectionMode,
     rotation_service: RotationService,
@@ -206,9 +356,18 @@ def build_candidate_selection_strategy(
     else (NomineeSelectionService, bot.py) works only against the
     CandidateSelectionStrategy Protocol, never against the mode enum
     directly.
+
+    Rotation-removal Phase 1: rotation_service is still accepted
+    unconditionally (never Optional) since ROTATION_POOL/SOFT_ROTATION
+    still need it and are not being removed this phase -- the two new
+    modes below simply never call it.
     """
     if mode is CandidateSelectionMode.ROTATION_POOL:
         return RotationPoolStrategy(rotation_service=rotation_service)
     if mode is CandidateSelectionMode.SOFT_ROTATION:
         return SoftRotationStrategy(rotation_service=rotation_service, suggestion_source=suggestion_source)
+    if mode is CandidateSelectionMode.FAVOR_NEW_ADDITIONS:
+        return FavorNewAdditionsStrategy(suggestion_source=suggestion_source)
+    if mode is CandidateSelectionMode.FAVOR_OLDER_ADDITIONS:
+        return FavorOlderAdditionsStrategy(suggestion_source=suggestion_source)
     return InfinitePoolStrategy(suggestion_source=suggestion_source)
