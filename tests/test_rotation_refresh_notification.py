@@ -31,7 +31,10 @@ from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.collection_eligibility_service import CollectionEligibilityService
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
 from watch_party_manager.services.permission_service import PermissionService
-from watch_party_manager.services.rotation_low_pool_notification_service import RotationLowPoolNotificationService
+from watch_party_manager.services.eligible_pool_warning_service import EligiblePoolWarningService
+from watch_party_manager.persistence.eligible_pool_warning_state_repository import (
+    JsonEligiblePoolWarningStateRepository,
+)
 from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import VoteService
@@ -205,12 +208,13 @@ class EndToEndNotificationTestCase(unittest.IsolatedAsyncioTestCase):
                 suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.ROTATION_POOL),
             )
         )
-        self.eligibility_service = CollectionEligibilityService(self.suggestion_service, self.rotation_service)
+        self.eligibility_service = CollectionEligibilityService(self.suggestion_service, self.vote_service)
 
         class FakeBot:
             def __init__(inner_self) -> None:
                 inner_self.suggestion_service = self.suggestion_service
                 inner_self.rotation_service = self.rotation_service
+                inner_self.vote_service = self.vote_service
                 inner_self.permission_service = PermissionService(
                     watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=WASH_CREW_ROLE_ID
                 )
@@ -218,9 +222,9 @@ class EndToEndNotificationTestCase(unittest.IsolatedAsyncioTestCase):
                 inner_self.suggestion_database_configuration_repository = self.configuration_repository
                 inner_self.guild_configuration_repository = FakeGuildConfigurationRepository()
                 inner_self.collection_eligibility_service = self.eligibility_service
-                inner_self.rotation_low_pool_notification_service = RotationLowPoolNotificationService(
+                inner_self.eligible_pool_warning_service = EligiblePoolWarningService(
                     self.eligibility_service,
-                    self.rotation_service,
+                    JsonEligiblePoolWarningStateRepository(Path(self._temp_dir.name) / "eligible_pool_warning_state.json"),
                     inner_self.guild_configuration_repository,
                     self.configuration_repository,
                     self.suggestion_service,
@@ -333,32 +337,29 @@ class VoteStartRotationRefreshNotificationTests(EndToEndNotificationTestCase):
         self.assertNotIn("Starting Rotation", embed_text)
 
 
-class ListRotationRefreshNotificationTests(EndToEndNotificationTestCase):
-    async def test_a_rollover_triggering_list_prepends_the_notification(self) -> None:
+class ListNeverShowsRotationRefreshNotificationTests(EndToEndNotificationTestCase):
+    """Rotation-removal Phase 2: /list's own eligibility resolution
+    (CollectionEligibilityService.get_eligibility) never touches
+    RotationService at all, so it can never trigger -- or announce -- a
+    rotation rollover any more. The Rotation Refresh Notification now
+    only ever appears alongside /vote start (see
+    VoteStartRotationRefreshNotificationTests above), for a legacy
+    Balanced Random/Soft Rotation collection's own internal rollover.
+    """
+
+    async def test_list_never_shows_the_rotation_refresh_notification_even_with_presented_items(self) -> None:
         items = self._add_items(3)
         self.rotation_service.get_or_start_rotation(self.database.database_id)
         self.rotation_service.record_presentation(self.database.database_id, [item.id for item in items[:2]])
-        # 1 of 3 remains pending -- fewer than the default candidate
-        # count of 3 -- so /list's own resolve() must roll over too.
         interaction = FakeInteraction()
 
         await handle_list_suggestions(interaction, self.bot, "eligible", False)
 
         message = interaction.response.sent_message
-        self.assertIn("All eligible watch items have now been presented.", message)
-        self.assertIn("Starting Rotation 2.", message)
+        self.assertNotIn("Starting Rotation", message)
+        self.assertNotIn("All eligible watch items have now been presented.", message)
 
-    async def test_no_rollover_shows_no_notification(self) -> None:
-        self._add_items(3)
-        interaction = FakeInteraction()
-
-        await handle_list_suggestions(interaction, self.bot, "eligible", False)
-
-        self.assertNotIn("Starting Rotation", interaction.response.sent_message)
-
-    async def test_a_terminal_status_only_filter_never_shows_the_notification(self) -> None:
-        # Vote Winners/Retired use peek(), which never rolls over --
-        # there is nothing to announce when checking either of them alone.
+    async def test_list_never_shows_it_on_any_filter(self) -> None:
         self._add_items(3)
         interaction = FakeInteraction()
 

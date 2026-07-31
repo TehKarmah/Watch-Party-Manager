@@ -29,7 +29,6 @@ class JsonRotationRepositoryTests(unittest.TestCase):
 
         self.assertEqual(result.rotations, [])
         self.assertEqual(result.next_rotation_id, 1)
-        self.assertEqual(result.low_pool_notified_rotation_ids, {})
 
     def test_save_then_load_round_trips_a_rotation(self) -> None:
         rotation = Rotation(
@@ -38,7 +37,7 @@ class JsonRotationRepositoryTests(unittest.TestCase):
             status=RotationStatus.OPEN,
             assigned_suggestion_ids=(1, 2, 3),
         )
-        self.repository.save([rotation], 2, {})
+        self.repository.save([rotation], 2)
 
         loaded = self.repository.load()
 
@@ -54,41 +53,37 @@ class JsonRotationRepositoryTests(unittest.TestCase):
         rotation = Rotation(
             id=1, database_id=10, status=RotationStatus.COMPLETED, started_at=started, completed_at=completed
         )
-        self.repository.save([rotation], 2, {})
+        self.repository.save([rotation], 2)
 
         loaded = self.repository.load()
 
         self.assertEqual(loaded.rotations[0].status, RotationStatus.COMPLETED)
         self.assertIsNotNone(loaded.rotations[0].completed_at)
 
-    def test_save_then_load_round_trips_the_low_pool_notified_rotation_id(self) -> None:
-        self.repository.save([], 1, {10: 5})
-
-        loaded = self.repository.load()
-
-        self.assertEqual(loaded.low_pool_notified_rotation_ids[10], 5)
-
-    def test_loading_a_file_with_the_old_timestamp_based_key_ignores_it_gracefully(self) -> None:
-        # Backward-compatible loading: a rotations.json saved before the
-        # Rotation & Collection Health Audit has
-        # low_pool_reminder_last_sent_at, not low_pool_notified_rotation_ids
-        # -- it must load as "nothing notified yet" rather than erroring.
+    def test_loading_a_file_with_the_old_low_pool_dedup_key_ignores_it_gracefully(self) -> None:
+        # Rotation-removal Phase 2: the Rotation Low-Pool notification's
+        # dedup map (low_pool_notified_rotation_ids) is gone -- its
+        # replacement, the Eligible Pool Warning, keys off its own
+        # separate, rotation-independent state file (see
+        # persistence/eligible_pool_warning_state_repository.py). A
+        # rotations.json saved before this phase simply has that key
+        # ignored on load rather than erroring.
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         self.file_path.write_text(
-            '{"next_rotation_id": 1, "rotations": [], '
-            '"low_pool_reminder_last_sent_at": {"10": "2026-01-01T00:00:00+00:00"}}',
+            '{"next_rotation_id": 1, "rotations": [], "low_pool_notified_rotation_ids": {"10": 5}}',
             encoding="utf-8",
         )
 
         loaded = self.repository.load()
 
-        self.assertEqual(loaded.low_pool_notified_rotation_ids, {})
+        self.assertEqual(loaded.rotations, [])
+        self.assertEqual(loaded.next_rotation_id, 1)
 
     def test_save_creates_parent_directories(self) -> None:
         nested_path = Path(self._temp_dir.name) / "nested" / "rotations.json"
         repository = JsonRotationRepository(nested_path)
 
-        repository.save([], 1, {})
+        repository.save([], 1)
 
         self.assertTrue(nested_path.exists())
 
@@ -102,8 +97,8 @@ class JsonRotationRepositoryTests(unittest.TestCase):
         self.assertEqual(result.next_rotation_id, 1)
 
     def test_save_overwrites_previous_contents(self) -> None:
-        self.repository.save([Rotation(id=1, database_id=10)], 2, {})
-        self.repository.save([Rotation(id=2, database_id=20)], 3, {})
+        self.repository.save([Rotation(id=1, database_id=10)], 2)
+        self.repository.save([Rotation(id=2, database_id=20)], 3)
 
         loaded = self.repository.load()
 

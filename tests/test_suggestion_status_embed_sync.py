@@ -18,7 +18,6 @@ from watch_party_manager.bot import (
     build_suggestion_confirmation_embed,
     handle_reject_suggestion,
     handle_suggestion_rejection_toggle,
-    sync_rotation_rollover_status_embeds,
     sync_suggestion_status_embed,
     sync_vote_completion_status_embeds,
     sync_vote_start_status_embeds,
@@ -29,10 +28,12 @@ from watch_party_manager.persistence.suggestion_database_repository import (
     JsonSuggestionDatabaseRepository,
 )
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
+from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_completion_service import VoteCompletionResult
+from watch_party_manager.services.vote_service import VoteService
 
 GUILD_ID = 100
 CHANNEL_ID = 200
@@ -93,18 +94,20 @@ class BuildSuggestionConfirmationEmbedStatusFieldTests(unittest.TestCase):
         )
         self.assertEqual("🏆 Vote Winner", self._status_value(embed))
 
-    def test_rotation_cooldown_shown_when_rotation_service_reports_it(self) -> None:
-        class FakeRotationService:
-            def is_in_rotation_cooldown(self, watch_item) -> bool:
-                return True
+    def test_in_an_active_vote_shown_when_vote_service_reports_an_open_round(self) -> None:
+        class FakeVoteService:
+            def get_open_round_for_suggestion(self, suggestion_id) -> object:
+                return object()
 
+        item = make_item(status=WatchItemStatus.SUGGESTED)
+        item.id = 1
         embed = build_suggestion_confirmation_embed(
-            make_item(status=WatchItemStatus.SUGGESTED),
+            item,
             database_name="Movies",
             suggested_by="<@1>",
-            rotation_service=FakeRotationService(),
+            vote_service=FakeVoteService(),
         )
-        self.assertEqual("🟡 Rotation Cooldown", self._status_value(embed))
+        self.assertEqual("🗳️ In an Active Vote", self._status_value(embed))
 
 
 class BuildSuggestionConfirmationEmbedCollectionFieldTests(unittest.TestCase):
@@ -201,10 +204,13 @@ def make_discord_forbidden() -> discord.Forbidden:
 
 
 class FakeBot:
-    def __init__(self, suggestion_service: SuggestionService, channel: FakeChannel, *, rotation_service=None) -> None:
+    def __init__(
+        self, suggestion_service: SuggestionService, channel: FakeChannel, *, rotation_service=None, vote_service=None
+    ) -> None:
         self.suggestion_service = suggestion_service
         self.suggestion_database_configuration_repository = None
         self.rotation_service = rotation_service
+        self.vote_service = vote_service
         self.permission_service = None
         self._channel = channel
 
@@ -392,10 +398,10 @@ class SyncSuggestionStatusEmbedTests(unittest.IsolatedAsyncioTestCase):
 
 class SyncVoteStartStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
     """Suggestion Status Synchronization, transition 1: a candidate
-    presented into a new voting round is already recorded as Rotation
-    Cooldown internally (see RotationService.record_presentation) by the
-    time perform_start_vote returns -- its own public post must reflect
-    that the moment the round opens, not only once the round later closes.
+    presented into a new voting round is In an Active Vote (Rotation-
+    removal Phase 2) by the time perform_start_vote returns -- its own
+    public post must reflect that the moment the round opens, not only
+    once the round later closes.
     """
 
     def setUp(self) -> None:
@@ -407,16 +413,14 @@ class SyncVoteStartStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
             database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
         )
         self.database = self.suggestion_service.create_database("Movies", GUILD_ID, CHANNEL_ID).database
-        from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
-
-        self.rotation_service = RotationService(
-            self.suggestion_service, repository=JsonRotationRepository(root / "rotations.json")
+        self.vote_service = VoteService(
+            self.suggestion_service, repository=JsonVoteRepository(root / "voting.json")
         )
 
     def _status_of(self, embed) -> str:
         return next(field.value for field in embed.fields if field.name == "Status")
 
-    async def test_every_presented_candidate_is_synced_to_rotation_cooldown(self) -> None:
+    async def test_every_presented_candidate_is_synced_to_in_an_active_vote(self) -> None:
         first = self.suggestion_service.suggest(
             "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).watch_item
@@ -427,40 +431,45 @@ class SyncVoteStartStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
         self.suggestion_service.set_confirmation_post_reference(second.id, GUILD_ID, CHANNEL_ID, 778)
 
         # Mirrors what perform_start_vote's nominee selection already did
-        # (via strategy.on_presented) before this function is called.
-        self.rotation_service.record_presentation(self.database.database_id, [first.id, second.id])
+        # (opening a round with these candidates) before this function is
+        # called.
+        self.vote_service.create_round(
+            candidate_suggestion_ids=[first.id, second.id], database_id=self.database.database_id
+        )
         presented_first = self.suggestion_service.get_suggestion(first.id)
         presented_second = self.suggestion_service.get_suggestion(second.id)
 
         message_first = FakeMessage(message_id=777)
         message_second = FakeMessage(message_id=778)
         channel = FakeChannel(message_first, message_second)
-        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+        bot = FakeBot(self.suggestion_service, channel, vote_service=self.vote_service)
 
         await sync_vote_start_status_embeds(bot, [presented_first, presented_second])
 
         self.assertEqual(1, message_first.edit_calls)
-        self.assertEqual("🟡 Rotation Cooldown", self._status_of(message_first.edited_embed))
+        self.assertEqual("🗳️ In an Active Vote", self._status_of(message_first.edited_embed))
         self.assertEqual(1, message_second.edit_calls)
-        self.assertEqual("🟡 Rotation Cooldown", self._status_of(message_second.edited_embed))
+        self.assertEqual("🗳️ In an Active Vote", self._status_of(message_second.edited_embed))
 
     async def test_a_candidate_with_no_public_post_is_skipped_without_raising(self) -> None:
         candidate = self.suggestion_service.suggest(
             "Alien", database_id=self.database.database_id
         ).watch_item
         channel = FakeChannel()
-        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+        bot = FakeBot(self.suggestion_service, channel, vote_service=self.vote_service)
 
         # Must not raise even though `candidate` has no channel_id/message_id.
         await sync_vote_start_status_embeds(bot, [candidate])
 
 
 class SyncVoteCompletionStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
-    """Requirement 1 (Rotation Cooldown Bug): a losing nominee's own
-    confirmation post must be refreshed to Rotation Cooldown right along
-    with the winner's refresh to Vote Winner -- the original bug synced
-    only the winner, leaving every losing nominee's post stuck showing
-    whatever status it had before the round completed.
+    """Requirement 1: a losing nominee's own confirmation post must be
+    refreshed right along with the winner's refresh to Vote Winner -- the
+    original bug synced only the winner, leaving every losing nominee's
+    post stuck showing whatever status it had before the round completed.
+    Rotation-removal Phase 2: a losing nominee reverts to Available once
+    the round closes (its own VoteService round is no longer open), not
+    to Rotation Cooldown.
     """
 
     def setUp(self) -> None:
@@ -472,18 +481,14 @@ class SyncVoteCompletionStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
             database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
         )
         self.database = self.suggestion_service.create_database("Movies", GUILD_ID, CHANNEL_ID).database
-        from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
-
-        self.rotation_service = RotationService(
-            self.suggestion_service, repository=JsonRotationRepository(root / "rotations.json")
+        self.vote_service = VoteService(
+            self.suggestion_service, repository=JsonVoteRepository(root / "voting.json")
         )
 
     def _status_of(self, embed) -> str:
         return next(field.value for field in embed.fields if field.name == "Status")
 
-    async def test_syncs_the_winner_to_vote_winner_and_the_loser_to_rotation_cooldown(self) -> None:
-        from watch_party_manager.domain.vote import VoteRound
-
+    async def test_syncs_the_winner_to_vote_winner_and_the_loser_to_available(self) -> None:
         winner = self.suggestion_service.suggest(
             "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).watch_item
@@ -493,51 +498,49 @@ class SyncVoteCompletionStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
         self.suggestion_service.set_confirmation_post_reference(winner.id, GUILD_ID, CHANNEL_ID, 777)
         self.suggestion_service.set_confirmation_post_reference(loser.id, GUILD_ID, CHANNEL_ID, 778)
 
-        # Both candidates are marked "presented" when the round starts --
-        # this is what RotationService.record_presentation() does at
-        # nominee-selection time, well before anyone knows the winner.
-        self.rotation_service.record_presentation(self.database.database_id, [winner.id, loser.id])
+        created = self.vote_service.create_round(
+            candidate_suggestion_ids=[winner.id, loser.id], database_id=self.database.database_id
+        )
+        self.vote_service.close_round(created.vote_round.id)
         self.suggestion_service.record_vote_win(winner.id, None)
 
         winner_message = FakeMessage(message_id=777)
         loser_message = FakeMessage(message_id=778)
         channel = FakeChannel(winner_message, loser_message)
-        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+        bot = FakeBot(self.suggestion_service, channel, vote_service=self.vote_service)
 
-        vote_round = VoteRound(
-            id=1,
-            database_id=self.database.database_id,
-            candidate_suggestion_ids=[winner.id, loser.id],
-        )
         result = VoteCompletionResult(
-            vote_round=vote_round, winning_suggestion_ids=[winner.id], standings=(), total_votes_cast=2
+            vote_round=created.vote_round, winning_suggestion_ids=[winner.id], standings=(), total_votes_cast=2
         )
         await sync_vote_completion_status_embeds(bot, result)
 
         self.assertEqual(1, winner_message.edit_calls)
         self.assertEqual("🏆 Vote Winner", self._status_of(winner_message.edited_embed))
         self.assertEqual(1, loser_message.edit_calls)
-        self.assertEqual("🟡 Rotation Cooldown", self._status_of(loser_message.edited_embed))
+        self.assertEqual("🟢 Available", self._status_of(loser_message.edited_embed))
 
     async def test_a_recorded_won_date_is_reflected_in_the_refreshed_embed(self) -> None:
         from datetime import date
 
-        from watch_party_manager.domain.vote import VoteRound
-
         winner = self.suggestion_service.suggest(
             "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
         ).watch_item
+        other = self.suggestion_service.suggest(
+            "Predator", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
         self.suggestion_service.set_confirmation_post_reference(winner.id, GUILD_ID, CHANNEL_ID, 777)
-        self.rotation_service.record_presentation(self.database.database_id, [winner.id])
+        created = self.vote_service.create_round(
+            candidate_suggestion_ids=[winner.id, other.id], database_id=self.database.database_id
+        )
+        self.vote_service.close_round(created.vote_round.id)
         self.suggestion_service.record_vote_win(winner.id, date(2026, 7, 28))
 
         winner_message = FakeMessage(message_id=777)
         channel = FakeChannel(winner_message)
-        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
+        bot = FakeBot(self.suggestion_service, channel, vote_service=self.vote_service)
 
-        vote_round = VoteRound(id=1, database_id=self.database.database_id, candidate_suggestion_ids=[winner.id])
         result = VoteCompletionResult(
-            vote_round=vote_round, winning_suggestion_ids=[winner.id], standings=(), total_votes_cast=1
+            vote_round=created.vote_round, winning_suggestion_ids=[winner.id], standings=(), total_votes_cast=1
         )
         await sync_vote_completion_status_embeds(bot, result)
 
@@ -576,122 +579,6 @@ class RotationCooldownAutomaticallyRevertsTests(unittest.TestCase):
         self.rotation_service.begin_next_rotation(self.database.database_id)
         refreshed_item = self.suggestion_service.get_suggestion(item.id)
         self.assertFalse(self.rotation_service.is_in_rotation_cooldown(refreshed_item))
-
-
-class SyncRotationRolloverStatusEmbedsTests(unittest.IsolatedAsyncioTestCase):
-    """Release-blocking rotation rollover fix: when a rollover clears
-    Rotation Cooldown for one or more suggestions, their confirmation
-    posts must be refreshed (edited in place, never recreated) so /list,
-    /start_vote, and the embeds all agree immediately -- mirroring
-    sync_vote_completion_status_embeds's existing per-candidate pattern.
-    """
-
-    def setUp(self) -> None:
-        self._temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self._temp_dir.cleanup)
-        root = Path(self._temp_dir.name)
-        self.suggestion_service = SuggestionService(
-            repository=JsonSuggestionRepository(root / "suggestions.json"),
-            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
-        )
-        from watch_party_manager.persistence.rotation_repository import JsonRotationRepository
-
-        self.rotation_service = RotationService(
-            self.suggestion_service, repository=JsonRotationRepository(root / "rotations.json")
-        )
-        self.database = self.suggestion_service.create_database("Movies", GUILD_ID, CHANNEL_ID).database
-
-    def _status_of(self, embed) -> str:
-        return next(field.value for field in embed.fields if field.name == "Status")
-
-    async def test_refreshes_every_suggestion_that_left_cooldown(self) -> None:
-        item_a = self.suggestion_service.suggest(
-            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
-        ).watch_item
-        item_b = self.suggestion_service.suggest(
-            "Predator", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
-        ).watch_item
-        self.suggestion_service.set_confirmation_post_reference(item_a.id, GUILD_ID, CHANNEL_ID, 777)
-        self.suggestion_service.set_confirmation_post_reference(item_b.id, GUILD_ID, CHANNEL_ID, 778)
-
-        self.rotation_service.get_or_start_rotation(self.database.database_id)
-        self.rotation_service.record_presentation(self.database.database_id, [item_a.id, item_b.id])
-        previously_cooled_down = {item_a.id, item_b.id}
-
-        # Simulate the rollover a caller like perform_start_vote already
-        # triggered before calling this function.
-        self.rotation_service.begin_next_rotation(self.database.database_id)
-
-        message_a = FakeMessage(message_id=777)
-        message_b = FakeMessage(message_id=778)
-        channel = FakeChannel(message_a, message_b)
-        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
-
-        await sync_rotation_rollover_status_embeds(bot, self.database.database_id, previously_cooled_down)
-
-        self.assertEqual(1, message_a.edit_calls)
-        self.assertEqual("🟢 Available", self._status_of(message_a.edited_embed))
-        self.assertEqual(1, message_b.edit_calls)
-        self.assertEqual("🟢 Available", self._status_of(message_b.edited_embed))
-        # Never recreates the message.
-        self.assertEqual([], channel.sent_messages)
-
-    async def test_skips_a_suggestion_that_is_still_on_cooldown(self) -> None:
-        """No rollover actually happened (or this particular suggestion
-        was re-presented in the meantime) -- its post must not be
-        touched, avoiding a pointless edit.
-        """
-        item = self.suggestion_service.suggest(
-            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
-        ).watch_item
-        self.suggestion_service.set_confirmation_post_reference(item.id, GUILD_ID, CHANNEL_ID, 777)
-        self.rotation_service.get_or_start_rotation(self.database.database_id)
-        self.rotation_service.record_presentation(self.database.database_id, [item.id])
-
-        message = FakeMessage(message_id=777)
-        channel = FakeChannel(message)
-        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
-
-        await sync_rotation_rollover_status_embeds(bot, self.database.database_id, {item.id})
-
-        self.assertEqual(0, message.edit_calls)
-
-    async def test_skips_a_suggestion_from_a_different_database(self) -> None:
-        other_database = self.suggestion_service.create_database("TV Shows", GUILD_ID, 300).database
-        item = self.suggestion_service.suggest(
-            "Alien", database_id=other_database.database_id, guild_id=GUILD_ID, channel_id=300
-        ).watch_item
-        self.suggestion_service.set_confirmation_post_reference(item.id, GUILD_ID, 300, 777)
-
-        message = FakeMessage(message_id=777)
-        channel = FakeChannel(message)
-        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
-
-        await sync_rotation_rollover_status_embeds(bot, self.database.database_id, {item.id})
-
-        self.assertEqual(0, message.edit_calls)
-
-    async def test_gracefully_skips_a_suggestion_that_no_longer_exists(self) -> None:
-        channel = FakeChannel()
-        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
-
-        # Must not raise even though suggestion id 999 was never created.
-        await sync_rotation_rollover_status_embeds(bot, self.database.database_id, {999})
-
-    async def test_gracefully_skips_an_unreachable_message(self) -> None:
-        item = self.suggestion_service.suggest(
-            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
-        ).watch_item
-        self.suggestion_service.set_confirmation_post_reference(item.id, GUILD_ID, CHANNEL_ID, 777)
-        self.rotation_service.get_or_start_rotation(self.database.database_id)
-        self.rotation_service.record_presentation(self.database.database_id, [item.id])
-        self.rotation_service.begin_next_rotation(self.database.database_id)
-
-        channel = FakeChannel(FakeMessage(message_id=777), fail_fetch=True)
-        bot = FakeBot(self.suggestion_service, channel, rotation_service=self.rotation_service)
-
-        # Must not raise.
-        await sync_rotation_rollover_status_embeds(bot, self.database.database_id, {item.id})
 
 
 class FakeRole:

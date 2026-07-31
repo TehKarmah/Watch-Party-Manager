@@ -274,7 +274,7 @@ Every setting the wizard can set (including candidate-selection mode) can also b
 
 Everything the setup wizard collects is stored per-server and can be changed afterward without re-running the whole wizard:
 
-- `/config` opens the same settings in a menu, section by section, for quick individual changes -- including a **Rotation Low-Pool Notification** section not covered by the setup wizard: enable/disable, a custom eligible-suggestion threshold (or restore the automatic default of two configured voting rounds), and a destination (Admin Channel, the default, or the Watch Party Home Channel).
+- `/config` opens the same settings in a menu, section by section, for quick individual changes -- including an **Eligible Pool Warning** section not covered by the setup wizard: enable/disable, a custom eligible-suggestion threshold (or restore the automatic default of the configured candidate count times 5), and a destination (Admin Channel, the default, or the Watch Party Home Channel).
 - `/database add` and `/database list` create and list additional suggestion databases beyond the one created during setup -- or run `/database manage` for a single guided menu that walks through every action (move, edit, back up, restore, reset, or remove) for a chosen collection. Direct shortcuts (`/database move`, `/database backup`, `/database restore`, `/database reset`, `/database remove`) remain available for experienced administrators. `/database health` reports a collection's rotation eligibility and pool health without changing anything.
 - `/watch_party` (WASH Crew only) manages membership directly: list, approve/deny pending requests, manually add or remove members, and search a member's history.
 

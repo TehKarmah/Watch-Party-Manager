@@ -489,45 +489,17 @@ class CandidateEligibilityTests(RotationServiceTestCase):
         self.assertFalse(self.rotation_service.is_candidate_eligible(unassigned_item, DATABASE_ID))
 
 
-class LowPoolNotificationDedupTests(RotationServiceTestCase):
-    def test_no_notification_has_been_sent_initially(self) -> None:
-        self.assertFalse(self.rotation_service.has_sent_low_pool_notification(DATABASE_ID, 1))
-
-    def test_recording_a_notification_persists_it(self) -> None:
-        rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)
-
-        self.rotation_service.record_low_pool_notification_sent(DATABASE_ID, rotation.id)
-
-        self.assertTrue(self.rotation_service.has_sent_low_pool_notification(DATABASE_ID, rotation.id))
-
-    def test_a_different_rotation_id_is_not_considered_notified(self) -> None:
-        rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)
-        self.rotation_service.record_low_pool_notification_sent(DATABASE_ID, rotation.id)
-
-        self.assertFalse(self.rotation_service.has_sent_low_pool_notification(DATABASE_ID, rotation.id + 999))
-
-    def test_a_fresh_rotation_naturally_resets_the_dedup(self) -> None:
-        first_rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)
-        self.rotation_service.record_low_pool_notification_sent(DATABASE_ID, first_rotation.id)
-
-        second_rotation = self.rotation_service.begin_next_rotation(DATABASE_ID)
-
-        self.assertFalse(self.rotation_service.has_sent_low_pool_notification(DATABASE_ID, second_rotation.id))
-
-
 class RotationPersistenceTests(RotationServiceTestCase):
     def test_rotation_state_survives_a_service_restart(self) -> None:
         item = self._add("Alien")
         rotation = self.rotation_service.get_or_start_rotation(DATABASE_ID)
         self.rotation_service.record_presentation(DATABASE_ID, [item.id])
-        self.rotation_service.record_low_pool_notification_sent(DATABASE_ID, rotation.id)
 
         restarted_service = RotationService(self.suggestion_service, repository=self.rotation_repository)
 
         reloaded = restarted_service.get_open_rotation(DATABASE_ID)
         self.assertEqual(reloaded.id, rotation.id)
         self.assertEqual(reloaded.assigned_suggestion_ids, rotation.assigned_suggestion_ids)
-        self.assertTrue(restarted_service.has_sent_low_pool_notification(DATABASE_ID, rotation.id))
 
     def test_rotation_data_is_a_plain_json_file_under_data_for_backup_compatibility(self) -> None:
         # BackupService sweeps every *.json file under data/ generically

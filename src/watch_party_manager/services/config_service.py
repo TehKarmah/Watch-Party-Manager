@@ -29,10 +29,10 @@ from typing import List, Optional, Tuple
 
 from watch_party_manager.domain.guild_configuration import (
     JOIN_MODE_DISPLAY_LABELS,
+    EligiblePoolWarningDestination,
     GuildConfiguration,
     GuildVoteVisibility,
     JoinMode,
-    RotationLowPoolNotificationDestination,
     VotingDefaultsConfig,
 )
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
@@ -53,6 +53,9 @@ from watch_party_manager.services.configuration_validation import (
     validate_role_exists,
 )
 from watch_party_manager.services.duration_formatter import format_duration_minutes
+from watch_party_manager.services.eligible_pool_warning_service import (
+    resolve_default_eligible_pool_warning_threshold,
+)
 from watch_party_manager.services.setup_wizard_service import (
     BACKUP_INTERVAL_DAYS_EXTRA_FIELD,
     BACKUP_RETENTION_COUNT_EXTRA_FIELD,
@@ -73,7 +76,7 @@ class ConfigSection(str, Enum):
     VOTING_DEFAULTS = "voting_defaults"
     REMINDER_DEFAULTS = "reminder_defaults"
     BACKUP_DEFAULTS = "backup_defaults"
-    ROTATION_LOW_POOL_NOTIFICATION = "rotation_low_pool_notification"
+    ELIGIBLE_POOL_WARNING = "eligible_pool_warning"
 
 
 CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
@@ -92,7 +95,7 @@ CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
     ConfigSection.VOTING_DEFAULTS,
     ConfigSection.REMINDER_DEFAULTS,
     ConfigSection.BACKUP_DEFAULTS,
-    ConfigSection.ROTATION_LOW_POOL_NOTIFICATION,
+    ConfigSection.ELIGIBLE_POOL_WARNING,
 )
 
 CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
@@ -106,7 +109,7 @@ CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
     ConfigSection.VOTING_DEFAULTS: "Voting Defaults",
     ConfigSection.REMINDER_DEFAULTS: "Reminder Defaults",
     ConfigSection.BACKUP_DEFAULTS: "Backup Defaults",
-    ConfigSection.ROTATION_LOW_POOL_NOTIFICATION: "Rotation Low-Pool Notification",
+    ConfigSection.ELIGIBLE_POOL_WARNING: "Eligible Pool Warning",
 }
 
 
@@ -249,21 +252,21 @@ class ConfigService:
 
         admin = configuration.notifications.administrative
         if not (configuration.feature_flags.low_suggestion_pool_alerts and admin.low_suggestion_pool):
-            lines.append("Rotation Low-Pool Notification: Configured (Disabled)")
+            lines.append("Eligible Pool Warning: Configured (Disabled)")
         else:
             threshold = (
                 admin.low_suggestion_pool_threshold
                 if admin.low_suggestion_pool_threshold is not None
-                else 2 * voting_defaults.candidate_count
+                else resolve_default_eligible_pool_warning_threshold(voting_defaults.candidate_count)
             )
             threshold_note = "auto" if admin.low_suggestion_pool_threshold is None else "custom"
             destination_label = (
                 "Watch Party Home Channel"
-                if admin.low_suggestion_pool_destination is RotationLowPoolNotificationDestination.HOME_CHANNEL
+                if admin.low_suggestion_pool_destination is EligiblePoolWarningDestination.HOME_CHANNEL
                 else "Admin Channel"
             )
             lines.append(
-                f"Rotation Low-Pool Notification: Configured (Enabled, threshold {threshold} [{threshold_note}], "
+                f"Eligible Pool Warning: Configured (Enabled, threshold {threshold} [{threshold_note}], "
                 f"destination: {destination_label})"
             )
 
@@ -660,9 +663,9 @@ class ConfigService:
         self._guild_configuration_repository.save(updated)
         return ConfigUpdateResult(True, "Backup defaults updated: Automatic Backups: Disabled.", updated)
 
-    # --- Rotation Low-Pool Notification ----------------------------------------------
+    # --- Eligible Pool Warning ---------------------------------------------------------
 
-    def set_rotation_low_pool_notification_enabled(self, guild_id: int, enabled: bool) -> ConfigUpdateResult:
+    def set_eligible_pool_warning_enabled(self, guild_id: int, enabled: bool) -> ConfigUpdateResult:
         configuration = self.get_configuration(guild_id)
         if configuration is None:
             return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
@@ -679,17 +682,13 @@ class ConfigService:
         )
         self._guild_configuration_repository.save(updated)
         message = (
-            "Rotation Low-Pool Notification updated: Enabled."
-            if enabled
-            else "Rotation Low-Pool Notification updated: Disabled."
+            "Eligible Pool Warning updated: Enabled." if enabled else "Eligible Pool Warning updated: Disabled."
         )
         return ConfigUpdateResult(True, message, updated)
 
-    def set_rotation_low_pool_notification_threshold(
-        self, guild_id: int, threshold: Optional[int]
-    ) -> ConfigUpdateResult:
-        """threshold=None restores the dynamic default (fewer eligible
-        suggestions than two configured voting rounds)."""
+    def set_eligible_pool_warning_threshold(self, guild_id: int, threshold: Optional[int]) -> ConfigUpdateResult:
+        """threshold=None restores the automatic default (the guild's
+        configured candidate count times the warning multiplier)."""
         configuration = self.get_configuration(guild_id)
         if configuration is None:
             return ConfigUpdateResult(False, "Run `/setup` before using `/config`.")
@@ -709,14 +708,14 @@ class ConfigService:
         )
         self._guild_configuration_repository.save(updated)
         message = (
-            f"Rotation Low-Pool Notification updated: threshold set to {threshold}."
+            f"Eligible Pool Warning updated: threshold set to {threshold}."
             if threshold is not None
-            else "Rotation Low-Pool Notification updated: threshold reset to automatic (two voting rounds)."
+            else "Eligible Pool Warning updated: threshold reset to automatic (candidate count × 5)."
         )
         return ConfigUpdateResult(True, message, updated)
 
-    def set_rotation_low_pool_notification_destination(
-        self, guild_id: int, destination: RotationLowPoolNotificationDestination
+    def set_eligible_pool_warning_destination(
+        self, guild_id: int, destination: EligiblePoolWarningDestination
     ) -> ConfigUpdateResult:
         configuration = self.get_configuration(guild_id)
         if configuration is None:
@@ -735,9 +734,9 @@ class ConfigService:
         self._guild_configuration_repository.save(updated)
         destination_label = (
             "Watch Party Home Channel"
-            if destination is RotationLowPoolNotificationDestination.HOME_CHANNEL
+            if destination is EligiblePoolWarningDestination.HOME_CHANNEL
             else "Admin Channel"
         )
         return ConfigUpdateResult(
-            True, f"Rotation Low-Pool Notification updated: destination set to {destination_label}.", updated
+            True, f"Eligible Pool Warning updated: destination set to {destination_label}.", updated
         )

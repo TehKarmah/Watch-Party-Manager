@@ -55,11 +55,11 @@ class TieBehavior(str, Enum):
     ALL_WINNERS = "all_winners"
 
 
-class RotationLowPoolNotificationDestination(str, Enum):
-    """Where the Rotation Low-Pool notification (Rotation & Collection
-    Health) posts -- never a collection's suggestion thread (that option
-    is deliberately not offered; see the notification service's module
-    docstring)."""
+class EligiblePoolWarningDestination(str, Enum):
+    """Where the Eligible Pool Warning (Rotation-removal Phase 2, formerly
+    the Rotation Low-Pool notification) posts -- never a collection's
+    suggestion thread (that option is deliberately not offered; see the
+    warning service's module docstring)."""
 
     ADMIN_CHANNEL = "admin_channel"
     HOME_CHANNEL = "home_channel"
@@ -213,24 +213,27 @@ class WatchNotificationsConfig:
 @dataclass(slots=True)
 class AdministrativeNotificationsConfig:
     """low_suggestion_pool/low_suggestion_pool_threshold/
-    low_suggestion_pool_destination together configure the Rotation
-    Low-Pool notification (Rotation & Collection Health), which replaced
-    the older, interval-based Low Pool Reminder.
+    low_suggestion_pool_destination together configure the Eligible Pool
+    Warning (Rotation-removal Phase 2, formerly the Rotation Low-Pool
+    notification, which itself replaced the older, interval-based Low
+    Pool Reminder). Field names are unchanged across that rename -- they
+    were already rotation-agnostic -- so an existing guild's saved values
+    load exactly as before.
 
-    low_suggestion_pool_threshold defaults to None ("auto": fewer
-    eligible suggestions than two configured voting rounds, computed
-    dynamically against the guild's current candidate_count rather than
-    a fixed number, since candidate_count is itself configurable). A
-    guild configuration saved before this milestone already has a
-    concrete threshold (the old flat default was 10) -- that explicit
-    value is preserved and used as-is; only a guild that has never set
-    this at all gets the new dynamic default.
+    low_suggestion_pool_threshold defaults to None ("auto": eligible
+    items at or below the guild's configured candidate_count times the
+    warning multiplier -- see
+    services/eligible_pool_warning_service.py's own default). A guild
+    configuration saved before this phase already has a concrete
+    threshold or the old dynamic-default behavior -- that explicit value
+    is preserved and used as-is; only a guild that has never set this at
+    all gets the new flat-multiple default.
     """
 
     low_suggestion_pool: bool = True
     low_suggestion_pool_threshold: Optional[int] = None
-    low_suggestion_pool_destination: RotationLowPoolNotificationDestination = (
-        RotationLowPoolNotificationDestination.ADMIN_CHANNEL
+    low_suggestion_pool_destination: EligiblePoolWarningDestination = (
+        EligiblePoolWarningDestination.ADMIN_CHANNEL
     )
     backup_completed: bool = True
     backup_failed: bool = True
@@ -242,7 +245,7 @@ class AdministrativeNotificationsConfig:
         if self.low_suggestion_pool_threshold is not None:
             _validate_positive_int(self.low_suggestion_pool_threshold, "low_suggestion_pool_threshold", 1, 1000)
         self.low_suggestion_pool_destination = _coerce_enum(  # type: ignore[assignment]
-            self.low_suggestion_pool_destination, RotationLowPoolNotificationDestination, "low_suggestion_pool_destination"
+            self.low_suggestion_pool_destination, EligiblePoolWarningDestination, "low_suggestion_pool_destination"
         )
         _validate_extra_fields(self.extra_fields)
 

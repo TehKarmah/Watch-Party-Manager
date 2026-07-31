@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional, Union
 from watch_party_manager.domain.guild_configuration import (
     AdministrativeNotificationsConfig,
     BackupConfig,
+    EligiblePoolWarningDestination,
     FeatureFlagsConfig,
     GuildChannelsConfig,
     GuildConfiguration,
@@ -21,7 +22,6 @@ from watch_party_manager.domain.guild_configuration import (
     JoinMode,
     MigrationConfig,
     NotificationsConfig,
-    RotationLowPoolNotificationDestination,
     TieBehavior,
     VoteNotificationsConfig,
     VotingDefaultsConfig,
@@ -378,14 +378,14 @@ class GuildConfigurationRepository:
                 ),
                 administrative=AdministrativeNotificationsConfig(
                     low_suggestion_pool=admin_notice.get("low_suggestion_pool", True),
-                    # None (never explicitly saved) resolves to the new
-                    # dynamic "two voting rounds" default at read time;
-                    # an explicit stored value (e.g. the old flat 10
-                    # every pre-Audit guild config already has) is
-                    # preserved as an override -- see
-                    # AdministrativeNotificationsConfig's docstring.
+                    # None (never explicitly saved) resolves to the
+                    # Eligible Pool Warning's flat-multiple default at
+                    # read time; an explicit stored value (from any
+                    # earlier default formula) is preserved as an
+                    # override -- see AdministrativeNotificationsConfig's
+                    # docstring.
                     low_suggestion_pool_threshold=admin_notice.get("low_suggestion_pool_threshold"),
-                    low_suggestion_pool_destination=RotationLowPoolNotificationDestination(
+                    low_suggestion_pool_destination=EligiblePoolWarningDestination(
                         admin_notice.get("low_suggestion_pool_destination", "admin_channel")
                     ),
                     backup_completed=admin_notice.get("backup_completed", True), backup_failed=admin_notice.get("backup_failed", True),

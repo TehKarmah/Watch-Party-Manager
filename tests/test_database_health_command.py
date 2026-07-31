@@ -27,10 +27,12 @@ from watch_party_manager.persistence.suggestion_database_configuration_repositor
 )
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
+from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.collection_eligibility_service import CollectionEligibilityService
 from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
+from watch_party_manager.services.vote_service import VoteService
 
 GUILD_ID = 100
 CHANNEL_ID = 200
@@ -84,7 +86,7 @@ class FakeGuildConfigurationRepository:
 
 
 class FakeBot:
-    def __init__(self, suggestion_service, rotation_repository=None, guild_configuration=None) -> None:
+    def __init__(self, suggestion_service, rotation_repository=None, guild_configuration=None, vote_service=None) -> None:
         self.suggestion_service = suggestion_service
         self.permission_service = PermissionService(
             watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=WASH_CREW_ROLE_ID
@@ -93,7 +95,8 @@ class FakeBot:
         self.suggestion_database_configuration_repository = None
         self.guild_configuration_repository = FakeGuildConfigurationRepository(guild_configuration)
         self.rotation_service = RotationService(suggestion_service, repository=rotation_repository)
-        self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, self.rotation_service)
+        self.vote_service = vote_service
+        self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, vote_service)
 
 
 class DatabaseHealthCommandTestCase(unittest.IsolatedAsyncioTestCase):
@@ -108,8 +111,13 @@ class DatabaseHealthCommandTestCase(unittest.IsolatedAsyncioTestCase):
         self.configuration_repository = SuggestionDatabaseConfigurationRepository(
             root / "suggestion_database_configurations.json"
         )
+        self.vote_service = VoteService(
+            self.suggestion_service, repository=JsonVoteRepository(root / "voting.json")
+        )
         self.bot = FakeBot(
-            self.suggestion_service, rotation_repository=JsonRotationRepository(root / "rotations.json")
+            self.suggestion_service,
+            rotation_repository=JsonRotationRepository(root / "rotations.json"),
+            vote_service=self.vote_service,
         )
         self.bot.suggestion_database_configuration_repository = self.configuration_repository
         self.database = self.suggestion_service.create_database(
@@ -202,25 +210,25 @@ class CollectionSelectionTests(DatabaseHealthCommandTestCase):
 
 class ReportContentTests(DatabaseHealthCommandTestCase):
     async def test_reconciliation_identities_hold(self) -> None:
-        self._set_candidate_selection(CandidateSelectionMode.ROTATION_POOL)
         item_a = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
         item_b = self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id).watch_item
         item_c = self.suggestion_service.suggest("Inception", database_id=self.database.database_id).watch_item
-        self.suggestion_service.suggest("Arrival", database_id=self.database.database_id)
+        other = self.suggestion_service.suggest("Arrival", database_id=self.database.database_id).watch_item
         self.suggestion_service.record_vote_win(item_a.id, date.today())
         self.suggestion_service.reject_suggestion(item_b.id, 1)
         self.suggestion_service.reject_suggestion(item_b.id, 2)
-        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
-        self.bot.rotation_service.record_presentation(self.database.database_id, [item_c.id])
+        self.bot.vote_service.create_round(
+            candidate_suggestion_ids=[item_c.id, other.id], database_id=self.database.database_id
+        )
         interaction = FakeInteraction()
 
         await handle_database_health(interaction, self.bot)
 
         message = interaction.response.sent_message
         self.assertIn("Total Watch Items: 4", message)
-        self.assertIn("Active Watch Items: 2 (Eligible for Voting + Rotation Cooldown)", message)
-        self.assertIn("Eligible for Voting: 1", message)
-        self.assertIn("Rotation Cooldown: 1", message)
+        self.assertIn("Active Watch Items: 2 (Eligible for Voting + In an Active Vote)", message)
+        self.assertIn("Eligible for Voting: 0", message)
+        self.assertIn("In an Active Vote: 2", message)
         self.assertIn("Vote Winners: 1", message)
         self.assertIn("Retired: 1", message)
 
@@ -229,23 +237,23 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
         # color-coded indicators at all -- these must match /list's own
         # SUGGESTION_DISPLAY_STATUS_EMOJI exactly, not a new visual
         # system invented just for this command.
-        self._set_candidate_selection(CandidateSelectionMode.ROTATION_POOL)
         item_a = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
         item_b = self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id).watch_item
         item_c = self.suggestion_service.suggest("Inception", database_id=self.database.database_id).watch_item
-        self.suggestion_service.suggest("Arrival", database_id=self.database.database_id)
+        other = self.suggestion_service.suggest("Arrival", database_id=self.database.database_id).watch_item
         self.suggestion_service.record_vote_win(item_a.id, date.today())
         self.suggestion_service.reject_suggestion(item_b.id, 1)
         self.suggestion_service.reject_suggestion(item_b.id, 2)
-        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
-        self.bot.rotation_service.record_presentation(self.database.database_id, [item_c.id])
+        self.bot.vote_service.create_round(
+            candidate_suggestion_ids=[item_c.id, other.id], database_id=self.database.database_id
+        )
         interaction = FakeInteraction()
 
         await handle_database_health(interaction, self.bot)
 
         message = interaction.response.sent_message
-        self.assertIn("🟢 Eligible for Voting: 1", message)
-        self.assertIn("🟡 Rotation Cooldown: 1", message)
+        self.assertIn("🟢 Eligible for Voting: 0", message)
+        self.assertIn("🗳️ In an Active Vote: 2", message)
         self.assertIn("🏆 Vote Winners: 1", message)
         self.assertIn("🗄️ Retired: 1", message)
 
@@ -281,7 +289,13 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
         self.assertIn("Next Vote: 🟢 Ready", interaction.response.sent_message)
 
-    async def test_next_vote_needs_rollover_when_active_covers_it_but_eligible_does_not(self) -> None:
+    async def test_next_vote_is_ready_even_for_a_legacy_collection_with_presented_items(self) -> None:
+        # Rotation-removal Phase 2: the old third state, "Needs Rollover",
+        # is gone -- a legacy collection's internal rollover now always
+        # happens silently inside actual vote creation, so Next Vote is
+        # simply Ready whenever there's enough Active Watch Items overall,
+        # regardless of how many of them a legacy strategy currently has
+        # internally excluded.
         self._set_candidate_selection(CandidateSelectionMode.ROTATION_POOL)
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
             GuildConfiguration(guild_id=GUILD_ID, guild_name="Test", voting_defaults=VotingDefaultsConfig(candidate_count=2))
@@ -294,7 +308,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
         await handle_database_health(interaction, self.bot)
 
-        self.assertIn("Next Vote: 🟡 Needs Rollover", interaction.response.sent_message)
+        self.assertIn("Next Vote: 🟢 Ready", interaction.response.sent_message)
 
     async def test_next_vote_is_insufficient_when_the_whole_collection_is_too_small(self) -> None:
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
@@ -308,11 +322,13 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
         self.assertIn("Next Vote: 🔴 Insufficient Suggestions", interaction.response.sent_message)
 
     async def test_low_pool_status_healthy_well_above_threshold(self) -> None:
+        # Default threshold = candidate_count * 5 = 10 -- comfortably
+        # more suggestions than that keeps this Healthy.
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
             GuildConfiguration(guild_id=GUILD_ID, guild_name="Test", voting_defaults=VotingDefaultsConfig(candidate_count=2))
         )
-        for title in ("Alien", "The Matrix", "Inception", "Arrival", "Amelie"):
-            self.suggestion_service.suggest(title, database_id=self.database.database_id)
+        for index in range(11):
+            self.suggestion_service.suggest(f"Movie {index}", database_id=self.database.database_id)
         interaction = FakeInteraction()
 
         await handle_database_health(interaction, self.bot)
@@ -330,17 +346,32 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
         self.assertIn("Low Pool Status: 🔴 Insufficient", interaction.response.sent_message)
 
-    async def test_infinite_pool_shows_no_rotation_progress(self) -> None:
+    async def test_infinite_pool_shows_no_rotation_progress_line_at_all(self) -> None:
+        # Rotation-removal Phase 2: rather than an explanatory "N/A"
+        # line, a mode with no rotation concept simply omits the
+        # Rotation Progress line entirely -- RotationService is an
+        # implementation detail these modes never even touch.
         self._set_candidate_selection(CandidateSelectionMode.INFINITE_POOL)
         self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
         interaction = FakeInteraction()
 
         await handle_database_health(interaction, self.bot)
 
-        self.assertIn("N/A (Pure Random selection has no rotation)", interaction.response.sent_message)
+        self.assertNotIn("Rotation Progress", interaction.response.sent_message)
         self.assertIsNone(self.bot.rotation_service.get_open_rotation(self.database.database_id))
 
+    async def test_favor_new_additions_shows_no_rotation_progress_line_either(self) -> None:
+        # The default mode for a freshly created collection -- also never
+        # touches RotationService.
+        self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
+        interaction = FakeInteraction()
+
+        await handle_database_health(interaction, self.bot)
+
+        self.assertNotIn("Rotation Progress", interaction.response.sent_message)
+
     async def test_rotation_progress_line_reflects_presented_count(self) -> None:
+        self._set_candidate_selection(CandidateSelectionMode.ROTATION_POOL)
         item_a = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
         self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id)
         self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
@@ -357,6 +388,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
         # per-collection sequence -- the report must show this
         # collection's own 1st/2nd/... rotation number, not a raw,
         # potentially-large global id.
+        self._set_candidate_selection(CandidateSelectionMode.ROTATION_POOL)
         item_a = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
         self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id)
         self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
@@ -371,9 +403,18 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
     async def test_rotation_number_is_scoped_per_collection_not_global(self) -> None:
         # A second collection's rotations must not shift the first
         # collection's own numbering.
+        self._set_candidate_selection(CandidateSelectionMode.ROTATION_POOL)
         other = self.suggestion_service.create_database(
             "TV Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID + 1
         ).database
+        self.configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=GUILD_ID,
+                database_id=other.database_id,
+                display_name="TV Night",
+                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.ROTATION_POOL),
+            )
+        )
         self.suggestion_service.suggest("Breaking Bad", database_id=other.database_id)
         self.bot.rotation_service.get_or_start_rotation(other.database_id)  # a rotation for the OTHER collection first
 
@@ -404,25 +445,31 @@ class MultipleCollectionsAndRestartTests(DatabaseHealthCommandTestCase):
         self.assertIn("Total Watch Items: 2", second_interaction.response.sent_message)
 
     async def test_health_report_survives_a_simulated_restart(self) -> None:
-        self._set_candidate_selection(CandidateSelectionMode.ROTATION_POOL)
         item = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
-        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
-        self.bot.rotation_service.record_presentation(self.database.database_id, [item.id])
+        other = self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id).watch_item
+        self.bot.vote_service.create_round(
+            candidate_suggestion_ids=[item.id, other.id], database_id=self.database.database_id
+        )
 
         root = Path(self._temp_dir.name)
         restarted_suggestion_service = SuggestionService(
             repository=JsonSuggestionRepository(root / "suggestions.json"),
             database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
         )
+        restarted_vote_service = VoteService(
+            restarted_suggestion_service, repository=JsonVoteRepository(root / "voting.json")
+        )
         restarted_bot = FakeBot(
-            restarted_suggestion_service, rotation_repository=JsonRotationRepository(root / "rotations.json")
+            restarted_suggestion_service,
+            rotation_repository=JsonRotationRepository(root / "rotations.json"),
+            vote_service=restarted_vote_service,
         )
         restarted_bot.suggestion_database_configuration_repository = self.configuration_repository
         interaction = FakeInteraction()
 
         await handle_database_health(interaction, restarted_bot)
 
-        self.assertIn("Rotation Cooldown: 1", interaction.response.sent_message)
+        self.assertIn("In an Active Vote: 2", interaction.response.sent_message)
         self.assertIn("Eligible for Voting: 0", interaction.response.sent_message)
 
 

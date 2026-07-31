@@ -44,21 +44,24 @@ Where configuration options exist, this document describes the intended behavior
 
 # 2. Watch Item Lifecycle
 
-Every Watch Item shows one of four statuses:
+Every Watch Item shows one of five statuses:
 
 ```text
-🟢 Available  ──▶  🟡 Rotation Cooldown  ──▶  🏆 Vote Winner
+🟢 Available  ──▶  🗳️ In an Active Vote  ──▶  🏆 Vote Winner  ──▶  ✅ Watched
        ▲                    │                       │
        └────────────────────┘                       ▼
                                               🗄️ Retired
 ```
 
 - **Available** -- eligible for future voting.
-- **Rotation Cooldown** -- already presented in the database's current rotation; computed at display time, not separately stored, so it automatically returns to Available the moment a fresh rotation begins.
-- **Vote Winner** -- won a voting round. WASH knows a suggestion won a vote; it does not yet know the group actually watched it -- confirming an actual viewing is a future watch-history milestone, tracked separately from this status. Whenever displayed, a Vote Winner with a recorded win date also shows a `Won: <Month D, YYYY>` line; a legacy Vote Winner with none omits it gracefully.
+- **In an Active Vote** -- currently a candidate in an open voting round for its collection; computed at display time, not separately stored, so it automatically returns to Available the moment its round closes.
+- **Vote Winner** -- won a voting round. WASH knows a suggestion won a vote; it does not yet know the group actually watched it, unless separately confirmed through the watch-history workflow (see Watched, below). Whenever displayed, a Vote Winner with a recorded win date also shows a `Won: <Month D, YYYY>` line; a legacy Vote Winner with none omits it gracefully.
 - **Retired** -- archived, whether by `/remove`, an "I WILL NOT WATCH" rejection threshold, or WASH Crew directly setting it via `/edit_suggestion`.
+- **Watched** -- explicitly confirmed watched.
 
-A Watch Item may return to Rotation Cooldown, and from there back to Available, multiple times throughout its lifetime as rotations begin and complete.
+A Watch Item may return to In an Active Vote, and from there back to Available, multiple times throughout its lifetime as voting rounds open and close.
+
+**Rotation-removal Phase 2: Rotation Cooldown is gone.** A legacy Balanced Random/Soft Rotation collection's internal rotation mechanism (see the Administration guide's "Nominee selection and rotation management" section) may still temporarily exclude a suggestion from its own next actual pick, but that exclusion is no longer a status this document -- or any user-facing surface -- reports; such a suggestion simply displays as Available.
 
 The complete history of every viewing is preserved.
 

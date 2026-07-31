@@ -36,8 +36,9 @@ from watch_party_manager.persistence.suggestion_repository import JsonSuggestion
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.services.collection_eligibility_service import CollectionEligibilityService
 from watch_party_manager.services.nominee_selection_service import NomineeSelectionService
-from watch_party_manager.services.rotation_low_pool_notification_service import (
-    RotationLowPoolNotificationService,
+from watch_party_manager.services.eligible_pool_warning_service import EligiblePoolWarningService
+from watch_party_manager.persistence.eligible_pool_warning_state_repository import (
+    JsonEligiblePoolWarningStateRepository,
 )
 from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_service import SuggestionService
@@ -45,10 +46,10 @@ from watch_party_manager.services.vote_service import VoteService
 
 
 class FakeGuildConfigurationRepository:
-    """Always reports "no guild configuration saved" -- the Rotation
-    Low-Pool notification then has no Admin/Home Channel to resolve, so
-    it never fires; these tests are about rollover mechanics, not the
-    notification itself (see test_rotation_low_pool_notification_service.py)."""
+    """Always reports "no guild configuration saved" -- the Eligible Pool
+    Warning then has no Admin/Home Channel to resolve, so it never
+    fires; these tests are about rollover mechanics, not the warning
+    itself (see test_eligible_pool_warning_service.py)."""
 
     def get(self, guild_id: int):
         return None
@@ -129,18 +130,21 @@ class FakeConfirmationChannel:
 
 class FakeBot:
     """The subset of WatchPartyBot sync_suggestion_status_embed (and now
-    maybe_send_low_pool_notification) needs."""
+    maybe_send_eligible_pool_warning) needs."""
 
-    def __init__(self, suggestion_service, rotation_service, channel, configuration_repository=None) -> None:
+    def __init__(
+        self, suggestion_service, rotation_service, channel, configuration_repository=None, vote_service=None
+    ) -> None:
         self.suggestion_service = suggestion_service
         self.suggestion_database_configuration_repository = configuration_repository
         self.rotation_service = rotation_service
+        self.vote_service = vote_service
         self.permission_service = None
         self.guild_configuration_repository = FakeGuildConfigurationRepository()
-        self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, rotation_service)
-        self.rotation_low_pool_notification_service = RotationLowPoolNotificationService(
+        self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, vote_service)
+        self.eligible_pool_warning_service = EligiblePoolWarningService(
             self.collection_eligibility_service,
-            rotation_service,
+            JsonEligiblePoolWarningStateRepository(Path(tempfile.mkdtemp()) / "eligible_pool_warning_state.json"),
             self.guild_configuration_repository,
             configuration_repository,
             suggestion_service,
@@ -204,7 +208,15 @@ class RotationRolloverEndToEndTests(unittest.IsolatedAsyncioTestCase):
         )
         return interaction
 
-    async def test_rollover_recovers_cooled_down_candidates_and_refreshes_their_posts(self) -> None:
+    async def test_rollover_recovers_previously_presented_candidates_for_a_new_round(self) -> None:
+        # Rotation-removal Phase 2: a suggestion presented in a closed
+        # round never displays anything other than Available (there is no
+        # Rotation Cooldown status left to refresh it away from) -- so
+        # this test now only confirms the rollover *mechanism* itself
+        # still recovers enough real candidates for the second round to
+        # succeed, and that only the second round's own newly-nominated
+        # candidates (via sync_vote_start_status_embeds) get their posts
+        # edited, never anything the rollover alone touched.
         first_interaction = await self._start_vote(nominee_count=2)
         self.assertFalse(first_interaction.response.sent_ephemeral)
         first_round = self.vote_service.get_open_round()
@@ -223,7 +235,7 @@ class RotationRolloverEndToEndTests(unittest.IsolatedAsyncioTestCase):
             )
             messages[item.id] = FakeConfirmationMessage(message_id=message_id)
         channel = FakeConfirmationChannel(*messages.values())
-        bot = FakeBot(self.suggestion_service, self.rotation_service, channel, self.configuration_repository)
+        bot = FakeBot(self.suggestion_service, self.rotation_service, channel, self.configuration_repository, self.vote_service)
 
         second_interaction = await self._start_vote(nominee_count=2, bot=bot)
 
@@ -233,26 +245,18 @@ class RotationRolloverEndToEndTests(unittest.IsolatedAsyncioTestCase):
         second_rotation = self.rotation_service.get_open_rotation(self.database.database_id)
         self.assertNotEqual(first_rotation.id, second_rotation.id)
 
-        # Both suggestions presented in the first round were on Rotation
-        # Cooldown going into the second call. Whichever of them the
-        # second round's (unseeded) selection does *not* re-nominate must
-        # have had its post refreshed to Available by the rollover; one
-        # that gets re-nominated is immediately back on cooldown under
-        # the new rotation, so its post correctly needs no edit at all
-        # (no visible status change) -- see
-        # sync_rotation_rollover_status_embeds's own dedicated,
-        # deterministic tests in test_suggestion_status_embed_sync.py
-        # for that "skip when nothing changed" behavior in isolation.
         second_round_candidate_ids = set(second_round.candidate_suggestion_ids)
-        refreshed_any = False
         for item in self.items.values():
-            if item.id in presented_ids and item.id not in second_round_candidate_ids:
-                message = messages[item.id]
+            message = messages[item.id]
+            if item.id in second_round_candidate_ids:
                 self.assertEqual(1, message.edit_calls)
                 status_field = next(field for field in message.edited_embed.fields if field.name == "Status")
-                self.assertEqual("🟢 Available", status_field.value)
-                refreshed_any = True
-        self.assertTrue(refreshed_any, "expected at least one previously-cooled-down post to be refreshed")
+                self.assertEqual("🗳️ In an Active Vote", status_field.value)
+            else:
+                # Never presented, or presented only in the first
+                # (bot=None) round -- either way, nothing here should
+                # have touched its post.
+                self.assertEqual(0, message.edit_calls)
 
     async def test_no_rollover_needed_when_the_current_rotation_already_satisfies_the_request(self) -> None:
         messages = {
@@ -264,7 +268,7 @@ class RotationRolloverEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 item.id, GUILD_ID, CHANNEL_ID, messages[item.id].id
             )
         channel = FakeConfirmationChannel(*messages.values())
-        bot = FakeBot(self.suggestion_service, self.rotation_service, channel, self.configuration_repository)
+        bot = FakeBot(self.suggestion_service, self.rotation_service, channel, self.configuration_repository, self.vote_service)
 
         interaction = await self._start_vote(nominee_count=2, bot=bot)
 

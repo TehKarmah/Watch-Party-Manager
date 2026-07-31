@@ -31,10 +31,10 @@ from watch_party_manager.domain.vote import (
 )
 from watch_party_manager.domain.guild_configuration import (
     JOIN_MODE_DISPLAY_LABELS,
+    EligiblePoolWarningDestination,
     GuildConfiguration,
     GuildVoteVisibility,
     JoinMode,
-    RotationLowPoolNotificationDestination,
     VISIBILITY_HELP_TEXT_SHORT,
 )
 from watch_party_manager.domain.setup_wizard import (
@@ -153,9 +153,12 @@ from watch_party_manager.services.collection_eligibility_service import (
     CollectionEligibility,
     CollectionEligibilityService,
 )
-from watch_party_manager.services.rotation_low_pool_notification_service import (
-    RotationLowPoolNotificationService,
-    resolve_low_pool_threshold,
+from watch_party_manager.services.eligible_pool_warning_service import (
+    EligiblePoolWarningService,
+    resolve_eligible_pool_warning_threshold,
+)
+from watch_party_manager.persistence.eligible_pool_warning_state_repository import (
+    JsonEligiblePoolWarningStateRepository,
 )
 from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.setup_wizard_service import (
@@ -237,18 +240,18 @@ from watch_party_manager.config_view import (
     ConfigDatabaseCandidateSelectionView,
     ConfigDatabaseSectionView,
     ConfigDatabaseSettingsMenuView,
+    ConfigEligiblePoolWarningView,
     ConfigHomeChannelSectionView,
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
     ConfigModalRetryView,
     ConfigReminderDefaultsChoiceView,
     ConfigRoleSectionView,
-    ConfigRotationLowPoolNotificationView,
     ConfigSuggestionDestinationSectionView,
     ConfigVotingDefaultsIntroView,
     ConfigWatchDestinationSectionView,
+    EligiblePoolWarningThresholdModal,
     OnBackToMenu,
-    RotationLowPoolThresholdModal,
 )
 from watch_party_manager.import_view import ImportModeChoiceView
 from watch_party_manager.membership_view import MembershipApprovalView, PendingRequestSelectView
@@ -405,11 +408,12 @@ class WatchPartyBot(commands.Bot):
             self.suggestion_database_configuration_repository,
         )
         self.collection_eligibility_service = CollectionEligibilityService(
-            self.suggestion_service, self.rotation_service
+            self.suggestion_service, self.vote_service
         )
-        self.rotation_low_pool_notification_service = RotationLowPoolNotificationService(
+        self.eligible_pool_warning_state_repository = JsonEligiblePoolWarningStateRepository()
+        self.eligible_pool_warning_service = EligiblePoolWarningService(
             self.collection_eligibility_service,
-            self.rotation_service,
+            self.eligible_pool_warning_state_repository,
             self.guild_configuration_repository,
             self.suggestion_database_configuration_repository,
             self.suggestion_service,
@@ -506,9 +510,11 @@ class WatchPartyBot(commands.Bot):
         )
         @discord.app_commands.choices(
             status=[
-                discord.app_commands.Choice(name="Active Watch Items (Eligible + Rotation Cooldown)", value="active"),
+                discord.app_commands.Choice(
+                    name="Active Watch Items (Eligible + In an Active Vote)", value="active"
+                ),
                 discord.app_commands.Choice(name="Eligible for Voting", value="eligible"),
-                discord.app_commands.Choice(name="Rotation Cooldown", value="rotation_cooldown"),
+                discord.app_commands.Choice(name="In an Active Vote", value="in_active_vote"),
                 discord.app_commands.Choice(name="Vote Winners", value="vote_winner"),
                 discord.app_commands.Choice(name="Retired", value="retired"),
                 discord.app_commands.Choice(name="Watched", value="watched"),
@@ -2841,8 +2847,8 @@ async def send_config_section(
     if section == ConfigSection.BACKUP_DEFAULTS:
         await send_config_backup_defaults_modal(interaction, bot, guild_id, on_back)
         return
-    if section == ConfigSection.ROTATION_LOW_POOL_NOTIFICATION:
-        await send_config_rotation_low_pool_notification_section(interaction, bot, guild_id, on_back, edit=edit)
+    if section == ConfigSection.ELIGIBLE_POOL_WARNING:
+        await send_config_eligible_pool_warning_section(interaction, bot, guild_id, on_back, edit=edit)
         return
 
     title = CONFIG_SECTION_TITLES[section]
@@ -3530,27 +3536,27 @@ async def send_config_backup_defaults_modal(
     )
 
 
-async def send_config_rotation_low_pool_notification_section(
+async def send_config_eligible_pool_warning_section(
     interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, on_back: OnBackToMenu, *, edit: bool
 ) -> None:
-    """Rotation & Collection Health: /config's Rotation Low-Pool
-    Notification section -- Enable/Disable, Set Threshold (blank restores
-    the automatic "two voting rounds" default), and destination (Admin
-    Channel or the Watch Party Home Channel).
+    """/config's Eligible Pool Warning section -- Enable/Disable, Set
+    Threshold (blank restores the automatic "candidate count × 5"
+    default), and destination (Admin Channel or the Watch Party Home
+    Channel).
     """
     config_service = bot.config_service
 
     def body() -> str:
         summary_lines = config_service.build_summary_lines(guild_id, interaction.guild)
-        current_value_line = summary_lines[CONFIG_SECTION_ORDER.index(ConfigSection.ROTATION_LOW_POOL_NOTIFICATION)]
-        return f"**WASH Configuration -- Rotation Low-Pool Notification**\n\nCurrent value -- {current_value_line}"
+        current_value_line = summary_lines[CONFIG_SECTION_ORDER.index(ConfigSection.ELIGIBLE_POOL_WARNING)]
+        return f"**WASH Configuration -- Eligible Pool Warning**\n\nCurrent value -- {current_value_line}"
 
     async def on_enable(enable_interaction: discord.Interaction) -> None:
-        result = config_service.set_rotation_low_pool_notification_enabled(guild_id, True)
+        result = config_service.set_eligible_pool_warning_enabled(guild_id, True)
         await send_config_result(enable_interaction, bot, guild_id, result)
 
     async def on_disable(disable_interaction: discord.Interaction) -> None:
-        result = config_service.set_rotation_low_pool_notification_enabled(guild_id, False)
+        result = config_service.set_eligible_pool_warning_enabled(guild_id, False)
         await send_config_result(disable_interaction, bot, guild_id, result)
 
     async def on_set_threshold(threshold_interaction: discord.Interaction) -> None:
@@ -3566,7 +3572,7 @@ async def send_config_rotation_low_pool_notification_section(
                         view=view(),
                     )
                     return
-            result = config_service.set_rotation_low_pool_notification_threshold(guild_id, threshold)
+            result = config_service.set_eligible_pool_warning_threshold(guild_id, threshold)
             await send_config_result(modal_interaction, bot, guild_id, result)
 
         current_configuration = config_service.get_configuration(guild_id)
@@ -3576,23 +3582,23 @@ async def send_config_rotation_low_pool_notification_section(
             else None
         )
         await threshold_interaction.response.send_modal(
-            RotationLowPoolThresholdModal(on_submit, default=str(current_threshold) if current_threshold else "")
+            EligiblePoolWarningThresholdModal(on_submit, default=str(current_threshold) if current_threshold else "")
         )
 
     async def on_use_admin_channel(admin_interaction: discord.Interaction) -> None:
-        result = config_service.set_rotation_low_pool_notification_destination(
-            guild_id, RotationLowPoolNotificationDestination.ADMIN_CHANNEL
+        result = config_service.set_eligible_pool_warning_destination(
+            guild_id, EligiblePoolWarningDestination.ADMIN_CHANNEL
         )
         await send_config_result(admin_interaction, bot, guild_id, result)
 
     async def on_use_home_channel(home_interaction: discord.Interaction) -> None:
-        result = config_service.set_rotation_low_pool_notification_destination(
-            guild_id, RotationLowPoolNotificationDestination.HOME_CHANNEL
+        result = config_service.set_eligible_pool_warning_destination(
+            guild_id, EligiblePoolWarningDestination.HOME_CHANNEL
         )
         await send_config_result(home_interaction, bot, guild_id, result)
 
-    def view() -> ConfigRotationLowPoolNotificationView:
-        return ConfigRotationLowPoolNotificationView(
+    def view() -> ConfigEligiblePoolWarningView:
+        return ConfigEligiblePoolWarningView(
             on_enable, on_disable, on_set_threshold, on_use_admin_channel, on_use_home_channel, on_back
         )
 
@@ -4390,12 +4396,11 @@ async def handle_start_vote_completion(
     database configured, none matching this channel), a picker is shown
     first and this function recurses with the WASH Crew member's choice
     once made -- see the ambiguity pre-check immediately below.
-    bot: optional, used only to refresh the confirmation posts of any
-    suggestions a rotation rollover returns to eligibility (see
-    sync_rotation_rollover_status_embeds). Defaults to None so existing
-    callers/tests keep working unchanged; when omitted, a rollover still
-    happens correctly, its posts simply aren't refreshed until something
-    else edits them.
+    bot: optional, used to sync newly-nominated candidates' own
+    confirmation posts (see sync_vote_start_status_embeds) and to
+    evaluate the Eligible Pool Warning after the round opens. Defaults to
+    None so existing callers/tests keep working unchanged; when omitted,
+    the round still opens correctly, those two side effects simply don't run.
     """
     target_database_id = resolved_database_id
     if (
@@ -4449,14 +4454,8 @@ async def handle_start_vote_completion(
 
         target_database_id = pre_resolution.database.database_id if pre_resolution.database is not None else None
 
-    previously_cooled_down_ids: set[int] = set()
     rotation_before: Optional[Rotation] = None
     if target_database_id is not None and rotation_service is not None:
-        previously_cooled_down_ids = {
-            item.id
-            for item in suggestion_service.get_suggestions_for_database(target_database_id)
-            if item.id is not None and rotation_service.is_in_rotation_cooldown(item)
-        }
         rotation_before = rotation_service.get_open_rotation(target_database_id)
 
     message, ephemeral = perform_start_vote(
@@ -4480,13 +4479,6 @@ async def handle_start_vote_completion(
         candidate_selection_override=candidate_selection_override,
     )
 
-    # A rotation rollover (see RotationService.resolve_rotation_for_requested_count)
-    # is a persisted side effect of perform_start_vote's eligibility check
-    # above, whether or not a round actually ended up being created --
-    # refresh any affected posts regardless of `ephemeral` below.
-    if previously_cooled_down_ids and bot is not None:
-        await sync_rotation_rollover_status_embeds(bot, target_database_id, previously_cooled_down_ids)
-
     rotation_after: Optional[Rotation] = (
         rotation_service.get_open_rotation(target_database_id)
         if target_database_id is not None and rotation_service is not None
@@ -4505,7 +4497,7 @@ async def handle_start_vote_completion(
     if not ephemeral and target_database_id is not None and bot is not None:
         database = suggestion_service.get_database(target_database_id)
         if database is not None:
-            await maybe_send_low_pool_notification(bot, database)
+            await maybe_send_eligible_pool_warning(bot, database)
 
     if ephemeral:
         await interaction.response.send_message(message, ephemeral=True)
@@ -6227,7 +6219,6 @@ def build_original_suggestion_link(item: WatchItem) -> Optional[str]:
 
 def build_duplicate_match_line(
     match: DuplicateMatch,
-    rotation_service: Optional[RotationService] = None,
     vote_service: Optional[VoteService] = None,
 ) -> str:
     """One matched existing item's line/block within an /add duplicate
@@ -6241,11 +6232,9 @@ def build_duplicate_match_line(
     original single-line format, but with the same labeled link in place
     of the bare IMDb URL it used to show.
 
-    rotation_service resolves the real Rotation Cooldown status (rather
-    than always reporting Available) -- optional, defaulting to None so
-    existing callers/tests keep working unchanged. vote_service resolves
-    In an Active Vote the same way (Rotation-removal Phase 1) -- also
-    optional, same reasoning.
+    vote_service resolves In an Active Vote -- optional, defaulting to
+    None so existing callers/tests keep working unchanged (meaning it's
+    never shown).
     """
     item = match.watch_item
     if match.category is DuplicateMatchCategory.VOTE_WINNER:
@@ -6255,7 +6244,7 @@ def build_duplicate_match_line(
     original_suggestion_link = build_original_suggestion_link(item)
     if original_suggestion_link is not None:
         parts.append(original_suggestion_link)
-    display_status = resolve_display_status(item, rotation_service, vote_service)
+    display_status = resolve_display_status(item, vote_service)
     parts.append(f"status: {display_status_label(display_status)}")
     return " | ".join(parts)
 
@@ -6295,7 +6284,6 @@ def decide_add_suggestion_outcome(
     duplicate_result: DuplicateCheckResult,
     *,
     is_crew: bool,
-    rotation_service: Optional[RotationService] = None,
     vote_service: Optional[VoteService] = None,
 ) -> AddSuggestionDecision:
     """Turn a duplicate check into what /add should do next (Sections 2-3).
@@ -6307,11 +6295,9 @@ def decide_add_suggestion_outcome(
     suggestion) after WASH Crew explicitly confirms. Regular members
     can never bypass either warning.
 
-    rotation_service resolves each matched item's real Rotation Cooldown
-    status (rather than always reporting Available) -- optional,
-    defaulting to None so existing callers/tests keep working unchanged.
-    vote_service resolves In an Active Vote the same way (Rotation-removal
-    Phase 1) -- also optional, same reasoning.
+    vote_service resolves each matched item's In an Active Vote status --
+    optional, defaulting to None so existing callers/tests keep working
+    unchanged (meaning it's never shown).
     """
     if duplicate_result.has_definite_match:
         active_matches = [
@@ -6322,14 +6308,14 @@ def decide_add_suggestion_outcome(
             return AddSuggestionDecision(
                 AddSuggestionOutcomeKind.BLOCKED_ACTIVE,
                 "🔴 That title is already in this collection.\n"
-                + build_duplicate_match_line(match, rotation_service, vote_service),
+                + build_duplicate_match_line(match, vote_service),
                 matched_item=match.watch_item,
             )
 
         match = duplicate_result.definite_matches[0]
         detail = (
             f"This title has {_ARCHIVE_CATEGORY_LABELS[match.category]}:\n"
-            + build_duplicate_match_line(match, rotation_service, vote_service)
+            + build_duplicate_match_line(match, vote_service)
         )
         if not is_crew:
             return AddSuggestionDecision(
@@ -6341,7 +6327,7 @@ def decide_add_suggestion_outcome(
 
     if duplicate_result.has_possible_only:
         lines = "\n".join(
-            build_duplicate_match_line(match, rotation_service, vote_service) for match in duplicate_result.matches
+            build_duplicate_match_line(match, vote_service) for match in duplicate_result.matches
         )
         detail = (
             "This title matches existing item(s) with no confirmed release year, "
@@ -6385,7 +6371,6 @@ async def post_suggestion_confirmation(
         watch_item,
         database_name=database.name,
         suggested_by=getattr(interaction.user, "mention", str(interaction.user)),
-        rotation_service=bot.rotation_service,
         vote_service=getattr(bot, "vote_service", None),
     )
     view = build_suggestion_view(
@@ -6463,7 +6448,6 @@ async def post_watched_item_archive(bot: "WatchPartyBot", watch_item: WatchItem)
         watch_item,
         database_name=database.name if database is not None else "Unknown collection",
         suggested_by=suggested_by,
-        rotation_service=bot.rotation_service,
         vote_service=getattr(bot, "vote_service", None),
     )
 
@@ -6531,7 +6515,6 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
         watch_item,
         database_name=database.name,
         suggested_by=suggested_by,
-        rotation_service=bot.rotation_service,
         vote_service=getattr(bot, "vote_service", None),
     )
     view = build_suggestion_view(
@@ -6595,16 +6578,13 @@ async def sync_vote_start_status_embeds(bot: "WatchPartyBot", candidates: "List[
     """Sync every newly-presented candidate's own confirmation-post Status
     field the moment a vote round opens (Suggestion Status Synchronization).
 
-    A nominee is already recorded as "presented" -- and so already on
-    Rotation Cooldown internally -- by the time perform_start_vote returns
-    (see RotationService.record_presentation, invoked from within
-    NomineeSelectionService.select_nominees). Without this, a candidate's
-    public post keeps showing whatever status it had when last synced
-    (typically Available) from the moment a round opens until the round
-    later closes and sync_vote_completion_status_embeds finally corrects
-    it -- the same kind of staleness sync_vote_completion_status_embeds
-    and sync_rotation_rollover_status_embeds already fix for the other
-    two directions of this same lifecycle.
+    A nominee is now In an Active Vote the moment perform_start_vote
+    returns. Without this, a candidate's public post keeps showing
+    whatever status it had when last synced (typically Available) from
+    the moment a round opens until the round later closes and
+    sync_vote_completion_status_embeds finally corrects it -- the same
+    kind of staleness sync_vote_completion_status_embeds fixes for the
+    other direction of this same lifecycle.
     """
     for watch_item in candidates:
         await sync_suggestion_status_embed(bot, watch_item)
@@ -6617,47 +6597,16 @@ async def sync_vote_completion_status_embeds(bot: "WatchPartyBot", result: VoteC
     after finalize_vote_completion().
 
     Every candidate, not just the winner(s), must be refreshed here: a
-    losing nominee was already recorded as "presented" in this rotation
-    when the round started (see RotationService.record_presentation()),
-    so it's already on Rotation Cooldown internally the moment the round
-    completes -- but its public post keeps showing whatever status it
-    had when last synced (typically Available) until something actually
-    edits it. Syncing only the winner (the original bug) left every
-    losing nominee's post stuck on a stale status indefinitely.
+    losing nominee stops being In an Active Vote the moment the round
+    completes, but its public post keeps showing whatever status it had
+    when last synced (typically In an Active Vote) until something
+    actually edits it. Syncing only the winner (the original bug) left
+    every losing nominee's post stuck on a stale status indefinitely.
     """
     for suggestion_id in result.vote_round.candidate_suggestion_ids:
         watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
         if watch_item is not None:
             await sync_suggestion_status_embed(bot, watch_item)
-
-
-async def sync_rotation_rollover_status_embeds(
-    bot: "WatchPartyBot", database_id: int, previously_cooled_down_suggestion_ids: "set[int]"
-) -> None:
-    """Refresh the confirmation posts of suggestions a rotation rollover
-    just returned to eligibility (see
-    RotationService.resolve_rotation_for_requested_count).
-
-    previously_cooled_down_suggestion_ids is a snapshot taken by the
-    caller *before* the rollover-triggering call, of every suggestion in
-    this database that was on Rotation Cooldown at that moment. Only
-    suggestions that actually left cooldown (a rollover clears it for
-    every previously-presented suggestion at once, but a suggestion
-    already removed, retired, or re-presented in the meantime should not
-    be touched) get their post refreshed -- avoiding a pointless edit
-    when nothing actually changed. Missing/deleted posts are skipped
-    gracefully by sync_suggestion_status_embed itself; posts are always
-    edited in place, never recreated.
-    """
-    for suggestion_id in previously_cooled_down_suggestion_ids:
-        watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
-        if watch_item is None:
-            continue
-        if watch_item.database_id != database_id:
-            continue
-        if bot.rotation_service.is_in_rotation_cooldown(watch_item):
-            continue
-        await sync_suggestion_status_embed(bot, watch_item)
 
 
 def admit_suggestion_to_rotation(bot: "WatchPartyBot", database: SuggestionDatabase, watch_item: WatchItem) -> None:
@@ -6679,33 +6628,22 @@ def admit_suggestion_to_rotation(bot: "WatchPartyBot", database: SuggestionDatab
     bot.rotation_service.admit_suggestion(database.database_id, watch_item.id, admission_mode)
 
 
-async def maybe_send_low_pool_notification(bot: "WatchPartyBot", database: SuggestionDatabase) -> None:
-    """Rotation & Collection Health: send the Rotation Low-Pool
-    notification when due, and only when due.
+async def maybe_send_eligible_pool_warning(bot: "WatchPartyBot", database: SuggestionDatabase) -> None:
+    """Send the Eligible Pool Warning when due, and only when due.
 
     Evaluated after every successful add/reactivation (the pool size may
-    have just crossed the configured threshold) and after a vote-start
-    rollover (goal 2: rollover is exactly the moment eligibility is
-    freshly recomputed, so it's also the natural moment to notice the
-    pool is still low even after reclaiming everything a rollover could).
-    RotationLowPoolNotificationService itself enforces the enabled flag,
-    threshold, and once-per-rotation dedup -- this only sends and records
-    which rotation was notified when told to. A Discord send failure is
-    logged and swallowed without recording the rotation id, so the next
-    opportunity can retry rather than going silent for the rest of that
-    rotation over one hiccup.
+    have just crossed the configured threshold) and after a vote
+    completes (the moment a collection's eligible pool shrinks by
+    however many nominees didn't win). EligiblePoolWarningService itself
+    enforces the enabled flag, threshold, and threshold-crossing dedup --
+    arming/disarming its own state as a side effect of evaluate() -- so
+    there is nothing left for this function to record. A Discord send
+    failure is logged and swallowed; the warning stays armed regardless
+    (matching every other "don't retry a transient send failure" call
+    site in this file), so it won't re-fire on the very next unrelated
+    change to this collection.
     """
-    configuration = bot.suggestion_database_configuration_repository.get(database.guild_id, database.database_id)
-    mode = (
-        configuration.suggestion_rules.candidate_selection
-        if configuration is not None
-        else CandidateSelectionMode.FAVOR_NEW_ADDITIONS
-    )
-    decision = bot.rotation_low_pool_notification_service.evaluate(
-        guild_id=database.guild_id,
-        database_id=database.database_id,
-        candidate_selection_mode=mode,
-    )
+    decision = bot.eligible_pool_warning_service.evaluate(guild_id=database.guild_id, database_id=database.database_id)
     if not decision.should_send or decision.destination_channel_id is None:
         return
     try:
@@ -6713,9 +6651,8 @@ async def maybe_send_low_pool_notification(bot: "WatchPartyBot", database: Sugge
         if channel is None:
             channel = await bot.fetch_channel(decision.destination_channel_id)
         await channel.send(decision.message)
-        bot.rotation_service.record_low_pool_notification_sent(database.database_id, decision.rotation_id)
     except Exception:
-        logger.warning("Could not send the Rotation Low-Pool notification for database %s", database.database_id, exc_info=True)
+        logger.warning("Could not send the Eligible Pool Warning for database %s", database.database_id, exc_info=True)
 
 
 async def finish_add_or_reactivate(
@@ -6747,7 +6684,7 @@ async def finish_add_or_reactivate(
     await interaction.response.send_message(ack, ephemeral=True)
 
     admit_suggestion_to_rotation(bot, database, watch_item)
-    await maybe_send_low_pool_notification(bot, database)
+    await maybe_send_eligible_pool_warning(bot, database)
 
 
 async def handle_add_suggestion(
@@ -6789,7 +6726,6 @@ async def handle_add_suggestion(
         decision = decide_add_suggestion_outcome(
             duplicate_result,
             is_crew=is_crew,
-            rotation_service=getattr(bot, "rotation_service", None),
             vote_service=getattr(bot, "vote_service", None),
         )
 
@@ -7651,17 +7587,14 @@ def build_suggestion_confirmation_embed(
     *,
     database_name: str,
     suggested_by: str,
-    rotation_service: Optional[RotationService] = None,
     vote_service: Optional[VoteService] = None,
 ):
     """Build the public /add confirmation as a compact record-style embed.
 
-    rotation_service is optional (defaults to None, meaning Rotation
-    Cooldown is never shown) so existing callers/tests that construct
-    this without one keep working unchanged -- see
-    suggestion_display_status.resolve_display_status. vote_service is the
-    same for In an Active Vote (Rotation-removal Phase 1), which takes
-    priority over Rotation Cooldown whenever both would apply.
+    vote_service is optional (defaults to None, meaning In an Active Vote
+    is never shown) so existing callers/tests that construct this without
+    one keep working unchanged -- see
+    suggestion_display_status.resolve_display_status.
 
     Deliberately built without EmbedFactory's default footer/timestamp
     (unlike most other WASH embeds): this post is edited in place
@@ -7699,7 +7632,7 @@ def build_suggestion_confirmation_embed(
     embed.add_field(name="Suggested By", value=suggested_by, inline=True)
     embed.add_field(name="Collection", value=format_collection_display(database_name), inline=True)
     embed.add_field(name="Reference", value=watch_item.reference, inline=True)
-    display_status = resolve_display_status(watch_item, rotation_service, vote_service)
+    display_status = resolve_display_status(watch_item, vote_service)
     embed.add_field(
         name="Status", value=format_display_status_with_won_date(watch_item, display_status), inline=True
     )
@@ -7798,26 +7731,25 @@ async def perform_repair_suggestions(
 class SuggestionListStatusFilter(str, Enum):
     """Which suggestions /list should include.
 
-    UI Polish (Watch Item Status Presentation): six filters, all
-    resolved through CollectionEligibilityService -- the same
-    authoritative calculation /vote start uses -- so none of them can
-    ever disagree with what starting a vote would actually see. Every
-    bucket below (eligible, rotation_cooldown, vote_winners, retired)
-    is already computed by CollectionEligibility itself; this filter
-    only chooses which of those (already-identical) buckets to show,
-    never recomputes eligibility.
+    Rotation-removal Phase 2: six filters, all resolved through
+    CollectionEligibilityService -- the same authoritative calculation
+    every other command uses -- so none of them can ever disagree with
+    what starting a vote would actually see. Every bucket below
+    (available, in_active_vote, vote_winners, retired, watched) is
+    already computed by CollectionEligibility itself; this filter only
+    chooses which of those (already-identical) buckets to show, never
+    recomputes eligibility.
 
-    ACTIVE (the new default) is Eligible + Rotation Cooldown mixed
-    together -- CollectionEligibility.active, unchanged. ELIGIBLE is
-    the pool actually eligible for the next vote (what the old
-    AVAILABLE filter showed). ROTATION_COOLDOWN, VOTE_WINNER, RETIRED,
-    and WATCHED are unchanged, plain-bucket filters. ALL is every watch
-    item in the collection, active or not.
+    ACTIVE (the new default) is Available + In an Active Vote mixed
+    together -- CollectionEligibility.active, unchanged. ELIGIBLE is the
+    Eligible Pool (what actually feeds the next vote). IN_ACTIVE_VOTE,
+    VOTE_WINNER, RETIRED, and WATCHED are unchanged, plain-bucket
+    filters. ALL is every watch item in the collection, active or not.
     """
 
     ACTIVE = "active"
     ELIGIBLE = "eligible"
-    ROTATION_COOLDOWN = "rotation_cooldown"
+    IN_ACTIVE_VOTE = "in_active_vote"
     VOTE_WINNER = "vote_winner"
     RETIRED = "retired"
     WATCHED = "watched"
@@ -7827,84 +7759,33 @@ class SuggestionListStatusFilter(str, Enum):
 SUGGESTION_LIST_STATUS_FILTER_LABELS: dict[SuggestionListStatusFilter, str] = {
     SuggestionListStatusFilter.ACTIVE: "Active Watch Items",
     SuggestionListStatusFilter.ELIGIBLE: "Eligible for Voting",
-    SuggestionListStatusFilter.ROTATION_COOLDOWN: "Rotation Cooldown",
+    SuggestionListStatusFilter.IN_ACTIVE_VOTE: "In an Active Vote",
     SuggestionListStatusFilter.VOTE_WINNER: "Vote Winners",
     SuggestionListStatusFilter.RETIRED: "Retired",
     SuggestionListStatusFilter.WATCHED: "Watched",
     SuggestionListStatusFilter.ALL: "All Watch Items",
 }
 
-# Filters whose result depends on the eligible/rotation-cooldown split
-# must use CollectionEligibilityService.resolve() -- including the
-# same automatic rollover-before-reporting /vote start relies on --
-# since they include rotation-sensitive buckets. VOTE_WINNER/RETIRED
-# are terminal statuses, entirely unaffected by rotation state, so
-# they use peek() instead: no reason to ever bootstrap or roll over a
-# rotation just to look at items that have already left it.
-_ROLLOVER_SENSITIVE_LIST_FILTERS = frozenset(
-    {
-        SuggestionListStatusFilter.ACTIVE,
-        SuggestionListStatusFilter.ELIGIBLE,
-        SuggestionListStatusFilter.ROTATION_COOLDOWN,
-        SuggestionListStatusFilter.ALL,
-    }
-)
-
-
-def _list_entry_status(
-    item: WatchItem, default_status: SuggestionDisplayStatus, vote_service: Optional[VoteService]
-) -> SuggestionDisplayStatus:
-    """The status one /list entry should actually show: In an Active Vote
-    (Rotation-removal Phase 1) takes priority over whatever bucket the
-    item came from, mirroring resolve_display_status's own precedence,
-    when it's currently nominated in an open voting round. Only Eligible/
-    Rotation Cooldown items can ever be a vote candidate -- Vote Winner/
-    Retired/Watched items are always passed their own terminal status
-    unchanged, so this is a cheap no-op check for those callers.
-    """
-    if (
-        vote_service is not None
-        and item.id is not None
-        and vote_service.get_open_round_for_suggestion(item.id) is not None
-    ):
-        return SuggestionDisplayStatus.IN_ACTIVE_VOTE
-    return default_status
-
 
 def resolve_suggestion_list_entries(
     eligibility: "CollectionEligibility",
     status_filter: SuggestionListStatusFilter,
-    vote_service: Optional[VoteService] = None,
 ) -> List[Tuple[WatchItem, SuggestionDisplayStatus]]:
     """Pick which of CollectionEligibility's already-computed buckets a
-    /list filter shows, paired with each item's display status (known
-    directly from which bucket it came from -- no separate rotation
-    lookup needed per item).
-
-    vote_service is optional (defaults to None, meaning In an Active Vote
-    is never shown -- existing callers/tests keep working unchanged) --
-    when given, overrides Available/Rotation Cooldown to In an Active
-    Vote for any item currently nominated in an open round (Rotation-
-    removal Phase 1).
+    /list filter shows, paired with each item's display status -- known
+    directly from which bucket it came from, since CollectionEligibility
+    itself already separates Available from In an Active Vote (Rotation-
+    removal Phase 2; no separate per-item VoteService lookup needed here
+    anymore).
     """
     if status_filter is SuggestionListStatusFilter.ACTIVE:
-        return [
-            (item, _list_entry_status(item, SuggestionDisplayStatus.AVAILABLE, vote_service))
-            for item in eligibility.eligible
-        ] + [
-            (item, _list_entry_status(item, SuggestionDisplayStatus.ROTATION_COOLDOWN, vote_service))
-            for item in eligibility.rotation_cooldown
+        return [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.available] + [
+            (item, SuggestionDisplayStatus.IN_ACTIVE_VOTE) for item in eligibility.in_active_vote
         ]
     if status_filter is SuggestionListStatusFilter.ELIGIBLE:
-        return [
-            (item, _list_entry_status(item, SuggestionDisplayStatus.AVAILABLE, vote_service))
-            for item in eligibility.eligible
-        ]
-    if status_filter is SuggestionListStatusFilter.ROTATION_COOLDOWN:
-        return [
-            (item, _list_entry_status(item, SuggestionDisplayStatus.ROTATION_COOLDOWN, vote_service))
-            for item in eligibility.rotation_cooldown
-        ]
+        return [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.available]
+    if status_filter is SuggestionListStatusFilter.IN_ACTIVE_VOTE:
+        return [(item, SuggestionDisplayStatus.IN_ACTIVE_VOTE) for item in eligibility.in_active_vote]
     if status_filter is SuggestionListStatusFilter.VOTE_WINNER:
         return [(item, SuggestionDisplayStatus.VOTE_WINNER) for item in eligibility.vote_winners]
     if status_filter is SuggestionListStatusFilter.RETIRED:
@@ -7913,14 +7794,8 @@ def resolve_suggestion_list_entries(
         return [(item, SuggestionDisplayStatus.WATCHED) for item in eligibility.watched]
     # ALL
     return (
-        [
-            (item, _list_entry_status(item, SuggestionDisplayStatus.AVAILABLE, vote_service))
-            for item in eligibility.eligible
-        ]
-        + [
-            (item, _list_entry_status(item, SuggestionDisplayStatus.ROTATION_COOLDOWN, vote_service))
-            for item in eligibility.rotation_cooldown
-        ]
+        [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.available]
+        + [(item, SuggestionDisplayStatus.IN_ACTIVE_VOTE) for item in eligibility.in_active_vote]
         + [(item, SuggestionDisplayStatus.VOTE_WINNER) for item in eligibility.vote_winners]
         + [(item, SuggestionDisplayStatus.RETIRED) for item in eligibility.retired]
         + [(item, SuggestionDisplayStatus.WATCHED) for item in eligibility.watched]
@@ -7932,8 +7807,8 @@ def build_suggestion_entry_line(item: WatchItem, display_status: SuggestionDispl
     available) a clean link back to the original public suggestion post.
 
     UI Polish (Watch Item Status Presentation): every entry now leads
-    with its status emoji (🟢/🟡/🏆/🗄️) so Active Watch Items' mixed
-    Eligible/Rotation Cooldown list -- and every other filter -- reads
+    with its status emoji (🟢/🗳️/🏆/🗄️/✅) so Active Watch Items' mixed
+    Eligible/In an Active Vote list -- and every other filter -- reads
     clearly at a glance without needing a separate status column.
     Deliberately still excludes the internal reference number and IMDb
     link the old /list rendering also omitted (Release Polish Priority 2)
@@ -8043,11 +7918,13 @@ def resolve_rotation_number_for_round(
 
 
 def build_rotation_refresh_notification(rotation_number: int) -> str:
-    """UI Polish (Rotation & Collection Health): a short, informational
-    (not warning-toned) note that a completed rotation was automatically
-    refreshed -- shown alongside /vote start and /list whenever their
-    own rollover-before-reporting resolve() actually rolled a rotation
-    forward (CollectionEligibility.rollover_occurred).
+    """A short, informational (not warning-toned) note that a completed
+    rotation was automatically refreshed -- shown alongside /vote start,
+    ephemerally to the WASH Crew member who ran it, whenever starting a
+    round rolled a legacy Balanced Random/Soft Rotation collection's
+    rotation forward. Purely informational bookkeeping for those two
+    modes' internal selection mechanism -- unrelated to Eligible Pool
+    reporting, which never surfaces this (Rotation-removal Phase 2).
     """
     return f"All eligible watch items have now been presented.\n\nStarting Rotation {rotation_number}."
 
@@ -8061,35 +7938,15 @@ async def send_suggestion_list(
     *,
     edit: bool = False,
 ) -> None:
-    """UI Polish (Watch Item Status Presentation): every filter is
-    resolved through CollectionEligibilityService -- the same
-    authoritative calculation, including rollover-before-reporting, that
-    /vote start uses -- so /list can never disagree with voting.
+    """Rotation-removal Phase 2: every filter is resolved through
+    CollectionEligibilityService -- the same authoritative calculation
+    every other command uses -- computed entirely from WatchItemStatus
+    and VoteService, never RotationService, so /list never needs to
+    trigger or care about a rotation rollover any more.
     """
-    mode = resolve_candidate_selection_mode(bot, database.guild_id, database.database_id)
-    if status_filter in _ROLLOVER_SENSITIVE_LIST_FILTERS:
-        # Vote Creation Validation / Suggestion Status Sync: /list's own
-        # resolve() call below can roll a completed rotation forward just
-        # like /vote start's can (see perform_start_vote's identical
-        # snapshot-before/sync-after pattern) -- snapshot who's on
-        # Rotation Cooldown first so any suggestion a rollover returns to
-        # eligibility gets its own public post refreshed too, not just
-        # this /list response.
-        previously_cooled_down_ids = {
-            item.id
-            for item in bot.suggestion_service.get_suggestions_for_database(database.database_id)
-            if item.id is not None and bot.rotation_service.is_in_rotation_cooldown(item)
-        }
-        candidate_count = resolve_configured_candidate_count(bot, database.guild_id)
-        eligibility = bot.collection_eligibility_service.resolve(
-            database.database_id, mode, requested_count=candidate_count
-        )
-        if eligibility.rollover_occurred:
-            await sync_rotation_rollover_status_embeds(bot, database.database_id, previously_cooled_down_ids)
-    else:
-        eligibility = bot.collection_eligibility_service.peek(database.database_id, mode)
+    eligibility = bot.collection_eligibility_service.get_eligibility(database.database_id)
 
-    entries = resolve_suggestion_list_entries(eligibility, status_filter, getattr(bot, "vote_service", None))
+    entries = resolve_suggestion_list_entries(eligibility, status_filter)
     # Deterministic ordering: by stable suggestion ID (assignment order),
     # never re-sorted by anything that could change between pages.
     entries = sorted(entries, key=lambda entry: entry[0].id or 0)
@@ -8101,28 +7958,13 @@ async def send_suggestion_list(
     )
     filter_label = SUGGESTION_LIST_STATUS_FILTER_LABELS[status_filter]
 
-    # Rotation Refresh Notification: /list's own resolve() may have just
-    # rolled a completed rotation forward (see CollectionEligibility.
-    # rollover_occurred) -- surface that plainly rather than leaving a
-    # member to wonder why Rotation Cooldown suddenly emptied out.
-    rollover_notice = ""
-    if eligibility.rollover_occurred:
-        rotation = bot.rotation_service.get_open_rotation(database.database_id)
-        if rotation is not None:
-            rollover_notice = (
-                build_rotation_refresh_notification(
-                    resolve_rotation_number(bot.rotation_service, database.database_id, rotation)
-                )
-                + "\n\n"
-            )
-
     async def on_switch_collection(switch_interaction: discord.Interaction) -> None:
         await show_list_switch_collection_picker(switch_interaction, bot, status_filter, public)
 
     switch_view_addition = await build_switch_collection_options(bot, database.guild_id) is not None
 
     if not entries:
-        content = f'{rollover_notice}"{display_name}" has no watch items matching {filter_label}.'
+        content = f'"{display_name}" has no watch items matching {filter_label}.'
         view = discord.ui.View(timeout=180)
         if switch_view_addition:
             view.add_item(SwitchCollectionButton(on_switch_collection))
@@ -8135,15 +7977,15 @@ async def send_suggestion_list(
             )
         return
 
-    header = f"{rollover_notice}**{display_name} -- {filter_label} ({len(entries)})**"
+    header = f"**{display_name} -- {filter_label} ({len(entries)})**"
     if status_filter is SuggestionListStatusFilter.ACTIVE:
-        # A short summary before the mixed Eligible/Rotation Cooldown
-        # list, e.g. "🟢 Eligible for Voting: 2\n🟡 Rotation Cooldown: 6".
+        # A short summary before the mixed Eligible/In an Active Vote
+        # list, e.g. "🟢 Eligible for Voting: 2\n🗳️ In an Active Vote: 6".
         header += (
             f"\n{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.AVAILABLE]} "
-            f"Eligible for Voting: {len(eligibility.eligible)}\n"
-            f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.ROTATION_COOLDOWN]} "
-            f"Rotation Cooldown: {len(eligibility.rotation_cooldown)}"
+            f"Eligible for Voting: {len(eligibility.available)}\n"
+            f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.IN_ACTIVE_VOTE]} "
+            f"In an Active Vote: {len(eligibility.in_active_vote)}"
         )
     lines = [build_suggestion_entry_line(item, display_status) for item, display_status in entries]
     pages = paginate_lines(header, lines)
@@ -8238,8 +8080,18 @@ async def show_list_switch_collection_picker(
 
 
 class NextVoteStatus(str, Enum):
+    """Rotation-removal Phase 2: the old third state, "Needs Rollover"
+    (not enough eligible right now, but enough active suggestions overall
+    that starting a vote would trigger an automatic rollover and
+    succeed), is gone -- a legacy Balanced Random/Soft Rotation
+    collection's internal rollover, when one is still needed, now always
+    happens silently inside actual vote creation (see
+    NomineeSelectionService.eligible_candidate_count); there is no longer
+    a meaningfully different outcome to warn an administrator about in
+    advance. READY now covers both of the old READY/NEEDS_ROLLOVER cases.
+    """
+
     READY = "Ready"
-    NEEDS_ROLLOVER = "Needs Rollover"
     INSUFFICIENT = "Insufficient Suggestions"
 
 
@@ -8251,12 +8103,11 @@ class LowPoolStatus(str, Enum):
 
 # /database health Visual Consistency: reuses the same traffic-light
 # idiom SUGGESTION_DISPLAY_STATUS_EMOJI already established for /list
-# (green/yellow for Available/Rotation Cooldown) rather than inventing a
-# new visual system -- red extends that same idiom for the one case
-# /list never had: a status that's an actual blocking problem.
+# (green for Available) rather than inventing a new visual system -- red
+# extends that same idiom for the one case /list never had: a status
+# that's an actual blocking problem.
 NEXT_VOTE_STATUS_EMOJI: dict[NextVoteStatus, str] = {
     NextVoteStatus.READY: "🟢",
-    NextVoteStatus.NEEDS_ROLLOVER: "🟡",
     NextVoteStatus.INSUFFICIENT: "🔴",
 }
 
@@ -8271,34 +8122,28 @@ def build_collection_health_report(bot: "WatchPartyBot", database: SuggestionDat
     """Build /database health's report text for one collection.
 
     The numbers are guaranteed to reconcile by construction, not by
-    coincidence: Active is literally len(eligible) + len(rotation_cooldown)
+    coincidence: Active is literally len(available) + len(in_active_vote)
     (CollectionEligibility.active), and Total is literally Active +
-    Vote Winners + Retired (CollectionEligibility.total) -- both
-    computed once, inside CollectionEligibilityService itself, never
+    Vote Winners + Retired + Watched (CollectionEligibility.total) --
+    both computed once, inside CollectionEligibilityService itself, never
     recomputed separately here.
     """
-    mode = resolve_candidate_selection_mode(bot, database.guild_id, database.database_id)
-    eligibility = bot.collection_eligibility_service.peek(database.database_id, mode)
+    eligibility = bot.collection_eligibility_service.get_eligibility(database.database_id)
 
     guild_configuration = bot.guild_configuration_repository.get(database.guild_id)
     database_configuration = bot.suggestion_database_configuration_repository.get(
         database.guild_id, database.database_id
     )
     candidate_count = resolve_configured_candidate_count(bot, database.guild_id)
-    eligible_count = len(eligibility.eligible)
+    eligible_count = eligibility.eligible_pool_count
     active_count = len(eligibility.active)
-    threshold = resolve_low_pool_threshold(guild_configuration, database_configuration, candidate_count, active_count)
+    threshold = resolve_eligible_pool_warning_threshold(guild_configuration, database_configuration, candidate_count)
 
-    if eligible_count >= candidate_count:
-        next_vote = NextVoteStatus.READY
-    elif active_count >= candidate_count:
-        next_vote = NextVoteStatus.NEEDS_ROLLOVER
-    else:
-        next_vote = NextVoteStatus.INSUFFICIENT
+    next_vote = NextVoteStatus.READY if active_count >= candidate_count else NextVoteStatus.INSUFFICIENT
 
     if eligible_count < candidate_count:
         low_pool = LowPoolStatus.INSUFFICIENT
-    elif eligible_count < threshold:
+    elif eligible_count <= threshold:
         low_pool = LowPoolStatus.ALMOST_COMPLETE
     else:
         low_pool = LowPoolStatus.HEALTHY
@@ -8309,14 +8154,14 @@ def build_collection_health_report(bot: "WatchPartyBot", database: SuggestionDat
         )
     )
 
-    # UI Polish (Rotation & Collection Health): the current rotation
-    # number is exposed here -- an administrator already looking at
-    # collection health is exactly the audience who benefits from it --
-    # rather than on every voting-related embed (Infinite Pool has no
-    # rotation to number at all, and a database with no rotation started
-    # yet has none to show either).
-    if mode is CandidateSelectionMode.INFINITE_POOL:
-        rotation_progress_line = "Rotation Progress: N/A (Pure Random selection has no rotation)"
+    # Rotation Progress remains a rotation *statistic* (Rotation-removal
+    # Phase 2 explicitly keeps historical/current rotation information for
+    # now -- see docs) -- shown only for a collection still actually using
+    # a legacy Balanced Random/Soft Rotation mode, which is the only case
+    # where RotationService tracks a rotation at all.
+    mode = resolve_candidate_selection_mode(bot, database.guild_id, database.database_id)
+    if mode not in (CandidateSelectionMode.ROTATION_POOL, CandidateSelectionMode.SOFT_ROTATION):
+        rotation_progress_line = None
     else:
         rotation = bot.rotation_service.get_open_rotation(database.database_id)
         if rotation is None:
@@ -8329,31 +8174,31 @@ def build_collection_health_report(bot: "WatchPartyBot", database: SuggestionDat
                 f"active items have been presented ({progress.completion_percentage:.0f}%)"
             )
 
-    # Formatting Polish: Eligible for Voting and Rotation Cooldown are
+    # Formatting Polish: Eligible for Voting and In an Active Vote are
     # indented under Active Watch Items so the reconciliation identity
-    # (Active = Eligible for Voting + Rotation Cooldown) reads directly
+    # (Active = Eligible for Voting + In an Active Vote) reads directly
     # from the layout, not just the parenthetical -- purely presentational,
     # the underlying numbers are unchanged.
-    return "\n".join(
-        [
-            f"**Collection Health -- {display_name}**",
-            "",
-            f"Total Watch Items: {eligibility.total}",
-            "",
-            f"Active Watch Items: {active_count} (Eligible for Voting + Rotation Cooldown)",
-            f"    {SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.AVAILABLE]} Eligible for Voting: {eligible_count}",
-            f"    {SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.ROTATION_COOLDOWN]} Rotation Cooldown: {len(eligibility.rotation_cooldown)}",
-            f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.VOTE_WINNER]} Vote Winners: {len(eligibility.vote_winners)}",
-            f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.RETIRED]} Retired: {len(eligibility.retired)}",
-            f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.WATCHED]} Watched: {len(eligibility.watched)}",
-            "",
-            rotation_progress_line,
-            f"Configured Candidate Count: {candidate_count}",
-            "",
-            f"Next Vote: {NEXT_VOTE_STATUS_EMOJI[next_vote]} {next_vote.value}",
-            f"Low Pool Status: {LOW_POOL_STATUS_EMOJI[low_pool]} {low_pool.value}",
-        ]
-    )
+    lines = [
+        f"**Collection Health -- {display_name}**",
+        "",
+        f"Total Watch Items: {eligibility.total}",
+        "",
+        f"Active Watch Items: {active_count} (Eligible for Voting + In an Active Vote)",
+        f"    {SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.AVAILABLE]} Eligible for Voting: {eligible_count}",
+        f"    {SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.IN_ACTIVE_VOTE]} In an Active Vote: {len(eligibility.in_active_vote)}",
+        f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.VOTE_WINNER]} Vote Winners: {len(eligibility.vote_winners)}",
+        f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.RETIRED]} Retired: {len(eligibility.retired)}",
+        f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.WATCHED]} Watched: {len(eligibility.watched)}",
+        "",
+    ]
+    if rotation_progress_line is not None:
+        lines.append(rotation_progress_line)
+    lines.append(f"Configured Candidate Count: {candidate_count}")
+    lines.append("")
+    lines.append(f"Next Vote: {NEXT_VOTE_STATUS_EMOJI[next_vote]} {next_vote.value}")
+    lines.append(f"Low Pool Status: {LOW_POOL_STATUS_EMOJI[low_pool]} {low_pool.value}")
+    return "\n".join(lines)
 
 
 async def send_collection_health(interaction: discord.Interaction, bot: "WatchPartyBot", database: SuggestionDatabase) -> None:
@@ -8449,7 +8294,7 @@ async def handle_list_suggestions(
         status_filter = SuggestionListStatusFilter(status)
     except ValueError:
         await interaction.response.send_message(
-            "Choose Active Watch Items, Eligible for Voting, Rotation Cooldown, Vote Winners, Retired, "
+            "Choose Active Watch Items, Eligible for Voting, In an Active Vote, Vote Winners, Retired, "
             "Watched, or All Watch Items.",
             ephemeral=True,
         )
@@ -9057,21 +8902,19 @@ def perform_remove_suggestion(
 def build_removal_option_label(
     item: WatchItem,
     suggestion_service: SuggestionService,
-    rotation_service: Optional[RotationService] = None,
     vote_service: Optional[VoteService] = None,
 ) -> str:
     """Build one /remove selector option's label: reference, title, year,
     database, and status (Section 6's "Show a selector including...").
 
-    rotation_service resolves the real Rotation Cooldown status (rather
-    than always reporting Available) -- optional, defaulting to None so
-    existing callers/tests keep working unchanged. vote_service resolves
-    In an Active Vote the same way (Rotation-removal Phase 1).
+    vote_service resolves In an Active Vote -- optional, defaulting to
+    None so existing callers/tests keep working unchanged (meaning it's
+    never shown).
     """
     database = suggestion_service.get_database(item.database_id) if item.database_id is not None else None
     database_name = database.name if database is not None else "Unknown collection"
     year_part = f" ({item.release_year})" if item.release_year else ""
-    display_status = resolve_display_status(item, rotation_service, vote_service)
+    display_status = resolve_display_status(item, vote_service)
     status_part = display_status_label(display_status)
     return f"{item.reference} {item.title}{year_part} -- {database_name} -- {status_part}"
 
@@ -9085,9 +8928,7 @@ async def send_removal_confirmation(interaction: discord.Interaction, bot: "Watc
     for genuinely broken records) -- this reuses archive_suggestion()
     instead, which preserves identity, journey, and history.
     """
-    summary = build_removal_option_label(
-        item, bot.suggestion_service, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
-    )
+    summary = build_removal_option_label(item, bot.suggestion_service, getattr(bot, "vote_service", None))
 
     async def on_confirm(confirm_interaction: discord.Interaction) -> None:
         result = bot.suggestion_service.archive_suggestion(item.id)
@@ -9132,9 +8973,7 @@ async def handle_remove_suggestion(interaction: discord.Interaction, bot: "Watch
     options = [
         (
             item.id,
-            build_removal_option_label(
-                item, bot.suggestion_service, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
-            ),
+            build_removal_option_label(item, bot.suggestion_service, getattr(bot, "vote_service", None)),
         )
         for item in matches
     ]
@@ -9150,7 +8989,6 @@ async def handle_remove_suggestion(interaction: discord.Interaction, bot: "Watch
 def build_edit_suggestion_summary(
     item: WatchItem,
     suggestion_service: SuggestionService,
-    rotation_service: Optional[RotationService] = None,
     vote_service: Optional[VoteService] = None,
 ) -> str:
     """Build the read-only IMDb-metadata summary shown alongside
@@ -9163,14 +9001,14 @@ def build_edit_suggestion_summary(
     Falls back to the raw IMDb URL only for a legacy suggestion with no
     confirmation post to link to, since that's otherwise the only way to
     reach its IMDb page from here at all. vote_service resolves In an
-    Active Vote alongside rotation_service's Rotation Cooldown
-    (Rotation-removal Phase 1).
+    Active Vote -- optional, defaulting to None so existing callers/tests
+    keep working unchanged (meaning it's never shown).
     """
     database = suggestion_service.get_database(item.database_id) if item.database_id is not None else None
     database_name = database.name if database is not None else "Unknown collection"
     year_part = f" ({item.release_year})" if item.release_year else ""
     imdb_url = item.metadata_ids.get(MetadataProvider.IMDB)
-    display_status = resolve_display_status(item, rotation_service, vote_service)
+    display_status = resolve_display_status(item, vote_service)
     lines = [
         f"{item.reference} {item.title}{year_part}",
         f"Collection: {database_name}",
@@ -9220,7 +9058,7 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
 
         async def on_status_selected(select_interaction: discord.Interaction, new_status: WatchItemStatus) -> None:
             result = bot.suggestion_service.set_suggestion_status(
-                item.id, new_status, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
+                item.id, new_status, getattr(bot, "vote_service", None)
             )
             await select_interaction.response.send_message(result.message, ephemeral=True)
             if result.success:
@@ -9231,7 +9069,6 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
             content=build_edit_suggestion_summary(
                 current_item,
                 bot.suggestion_service,
-                bot.rotation_service,
                 getattr(bot, "vote_service", None),
             )
             + "\n\nChoose the new status:",
@@ -9297,18 +9134,14 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
                 match = duplicate_result.definite_matches[0]
                 await select_interaction.response.send_message(
                     "This move would duplicate an existing suggestion:\n"
-                    + build_duplicate_match_line(
-                        match, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
-                    ),
+                    + build_duplicate_match_line(match, getattr(bot, "vote_service", None)),
                     ephemeral=True,
                 )
                 return
 
             if duplicate_result.has_possible_only:
                 lines = "\n".join(
-                    build_duplicate_match_line(
-                        match, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
-                    )
+                    build_duplicate_match_line(match, getattr(bot, "vote_service", None))
                     for match in duplicate_result.matches
                 )
                 message = f"This move might duplicate existing item(s):\n{lines}"
@@ -9341,7 +9174,7 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
         )
         await button_interaction.response.edit_message(
             content=build_edit_suggestion_summary(
-                item, bot.suggestion_service, bot.rotation_service, getattr(bot, "vote_service", None)
+                item, bot.suggestion_service, getattr(bot, "vote_service", None)
             )
             + "\n\nMove to which collection?",
             view=view,
@@ -9352,9 +9185,7 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
 
     view = EditSuggestionActionView(on_change_status, on_move_collection, on_cancel)
     await interaction.response.send_message(
-        build_edit_suggestion_summary(
-            item, bot.suggestion_service, bot.rotation_service, getattr(bot, "vote_service", None)
-        ),
+        build_edit_suggestion_summary(item, bot.suggestion_service, getattr(bot, "vote_service", None)),
         view=view,
         ephemeral=True,
     )
@@ -10955,9 +10786,7 @@ async def send_suggestion_statistics(
         options = [
             (
                 item.id,
-                build_removal_option_label(
-                    item, bot.suggestion_service, getattr(bot, "rotation_service", None), getattr(bot, "vote_service", None)
-                ),
+                build_removal_option_label(item, bot.suggestion_service, getattr(bot, "vote_service", None)),
             )
             for item in matches
         ]

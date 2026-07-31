@@ -27,110 +27,38 @@ def make_item(status: WatchItemStatus = WatchItemStatus.SUGGESTED) -> WatchItem:
 
 
 class ComputeDisplayStatusTests(unittest.TestCase):
-    def test_archived_is_retired_regardless_of_cooldown(self) -> None:
+    def test_archived_is_retired_regardless_of_active_vote(self) -> None:
         item = make_item(WatchItemStatus.ARCHIVED)
-        self.assertEqual(
-            SuggestionDisplayStatus.RETIRED, compute_display_status(item, in_rotation_cooldown=True)
-        )
-        self.assertEqual(
-            SuggestionDisplayStatus.RETIRED, compute_display_status(item, in_rotation_cooldown=False)
-        )
+        self.assertEqual(SuggestionDisplayStatus.RETIRED, compute_display_status(item, in_active_vote=True))
+        self.assertEqual(SuggestionDisplayStatus.RETIRED, compute_display_status(item, in_active_vote=False))
 
-    def test_vote_winner_is_vote_winner_regardless_of_cooldown(self) -> None:
+    def test_vote_winner_is_vote_winner_regardless_of_active_vote(self) -> None:
         item = make_item(WatchItemStatus.VOTE_WINNER)
-        self.assertEqual(
-            SuggestionDisplayStatus.VOTE_WINNER, compute_display_status(item, in_rotation_cooldown=True)
-        )
-        self.assertEqual(
-            SuggestionDisplayStatus.VOTE_WINNER, compute_display_status(item, in_rotation_cooldown=False)
-        )
-
-    def test_suggested_in_cooldown_is_rotation_cooldown(self) -> None:
-        item = make_item(WatchItemStatus.SUGGESTED)
-        self.assertEqual(
-            SuggestionDisplayStatus.ROTATION_COOLDOWN, compute_display_status(item, in_rotation_cooldown=True)
-        )
-
-    def test_suggested_not_in_cooldown_is_available(self) -> None:
-        item = make_item(WatchItemStatus.SUGGESTED)
-        self.assertEqual(
-            SuggestionDisplayStatus.AVAILABLE, compute_display_status(item, in_rotation_cooldown=False)
-        )
-
-    def test_watched_is_watched_regardless_of_cooldown(self) -> None:
-        item = make_item(WatchItemStatus.WATCHED)
-        self.assertEqual(
-            SuggestionDisplayStatus.WATCHED, compute_display_status(item, in_rotation_cooldown=True)
-        )
-        self.assertEqual(
-            SuggestionDisplayStatus.WATCHED, compute_display_status(item, in_rotation_cooldown=False)
-        )
+        self.assertEqual(SuggestionDisplayStatus.VOTE_WINNER, compute_display_status(item, in_active_vote=True))
+        self.assertEqual(SuggestionDisplayStatus.VOTE_WINNER, compute_display_status(item, in_active_vote=False))
 
     def test_suggested_in_an_active_vote_is_in_active_vote(self) -> None:
-        # Rotation-removal Phase 1.
         item = make_item(WatchItemStatus.SUGGESTED)
-        self.assertEqual(
-            SuggestionDisplayStatus.IN_ACTIVE_VOTE,
-            compute_display_status(item, in_rotation_cooldown=False, in_active_vote=True),
-        )
+        self.assertEqual(SuggestionDisplayStatus.IN_ACTIVE_VOTE, compute_display_status(item, in_active_vote=True))
 
-    def test_in_an_active_vote_takes_precedence_over_rotation_cooldown(self) -> None:
+    def test_suggested_not_in_an_active_vote_is_available(self) -> None:
         item = make_item(WatchItemStatus.SUGGESTED)
-        self.assertEqual(
-            SuggestionDisplayStatus.IN_ACTIVE_VOTE,
-            compute_display_status(item, in_rotation_cooldown=True, in_active_vote=True),
-        )
+        self.assertEqual(SuggestionDisplayStatus.AVAILABLE, compute_display_status(item, in_active_vote=False))
+
+    def test_watched_is_watched_regardless_of_active_vote(self) -> None:
+        item = make_item(WatchItemStatus.WATCHED)
+        self.assertEqual(SuggestionDisplayStatus.WATCHED, compute_display_status(item, in_active_vote=True))
+        self.assertEqual(SuggestionDisplayStatus.WATCHED, compute_display_status(item, in_active_vote=False))
 
     def test_in_active_vote_defaults_to_false(self) -> None:
         # Backward-compatible optional parameter: every pre-existing call
         # site that doesn't yet pass in_active_vote must behave exactly
         # as before.
         item = make_item(WatchItemStatus.SUGGESTED)
-        self.assertEqual(
-            SuggestionDisplayStatus.AVAILABLE, compute_display_status(item, in_rotation_cooldown=False)
-        )
-
-    def test_archived_is_retired_even_in_an_active_vote(self) -> None:
-        item = make_item(WatchItemStatus.ARCHIVED)
-        self.assertEqual(
-            SuggestionDisplayStatus.RETIRED,
-            compute_display_status(item, in_rotation_cooldown=False, in_active_vote=True),
-        )
-
-    def test_vote_winner_is_vote_winner_even_in_an_active_vote(self) -> None:
-        item = make_item(WatchItemStatus.VOTE_WINNER)
-        self.assertEqual(
-            SuggestionDisplayStatus.VOTE_WINNER,
-            compute_display_status(item, in_rotation_cooldown=False, in_active_vote=True),
-        )
-
-    def test_watched_is_watched_even_in_an_active_vote(self) -> None:
-        item = make_item(WatchItemStatus.WATCHED)
-        self.assertEqual(
-            SuggestionDisplayStatus.WATCHED,
-            compute_display_status(item, in_rotation_cooldown=False, in_active_vote=True),
-        )
+        self.assertEqual(SuggestionDisplayStatus.AVAILABLE, compute_display_status(item))
 
 
 class ResolveDisplayStatusTests(unittest.TestCase):
-    class _FakeRotationService:
-        def __init__(self, cooldown: bool) -> None:
-            self._cooldown = cooldown
-
-        def is_in_rotation_cooldown(self, watch_item) -> bool:
-            return self._cooldown
-
-    def test_uses_the_rotation_service_when_provided(self) -> None:
-        item = make_item(WatchItemStatus.SUGGESTED)
-        self.assertEqual(
-            SuggestionDisplayStatus.ROTATION_COOLDOWN,
-            resolve_display_status(item, self._FakeRotationService(True)),
-        )
-
-    def test_defaults_to_available_with_no_rotation_service(self) -> None:
-        item = make_item(WatchItemStatus.SUGGESTED)
-        self.assertEqual(SuggestionDisplayStatus.AVAILABLE, resolve_display_status(item, None))
-
     class _FakeVoteService:
         def __init__(self, open_round) -> None:
             self._open_round = open_round
@@ -142,19 +70,19 @@ class ResolveDisplayStatusTests(unittest.TestCase):
         item = WatchItem(id=1, title="Alien", media_type=MediaType.MOVIE, status=WatchItemStatus.SUGGESTED)
         self.assertEqual(
             SuggestionDisplayStatus.IN_ACTIVE_VOTE,
-            resolve_display_status(item, None, self._FakeVoteService(open_round=object())),
+            resolve_display_status(item, self._FakeVoteService(open_round=object())),
         )
 
     def test_not_in_an_active_vote_when_the_vote_service_reports_no_open_round(self) -> None:
         item = WatchItem(id=1, title="Alien", media_type=MediaType.MOVIE, status=WatchItemStatus.SUGGESTED)
         self.assertEqual(
             SuggestionDisplayStatus.AVAILABLE,
-            resolve_display_status(item, None, self._FakeVoteService(open_round=None)),
+            resolve_display_status(item, self._FakeVoteService(open_round=None)),
         )
 
     def test_defaults_to_not_in_an_active_vote_with_no_vote_service(self) -> None:
         item = WatchItem(id=1, title="Alien", media_type=MediaType.MOVIE, status=WatchItemStatus.SUGGESTED)
-        self.assertEqual(SuggestionDisplayStatus.AVAILABLE, resolve_display_status(item, None))
+        self.assertEqual(SuggestionDisplayStatus.AVAILABLE, resolve_display_status(item))
 
     def test_in_an_active_vote_never_fires_for_an_item_with_no_id(self) -> None:
         # An unsaved WatchItem (id=None) can never be an actual vote
@@ -162,27 +90,26 @@ class ResolveDisplayStatusTests(unittest.TestCase):
         item = WatchItem(title="Alien", media_type=MediaType.MOVIE, status=WatchItemStatus.SUGGESTED)
         self.assertEqual(
             SuggestionDisplayStatus.AVAILABLE,
-            resolve_display_status(item, None, self._FakeVoteService(open_round=object())),
-        )
-
-    def test_in_an_active_vote_takes_precedence_over_rotation_cooldown(self) -> None:
-        item = WatchItem(id=1, title="Alien", media_type=MediaType.MOVIE, status=WatchItemStatus.SUGGESTED)
-        self.assertEqual(
-            SuggestionDisplayStatus.IN_ACTIVE_VOTE,
-            resolve_display_status(item, self._FakeRotationService(True), self._FakeVoteService(open_round=object())),
+            resolve_display_status(item, self._FakeVoteService(open_round=object())),
         )
 
 
 class DisplayStatusLabelTests(unittest.TestCase):
+    def test_exactly_five_authoritative_states_exist(self) -> None:
+        # Rotation-removal Phase 2: Rotation Cooldown is gone -- Available,
+        # In an Active Vote, Vote Winner, Watched, Retired are the only
+        # five user-facing states.
+        self.assertEqual(
+            {"available", "in_active_vote", "vote_winner", "retired", "watched"},
+            {member.value for member in SuggestionDisplayStatus},
+        )
+
     def test_every_status_has_a_label(self) -> None:
         for status in SuggestionDisplayStatus:
             self.assertIn(status, SUGGESTION_DISPLAY_STATUS_LABELS)
 
     def test_labels_match_the_specified_emoji_and_wording(self) -> None:
         self.assertEqual("🟢 Available", display_status_label(SuggestionDisplayStatus.AVAILABLE))
-        self.assertEqual(
-            "🟡 Rotation Cooldown", display_status_label(SuggestionDisplayStatus.ROTATION_COOLDOWN)
-        )
         self.assertEqual("🏆 Vote Winner", display_status_label(SuggestionDisplayStatus.VOTE_WINNER))
         self.assertEqual("🗄️ Retired", display_status_label(SuggestionDisplayStatus.RETIRED))
         self.assertEqual("✅ Watched", display_status_label(SuggestionDisplayStatus.WATCHED))

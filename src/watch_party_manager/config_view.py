@@ -623,16 +623,16 @@ class ConfigReminderDefaultsChoiceView(discord.ui.View):
         self.add_item(BackToMenuButton(on_back))
 
 
-# --- Rotation Low-Pool Notification (Rotation & Collection Health) ------------------------
+# --- Eligible Pool Warning (Rotation-removal Phase 2) ------------------------------------
 
 
-class RotationLowPoolThresholdModal(discord.ui.Modal):
-    """A single field: the eligible-suggestion threshold that triggers
-    the notification, or blank to restore the automatic default (fewer
-    eligible suggestions than two configured voting rounds)."""
+class EligiblePoolWarningThresholdModal(discord.ui.Modal):
+    """A single field: the eligible-pool threshold that triggers the
+    warning, or blank to restore the automatic default (the guild's
+    configured candidate count times the warning multiplier)."""
 
     def __init__(self, on_submit: OnConfigRetryModalSubmit, *, default: str = "") -> None:
-        super().__init__(title="Rotation Low-Pool Threshold")
+        super().__init__(title="Eligible Pool Warning Threshold")
         self._submit_callback = on_submit
         self.threshold_input = discord.ui.TextInput(
             label="Threshold (blank = automatic)", default=default or None, required=False
@@ -643,7 +643,7 @@ class RotationLowPoolThresholdModal(discord.ui.Modal):
         await self._submit_callback(interaction, self.threshold_input.value)
 
 
-class ConfigEnableLowPoolNotificationButton(discord.ui.Button):
+class ConfigEnableEligiblePoolWarningButton(discord.ui.Button):
     def __init__(self, on_click: OnConfigRetry) -> None:
         super().__init__(label="Enable", style=discord.ButtonStyle.primary, custom_id="wpm_config_low_pool_enable")
         self._on_click = on_click
@@ -652,7 +652,7 @@ class ConfigEnableLowPoolNotificationButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class ConfigDisableLowPoolNotificationButton(discord.ui.Button):
+class ConfigDisableEligiblePoolWarningButton(discord.ui.Button):
     def __init__(self, on_click: OnConfigRetry) -> None:
         super().__init__(label="Disable", style=discord.ButtonStyle.secondary, custom_id="wpm_config_low_pool_disable")
         self._on_click = on_click
@@ -661,7 +661,7 @@ class ConfigDisableLowPoolNotificationButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class ConfigSetLowPoolThresholdButton(discord.ui.Button):
+class ConfigSetEligiblePoolWarningThresholdButton(discord.ui.Button):
     def __init__(self, on_click: OnConfigRetry) -> None:
         super().__init__(
             label="Set Threshold...", style=discord.ButtonStyle.secondary, custom_id="wpm_config_low_pool_threshold"
@@ -672,7 +672,7 @@ class ConfigSetLowPoolThresholdButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class ConfigLowPoolUseAdminChannelButton(discord.ui.Button):
+class ConfigEligiblePoolWarningUseAdminChannelButton(discord.ui.Button):
     def __init__(self, on_click: OnConfigRetry) -> None:
         super().__init__(
             label="Use Admin Channel (Recommended)",
@@ -685,7 +685,7 @@ class ConfigLowPoolUseAdminChannelButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class ConfigLowPoolUseHomeChannelButton(discord.ui.Button):
+class ConfigEligiblePoolWarningUseHomeChannelButton(discord.ui.Button):
     def __init__(self, on_click: OnConfigRetry) -> None:
         super().__init__(
             label="Use Watch Party Home Channel",
@@ -698,11 +698,11 @@ class ConfigLowPoolUseHomeChannelButton(discord.ui.Button):
         await self._on_click(interaction)
 
 
-class ConfigRotationLowPoolNotificationView(discord.ui.View):
-    """/config's Rotation Low-Pool Notification section: Enable/Disable,
-    Set Threshold (a modal; blank restores the automatic default), and
-    the notification's destination (Admin Channel, the default, or the
-    Watch Party Home Channel -- never a collection's suggestion thread).
+class ConfigEligiblePoolWarningView(discord.ui.View):
+    """/config's Eligible Pool Warning section: Enable/Disable, Set
+    Threshold (a modal; blank restores the automatic default), and the
+    warning's destination (Admin Channel, the default, or the Watch
+    Party Home Channel -- never a collection's suggestion thread).
     """
 
     def __init__(
@@ -715,9 +715,9 @@ class ConfigRotationLowPoolNotificationView(discord.ui.View):
         on_back: OnBackToMenu,
     ) -> None:
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
-        self.add_item(ConfigEnableLowPoolNotificationButton(on_enable))
-        self.add_item(ConfigDisableLowPoolNotificationButton(on_disable))
-        self.add_item(ConfigSetLowPoolThresholdButton(on_set_threshold))
-        self.add_item(ConfigLowPoolUseAdminChannelButton(on_use_admin_channel))
-        self.add_item(ConfigLowPoolUseHomeChannelButton(on_use_home_channel))
+        self.add_item(ConfigEnableEligiblePoolWarningButton(on_enable))
+        self.add_item(ConfigDisableEligiblePoolWarningButton(on_disable))
+        self.add_item(ConfigSetEligiblePoolWarningThresholdButton(on_set_threshold))
+        self.add_item(ConfigEligiblePoolWarningUseAdminChannelButton(on_use_admin_channel))
+        self.add_item(ConfigEligiblePoolWarningUseHomeChannelButton(on_use_home_channel))
         self.add_item(BackToMenuButton(on_back))

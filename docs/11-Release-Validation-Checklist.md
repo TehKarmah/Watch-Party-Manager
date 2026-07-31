@@ -575,18 +575,19 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 3.4e `/database health` (Rotation & Collection Health)
 
-- **Objective:** Confirm `/database health` reports an accurate, reconciled eligibility breakdown for a collection, resolves its collection the same way `/list` does, and never itself changes rotation state.
-- **Preconditions:** A Balanced Random (Rotation Pool) collection with a mix of Eligible, Rotation Cooldown, Vote Winner, and Retired suggestions (run a vote round or two, and retire at least one suggestion, if needed); a second collection in the same server.
+- **Objective:** Confirm `/database health` reports an accurate, reconciled eligibility breakdown for a collection, resolves its collection the same way `/list` does, and never itself changes rotation state (Rotation-removal Phase 2: it never touches rotation state for reporting purposes at all any more).
+- **Preconditions:** A Balanced Random (Rotation Pool) collection with a mix of Eligible, In an Active Vote, Vote Winner, and Retired suggestions (run a vote round or two, and retire at least one suggestion, if needed); a second collection in the same server.
 - **Steps:**
   1. From inside the collection's own thread, run `/database health`; confirm it resolves to that collection automatically with no picker.
-  2. Confirm the report shows: Collection Name, Total Watch Items, Active Watch Items, Eligible for Voting, Rotation Cooldown, Vote Winners, Retired, the collection's own current Rotation number and progress (e.g. "Rotation 4 Progress: N of M active items have been presented"), Configured Candidate Count, a **Next Vote** status, and a **Low Pool Status**. Confirm Eligible for Voting and Rotation Cooldown are shown visually nested/indented beneath Active Watch Items.
-  3. Confirm the numbers reconcile: Active Watch Items = Eligible for Voting + Rotation Cooldown, and Total = Active Watch Items + Vote Winners + Retired.
+  2. Confirm the report shows: Collection Name, Total Watch Items, Active Watch Items, Eligible for Voting, In an Active Vote, Vote Winners, Retired, Watched, the collection's own current Rotation number and progress (e.g. "Rotation 4 Progress: N of M active items have been presented"), Configured Candidate Count, a **Next Vote** status, and a **Low Pool Status**. Confirm Eligible for Voting and In an Active Vote are shown visually nested/indented beneath Active Watch Items.
+  3. Confirm the numbers reconcile: Active Watch Items = Eligible for Voting + In an Active Vote, and Total = Active Watch Items + Vote Winners + Retired + Watched.
   3b. Trigger a second rotation for this collection (e.g. via Test 5.5b) and confirm the shown rotation number increases to 2 for this collection specifically, unaffected by any rotations that have happened for a different collection in the same server.
   4. Click **Switch Collection** and confirm it shows the report for the other collection instead, in place.
   5. Run `/database health` from a channel not tied to either collection; confirm WASH shows a picker instead of guessing.
-  6. Immediately after, run `/list status:Eligible for Voting` and separately `/vote start` against the same collection; confirm the eligible count and Rotation Cooldown count reported by `/database health` match exactly what `/list` shows and what `/vote start` actually nominates from.
+  6. Immediately after, run `/list status:Eligible for Voting` and separately `/vote start` against the same collection; confirm the eligible count reported by `/database health` matches exactly what `/list` shows and what `/vote start` actually nominates from.
   7. Run `/database health` again right after step 6; confirm nothing about the collection's rotation state changed as a result of having checked health (no rollover was triggered merely by running this command).
-- **Expected Result:** `/database health` never disagrees with `/list`/`/vote start`'s own eligibility count; its collection selection matches `/list`'s (auto-resolve in thread, Switch Collection button, picker when ambiguous); checking health is always side-effect-free -- it never bootstraps or advances a rotation.
+  8. Switch this same collection to Pure Random (or Favor New Additions/Favor Older Additions) via `/config` and run `/database health` again; confirm the Rotation Progress line is omitted entirely (not shown as "N/A") for these three modes.
+- **Expected Result:** `/database health` never disagrees with `/list`/`/vote start`'s own eligibility count; its collection selection matches `/list`'s (auto-resolve in thread, Switch Collection button, picker when ambiguous); checking health is always side-effect-free -- it never bootstraps or advances a rotation; Rotation Progress only appears for a collection still using a legacy rotation-based mode.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -674,11 +675,11 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 4.6 `/list` -- Active Watch Items (default)
 
-- **Objective:** Confirm the default list view mixes Eligible and Rotation Cooldown items with a summary line and per-item status emoji.
-- **Preconditions:** A Balanced Random collection with at least one completed vote round, so some suggestions are Eligible and some are on Rotation Cooldown; at least one entry with a known original-post link.
+- **Objective:** Confirm the default list view mixes Eligible and In an Active Vote items with a summary line and per-item status emoji.
+- **Preconditions:** A collection with an open voting round, so some suggestions are Eligible and some are In an Active Vote; at least one entry with a known original-post link.
 - **Steps:**
   1. Run `/list` (default `status:Active Watch Items`).
-- **Expected Result:** Ephemeral by default. A summary line appears before the list, e.g. "🟢 Eligible for Voting: 2" then "🟡 Rotation Cooldown: 6", using the actual counts. Every entry leads with its status emoji (🟢 or 🟡), followed by the title and year exactly once (never doubled, e.g. not `(2004) (2004)`), then `| [Original Suggestion](link)` only when a post link exists. No reference number or IMDb link appears. No embed/link-preview card is shown. Long lists page with Previous/Next.
+- **Expected Result:** Ephemeral by default. A summary line appears before the list, e.g. "🟢 Eligible for Voting: 2" then "🗳️ In an Active Vote: 3", using the actual counts. Every entry leads with its status emoji (🟢 or 🗳️), followed by the title and year exactly once (never doubled, e.g. not `(2004) (2004)`), then `| [Original Suggestion](link)` only when a post link exists. No reference number or IMDb link appears. No embed/link-preview card is shown. Long lists page with Previous/Next.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -687,7 +688,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm the Eligible for Voting filter shows only the eligible subset, and All Watch Items shows every status together.
 - **Preconditions:** Same collection as Test 4.6, plus at least one Vote Winner and one Retired suggestion.
 - **Steps:**
-  1. Run `/list status:Eligible for Voting`; confirm it shows only 🟢 entries (no Rotation Cooldown, Vote Winner, or Retired items).
+  1. Run `/list status:Eligible for Voting`; confirm it shows only 🟢 entries (no In an Active Vote, Vote Winner, or Retired items).
   2. Run `/list status:All Watch Items`; confirm it shows every suggestion regardless of status, each with its own correct emoji.
 - **Expected Result:** Eligible for Voting is a strict subset of Active Watch Items (Test 4.6); All Watch Items is the only filter that includes every status at once.
 - **Result:** [ ] Pass [ ] Fail
@@ -714,17 +715,17 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.7b `/list status:Rotation Cooldown`, thread auto-resolve, and Switch Collection
+### 4.7b `/list status:In an Active Vote`, thread auto-resolve, and Switch Collection
 
-- **Objective:** Confirm the Rotation Cooldown filter, `/list`'s thread-context auto-resolve, and its Switch Collection button all work, and that Eligible for Voting/Rotation Cooldown never disagree with `/vote start`.
-- **Preconditions:** A Balanced Random collection with at least one completed vote round (so some suggestions are on Rotation Cooldown and some remain Eligible); a second collection in the same server.
+- **Objective:** Confirm the In an Active Vote filter, `/list`'s thread-context auto-resolve, and its Switch Collection button all work, and that Eligible for Voting/In an Active Vote never disagree with `/vote start`.
+- **Preconditions:** A collection with an open voting round (so some suggestions are In an Active Vote and some remain Eligible); a second collection in the same server.
 - **Steps:**
-  1. Run `/list status:Rotation Cooldown`; confirm it shows exactly the suggestions presented in the current rotation but not yet a Vote Winner or Retired, each leading with 🟡.
+  1. Run `/list status:In an Active Vote`; confirm it shows exactly the suggestions currently nominated in the open round, each leading with 🗳️.
   2. From inside the collection's own thread, run `/list` with no other context; confirm it automatically uses that collection with no picker.
   3. Click **Switch Collection**; confirm it shows the other collection's list in place, without re-running the command.
-  4. Run `/list status:Eligible for Voting` and separately start `/vote start`; confirm the eligible count and the actual nominee pool never disagree -- including that if the current rotation can't otherwise supply the configured candidate count, `/list` itself automatically rolls over the rotation the same way `/vote start` would, before showing anything, and shows the same Rotation Refresh Notification text ("All eligible watch items have now been presented. Starting Rotation N.") as a leading line in its own response when it does.
-  5. Run `/list status:Vote Winners` (or `Retired`) on a collection that has never had a vote; confirm this never creates rotation state (checking a terminal-status filter alone must never bootstrap a rotation) and never shows the Rotation Refresh Notification.
-- **Expected Result:** Rotation Cooldown lists exactly the expected suggestions; thread auto-resolve and Switch Collection both work as described; Eligible for Voting always matches what `/vote start` would actually nominate from, including matching automatic-rollover behavior and its notification; Vote Winners/Retired never trigger a rollover, bootstrap, or notification.
+  4. Run `/list status:Eligible for Voting` and separately start `/vote start`; confirm the eligible count and the actual nominee pool never disagree. **Rotation-removal Phase 2:** `/list` never rolls over any rotation or shows the Rotation Refresh Notification any more -- that notification now only ever appears alongside `/vote start` itself (see Test 5.5b).
+  5. Run `/list status:Vote Winners` (or `Retired`) on a collection that has never had a vote; confirm this never creates rotation state (checking a terminal-status filter alone must never bootstrap a rotation).
+- **Expected Result:** In an Active Vote lists exactly the expected suggestions; thread auto-resolve and Switch Collection both work as described; Eligible for Voting always matches what `/vote start` would actually nominate from; Vote Winners/Retired never trigger any rotation bootstrap; `/list` itself never mentions rotation state at all, for any filter.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -770,7 +771,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** WASH Crew role; at least one suggestion; at least two collections in the server.
 - **Steps:**
   1. Run `/edit_suggestion`; confirm it shows a read-only summary (title, year, collection, status, IMDb link) plus Change Status, Move to Another Collection, and Cancel -- no title/release year/IMDb link fields to type into. If the suggestion is currently a Vote Winner with a recorded win date, confirm the summary also shows a `Won: <date>` line right below the status.
-  2. Choose Change Status; confirm the dropdown offers only Available, Vote Winner (🏆), and Retired (🗄️) (never Rotation Cooldown); pick one and confirm the suggestion's status updates and its public confirmation post's Status field updates in place.
+  2. Choose Change Status; confirm the dropdown offers only Available, Vote Winner (🏆), and Retired (🗄️) (never In an Active Vote); pick one and confirm the suggestion's status updates and its public confirmation post's Status field updates in place.
   3. Choose Move to Another Collection; confirm the duplicate check re-runs against the destination collection, and that the suggestion's status is unchanged after the move.
   4. Choose Cancel; confirm nothing changes.
   5. Run `/remove` with a reference number, then again with an exact title; confirm both resolve correctly and archive (not delete) the record.
@@ -778,31 +779,20 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.12 Rotation Low-Pool Notification
+### 4.12 Eligible Pool Warning
 
-- **Objective:** Confirm WASH proactively notifies WASH Crew when a collection's eligible pool runs low against the finalized threshold (max(10% of Active Watch Items, two configured voting rounds)), fires only once per rotation, resets after a rollover, respects its configured Enabled/Threshold/Destination settings, and is suppressed for very small collections.
-- **Preconditions:** A Balanced Random collection large enough that its threshold isn't trivially the whole collection (at least ~15-20 active watch items recommended); Rotation Low-Pool Notification enabled via `/config` (Test 3.2), with a known destination (Admin Channel by default).
+- **Objective:** Confirm WASH proactively notifies WASH Crew when a collection's eligible pool drops to or below the configured threshold (default: configured candidate count × 5), fires once and suppresses duplicates while it stays at or below the threshold, re-arms once the pool rises back above it, and respects its configured Enabled/Threshold/Destination settings -- for every nominee-selection mode equally, with no dependency on rotation state.
+- **Preconditions:** A collection with a known configured candidate count (e.g. 3, giving a default threshold of 15); Eligible Pool Warning enabled via `/config` (Test 3.2), with a known destination (Admin Channel by default).
 - **Steps:**
-  1. Reduce the collection's eligible count below the computed threshold (e.g. `/vote start` a few rounds so most items are on Rotation Cooldown, or `/remove` suggestions), then run `/vote start` again.
-  2. Observe the configured destination (Admin Channel by default, or the Watch Party Home Channel if switched via `/config`) for a notification naming the collection, the remaining eligible count, the configured candidate count, and a nudge to use `/add`.
-  3. Run `/vote start` again without anything else changing; confirm the notification does **not** repeat for the same rotation.
-  4. Trigger a rotation rollover (e.g. via Test 5.5b's scenario) and drop the pool below the threshold again; confirm the notification fires again for the new rotation.
-  5. Via `/config`, disable the notification; repeat step 1's conditions; confirm nothing is posted.
-  6. Re-enable it and switch its destination to the Watch Party Home Channel; confirm the next notification posts there instead of the Admin Channel.
-  7. On a Pure Random (`infinite_pool`) collection, drive its eligible count arbitrarily low; confirm no notification is ever sent (Pure Random has no rotation to key the once-per-rotation dedup on).
-- **Expected Result:** The notification fires only when the eligible count is genuinely below the threshold, at most once per rotation, and resets naturally once a fresh rotation begins; Enabled/Disabled and Destination are both respected; Pure Random collections never receive it.
-- **Result:** [ ] Pass [ ] Fail
-- **Notes:** ___________________________
-
-### 4.12b Rotation Low-Pool Notification suppression for small collections
-
-- **Objective:** Confirm the notification never fires for a collection whose entire Active pool is already at or below the computed threshold, even though `/database health`'s Low Pool Status still reports it accurately.
-- **Preconditions:** A brand-new, small Balanced Random collection (e.g. 3-4 suggestions total, at the documented default candidate count of 3) with the Rotation Low-Pool Notification enabled.
-- **Steps:**
-  1. Run `/vote start` enough times (with rollovers as needed) that most of the collection has been presented.
-  2. Confirm no Rotation Low-Pool Notification is ever posted, no matter how "used up" the small collection gets.
-  3. Run `/database health` on the same collection; confirm its Low Pool Status still accurately reports **Insufficient** or **Almost Complete** as appropriate.
-- **Expected Result:** The proactive notification stays silent for a collection this small (nothing new to tell an administrator every rotation), while `/database health`'s on-demand report remains accurate.
+  1. Reduce the collection's eligible count to or below the threshold (e.g. `/remove` suggestions, or mark some Vote Winner/Watched), then run `/add` or `/vote start`.
+  2. Observe the configured destination (Admin Channel by default, or the Watch Party Home Channel if switched via `/config`) for a message reading "**Eligible Pool Warning** -- \<collection name\>", "Eligible Items Remaining: N", "Warning Threshold: T", and a nudge to use `/add`.
+  3. Run `/add` again without raising the pool back above the threshold; confirm the warning does **not** repeat.
+  4. Add enough suggestions to raise the eligible count back above the threshold, then run `/add` once more (to trigger re-evaluation); confirm no warning is sent (it's disarming, not firing).
+  5. Drop the pool back to or below the threshold and run `/add` again; confirm the warning fires again.
+  6. Via `/config`, disable the warning; repeat step 1's conditions; confirm nothing is posted.
+  7. Re-enable it and switch its destination to the Watch Party Home Channel; confirm the next warning posts there instead of the Admin Channel.
+  8. Repeat steps 1-2 on a Pure Random (or Favor New Additions/Favor Older Additions) collection; confirm the warning fires there too, on the same terms -- no mode is exempt.
+- **Expected Result:** The warning fires only when the eligible count is genuinely at or below the threshold, stays silent on repeat checks while it remains there, automatically re-arms once the pool rises back above the threshold, and fires again on the next drop; Enabled/Disabled and Destination are both respected; every nominee-selection mode behaves identically, since the warning never depends on rotation state.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -897,15 +887,15 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 5.5b Rotation rollover when the current rotation can't supply enough candidates
 
-- **Objective:** Confirm a Balanced Random (Rotation Pool) collection with plenty of "Available" suggestions -- most of them just on Rotation Cooldown from a recent round -- automatically rolls over to a fresh rotation and starts the vote, instead of reporting an insufficient-candidates error.
+- **Objective:** Confirm a Balanced Random (Rotation Pool) collection whose internal rotation can't currently supply enough real candidates still succeeds by rolling over automatically, entirely internally, rather than reporting an insufficient-candidates error -- and that this rollover stays invisible to `/list` and every suggestion's own displayed status.
 - **Preconditions:** A Balanced Random collection with exactly 3 suggestions.
 - **Steps:**
   1. Run `/vote start` with a candidate count of 2; confirm it succeeds and note which 2 suggestions were nominated.
   2. Let the round complete (or use `/vote edit` -> **End Now**).
-  3. Confirm `/list` still shows all 3 suggestions as available, but only 1 is unpresented in the current rotation.
+  3. Confirm `/list status:Eligible for Voting` shows all 3 suggestions as 🟢 Available -- **Rotation-removal Phase 2:** it never distinguishes a presented-but-not-nominated suggestion from any other Available one, so no suggestion appears "different" here even though the collection's internal rotation has only 1 of the 3 left unpresented.
   4. Run `/vote start` again with a candidate count of 2.
   5. After the public voting post appears, confirm a separate ephemeral follow-up message (visible only to you) reads "All eligible watch items have now been presented." followed by "Starting Rotation 2." -- and confirm the public voting post itself does **not** mention the rotation at all.
-- **Expected Result:** The second `/vote start` succeeds (does not report "not enough eligible suggestions"), automatically starting a fresh rotation and returning the 2 previously-cooled-down suggestions to eligibility. Any suggestion whose confirmation post was showing 🟡 Rotation Cooldown and is not re-nominated this round updates in place to 🟢 Available; Vote Winner and Retired suggestions are never made eligible by this rollover. The Rotation Refresh Notification (step 5) fires exactly once, privately, naming the correct new rotation number. Repeating the same request a third time in a row (with nothing else changed) behaves the same way -- no duplicate or orphaned rotation is created, and no further Rotation Refresh Notification fires since no further rollover happens.
+- **Expected Result:** The second `/vote start` succeeds (does not report "not enough eligible suggestions"), automatically starting a fresh rotation internally; Vote Winner and Retired suggestions are never made eligible by this rollover. The Rotation Refresh Notification (step 5) fires exactly once, privately, naming the correct new rotation number -- this is the *only* place any rollover is ever mentioned to a user. Repeating the same request a third time in a row (with nothing else changed) behaves the same way -- no duplicate or orphaned rotation is created, and no further Rotation Refresh Notification fires since no further rollover happens.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

@@ -36,7 +36,10 @@ from watch_party_manager.persistence.suggestion_repository import JsonSuggestion
 from watch_party_manager.services.collection_eligibility_service import CollectionEligibilityService
 from watch_party_manager.services.duplicate_detection_service import find_duplicates
 from watch_party_manager.services.permission_service import PermissionService
-from watch_party_manager.services.rotation_low_pool_notification_service import RotationLowPoolNotificationService
+from watch_party_manager.services.eligible_pool_warning_service import EligiblePoolWarningService
+from watch_party_manager.persistence.eligible_pool_warning_state_repository import (
+    JsonEligiblePoolWarningStateRepository,
+)
 from watch_party_manager.services.rotation_service import RotationService
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_service import SuggestionService
@@ -292,12 +295,12 @@ class FakeInteraction:
 
 
 class FakeGuildConfigurationRepository:
-    """Reports "no guild configuration saved" by default -- Rotation
-    LowPoolNotificationService's destination resolution then has no
+    """Reports "no guild configuration saved" by default --
+    EligiblePoolWarningService's destination resolution then has no
     Admin/Home Channel to resolve, so it never fires (see
-    RotationLowPoolNotificationService._resolve_destination_channel_id).
-    A caller with an actual GuildConfiguration to report (e.g. one with
-    an Admin Channel configured) may pass it in.
+    EligiblePoolWarningService._resolve_destination_channel_id). A caller
+    with an actual GuildConfiguration to report (e.g. one with an Admin
+    Channel configured) may pass it in.
     """
 
     def __init__(self, configuration=None) -> None:
@@ -324,11 +327,11 @@ class FakeBot:
         )
         self.wash_crew_role_id = wash_crew_role_id
         self.rotation_service = RotationService(suggestion_service, repository=rotation_repository)
-        self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, self.rotation_service)
+        self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, None)
         self.guild_configuration_repository = guild_configuration_repository or FakeGuildConfigurationRepository()
-        self.rotation_low_pool_notification_service = RotationLowPoolNotificationService(
+        self.eligible_pool_warning_service = EligiblePoolWarningService(
             self.collection_eligibility_service,
-            self.rotation_service,
+            JsonEligiblePoolWarningStateRepository(Path(tempfile.mkdtemp()) / "eligible_pool_warning_state.json"),
             self.guild_configuration_repository,
             configuration_repository,
             suggestion_service,
@@ -828,62 +831,56 @@ class AdmissionModeAndLowPoolReminderTests(HandleAddSuggestionTestCase):
         self.assertIn(item.id, rotation.assigned_suggestion_ids)
 
     async def test_low_pool_notification_never_bootstraps_a_rotation(self) -> None:
-        # No rotation exists yet (no vote has ever run) -- the
-        # notification must never create one merely to check pool size,
-        # so it simply doesn't fire yet. Explicit Next Rotation (no
-        # longer the default as of Rotation-removal Phase 1) keeps the
-        # add itself from bootstrapping a rotation too, isolating the
-        # notification's own no-bootstrap guarantee from admission's.
+        # Rotation-removal Phase 2: the Eligible Pool Warning never
+        # touches RotationService at all -- confirms no rotation gets
+        # created as a side effect of evaluating it, regardless of
+        # whether the warning itself fires.
         self._set_admission_mode(SuggestionAdmissionMode.NEXT_ROTATION)
 
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
 
-        self.assertEqual(0, len(self.admin_channel.sent))
         self.assertIsNone(self.bot.rotation_service.get_open_rotation(self.database.database_id))
 
     def _seed_low_pool_condition(self) -> None:
-        """9 pre-existing suggestions, 5 already presented -- large
-        enough (Active Watch Items) that the finalized threshold
-        (max(10% Active, 2 configured voting rounds)) isn't suppressed
-        as "too small to be meaningful", while still leaving Eligible
-        below it.
+        """9 pre-existing suggestions -- comfortably below the default
+        threshold (candidate_count 3 * multiplier 5 = 15) once one more
+        is added by the caller.
         """
         for index in range(9):
             self.suggestion_service.suggest(f"Movie {index}", database_id=self.database.database_id)
-        self.bot.rotation_service.get_or_start_rotation(self.database.database_id)
-        presented_ids = [
-            item.id
-            for item in self.suggestion_service.get_suggestions_for_database(self.database.database_id)[:5]
-        ]
-        self.bot.rotation_service.record_presentation(self.database.database_id, presented_ids)
 
-    async def test_low_pool_notification_fires_once_per_rotation(self) -> None:
+    async def test_low_pool_notification_fires_once_then_suppresses_duplicates(self) -> None:
         self._seed_low_pool_condition()
 
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
         self.assertEqual(1, len(self.admin_channel.sent))
-        self.assertIn("Rotation Low-Pool", self.admin_channel.sent[0][0])
+        self.assertIn("Eligible Pool Warning", self.admin_channel.sent[0][0])
 
         await handle_add_suggestion(FakeInteraction(), self.bot, "The Matrix", None, 1999)
 
-        # Still just 1: the same rotation was already notified for, even
-        # though the pool is still below threshold.
+        # Still just 1: already armed, and still below threshold.
         self.assertEqual(1, len(self.admin_channel.sent))
 
-    async def test_low_pool_notification_resets_after_a_new_rotation(self) -> None:
+    async def test_low_pool_notification_fires_again_after_rising_above_threshold_and_dropping_again(self) -> None:
         self._seed_low_pool_condition()
         await handle_add_suggestion(FakeInteraction(), self.bot, "Alien", None, 1979)
         self.assertEqual(1, len(self.admin_channel.sent))
 
-        self.bot.rotation_service.begin_next_rotation(self.database.database_id)
-        # A fresh rotation returns every suggestion to Eligible -- recreate
-        # the same low-pool condition under the new rotation too.
-        all_items = self.suggestion_service.get_suggestions_for_database(self.database.database_id)
-        self.bot.rotation_service.record_presentation(
-            self.database.database_id, [item.id for item in all_items[:6]]
-        )
-
+        # Add enough suggestions to rise back above the threshold (15),
+        # and let a real add re-evaluate (and so re-arm/disarm) the
+        # warning -- evaluation only happens as a side effect of /add,
+        # never merely by suggestions existing.
+        for index in range(19):
+            self.suggestion_service.suggest(f"Extra {index}", database_id=self.database.database_id)
         await handle_add_suggestion(FakeInteraction(), self.bot, "The Matrix", None, 1999)
+        self.assertEqual(1, len(self.admin_channel.sent))  # still 1: disarmed, not re-fired
+
+        # Now drop back below threshold again.
+        items = self.suggestion_service.get_suggestions_for_database(self.database.database_id)
+        for item in items[:20]:
+            self.suggestion_service.archive_suggestion(item.id)
+
+        await handle_add_suggestion(FakeInteraction(), self.bot, "Inception", None, 2010)
 
         self.assertEqual(2, len(self.admin_channel.sent))
 
