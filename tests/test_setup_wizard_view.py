@@ -29,6 +29,8 @@ from watch_party_manager.setup_wizard_view import (
     HomeChannelChoiceView,
     HomeChannelNameModal,
     ModalStepIntroView,
+    RejectionSettingsChoiceView,
+    RejectionThresholdModal,
     ReminderDefaultsChoiceView,
     ReminderDefaultsModal,
     ReviewStepView,
@@ -36,7 +38,6 @@ from watch_party_manager.setup_wizard_view import (
     SetupCancelButton,
     SetupPreparationView,
     SetupSaveForLaterButton,
-    SetupVotingDefaultsModal,
     SetupWizardResumeView,
     SuggestionDatabaseChoiceView,
     VisibilitySelectComponent,
@@ -506,10 +507,9 @@ class ModalStepIntroViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
-    """Guild-wide only (reused unchanged by /config's Voting Defaults
-    section) -- never a per-collection field like the "I Won't Watch"
-    threshold; see SetupVotingDefaultsModalTests below for the Setup
-    Wizard's own variant that bundles one in.
+    """Shared unchanged between the Setup Wizard's own Voting Defaults
+    step and /config's -- "I Won't Watch" threshold has its own dedicated
+    step/section instead (see RejectionThresholdModalTests below).
     """
 
     async def test_has_exactly_two_fields_both_text_inputs(self) -> None:
@@ -543,33 +543,70 @@ class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(modal.duration_input.default, "2d")
 
 
-class SetupVotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_exactly_three_fields_all_text_inputs(self) -> None:
-        modal = SetupVotingDefaultsModal(_noop)
-        self.assertEqual(len(modal.children), 3)
+class RejectionThresholdModalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_exactly_one_field_a_text_input(self) -> None:
+        # Fixed-Option UX Audit: "enabled?" is collected by
+        # RejectionSettingsChoiceView's buttons, before this modal ever
+        # opens -- only the flexible threshold value remains here.
+        modal = RejectionThresholdModal(_noop)
+        self.assertEqual(len(modal.children), 1)
         self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in modal.children))
-        self.assertEqual(modal.candidate_count_input.default, "3")
-        self.assertEqual(modal.duration_input.default, "1d")
-        self.assertEqual(modal.rejection_threshold_input.default, "2")
+        self.assertEqual(modal.threshold_input.default, "2")
 
-    async def test_submission_forwards_all_three_values(self) -> None:
+    async def test_submission_forwards_the_value(self) -> None:
         calls = []
 
-        async def on_submit(interaction, candidate_count, duration_text, rejection_threshold_text) -> None:
-            calls.append((candidate_count, duration_text, rejection_threshold_text))
+        async def on_submit(interaction, threshold_text) -> None:
+            calls.append(threshold_text)
 
-        modal = SetupVotingDefaultsModal(on_submit)
-        modal.candidate_count_input._value = "4"
-        modal.duration_input._value = "10"
-        modal.rejection_threshold_input._value = "5"
+        modal = RejectionThresholdModal(on_submit)
+        modal.threshold_input._value = "5"
         await modal.on_submit(interaction=object())
-        self.assertEqual(calls, [("4", "10", "5")])
+        self.assertEqual(calls, ["5"])
 
-    async def test_uses_the_supplied_defaults(self) -> None:
-        modal = SetupVotingDefaultsModal(_noop, defaults=("5", "2d", "3"))
-        self.assertEqual(modal.candidate_count_input.default, "5")
-        self.assertEqual(modal.duration_input.default, "2d")
-        self.assertEqual(modal.rejection_threshold_input.default, "3")
+    async def test_uses_the_supplied_default(self) -> None:
+        modal = RejectionThresholdModal(_noop, default="3")
+        self.assertEqual(modal.threshold_input.default, "3")
+
+
+class RejectionSettingsChoiceViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_enable_disable_back_save_and_cancel(self) -> None:
+        view = RejectionSettingsChoiceView(_noop, _noop, _noop, _noop, _noop)
+        self.assertEqual(
+            [getattr(child, "label", None) for child in view.children],
+            [
+                "Enable \"I Won't Watch\" (Recommended)",
+                "Disable \"I Won't Watch\"",
+                "Back",
+                "Save & Finish Later",
+                "Cancel Setup",
+            ],
+        )
+
+    async def test_enable_is_the_recommended_primary_styled_button(self) -> None:
+        view = RejectionSettingsChoiceView(_noop, _noop, _noop, _noop, _noop)
+        enable_button = view.children[0]
+        self.assertEqual(enable_button.style, discord.ButtonStyle.primary)
+
+    async def test_enable_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_enable(interaction) -> None:
+            calls.append("enable")
+
+        view = RejectionSettingsChoiceView(on_enable, _noop, _noop, _noop, _noop)
+        await view.children[0].callback(interaction=object())
+        self.assertEqual(calls, ["enable"])
+
+    async def test_disable_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_disable(interaction) -> None:
+            calls.append("disable")
+
+        view = RejectionSettingsChoiceView(_noop, on_disable, _noop, _noop, _noop)
+        await view.children[1].callback(interaction=object())
+        self.assertEqual(calls, ["disable"])
 
 
 class VisibilitySelectComponentTests(unittest.IsolatedAsyncioTestCase):

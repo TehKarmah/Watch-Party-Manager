@@ -74,6 +74,7 @@ class ConfigSection(str, Enum):
     MANAGE_COLLECTIONS = "manage_collections"
     WATCH_DESTINATION = "watch_destination"
     VOTING_DEFAULTS = "voting_defaults"
+    REJECTION_SETTINGS = "rejection_settings"
     REMINDER_DEFAULTS = "reminder_defaults"
     BACKUP_DEFAULTS = "backup_defaults"
     ELIGIBLE_POOL_WARNING = "eligible_pool_warning"
@@ -93,6 +94,10 @@ CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
     ConfigSection.MANAGE_COLLECTIONS,
     ConfigSection.WATCH_DESTINATION,
     ConfigSection.VOTING_DEFAULTS,
+    # Its own dedicated section, immediately after Voting Defaults --
+    # mirrors the Setup Wizard's own step ordering (see
+    # SETUP_WIZARD_STEP_ORDER's REJECTION_SETTINGS placement).
+    ConfigSection.REJECTION_SETTINGS,
     ConfigSection.REMINDER_DEFAULTS,
     ConfigSection.BACKUP_DEFAULTS,
     ConfigSection.ELIGIBLE_POOL_WARNING,
@@ -107,6 +112,7 @@ CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
     ConfigSection.MANAGE_COLLECTIONS: "Collections",
     ConfigSection.WATCH_DESTINATION: "Watched Item Archive",
     ConfigSection.VOTING_DEFAULTS: "Voting Defaults",
+    ConfigSection.REJECTION_SETTINGS: "\"I Won't Watch\" Settings",
     ConfigSection.REMINDER_DEFAULTS: "Reminder Defaults",
     ConfigSection.BACKUP_DEFAULTS: "Backup Defaults",
     ConfigSection.ELIGIBLE_POOL_WARNING: "Eligible Pool Warning",
@@ -227,6 +233,23 @@ class ConfigService:
             f"({voting_defaults.candidate_count} candidates, {format_duration_minutes(voting_defaults.duration_minutes)}, "
             f"{voting_defaults.visibility.value.capitalize()})"
         )
+
+        if not databases:
+            lines.append("\"I Won't Watch\" Settings: Not configured")
+        elif len(databases) == 1:
+            rejection_rules = self.get_database_configuration(guild_id, databases[0].database_id).suggestion_rules
+            if rejection_rules.rejection_enabled:
+                lines.append(
+                    "\"I Won't Watch\" Settings: Configured "
+                    f"(Enabled, threshold {rejection_rules.rejection_threshold})"
+                )
+            else:
+                lines.append("\"I Won't Watch\" Settings: Configured (Disabled)")
+        else:
+            lines.append(
+                f"\"I Won't Watch\" Settings: Configured ({len(databases)} collections -- "
+                "select below to edit each collection's setting)"
+            )
 
         vote_notifications = configuration.notifications.vote
         if vote_notifications.vote_ending_reminder:
@@ -540,22 +563,36 @@ class ConfigService:
             True, f'Nominee selection for "{database.name}" updated to {label}.', self.get_configuration(guild_id)
         )
 
-    def set_database_rejection_threshold(
-        self, guild_id: int, database_id: int, rejection_threshold: int
+    def set_database_rejection_settings(
+        self, guild_id: int, database_id: int, *, enabled: bool, threshold: Optional[int] = None
     ) -> ConfigUpdateResult:
+        """/config's dedicated "I Won't Watch" Settings section: update a
+        collection's enabled flag and, only when enabling, its threshold,
+        in a single save. Disabling leaves whatever threshold was
+        previously configured untouched (threshold=None) rather than
+        resetting it -- re-enabling later pre-fills that same value
+        instead of silently reverting to the documented default, and
+        existing rejection history is never affected either way.
+        """
         database = self._get_database_for_guild(guild_id, database_id)
         if database is None:
             return ConfigUpdateResult(False, "That collection doesn't exist.")
 
         base = self.get_database_configuration(guild_id, database_id)
+        new_threshold = threshold if threshold is not None else base.suggestion_rules.rejection_threshold
         self._suggestion_database_configuration_repository.save(
-            replace(base, suggestion_rules=replace(base.suggestion_rules, rejection_threshold=rejection_threshold))
+            replace(
+                base,
+                suggestion_rules=replace(
+                    base.suggestion_rules, rejection_enabled=enabled, rejection_threshold=new_threshold
+                ),
+            )
         )
-        return ConfigUpdateResult(
-            True,
-            f'"I Won\'t Watch" threshold for "{database.name}" updated to {rejection_threshold}.',
-            self.get_configuration(guild_id),
-        )
+        if enabled:
+            message = f'"I Won\'t Watch" enabled for "{database.name}" with a threshold of {new_threshold}.'
+        else:
+            message = f'"I Won\'t Watch" disabled for "{database.name}".'
+        return ConfigUpdateResult(True, message, self.get_configuration(guild_id))
 
     def _save_database_channel(
         self, guild_id: int, database: SuggestionDatabase, channel_id: Optional[int], *, field_name: str

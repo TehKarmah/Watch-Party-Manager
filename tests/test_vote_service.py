@@ -337,6 +337,38 @@ class VoteServiceTests(unittest.TestCase):
 
         self.assertEqual(result.vote_round.reminder_minutes_before_close, 240)
 
+    # --- Custom Vote Filter Architecture: filter/mode context ---------------
+
+    def test_create_round_defaults_filter_context_to_none(self) -> None:
+        result = self.service.create_round()
+
+        self.assertIsNone(result.vote_round.candidate_selection_mode)
+        self.assertIsNone(result.vote_round.filter_member_discord_user_id)
+        self.assertIsNone(result.vote_round.filter_genre)
+
+    def test_create_round_accepts_a_candidate_selection_mode(self) -> None:
+        from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+
+        result = self.service.create_round(candidate_selection_mode=CandidateSelectionMode.INFINITE_POOL)
+
+        self.assertEqual(result.vote_round.candidate_selection_mode, CandidateSelectionMode.INFINITE_POOL)
+
+    def test_create_round_accepts_a_member_filter(self) -> None:
+        result = self.service.create_round(filter_member_discord_user_id=111)
+
+        self.assertEqual(result.vote_round.filter_member_discord_user_id, 111)
+
+    def test_create_round_accepts_a_genre_filter(self) -> None:
+        result = self.service.create_round(filter_genre="Horror")
+
+        self.assertEqual(result.vote_round.filter_genre, "Horror")
+
+    def test_create_round_accepts_both_filters_combined(self) -> None:
+        result = self.service.create_round(filter_member_discord_user_id=111, filter_genre="Comedy")
+
+        self.assertEqual(result.vote_round.filter_member_discord_user_id, 111)
+        self.assertEqual(result.vote_round.filter_genre, "Comedy")
+
     def test_mark_reminder_sent_updates_the_round(self) -> None:
         created = self.service.create_round()
         sent_at = datetime.now(timezone.utc)

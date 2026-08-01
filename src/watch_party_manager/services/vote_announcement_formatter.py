@@ -17,6 +17,7 @@ from typing import List, Optional, Protocol
 import discord
 
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
+from watch_party_manager.domain.suggestion_database_configuration import CANDIDATE_SELECTION_DISPLAY_LABELS
 from watch_party_manager.domain.vote import VoteRound, VoteVisibility
 from watch_party_manager.domain.watch_item import WatchItem
 from watch_party_manager.services.collection_display import format_collection_display
@@ -79,6 +80,32 @@ def build_vote_round_line(vote_round: VoteRound) -> str:
     beneath every collection-centric vote title (Requirement 1).
     """
     return f"Round: {vote_round.id}"
+
+
+def build_active_filter_lines(vote_round: VoteRound) -> List[str]:
+    """Build Custom Vote Summary & Announcement's active-filter lines,
+    shared by /vote_status, the voting-opened post, and the completion
+    announcement so all three always agree.
+
+    Shows Nominee Selection (when this round tracked which mode it
+    actually used -- see VoteService.create_round's candidate_selection_mode),
+    Suggestion Source (a Discord mention -- auto-resolves to the
+    member's current display name/nickname client-side, so this is
+    never stale, unlike a stored display-name snapshot would be), and
+    Genre, each on its own line, in that order. Every field is omitted
+    individually when inactive ("Any Member"/"Any Genre" are never
+    shown) -- returns an empty list when the round has no active filter
+    and no recorded Nominee Selection mode at all (e.g. a legacy round
+    that predates these fields, or a round with no database context).
+    """
+    lines: List[str] = []
+    if vote_round.candidate_selection_mode is not None:
+        lines.append(f"Nominee Selection: {CANDIDATE_SELECTION_DISPLAY_LABELS[vote_round.candidate_selection_mode]}")
+    if vote_round.filter_member_discord_user_id is not None:
+        lines.append(f"Suggestion Source: <@{vote_round.filter_member_discord_user_id}>")
+    if vote_round.filter_genre is not None:
+        lines.append(f"Genre: {vote_round.filter_genre}")
+    return lines
 
 
 def format_standings_lines(
@@ -412,6 +439,7 @@ def build_vote_completion_announcement(
     lines = [
         f"**{format_vote_title(collection_name, 'Voting — Results')}**",
         build_vote_round_line(vote_round),
+        *build_active_filter_lines(vote_round),
     ]
     lines.append(_build_winner_summary_line(winning_items, total_votes_cast))
     lines.append(f"Total votes cast: {total_votes_cast}")
@@ -472,6 +500,7 @@ def build_closed_voting_post_text(
     lines = [
         f"**{format_vote_title(collection_name, 'Voting — Closed')}**",
         build_vote_round_line(vote_round),
+        *build_active_filter_lines(vote_round),
         _build_winner_summary_line(winning_items, total_votes_cast),
         f"Total votes cast: {total_votes_cast}",
     ]

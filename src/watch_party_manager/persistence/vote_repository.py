@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional, Union
 
+from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.domain.vote import (
     VoteRecord,
     VoteRound,
@@ -115,6 +116,11 @@ class JsonVoteRepository:
             "reminder_enabled": vote_round.reminder_enabled,
             "reminder_minutes_before_close": vote_round.reminder_minutes_before_close,
             "reminder_sent_at": vote_round.reminder_sent_at.isoformat() if vote_round.reminder_sent_at else None,
+            "candidate_selection_mode": (
+                vote_round.candidate_selection_mode.value if vote_round.candidate_selection_mode is not None else None
+            ),
+            "filter_member_discord_user_id": vote_round.filter_member_discord_user_id,
+            "filter_genre": vote_round.filter_genre,
             "votes": [
                 JsonVoteRepository._serialize_vote(vote_record)
                 for vote_record in vote_round.votes.values()
@@ -141,6 +147,7 @@ class JsonVoteRepository:
 
         closes_at_raw = entry.get("closes_at")
         reminder_sent_at_raw = entry.get("reminder_sent_at")
+        candidate_selection_mode_raw = entry.get("candidate_selection_mode")
         return VoteRound(
             id=entry["id"],
             status=VoteRoundStatus(entry["status"]),
@@ -158,6 +165,11 @@ class JsonVoteRepository:
             reminder_enabled=entry.get("reminder_enabled"),
             reminder_minutes_before_close=JsonVoteRepository._resolve_reminder_minutes_before_close(entry),
             reminder_sent_at=datetime.fromisoformat(reminder_sent_at_raw) if reminder_sent_at_raw else None,
+            candidate_selection_mode=(
+                CandidateSelectionMode(candidate_selection_mode_raw) if candidate_selection_mode_raw else None
+            ),
+            filter_member_discord_user_id=entry.get("filter_member_discord_user_id"),
+            filter_genre=entry.get("filter_genre"),
         )
 
     @staticmethod

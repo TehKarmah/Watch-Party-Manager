@@ -537,3 +537,53 @@ class VoteRepositoryCancelledStatusTests(unittest.TestCase):
 
         result = self.repository.load()
         self.assertEqual(result.rounds[0].status, VoteRoundStatus.CLOSED)
+
+
+class VoteRepositoryCustomVoteFilterFieldsTests(unittest.TestCase):
+    """Custom Vote Filter Architecture: candidate_selection_mode/
+    filter_member_discord_user_id/filter_genre persist and load
+    backward-compatibly, mirroring the existing reminder-field pattern
+    (JsonVoteRepository._resolve_reminder_minutes_before_close).
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.file_path = Path(self._temp_dir.name) / "voting_filters.json"
+        self.repository = JsonVoteRepository(self.file_path)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_candidate_selection_mode_round_trips(self) -> None:
+        from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+
+        self.repository.save(
+            [VoteRound(id=1, candidate_selection_mode=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)],
+            next_round_id=2,
+        )
+        loaded = self.repository.load().rounds[0]
+        self.assertEqual(loaded.candidate_selection_mode, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
+
+    def test_filter_member_discord_user_id_round_trips(self) -> None:
+        self.repository.save([VoteRound(id=1, filter_member_discord_user_id=111)], next_round_id=2)
+        loaded = self.repository.load().rounds[0]
+        self.assertEqual(loaded.filter_member_discord_user_id, 111)
+
+    def test_filter_genre_round_trips(self) -> None:
+        self.repository.save([VoteRound(id=1, filter_genre="Horror")], next_round_id=2)
+        loaded = self.repository.load().rounds[0]
+        self.assertEqual(loaded.filter_genre, "Horror")
+
+    def test_legacy_round_without_any_filter_fields_loads_with_none_defaults(self) -> None:
+        now = utc_now()
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(
+            '{"next_round_id": 2, "rounds": [{"id": 1, "status": "open", '
+            '"visibility": "visible", "created_at": "' + now.isoformat() + '", '
+            '"closes_at": null, "winning_suggestion_id": null, "votes": []}]}',
+            encoding="utf-8",
+        )
+        loaded = self.repository.load().rounds[0]
+        self.assertIsNone(loaded.candidate_selection_mode)
+        self.assertIsNone(loaded.filter_member_discord_user_id)
+        self.assertIsNone(loaded.filter_genre)

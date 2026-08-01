@@ -37,13 +37,14 @@ class SetupWizardStep(str, Enum):
     SUGGESTION_DATABASE = "suggestion_database"
     WATCH_DESTINATION = "watch_destination"
     VOTING_DEFAULTS = "voting_defaults"
+    REJECTION_SETTINGS = "rejection_settings"
     REMINDER_DEFAULTS = "reminder_defaults"
     BACKUP_DEFAULTS = "backup_defaults"
     REVIEW = "review"
 
 
 # The wizard's walkthrough order -- also what drives progress display
-# ("Step 3 of 9") and the Review screen's "jump to a section" menu.
+# ("Step 3 of 10") and the Review screen's "jump to a section" menu.
 SETUP_WIZARD_STEP_ORDER: tuple[SetupWizardStep, ...] = (
     SetupWizardStep.WASH_CREW_ROLE,
     SetupWizardStep.WATCH_PARTY_ROLE,
@@ -52,6 +53,11 @@ SETUP_WIZARD_STEP_ORDER: tuple[SetupWizardStep, ...] = (
     SetupWizardStep.SUGGESTION_DATABASE,
     SetupWizardStep.WATCH_DESTINATION,
     SetupWizardStep.VOTING_DEFAULTS,
+    # "I Won't Watch" Settings: its own dedicated step, immediately after
+    # Voting Defaults -- previously bundled into VOTING_DEFAULTS's own
+    # modal even though it's a per-collection setting with its own
+    # enable/disable choice, unrelated to guild-wide voting behavior.
+    SetupWizardStep.REJECTION_SETTINGS,
     SetupWizardStep.REMINDER_DEFAULTS,
     SetupWizardStep.BACKUP_DEFAULTS,
     SetupWizardStep.REVIEW,
@@ -105,6 +111,8 @@ class SetupWizardDraft:
     voting_duration_minutes: Optional[int] = None
     voting_visibility: Optional[GuildVoteVisibility] = None
     voting_candidate_selection: Optional[CandidateSelectionMode] = None
+
+    rejection_enabled: Optional[bool] = None
     rejection_threshold: Optional[int] = None
 
     reminder_enabled: Optional[bool] = None

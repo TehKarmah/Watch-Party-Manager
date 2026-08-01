@@ -441,6 +441,7 @@ class SuggestionDatabaseConfigurationRepository:
                         "allow_imdb_links": c.suggestion_rules.allow_imdb_links,
                         "allow_manual_titles": c.suggestion_rules.allow_manual_titles,
                         "require_unique_active_titles": c.suggestion_rules.require_unique_active_titles,
+                        "rejection_enabled": c.suggestion_rules.rejection_enabled,
                         "rejection_threshold": c.suggestion_rules.rejection_threshold,
                         "allow_resuggestion": c.suggestion_rules.allow_resuggestion,
                         "candidate_selection": c.suggestion_rules.candidate_selection.value,
@@ -555,6 +556,7 @@ class SuggestionDatabaseConfigurationRepository:
                 allow_imdb_links=rules.get("allow_imdb_links", True),
                 allow_manual_titles=rules.get("allow_manual_titles", True),
                 require_unique_active_titles=rules.get("require_unique_active_titles", True),
+                rejection_enabled=rules.get("rejection_enabled", True),
                 rejection_threshold=rules.get("rejection_threshold", 2),
                 allow_resuggestion=rules.get("allow_resuggestion", True),
                 candidate_selection=CandidateSelectionMode(
@@ -566,6 +568,7 @@ class SuggestionDatabaseConfigurationRepository:
                         "allow_imdb_links",
                         "allow_manual_titles",
                         "require_unique_active_titles",
+                        "rejection_enabled",
                         "rejection_threshold",
                         "allow_resuggestion",
                         "candidate_selection",

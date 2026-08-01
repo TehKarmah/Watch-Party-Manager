@@ -40,7 +40,12 @@ from watch_party_manager.domain.guild_configuration import (
     GuildVoteVisibility,
     JoinMode,
 )
-from watch_party_manager.domain.setup_wizard import SetupWizardDraft, SetupWizardState, SetupWizardStep
+from watch_party_manager.domain.setup_wizard import (
+    SETUP_WIZARD_STEP_ORDER,
+    SetupWizardDraft,
+    SetupWizardState,
+    SetupWizardStep,
+)
 from watch_party_manager.domain.suggestion_database_configuration import (
     CANDIDATE_SELECTION_DISPLAY_LABELS,
     CandidateSelectionMode,
@@ -68,6 +73,8 @@ from watch_party_manager.setup_wizard_view import (
     HomeChannelChoiceView,
     HomeChannelNameModal,
     ModalStepIntroView,
+    RejectionSettingsChoiceView,
+    RejectionThresholdModal,
     ReminderDefaultsChoiceView,
     ReminderDefaultsModal,
     ReviewStepView,
@@ -846,13 +853,13 @@ class BuildSetupStepHeaderTests(unittest.TestCase):
     def test_shows_position_and_title_for_first_step(self):
         state = SetupWizardState(guild_id=GUILD_ID)
         header = build_setup_step_header(state)
-        self.assertIn("Step 1 of 10", header)
+        self.assertIn("Step 1 of 11", header)
         self.assertIn("WASH Crew Role", header)
 
     def test_shows_position_and_title_for_review_step(self):
         state = SetupWizardState(guild_id=GUILD_ID, current_step=SetupWizardStep.REVIEW)
         header = build_setup_step_header(state)
-        self.assertIn("Step 10 of 10", header)
+        self.assertIn("Step 11 of 11", header)
         self.assertIn("Review", header)
 
 
@@ -986,7 +993,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
 
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
-        self.assertIn("Step 1 of 10", interaction.response.sent_message)
+        self.assertIn("Step 1 of 11", interaction.response.sent_message)
         self.assertTrue(interaction.response.sent_ephemeral)
         self.assertIsInstance(interaction.response.sent_view, WashCrewRoleStepView)
 
@@ -1004,7 +1011,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         select_interaction = FakeInteraction()
         await role_select.callback(interaction=select_interaction)
 
-        self.assertIn("Step 2 of 10", select_interaction.response.edited_content)
+        self.assertIn("Step 2 of 11", select_interaction.response.edited_content)
         self.assertIsInstance(select_interaction.response.edited_view, WatchPartyRoleStepView)
 
     async def test_admin_channel_step_renders_and_advances_to_suggestion_database(self) -> None:
@@ -1017,7 +1024,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
 
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
-        self.assertIn("Step 3 of 10", interaction.response.sent_message)
+        self.assertIn("Step 3 of 11", interaction.response.sent_message)
         self.assertIn("Admin Channel", interaction.response.sent_message)
         self.assertIsInstance(interaction.response.sent_view, AdminChannelStepView)
 
@@ -1027,7 +1034,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         skip_interaction = FakeInteraction()
         await skip_button.callback(interaction=skip_interaction)
 
-        self.assertIn("Step 4 of 10", skip_interaction.response.edited_content)
+        self.assertIn("Step 4 of 11", skip_interaction.response.edited_content)
 
     async def test_voting_defaults_step_sends_a_modal_with_valid_component_labels(self) -> None:
         # Regression test: Voting Defaults previously crashed with
@@ -1044,7 +1051,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         # confirms every field on the modal actually sent is a TextInput
         # with a label within Discord's 1-45 character limit.
         from watch_party_manager.domain.setup_wizard import SetupWizardStep
-        from watch_party_manager.setup_wizard_view import SetupVotingDefaultsModal, VotingDefaultsIntroView
+        from watch_party_manager.setup_wizard_view import VotingDefaultsIntroView, VotingDefaultsModal
 
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
@@ -1062,7 +1069,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         await configure_button.callback(interaction=configure_interaction)
 
         sent_modal = configure_interaction.response.sent_modal
-        self.assertIsInstance(sent_modal, SetupVotingDefaultsModal)
+        self.assertIsInstance(sent_modal, VotingDefaultsModal)
         self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in sent_modal.children))
         for child in sent_modal.children:
             label = getattr(child, "label", None)
@@ -1145,8 +1152,9 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
+        state = self.bot.setup_wizard_service.enable_rejection_settings(state, 2)
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 30)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 2, 15)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
@@ -1164,7 +1172,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
 
         # Redirected specifically to Admin Channel (Step 3), with an
         # actionable message -- not a generic failure.
-        self.assertIn("Step 3 of 10", save_interaction.response.edited_content)
+        self.assertIn("Step 3 of 11", save_interaction.response.edited_content)
         self.assertIn("cannot send messages", save_interaction.response.edited_content)
         self.assertEqual(self.applied_roles, [])
 
@@ -1223,8 +1231,9 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
+        state = self.bot.setup_wizard_service.enable_rejection_settings(state, 2)
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
 
@@ -1274,8 +1283,9 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
+        state = self.bot.setup_wizard_service.enable_rejection_settings(state, 2)
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
@@ -1320,8 +1330,9 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
+        state = self.bot.setup_wizard_service.enable_rejection_settings(state, 2)
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
 
@@ -1365,8 +1376,9 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
+        state = self.bot.setup_wizard_service.enable_rejection_settings(state, 2)
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
 
@@ -1428,8 +1440,9 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
+        state = self.bot.setup_wizard_service.enable_rejection_settings(state, 2)
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 3, 15)
 
@@ -1492,7 +1505,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         back_interaction = FakeInteraction()
         await back_button.callback(interaction=back_interaction)
 
-        self.assertIn("Step 1 of 10", back_interaction.response.edited_content)
+        self.assertIn("Step 1 of 11", back_interaction.response.edited_content)
         self.assertIsInstance(back_interaction.response.edited_view, WashCrewRoleStepView)
 
     async def test_back_does_not_clear_the_previously_saved_value(self) -> None:
@@ -1523,7 +1536,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
     async def test_voting_defaults_modal_reopened_after_back_shows_previously_saved_values(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
+            state, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
         # Simulate returning to Voting Defaults later (e.g. via Back from
         # Reminder Defaults, or Review's edit-a-section) -- the modal must
@@ -1979,8 +1992,9 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
+        state = self.bot.setup_wizard_service.enable_rejection_settings(state, 2)
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
@@ -2011,7 +2025,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
     async def test_review_line_shows_the_friendly_candidate_selection_label(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_NEW_ADDITIONS, 2
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_NEW_ADDITIONS
         )
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
         interaction = FakeInteraction()
@@ -2023,7 +2037,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
     async def test_settings_persist_through_a_repository_round_trip(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         self.bot.setup_wizard_service.set_voting_defaults(
-            state, 7, 3, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.INFINITE_POOL, 2
+            state, 7, 3, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.INFINITE_POOL
         )
 
         reloaded = self.wizard_repository.get(GUILD_ID)
@@ -2042,8 +2056,9 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 6
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
+        state = self.bot.setup_wizard_service.enable_rejection_settings(state, 6)
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
 
@@ -2093,8 +2108,9 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_NEW_ADDITIONS, 2
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_NEW_ADDITIONS
         )
+        state = self.bot.setup_wizard_service.enable_rejection_settings(state, 2)
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
 
@@ -2126,6 +2142,160 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
         self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
         self.assertEqual(database_configuration.suggestion_rules.rejection_threshold, 2)
+
+
+class RejectionSettingsSetupIntegrationTests(SetupCommandTestCase):
+    """"I Won't Watch" Settings: its own dedicated step, immediately after
+    Voting Defaults -- an Enable/Disable choice, mirroring Reminder
+    Defaults' identical enable/disable-then-configure shape, and only
+    ever opens the threshold modal when Enable is chosen.
+    """
+
+    async def test_step_appears_immediately_after_voting_defaults(self) -> None:
+        self.assertEqual(
+            SETUP_WIZARD_STEP_ORDER[SETUP_WIZARD_STEP_ORDER.index(SetupWizardStep.VOTING_DEFAULTS) + 1],
+            SetupWizardStep.REJECTION_SETTINGS,
+        )
+
+    async def test_step_shows_the_enable_disable_choice_view(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REJECTION_SETTINGS)
+        interaction = FakeInteraction()
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        view: RejectionSettingsChoiceView = interaction.response.sent_view
+        self.assertIsInstance(view, RejectionSettingsChoiceView)
+        labels = [getattr(child, "label", None) for child in view.children]
+        self.assertIn("Enable \"I Won't Watch\" (Recommended)", labels)
+        self.assertIn("Disable \"I Won't Watch\"", labels)
+        self.assertIn("Step 8 of 11", interaction.response.sent_message)
+
+    async def test_disable_saves_immediately_without_opening_a_modal(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REJECTION_SETTINGS)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: RejectionSettingsChoiceView = interaction.response.sent_view
+        disable_button = next(
+            child for child in view.children if getattr(child, "label", None) == "Disable \"I Won't Watch\""
+        )
+
+        disable_interaction = FakeInteraction()
+        await disable_button.callback(interaction=disable_interaction)
+
+        self.assertIsNone(disable_interaction.response.sent_modal)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertFalse(persisted.draft.rejection_enabled)
+        self.assertIsNone(persisted.draft.rejection_threshold)
+        self.assertEqual(persisted.current_step, SetupWizardStep.REMINDER_DEFAULTS)
+
+    async def test_enable_opens_a_modal_with_only_the_threshold_field(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REJECTION_SETTINGS)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: RejectionSettingsChoiceView = interaction.response.sent_view
+        enable_button = next(
+            child for child in view.children
+            if getattr(child, "label", None) == "Enable \"I Won't Watch\" (Recommended)"
+        )
+
+        enable_interaction = FakeInteraction()
+        await enable_button.callback(interaction=enable_interaction)
+
+        modal: RejectionThresholdModal = enable_interaction.response.sent_modal
+        self.assertEqual(len(modal.children), 1)
+        self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in modal.children))
+        self.assertEqual(modal.threshold_input.default, "2")
+
+    async def test_enable_then_submit_saves_the_threshold_and_advances_to_reminder_defaults(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REJECTION_SETTINGS)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: RejectionSettingsChoiceView = interaction.response.sent_view
+        enable_button = next(
+            child for child in view.children
+            if getattr(child, "label", None) == "Enable \"I Won't Watch\" (Recommended)"
+        )
+        enable_interaction = FakeInteraction()
+        await enable_button.callback(interaction=enable_interaction)
+        modal: RejectionThresholdModal = enable_interaction.response.sent_modal
+        modal.threshold_input._value = "4"
+
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertTrue(persisted.draft.rejection_enabled)
+        self.assertEqual(persisted.draft.rejection_threshold, 4)
+        self.assertEqual(persisted.current_step, SetupWizardStep.REMINDER_DEFAULTS)
+
+    async def test_invalid_threshold_shows_a_retry_screen(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REJECTION_SETTINGS)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: RejectionSettingsChoiceView = interaction.response.sent_view
+        enable_button = next(
+            child for child in view.children
+            if getattr(child, "label", None) == "Enable \"I Won't Watch\" (Recommended)"
+        )
+        enable_interaction = FakeInteraction()
+        await enable_button.callback(interaction=enable_interaction)
+        modal: RejectionThresholdModal = enable_interaction.response.sent_modal
+        modal.threshold_input._value = "11"
+
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        self.assertIn("⚠", submit_interaction.response.edited_content)
+        retry_view = submit_interaction.response.edited_view
+        self.assertIsInstance(retry_view, RejectionSettingsChoiceView)
+
+    async def test_completion_summary_shows_disabled_when_declined(self) -> None:
+        database = self.suggestion_service.create_database(
+            "Movies", GUILD_ID, DESTINATION_CHANNEL_ID
+        ).database
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.bot.setup_wizard_service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.MANUAL)
+        state = self.bot.setup_wizard_service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        state, _ = self.bot.setup_wizard_service.select_existing_database(
+            state, database.database_id, guild_id=GUILD_ID
+        )
+        state = self.bot.setup_wizard_service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
+        state = self.bot.setup_wizard_service.set_voting_defaults(
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+        )
+        state = self.bot.setup_wizard_service.disable_rejection_settings(state)
+        state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
+        state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
+
+        class FakeGuild:
+            name = "Test Guild"
+
+            def get_role(self, role_id):
+                return FakeRole(role_id)
+
+            def get_channel_or_thread(self, channel_id):
+                if channel_id == DESTINATION_CHANNEL_ID:
+                    return FakeUsableChannel()
+                return None
+
+            me = object()
+
+        result = self.bot.setup_wizard_service.finalize(state, GUILD_ID, "Test Guild", FakeGuild())
+        self.assertTrue(result.success)
+
+        summary = build_setup_completion_summary(result.configuration, state.draft)
+
+        self.assertIn("I Won't Watch: Disabled", summary)
+        saved_database_configuration = self.suggestion_database_configuration_repository.get(
+            GUILD_ID, database.database_id
+        )
+        self.assertFalse(saved_database_configuration.suggestion_rules.rejection_enabled)
 
 
 class ReminderDefaultsSetupIntegrationTests(SetupCommandTestCase):
@@ -2259,7 +2429,7 @@ class SetupPreparationScreenIntegrationTests(SetupCommandTestCase):
         begin_interaction = FakeInteraction()
         await begin_button.callback(interaction=begin_interaction)
 
-        self.assertIn("Step 1 of 10", begin_interaction.response.edited_content)
+        self.assertIn("Step 1 of 11", begin_interaction.response.edited_content)
         self.assertIsInstance(begin_interaction.response.edited_view, WashCrewRoleStepView)
 
     async def test_cancel_from_preparation_screen_discards_the_draft(self) -> None:
@@ -2432,7 +2602,7 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         select_interaction = FakeInteraction()
         await channel_select.callback(interaction=select_interaction)
 
-        self.assertIn("Step 7 of 10", select_interaction.response.edited_content)
+        self.assertIn("Step 7 of 11", select_interaction.response.edited_content)
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertEqual(persisted.draft.watch_destination_channel_id, DESTINATION_CHANNEL_ID)
         self.assertFalse(persisted.draft.watch_destination_skipped)
@@ -2454,7 +2624,7 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         self.assertEqual(
             fake_home_channel.created_with, ("Watched Item Archive", __import__("discord").ChannelType.public_thread)
         )
-        self.assertIn("Step 7 of 10", submit_interaction.response.edited_content)
+        self.assertIn("Step 7 of 11", submit_interaction.response.edited_content)
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertEqual(persisted.draft.watch_destination_channel_id, 777)
 
@@ -2510,7 +2680,7 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         skip_interaction = FakeInteraction(guild=guild)
         await skip_button.callback(interaction=skip_interaction)
 
-        self.assertIn("Step 7 of 10", skip_interaction.response.edited_content)
+        self.assertIn("Step 7 of 11", skip_interaction.response.edited_content)
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertTrue(persisted.draft.watch_destination_skipped)
 
@@ -2744,7 +2914,7 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         skip_interaction = FakeInteraction(guild=guild)
         await skip_button.callback(interaction=skip_interaction)
 
-        self.assertIn("Step 7 of 10", skip_interaction.response.edited_content)
+        self.assertIn("Step 7 of 11", skip_interaction.response.edited_content)
         final = self.wizard_repository.get(GUILD_ID)
         self.assertTrue(final.draft.watch_destination_skipped)
         self.assertIsNone(final.draft.watch_destination_channel_id)

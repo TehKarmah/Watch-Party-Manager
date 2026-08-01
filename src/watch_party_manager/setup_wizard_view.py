@@ -41,8 +41,8 @@ OnChannelSelected = Callable[[discord.Interaction, int], Awaitable[None]]
 OnSkip = Callable[[discord.Interaction], Awaitable[None]]
 OnCreateThreadClicked = Callable[[discord.Interaction], Awaitable[None]]
 OnVotingDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
-OnSetupVotingDefaultsSubmit = Callable[[discord.Interaction, str, str, str], Awaitable[None]]
 OnVotingDefaultsConfigure = Callable[[discord.Interaction, CandidateSelectionMode, GuildVoteVisibility], Awaitable[None]]
+OnRejectionThresholdSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnReminderDefaultsSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnBackupDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 OnSave = Callable[[discord.Interaction], Awaitable[None]]
@@ -985,10 +985,12 @@ class VisibilitySelectComponent(discord.ui.Select):
 
 class VotingDefaultsModal(discord.ui.Modal):
     """Default nominee count and vote duration only -- guild-wide fields,
-    reused unchanged by /config's own (never per-collection) Voting
-    Defaults section. See SetupVotingDefaultsModal below for the Setup
-    Wizard's own variant, which additionally bundles a per-collection
-    field.
+    shared unchanged between the Setup Wizard's own Voting Defaults step
+    and /config's (never per-collection) Voting Defaults section. "I
+    Won't Watch" threshold is deliberately NOT bundled in here even
+    though it used to be -- it's a per-collection setting with its own
+    enable/disable choice, and now has its own dedicated step/section
+    (see RejectionSettingsChoiceView/RejectionThresholdModal).
 
     Discord modals accept TextInput components only -- a Select embedded
     in a modal constructs without error client-side (discord.py doesn't
@@ -1019,52 +1021,6 @@ class VotingDefaultsModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self._submit_callback(interaction, self.candidate_count_input.value, self.duration_input.value)
-
-
-class SetupVotingDefaultsModal(discord.ui.Modal):
-    """Setup Wizard-only: default candidate count and vote duration
-    (guild-wide), plus this pass's collection's "I Won't Watch" threshold
-    -- bundled into the wizard's one Voting Defaults step the same way
-    Candidate Selection Mode already is (see VotingDefaultsIntroView),
-    even though both are actually stored per-collection
-    (SuggestionRulesConfig), not guild-wide. Kept as its own class,
-    rather than a shared/parameterized VotingDefaultsModal, so /config's
-    guild-wide-only Voting Defaults section can never accidentally show a
-    per-collection field with no collection context to anchor it to --
-    exactly the "which database does this apply to?" ambiguity
-    VotingDefaultsModal's own docstring describes avoiding. Unlike
-    candidate selection, the threshold is a plain number and needs no
-    Select, so it's collected here as a TextInput rather than needing its
-    own screen.
-    """
-
-    def __init__(
-        self, on_submit: OnSetupVotingDefaultsSubmit, *, defaults: Optional[Tuple[str, str, str]] = None
-    ) -> None:
-        super().__init__(title="Voting Defaults")
-        self._submit_callback = on_submit
-        candidate_count_default, duration_default, rejection_threshold_default = defaults or ("3", "1d", "2")
-        self.candidate_count_input = discord.ui.TextInput(
-            label="Default candidate count (2-10)", default=candidate_count_default
-        )
-        self.duration_input = discord.ui.TextInput(
-            label="Default vote duration (1m-30d; 10m,1h,7d)",
-            default=duration_default,
-        )
-        self.rejection_threshold_input = discord.ui.TextInput(
-            label="I Won't Watch threshold (1-10)", default=rejection_threshold_default
-        )
-        self.add_item(self.candidate_count_input)
-        self.add_item(self.duration_input)
-        self.add_item(self.rejection_threshold_input)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        await self._submit_callback(
-            interaction,
-            self.candidate_count_input.value,
-            self.duration_input.value,
-            self.rejection_threshold_input.value,
-        )
 
 
 class CandidateSelectionSelectComponent(discord.ui.Select):
@@ -1142,6 +1098,86 @@ class VotingDefaultsIntroView(SetupWizardStepView):
         await self._on_configure(interaction, self.candidate_selection_select.selected, self.visibility_select.selected)
 
 
+# --- "I Won't Watch" Settings ------------------------------------------------------------
+#
+# Its own dedicated step, immediately after Voting Defaults -- previously
+# bundled into VotingDefaultsModal's own third field even though it's a
+# per-collection setting, unrelated to guild-wide voting behavior, with
+# its own enable/disable choice most other optional settings already get
+# (see ReminderDefaultsChoiceView/BackupDefaultsChoiceView, mirrored here).
+
+
+class RejectionThresholdModal(discord.ui.Modal):
+    """Whether "I Won't Watch" is enabled at all is decided by
+    RejectionSettingsChoiceView's Enable/Disable buttons before this modal
+    ever opens (same Fixed-Option UX Audit reasoning as
+    ReminderDefaultsModal's own docstring). This modal only ever opens
+    after Enable was chosen, so it collects just the flexible threshold
+    value.
+    """
+
+    def __init__(self, on_submit: OnRejectionThresholdSubmit, *, default: Optional[str] = None) -> None:
+        super().__init__(title="I Won't Watch Threshold")
+        self._submit_callback = on_submit
+        self.threshold_input = discord.ui.TextInput(label="Threshold (1-10)", default=default or "2")
+        self.add_item(self.threshold_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self._submit_callback(interaction, self.threshold_input.value)
+
+
+class EnableRejectionSettingsButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigureClicked) -> None:
+        super().__init__(
+            label='Enable "I Won\'t Watch" (Recommended)',
+            style=discord.ButtonStyle.primary,
+            custom_id="wpm_setup_rejection_enable",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class DisableRejectionSettingsButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigureClicked) -> None:
+        super().__init__(
+            label='Disable "I Won\'t Watch"',
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_setup_rejection_disable",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class RejectionSettingsChoiceView(SetupWizardStepView):
+    """Step 8: choose whether "I Won't Watch" is enabled at all for this
+    pass's collection before -- only if enabled -- configuring its
+    threshold, mirroring ReminderDefaultsChoiceView's identical
+    enable/disable-then-configure shape. Enable is the recommended,
+    default action.
+    """
+
+    def __init__(
+        self,
+        on_enable: OnConfigureClicked,
+        on_disable: OnConfigureClicked,
+        on_back: OnBack,
+        on_save_for_later: OnSaveForLater,
+        on_cancel: OnWizardCancel,
+        *,
+        requester_id: Optional[int] = None,
+    ) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(EnableRejectionSettingsButton(on_enable))
+        self.add_item(DisableRejectionSettingsButton(on_disable))
+        self.add_item(SetupBackButton(on_back))
+        self.add_item(SetupSaveForLaterButton(on_save_for_later))
+        self.add_item(SetupCancelButton(on_cancel))
+
+
 class ReminderDefaultsModal(discord.ui.Modal):
     """Whether a vote-ending reminder should be sent is decided by
     ReminderDefaultsChoiceView's Enable/Disable buttons before this modal
@@ -1194,7 +1230,7 @@ class DisableVoteEndingReminderButton(discord.ui.Button):
 
 
 class ReminderDefaultsChoiceView(SetupWizardStepView):
-    """Step 7: choose whether a vote-ending reminder is sent at all
+    """Step 9: choose whether a vote-ending reminder is sent at all
     before -- only if enabled -- configuring its lead time, mirroring
     BackupDefaultsChoiceView's identical enable/disable-then-configure
     shape. Enable is the recommended, default action.
@@ -1245,7 +1281,7 @@ class DisableAutomaticBackupsButton(discord.ui.Button):
 
 
 class BackupDefaultsChoiceView(SetupWizardStepView):
-    """Step 8: choose whether automatic backups are enabled at all
+    """Step 10: choose whether automatic backups are enabled at all
     (Release Polish: Optional Automatic Backups) before -- only if
     enabled -- configuring their interval and retention. Enable is the
     recommended, default action, matching HomeChannelChoiceView's and

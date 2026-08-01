@@ -33,7 +33,11 @@ from watch_party_manager.bot import (
 )
 from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, GuildConfiguration, GuildVoteVisibility
 from watch_party_manager.domain.setup_wizard import SETUP_WIZARD_STEP_ORDER, SetupWizardStep
-from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+from watch_party_manager.domain.suggestion_database_configuration import (
+    CandidateSelectionMode,
+    SuggestionDatabaseConfiguration,
+    SuggestionRulesConfig,
+)
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
@@ -112,13 +116,13 @@ from watch_party_manager.config_view import (
     ConfigDatabaseSettingsMenuView,
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
+    ConfigRejectionSettingsView,
     ConfigRejectionThresholdModal,
     ConfigRoleSectionView,
     ConfigSuggestionDestinationSectionView,
     ConfigVotingDefaultsIntroView,
     ConfigWatchDestinationSectionView,
     DATABASE_SETTING_CANDIDATE_SELECTION,
-    DATABASE_SETTING_REJECTION_THRESHOLD,
     DATABASE_SETTING_SUGGESTION_DESTINATION,
     DATABASE_SETTING_WATCH_DESTINATION,
 )
@@ -335,10 +339,12 @@ class MainMenuTests(ConfigCommandTestCase):
         self.assertIn("WASH Crew Role", select_interaction.response.edited_content)
         self.assertIsInstance(select_interaction.response.edited_view, ConfigRoleSectionView)
 
-    async def test_voting_defaults_option_explains_visibility(self) -> None:
-        # UI Polish (Visibility Help): since Voting Defaults opens its
-        # modal directly with no intro screen, the Visible/Blind
-        # explanation lives on this menu option's description instead.
+    async def test_main_menu_options_carry_no_descriptions(self) -> None:
+        # /config Main Menu Cleanup: the main dropdown is a clean numbered
+        # list of section names only -- explanatory text (e.g. Voting
+        # Defaults' own Visible/Blind explanation) belongs on the
+        # selected section's own screen instead (see
+        # ConfigVotingDefaultsScreenTests below).
         self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
         interaction = FakeInteraction()
 
@@ -346,10 +352,8 @@ class MainMenuTests(ConfigCommandTestCase):
 
         view: ConfigMainMenuView = interaction.response.sent_view
         select = view.children[0]
-        options_by_value = {option.value: option for option in select.options}
-        self.assertIsNotNone(options_by_value["voting_defaults"].description)
-        self.assertIn("Blind", options_by_value["voting_defaults"].description)
-        self.assertIsNone(options_by_value["wash_crew_role"].description)
+        for option in select.options:
+            self.assertIsNone(option.description)
 
 
 class ConfigSectionNumberingTests(ConfigCommandTestCase):
@@ -571,7 +575,7 @@ class SectionRenderingTests(ConfigCommandTestCase):
 
         self.assertIn(f"<#{DESTINATION_CHANNEL_ID}>", interaction.response.edited_content)
         self.assertIn("Favor New Additions", interaction.response.edited_content)
-        self.assertIn("I Won't Watch Threshold: 2", interaction.response.edited_content)
+        self.assertIn("I Won't Watch: Enabled (threshold 2)", interaction.response.edited_content)
 
     async def test_choosing_suggestion_destination_shows_the_channel_picker(self) -> None:
         self._seed_completed_setup()
@@ -640,7 +644,10 @@ class SectionRenderingTests(ConfigCommandTestCase):
             CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
         )
 
-    async def test_choosing_rejection_settings_opens_the_threshold_modal(self) -> None:
+    async def test_database_settings_menu_shows_rejection_status_read_only(self) -> None:
+        # "I Won't Watch" now has its own dedicated /config section (see
+        # ConfigRejectionSettingsSectionTests below) -- the per-database
+        # settings menu only displays its current status for reference.
         self._seed_completed_setup()
         database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
         interaction = FakeInteraction()
@@ -653,64 +660,17 @@ class SectionRenderingTests(ConfigCommandTestCase):
         await send_config_database_settings_menu(
             interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
         )
+
+        self.assertIn("I Won't Watch: Enabled (threshold 2)", interaction.response.edited_content)
         setting_select = interaction.response.edited_view.children[0]
-        setting_select._values = [DATABASE_SETTING_REJECTION_THRESHOLD]
-
-        setting_interaction = FakeInteraction()
-        await setting_select.callback(interaction=setting_interaction)
-
-        self.assertIsInstance(setting_interaction.response.sent_modal, ConfigRejectionThresholdModal)
-        self.assertEqual(setting_interaction.response.sent_modal.threshold_input.default, "2")
-
-    async def test_saving_a_rejection_threshold_persists_it(self) -> None:
-        self._seed_completed_setup()
-        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
-        interaction = FakeInteraction()
-
-        async def on_back(back_interaction) -> None:
-            pass
-
-        from watch_party_manager.bot import send_config_database_rejection_threshold
-
-        await send_config_database_rejection_threshold(
-            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        self.assertEqual(
+            [option.value for option in setting_select.options],
+            [
+                DATABASE_SETTING_SUGGESTION_DESTINATION,
+                DATABASE_SETTING_WATCH_DESTINATION,
+                DATABASE_SETTING_CANDIDATE_SELECTION,
+            ],
         )
-        modal = interaction.response.sent_modal
-        modal.threshold_input._value = "5"
-
-        submit_interaction = FakeInteraction()
-        await modal.on_submit(interaction=submit_interaction)
-
-        self.assertIn("5", submit_interaction.response.edited_content)
-        database_configuration = self.suggestion_database_configuration_repository.get(
-            GUILD_ID, database_result.database.database_id
-        )
-        self.assertEqual(database_configuration.suggestion_rules.rejection_threshold, 5)
-
-    async def test_saving_a_rejection_threshold_outside_one_to_ten_shows_an_error(self) -> None:
-        self._seed_completed_setup()
-        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
-        interaction = FakeInteraction()
-
-        async def on_back(back_interaction) -> None:
-            pass
-
-        from watch_party_manager.bot import send_config_database_rejection_threshold
-
-        await send_config_database_rejection_threshold(
-            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
-        )
-        modal = interaction.response.sent_modal
-        modal.threshold_input._value = "11"
-
-        submit_interaction = FakeInteraction()
-        await modal.on_submit(interaction=submit_interaction)
-
-        self.assertIn("⚠", submit_interaction.response.edited_content)
-        database_configuration = self.bot.config_service.get_database_configuration(
-            GUILD_ID, database_result.database.database_id
-        )
-        self.assertEqual(database_configuration.suggestion_rules.rejection_threshold, 2)
 
     async def test_selecting_a_suggestion_destination_saves_immediately(self) -> None:
         self._seed_completed_setup()
@@ -1522,6 +1482,297 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
 
         self.assertIn("could not be found", configure_interaction.response.edited_content)
         self.assertIn("/setup", configure_interaction.response.edited_content)
+
+
+class ConfigVotingDefaultsCollectionScopingTests(ConfigCommandTestCase):
+    """/config Voting Defaults Consistency: Voting Defaults now exposes
+    Nominee Selection alongside Vote Visibility, scoped per collection
+    exactly like the Setup Wizard's own Voting Defaults step -- one
+    collection auto-resolves, more than one requires an explicit choice,
+    and saving only ever updates the chosen collection.
+    """
+
+    _next_channel_id = DESTINATION_CHANNEL_ID + 1
+
+    def _create_database(self, name: str) -> int:
+        ConfigVotingDefaultsCollectionScopingTests._next_channel_id += 1
+        result = self.suggestion_service.create_database(
+            name, guild_id=GUILD_ID, channel_id=ConfigVotingDefaultsCollectionScopingTests._next_channel_id
+        )
+        self.assertTrue(result.success)
+        return result.database.database_id
+
+    async def on_back(self, back_interaction) -> None:
+        pass
+
+    async def test_no_collections_shows_no_nominee_selection_dropdown(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+
+        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, self.on_back)
+
+        intro_view = interaction.response.edited_view
+        self.assertIsInstance(intro_view, ConfigVotingDefaultsIntroView)
+        self.assertIsNone(intro_view.candidate_selection_select)
+
+    async def test_one_collection_automatically_resolves_and_preselects_its_mode(self) -> None:
+        self._seed_completed_setup()
+        database_id = self._create_database("Sunday Watch Party")
+        self.suggestion_database_configuration_repository.save(
+            SuggestionDatabaseConfiguration(
+                guild_id=GUILD_ID,
+                database_id=database_id,
+                display_name="Sunday Watch Party",
+                suggestion_rules=SuggestionRulesConfig(candidate_selection=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS),
+            )
+        )
+        interaction = FakeInteraction()
+
+        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, self.on_back)
+
+        intro_view = interaction.response.edited_view
+        self.assertIsInstance(intro_view, ConfigVotingDefaultsIntroView)
+        self.assertIsNotNone(intro_view.candidate_selection_select)
+        self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
+
+    async def test_multiple_collections_require_an_explicit_choice_first(self) -> None:
+        self._seed_completed_setup()
+        self._create_database("Movie Night")
+        self._create_database("TV Night")
+        interaction = FakeInteraction()
+
+        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, self.on_back)
+
+        picker_view = interaction.response.edited_view
+        self.assertIsInstance(picker_view, ConfigDatabaseSectionView)
+
+    async def test_choosing_a_collection_from_the_picker_shows_its_nominee_selection(self) -> None:
+        self._seed_completed_setup()
+        first_id = self._create_database("Movie Night")
+        self._create_database("TV Night")
+        interaction = FakeInteraction()
+        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, self.on_back)
+        picker_view = interaction.response.edited_view
+        select = picker_view.children[0]
+        select._values = [str(first_id)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+
+        intro_view = select_interaction.response.edited_view
+        self.assertIsInstance(intro_view, ConfigVotingDefaultsIntroView)
+        self.assertIsNotNone(intro_view.candidate_selection_select)
+
+    async def test_saving_updates_only_the_selected_collections_nominee_selection(self) -> None:
+        self._seed_completed_setup()
+        target_id = self._create_database("Movie Night")
+        other_id = self._create_database("TV Night")
+        interaction = FakeInteraction()
+        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, self.on_back)
+        picker_view = interaction.response.edited_view
+        select = picker_view.children[0]
+        select._values = [str(target_id)]
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+        intro_view = select_interaction.response.edited_view
+        intro_view.candidate_selection_select._values = [CandidateSelectionMode.INFINITE_POOL.value]
+
+        configure_button = next(
+            child for child in intro_view.children if getattr(child, "label", None) == "Set Voting Defaults"
+        )
+        configure_interaction = FakeInteraction()
+        await configure_button.callback(interaction=configure_interaction)
+        modal = configure_interaction.response.sent_modal
+        modal.candidate_count_input._value = "4"
+        modal.duration_input._value = "1d"
+
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        target_configuration = self.bot.config_service.get_database_configuration(GUILD_ID, target_id)
+        other_configuration = self.bot.config_service.get_database_configuration(GUILD_ID, other_id)
+        self.assertEqual(target_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.INFINITE_POOL)
+        # Do not silently apply a collection-specific setting to every
+        # collection: the other collection keeps its own default.
+        self.assertNotEqual(other_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.INFINITE_POOL)
+
+    async def test_saving_still_updates_guild_wide_visibility_and_count(self) -> None:
+        self._seed_completed_setup()
+        self._create_database("Movie Night")
+        interaction = FakeInteraction()
+        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, self.on_back)
+        intro_view = interaction.response.edited_view
+        intro_view.visibility_select._values = [GuildVoteVisibility.BLIND.value]
+
+        configure_button = next(
+            child for child in intro_view.children if getattr(child, "label", None) == "Set Voting Defaults"
+        )
+        configure_interaction = FakeInteraction()
+        await configure_button.callback(interaction=configure_interaction)
+        modal = configure_interaction.response.sent_modal
+        modal.candidate_count_input._value = "6"
+        modal.duration_input._value = "2d"
+
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        voting_defaults = self.guild_configuration_repository.get(GUILD_ID).voting_defaults
+        self.assertEqual(voting_defaults.visibility, GuildVoteVisibility.BLIND)
+        self.assertEqual(voting_defaults.candidate_count, 6)
+
+
+class ConfigRejectionSettingsSectionTests(ConfigCommandTestCase):
+    """"I Won't Watch" Settings: its own dedicated /config section,
+    scoped per collection exactly like Voting Defaults' own Nominee
+    Selection -- one collection auto-resolves, more than one requires an
+    explicit choice, and saving only ever updates the chosen collection.
+    """
+
+    _next_channel_id = DESTINATION_CHANNEL_ID + 1000
+
+    def _create_database(self, name: str) -> int:
+        ConfigRejectionSettingsSectionTests._next_channel_id += 1
+        result = self.suggestion_service.create_database(
+            name, guild_id=GUILD_ID, channel_id=ConfigRejectionSettingsSectionTests._next_channel_id
+        )
+        self.assertTrue(result.success)
+        return result.database.database_id
+
+    async def on_back(self, back_interaction) -> None:
+        pass
+
+    async def test_no_collections_shows_no_collections_message(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.REJECTION_SETTINGS, edit=False)
+
+        self.assertIn("No collections exist", interaction.response.sent_message)
+        self.assertIsInstance(interaction.response.sent_view, BackToMenuOnlyView)
+
+    async def test_one_collection_automatically_resolves(self) -> None:
+        self._seed_completed_setup()
+        self._create_database("Sunday Watch Party")
+        interaction = FakeInteraction()
+
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.REJECTION_SETTINGS, edit=False)
+
+        self.assertIsInstance(interaction.response.sent_view, ConfigRejectionSettingsView)
+        self.assertIn("Enabled (threshold 2)", interaction.response.sent_message)
+
+    async def test_multiple_collections_require_an_explicit_choice_first(self) -> None:
+        self._seed_completed_setup()
+        self._create_database("Movie Night")
+        self._create_database("TV Night")
+        interaction = FakeInteraction()
+
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.REJECTION_SETTINGS, edit=False)
+
+        self.assertIsInstance(interaction.response.sent_view, ConfigDatabaseSectionView)
+
+    async def test_choosing_a_collection_from_the_picker_shows_its_settings(self) -> None:
+        self._seed_completed_setup()
+        first_id = self._create_database("Movie Night")
+        self._create_database("TV Night")
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.REJECTION_SETTINGS, edit=False)
+        picker_view = interaction.response.sent_view
+        select = picker_view.children[0]
+        select._values = [str(first_id)]
+
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+
+        self.assertIsInstance(select_interaction.response.edited_view, ConfigRejectionSettingsView)
+
+    async def test_enabling_saves_the_threshold_for_only_the_chosen_collection(self) -> None:
+        self._seed_completed_setup()
+        target_id = self._create_database("Movie Night")
+        other_id = self._create_database("TV Night")
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.REJECTION_SETTINGS, edit=False)
+        picker_view = interaction.response.sent_view
+        select = picker_view.children[0]
+        select._values = [str(target_id)]
+        select_interaction = FakeInteraction()
+        await select.callback(interaction=select_interaction)
+        settings_view = select_interaction.response.edited_view
+        enable_button = next(c for c in settings_view.children if getattr(c, "label", None) == "Enable")
+
+        enable_interaction = FakeInteraction()
+        await enable_button.callback(interaction=enable_interaction)
+        modal = enable_interaction.response.sent_modal
+        modal.threshold_input._value = "5"
+
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        target_configuration = self.bot.config_service.get_database_configuration(GUILD_ID, target_id)
+        other_configuration = self.bot.config_service.get_database_configuration(GUILD_ID, other_id)
+        self.assertTrue(target_configuration.suggestion_rules.rejection_enabled)
+        self.assertEqual(target_configuration.suggestion_rules.rejection_threshold, 5)
+        # Do not silently apply a collection-specific setting to every
+        # collection: the other collection keeps its own default.
+        self.assertEqual(other_configuration.suggestion_rules.rejection_threshold, 2)
+
+    async def test_enabling_with_an_out_of_range_threshold_shows_an_error(self) -> None:
+        self._seed_completed_setup()
+        self._create_database("Movie Night")
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.REJECTION_SETTINGS, edit=False)
+        settings_view = interaction.response.sent_view
+        enable_button = next(c for c in settings_view.children if getattr(c, "label", None) == "Enable")
+
+        enable_interaction = FakeInteraction()
+        await enable_button.callback(interaction=enable_interaction)
+        modal = enable_interaction.response.sent_modal
+        modal.threshold_input._value = "11"
+
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        self.assertIn("⚠", submit_interaction.response.edited_content)
+
+    async def test_disabling_persists_disabled_and_keeps_the_previous_threshold(self) -> None:
+        self._seed_completed_setup()
+        database_id = self._create_database("Movie Night")
+        interaction = FakeInteraction()
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.REJECTION_SETTINGS, edit=False)
+        settings_view = interaction.response.sent_view
+        enable_button = next(c for c in settings_view.children if getattr(c, "label", None) == "Enable")
+        enable_interaction = FakeInteraction()
+        await enable_button.callback(interaction=enable_interaction)
+        modal = enable_interaction.response.sent_modal
+        modal.threshold_input._value = "7"
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        from watch_party_manager.bot import send_config_rejection_settings_screen
+
+        screen_interaction = FakeInteraction()
+        await send_config_rejection_settings_screen(
+            screen_interaction, self.bot, GUILD_ID, self.on_back, database_id=database_id, edit=False
+        )
+        settings_view = screen_interaction.response.sent_view
+        disable_button = next(c for c in settings_view.children if getattr(c, "label", None) == "Disable")
+
+        disable_interaction = FakeInteraction()
+        await disable_button.callback(interaction=disable_interaction)
+
+        configuration = self.bot.config_service.get_database_configuration(GUILD_ID, database_id)
+        self.assertFalse(configuration.suggestion_rules.rejection_enabled)
+        # Re-enabling later should pre-fill the same threshold, not reset
+        # to the documented default.
+        self.assertEqual(configuration.suggestion_rules.rejection_threshold, 7)
+
+    async def test_main_menu_summary_line_reflects_the_single_collections_setting(self) -> None:
+        self._seed_completed_setup()
+        self._create_database("Movie Night")
+        interaction = FakeInteraction()
+
+        await send_config_main_menu(interaction, self.bot, GUILD_ID, edit=False)
+
+        self.assertIn("\"I Won't Watch\" Settings: Configured (Enabled, threshold 2)", interaction.response.sent_message)
 
 
 class SendConfigResultTests(ConfigCommandTestCase):

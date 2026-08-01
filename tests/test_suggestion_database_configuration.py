@@ -246,9 +246,14 @@ class SuggestionRulesConfigTests(unittest.TestCase):
         self.assertTrue(rules.allow_imdb_links)
         self.assertTrue(rules.allow_manual_titles)
         self.assertTrue(rules.require_unique_active_titles)
+        self.assertTrue(rules.rejection_enabled)
         self.assertEqual(rules.rejection_threshold, 2)
         self.assertTrue(rules.allow_resuggestion)
         self.assertEqual(rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+
+    def test_rejection_enabled_can_be_turned_off(self) -> None:
+        rules = SuggestionRulesConfig(rejection_enabled=False)
+        self.assertFalse(rules.rejection_enabled)
 
     def test_requires_at_least_one_input_method(self) -> None:
         with self.assertRaises(ValueError):

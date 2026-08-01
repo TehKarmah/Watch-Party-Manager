@@ -53,6 +53,8 @@ class SetupWizardRepositoryTests(unittest.TestCase):
             voting_duration_minutes=10,
             voting_visibility=GuildVoteVisibility.VISIBLE,
             voting_candidate_selection=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
+            rejection_enabled=False,
+            rejection_threshold=6,
             reminder_enabled=True,
             reminder_minutes_before_close=48 * 60,
             backup_interval_days=2,
@@ -83,6 +85,8 @@ class SetupWizardRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.draft.voting_duration_minutes, 10)
         self.assertEqual(loaded.draft.voting_visibility, GuildVoteVisibility.VISIBLE)
         self.assertEqual(loaded.draft.voting_candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
+        self.assertFalse(loaded.draft.rejection_enabled)
+        self.assertEqual(loaded.draft.rejection_threshold, 6)
         self.assertTrue(loaded.draft.reminder_enabled)
         self.assertEqual(loaded.draft.reminder_minutes_before_close, 48 * 60)
         self.assertEqual(loaded.draft.backup_interval_days, 2)

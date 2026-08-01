@@ -198,6 +198,8 @@ class SuggestionView(discord.ui.View):
         threshold: int,
         on_toggle: OnToggleRejectionCallback,
         on_watched: OnWatchedClickCallback,
+        *,
+        rejection_enabled: bool = True,
     ) -> None:
         """Initialize the view for one suggestion.
 
@@ -210,6 +212,11 @@ class SuggestionView(discord.ui.View):
                 Watch" threshold.
             on_toggle: Passed through to the reject button.
             on_watched: Passed through to the Mark as Watched button.
+            rejection_enabled: The suggestion database's configured "I
+                Won't Watch" enabled flag. False omits the reject button
+                entirely (its own dedicated Setup Wizard step/config
+                section) -- no rejection tracking happens while disabled,
+                so there is nothing for the button to do.
         """
         if watch_item.id is None or watch_item.id <= 0:
             raise ValueError("SuggestionView requires a suggestion with a positive ID.")
@@ -219,17 +226,18 @@ class SuggestionView(discord.ui.View):
         archived = watch_item.status == WatchItemStatus.ARCHIVED
         watched = watch_item.status == WatchItemStatus.WATCHED
         pending_review = watch_item.status == WatchItemStatus.PENDING_CREW_REVIEW
-        self.add_item(
-            RejectSuggestionButton(
-                watch_item.id,
-                rejection_count,
-                threshold,
-                archived=archived,
-                watched=watched,
-                pending_review=pending_review,
-                on_toggle=on_toggle,
+        if rejection_enabled:
+            self.add_item(
+                RejectSuggestionButton(
+                    watch_item.id,
+                    rejection_count,
+                    threshold,
+                    archived=archived,
+                    watched=watched,
+                    pending_review=pending_review,
+                    on_toggle=on_toggle,
+                )
             )
-        )
         self.add_item(WatchedSuggestionButton(watch_item.id, watched=watched, on_click=on_watched))
 
 

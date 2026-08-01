@@ -71,6 +71,36 @@ class SuggestionViewTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(view.children), 2)
 
+    async def test_reject_button_is_omitted_when_rejection_is_disabled(self) -> None:
+        # "I Won't Watch" Settings: while disabled for a collection, the
+        # suggestion post must not display the button at all -- omitted
+        # entirely, not just disabled, so no tracking interaction exists.
+        watch_item = make_watch_item()
+
+        view = SuggestionView(
+            watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop, rejection_enabled=False
+        )
+
+        self.assertEqual(len(view.children), 1)
+        self.assertIsInstance(view.children[0], WatchedSuggestionButton)
+
+    async def test_reject_button_is_present_when_rejection_is_enabled(self) -> None:
+        watch_item = make_watch_item()
+
+        view = SuggestionView(
+            watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop, rejection_enabled=True
+        )
+
+        self.assertEqual(len(view.children), 2)
+        self.assertIsInstance(view.children[0], RejectSuggestionButton)
+
+    async def test_reject_button_is_present_by_default(self) -> None:
+        watch_item = make_watch_item()
+
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
+
+        self.assertEqual(len(view.children), 2)
+
     async def test_button_custom_id_encodes_the_suggestion_id(self) -> None:
         watch_item = make_watch_item(id=42)
 

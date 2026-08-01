@@ -172,11 +172,20 @@ class SuggestionRulesConfig:
 
     A new suggestion becomes eligible for nomination immediately upon
     creation -- there is no admission delay or mode to configure.
+
+    rejection_enabled/rejection_threshold together configure "I Won't
+    Watch" (own dedicated Setup Wizard step and /config section, both
+    separate from Voting Defaults): while disabled, suggestion posts omit
+    the button entirely and no new rejection is ever recorded, but
+    already-recorded rejection history is preserved untouched and is
+    never re-evaluated against the threshold on re-enable -- re-enabling
+    only resumes accepting new rejections going forward.
     """
 
     allow_imdb_links: bool = True
     allow_manual_titles: bool = True
     require_unique_active_titles: bool = True
+    rejection_enabled: bool = True
     rejection_threshold: int = 2
     allow_resuggestion: bool = True
     candidate_selection: CandidateSelectionMode = CandidateSelectionMode.FAVOR_NEW_ADDITIONS

@@ -326,6 +326,7 @@ class PersistentSuggestionViewsTests(unittest.IsolatedAsyncioTestCase):
 
         class FakeConfig:
             class suggestion_rules:
+                rejection_enabled = True
                 rejection_threshold = 5
 
         class FakeConfigRepository:

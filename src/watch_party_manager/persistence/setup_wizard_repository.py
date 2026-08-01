@@ -131,6 +131,8 @@ class SetupWizardRepository:
                 "voting_candidate_selection": (
                     draft.voting_candidate_selection.value if draft.voting_candidate_selection else None
                 ),
+                "rejection_enabled": draft.rejection_enabled,
+                "rejection_threshold": draft.rejection_threshold,
                 "reminder_enabled": draft.reminder_enabled,
                 "reminder_minutes_before_close": draft.reminder_minutes_before_close,
                 "backup_enabled": draft.backup_enabled,
@@ -164,6 +166,8 @@ class SetupWizardRepository:
             voting_candidate_selection=(
                 CandidateSelectionMode(candidate_selection_raw) if candidate_selection_raw else None
             ),
+            rejection_enabled=draft_entry.get("rejection_enabled"),
+            rejection_threshold=draft_entry.get("rejection_threshold"),
             reminder_enabled=draft_entry.get("reminder_enabled"),
             reminder_minutes_before_close=draft_entry.get("reminder_minutes_before_close"),
             backup_enabled=draft_entry.get("backup_enabled"),

@@ -360,6 +360,30 @@ class VoteCommandTests(unittest.TestCase):
 
         self.assertIn("Vote changes allowed:", message)
 
+    def test_vote_status_shows_active_filters_when_the_round_tracked_them(self) -> None:
+        from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+
+        self.vote_service.create_round(
+            visibility=VoteVisibility.VISIBLE,
+            candidate_selection_mode=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
+            filter_member_discord_user_id=111,
+            filter_genre="Horror",
+        )
+
+        message = perform_vote_status(self.vote_service, self.suggestion_service)
+
+        self.assertIn("Nominee Selection: Favor Older Additions", message)
+        self.assertIn("Suggestion Source: <@111>", message)
+        self.assertIn("Genre: Horror", message)
+
+    def test_vote_status_omits_inactive_filters(self) -> None:
+        self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
+
+        message = perform_vote_status(self.vote_service, self.suggestion_service)
+
+        self.assertNotIn("Suggestion Source:", message)
+        self.assertNotIn("Genre:", message)
+
     def test_vote_status_handles_a_standings_service_failure(self) -> None:
         self.vote_service.create_round(visibility=VoteVisibility.VISIBLE)
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=1)

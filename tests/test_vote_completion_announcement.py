@@ -317,6 +317,33 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
         self.assertEqual(lines[0], "**🎬 Movie Suggestions Voting — Results**")
         self.assertEqual(lines[1], "Round: 1")
 
+    # --- Custom Vote Summary & Announcement: active filters ------------------------------
+
+    def test_includes_active_filters_when_the_round_tracked_them(self) -> None:
+        from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+
+        winner = make_watch_item("The Matrix", id=1)
+        vote_round = VoteRound(
+            id=1,
+            status=VoteRoundStatus.CLOSED,
+            candidate_selection_mode=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
+            filter_member_discord_user_id=555,
+            filter_genre="Comedy",
+        )
+        text = build_vote_completion_announcement(vote_round, self._candidates(), [winner], [], 1)
+
+        self.assertIn("Nominee Selection: Favor Older Additions", text)
+        self.assertIn("Suggestion Source: <@555>", text)
+        self.assertIn("Genre: Comedy", text)
+
+    def test_omits_inactive_filters_and_untracked_mode(self) -> None:
+        winner = make_watch_item("The Matrix", id=1)
+        text = build_vote_completion_announcement(make_round(), self._candidates(), [winner], [], 1)
+
+        self.assertNotIn("Nominee Selection:", text)
+        self.assertNotIn("Suggestion Source:", text)
+        self.assertNotIn("Genre:", text)
+
     # --- Suggested by -------------------------------------------------------------------
 
     def test_shows_who_suggested_the_winner(self) -> None:
@@ -427,6 +454,53 @@ class BuildClosedVotingPostTextTests(unittest.TestCase):
         )
 
         self.assertIn("https://discord.com/channels/1/2/999", text)
+
+    def test_includes_active_filters_when_the_round_tracked_them(self) -> None:
+        winner = make_watch_item("The Matrix", id=1)
+        vote_round = VoteRound(id=1, status=VoteRoundStatus.CLOSED, filter_genre="Horror")
+        text = build_closed_voting_post_text(vote_round, self._candidates(), [winner], [], 1)
+
+        self.assertIn("Genre: Horror", text)
+
+
+class BuildActiveFilterLinesTests(unittest.TestCase):
+    """Custom Vote Summary & Announcement: the shared active-filter lines
+    /vote_status, the voting-opened post, and the completion announcement
+    all reuse (see bot.py's build_vote_status_text/build_voting_post_embed).
+    """
+
+    def test_empty_when_nothing_is_tracked(self) -> None:
+        from watch_party_manager.services.vote_announcement_formatter import build_active_filter_lines
+
+        self.assertEqual(build_active_filter_lines(make_round()), [])
+
+    def test_shows_only_the_active_fields_omitting_any_member_and_any_genre(self) -> None:
+        from watch_party_manager.services.vote_announcement_formatter import build_active_filter_lines
+
+        vote_round = VoteRound(id=1, filter_member_discord_user_id=555)
+        self.assertEqual(build_active_filter_lines(vote_round), ["Suggestion Source: <@555>"])
+
+    def test_shows_nominee_selection_mode_when_tracked(self) -> None:
+        from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+        from watch_party_manager.services.vote_announcement_formatter import build_active_filter_lines
+
+        vote_round = VoteRound(id=1, candidate_selection_mode=CandidateSelectionMode.INFINITE_POOL)
+        self.assertEqual(build_active_filter_lines(vote_round), ["Nominee Selection: Pure Random"])
+
+    def test_order_is_mode_then_member_then_genre(self) -> None:
+        from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+        from watch_party_manager.services.vote_announcement_formatter import build_active_filter_lines
+
+        vote_round = VoteRound(
+            id=1,
+            candidate_selection_mode=CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
+            filter_member_discord_user_id=555,
+            filter_genre="Comedy",
+        )
+        self.assertEqual(
+            build_active_filter_lines(vote_round),
+            ["Nominee Selection: Favor New Additions", "Suggestion Source: <@555>", "Genre: Comedy"],
+        )
 
 
 class BuildWinnerDetailEmbedTests(unittest.TestCase):

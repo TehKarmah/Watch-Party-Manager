@@ -156,8 +156,9 @@ class WizardFlowTests(SetupWizardServiceTestCase):
         state, _ = self.service.create_new_database(state, "Movies", DESTINATION_CHANNEL_ID, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_NEW_ADDITIONS, 2
+            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_NEW_ADDITIONS
         )
+        state = self.service.enable_rejection_settings(state, 2)
         state = self.service.enable_vote_ending_reminder(state, 48)
         state = self.service.enable_automatic_backups(state, 2, 15)
         self.assertEqual(state.current_step, SetupWizardStep.REVIEW)
@@ -281,8 +282,9 @@ class ReturnToStepServiceTests(SetupWizardServiceTestCase):
         state = self.service.set_admin_channel(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 3
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
+        state = self.service.enable_rejection_settings(state, 3)
         state = self.service.go_to_step(state, SetupWizardStep.REVIEW)
 
         jumped_back = self.service.go_to_step(
@@ -498,8 +500,9 @@ class AdminChannelStepTests(SetupWizardServiceTestCase):
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
+        state = self.service.enable_rejection_settings(state, 2)
         state = self.service.enable_vote_ending_reminder(state, 24)
         state = self.service.enable_automatic_backups(state, 1, 30)
 
@@ -602,17 +605,40 @@ class VotingDefaultsStepTests(SetupWizardServiceTestCase):
     def test_defaults_are_saved_and_restored(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
         updated = self.service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 4
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
         self.assertEqual(updated.draft.voting_candidate_count, 5)
         self.assertEqual(updated.draft.voting_duration_minutes, 14)
         self.assertEqual(updated.draft.voting_visibility, GuildVoteVisibility.BLIND)
         self.assertEqual(updated.draft.voting_candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
+        # "I Won't Watch" moved to its own dedicated step, immediately
+        # after Voting Defaults -- see RejectionSettingsStepTests.
+        self.assertEqual(updated.current_step, SetupWizardStep.REJECTION_SETTINGS)
+
+        reloaded = self.wizard_repository.get(GUILD_ID)
+        self.assertEqual(reloaded.draft.voting_candidate_count, 5)
+
+
+class RejectionSettingsStepTests(SetupWizardServiceTestCase):
+    def test_enabling_saves_the_threshold_and_advances_to_reminder_defaults(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        updated = self.service.enable_rejection_settings(state, 4)
+        self.assertTrue(updated.draft.rejection_enabled)
         self.assertEqual(updated.draft.rejection_threshold, 4)
         self.assertEqual(updated.current_step, SetupWizardStep.REMINDER_DEFAULTS)
 
         reloaded = self.wizard_repository.get(GUILD_ID)
-        self.assertEqual(reloaded.draft.voting_candidate_count, 5)
+        self.assertEqual(reloaded.draft.rejection_threshold, 4)
+
+    def test_disabling_clears_the_threshold_and_advances_to_reminder_defaults(self):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.enable_rejection_settings(state, 4)
+
+        updated = self.service.disable_rejection_settings(state)
+
+        self.assertFalse(updated.draft.rejection_enabled)
+        self.assertIsNone(updated.draft.rejection_threshold)
+        self.assertEqual(updated.current_step, SetupWizardStep.REMINDER_DEFAULTS)
 
 
 class ReminderDefaultsStepTests(SetupWizardServiceTestCase):
@@ -726,8 +752,9 @@ class CompletionTests(SetupWizardServiceTestCase):
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_NEW_ADDITIONS, 2
+            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_NEW_ADDITIONS
         )
+        state = self.service.enable_rejection_settings(state, 2)
         state = self.service.enable_vote_ending_reminder(state, 24)
         state = self.service.enable_automatic_backups(state, 1, 30)
         return state
@@ -807,8 +834,9 @@ class FinalizePersistenceFailureTests(SetupWizardServiceTestCase):
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
+            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
         )
+        state = self.service.enable_rejection_settings(state, 2)
         state = self.service.enable_vote_ending_reminder(state, 24)
         state = self.service.enable_automatic_backups(state, 1, 30)
         return state, database

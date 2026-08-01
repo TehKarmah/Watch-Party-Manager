@@ -398,6 +398,7 @@ class RejectionCommandTests(unittest.TestCase):
 
         class FakeConfig:
             class suggestion_rules:
+                rejection_enabled = True
                 rejection_threshold = 1
 
         class FakeConfigRepository:
@@ -417,6 +418,41 @@ class RejectionCommandTests(unittest.TestCase):
         self.assertEqual(
             self.suggestion_service.get_suggestion(inception.id).status.value, "pending_crew_review"
         )
+
+    def test_reject_is_blocked_when_rejection_is_disabled_for_the_collection(self) -> None:
+        # "I Won't Watch" Settings: disabled means no rejection tracking
+        # occurs at all -- /reject must refuse rather than silently
+        # recording it, matching the button's own omission from the post.
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        inception = self.suggestion_service.suggest(
+            "Inception", database_id=created.database.database_id
+        ).watch_item
+
+        class FakeConfig:
+            class suggestion_rules:
+                rejection_enabled = False
+                rejection_threshold = 2
+
+        class FakeConfigRepository:
+            def get(self, guild_id, database_id):
+                return FakeConfig()
+
+        message, ephemeral, watch_item = perform_reject_suggestion(
+            self.suggestion_service,
+            FakeConfigRepository(),
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            inception.id,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("disabled", message)
+        self.assertIsNone(watch_item)
+        journey = self.suggestion_service.get_suggestion(inception.id).journey
+        self.assertEqual(journey.rejected_by_discord_user_ids, ())
 
     def test_reject_falls_back_to_default_threshold_when_unconfigured(self) -> None:
         message, ephemeral, _ = perform_reject_suggestion(
@@ -617,6 +653,7 @@ class SuggestionRejectionToggleTests(unittest.TestCase):
 
         class FakeConfig:
             class suggestion_rules:
+                rejection_enabled = True
                 rejection_threshold = 1
 
         class FakeConfigRepository:
@@ -632,6 +669,97 @@ class SuggestionRejectionToggleTests(unittest.TestCase):
             inception.id,
         )
 
+        self.assertIn("pending WASH Crew review", message)
+        self.assertEqual(watch_item.status, WatchItemStatus.PENDING_CREW_REVIEW)
+
+    def test_new_rejection_is_blocked_when_rejection_is_disabled_for_the_collection(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        inception = self.suggestion_service.suggest(
+            "Inception", database_id=created.database.database_id
+        ).watch_item
+
+        class FakeConfig:
+            class suggestion_rules:
+                rejection_enabled = False
+                rejection_threshold = 2
+
+        class FakeConfigRepository:
+            def get(self, guild_id, database_id):
+                return FakeConfig()
+
+        message, ephemeral, watch_item = perform_toggle_suggestion_rejection(
+            self.suggestion_service,
+            FakeConfigRepository(),
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            inception.id,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("disabled", message)
+        self.assertIsNone(watch_item)
+        self.assertEqual(
+            self.suggestion_service.get_suggestion(inception.id).journey.rejected_by_discord_user_ids, ()
+        )
+
+    def test_re_enabling_never_retroactively_triggers_pending_review(self) -> None:
+        # "Re-enabling should start fresh": a rejection recorded while
+        # enabled, followed by disabling and re-enabling with no new
+        # rejection in between, must never retroactively push the
+        # suggestion into Pending Crew Review just because the config
+        # flag flipped back to enabled -- toggling the flag itself never
+        # re-evaluates the existing (still below-threshold) count. Only
+        # an actual new rejection can ever cross the threshold.
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        inception = self.suggestion_service.suggest(
+            "Inception", database_id=created.database.database_id
+        ).watch_item
+
+        class EnabledConfig:
+            class suggestion_rules:
+                rejection_enabled = True
+                rejection_threshold = 2
+
+        class EnabledConfigRepository:
+            def get(self, guild_id, database_id):
+                return EnabledConfig()
+
+        # One rejection recorded while enabled -- below the threshold of 2.
+        perform_toggle_suggestion_rejection(
+            self.suggestion_service,
+            EnabledConfigRepository(),
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            inception.id,
+        )
+        self.assertEqual(
+            self.suggestion_service.get_suggestion(inception.id).status, WatchItemStatus.SUGGESTED
+        )
+
+        # Simulate disable-then-re-enable: no code path re-checks the
+        # existing count merely from resolving "enabled" again, so the
+        # suggestion must still be untouched at this point.
+        reloaded = self.suggestion_service.get_suggestion(inception.id)
+        self.assertEqual(reloaded.status, WatchItemStatus.SUGGESTED)
+        self.assertEqual(reloaded.journey.rejected_by_discord_user_ids, (1,))
+
+        # Once re-enabled, a genuinely new rejection still correctly
+        # crosses the threshold -- disabling never silently exempts the
+        # suggestion from ever reaching Pending Crew Review again.
+        message, ephemeral, watch_item = perform_toggle_suggestion_rejection(
+            self.suggestion_service,
+            EnabledConfigRepository(),
+            self.permission_service,
+            self._watch_party_member(2),
+            GUILD_ID,
+            inception.id,
+        )
         self.assertIn("pending WASH Crew review", message)
         self.assertEqual(watch_item.status, WatchItemStatus.PENDING_CREW_REVIEW)
 
@@ -724,6 +852,7 @@ class HandleSuggestionRejectionToggleTests(unittest.IsolatedAsyncioTestCase):
 
         class FakeConfig:
             class suggestion_rules:
+                rejection_enabled = True
                 rejection_threshold = 1
 
         class FakeConfigRepository:
@@ -809,6 +938,7 @@ class BuildSuggestionViewTests(unittest.TestCase):
 
         class FakeConfig:
             class suggestion_rules:
+                rejection_enabled = True
                 rejection_threshold = 5
 
         class FakeConfigRepository:
@@ -818,6 +948,28 @@ class BuildSuggestionViewTests(unittest.TestCase):
         view = build_suggestion_view(self.suggestion_service, FakeConfigRepository(), inception, GUILD_ID)
 
         self.assertEqual(view.children[0].label, "I WON'T WATCH: 0 / 5")
+
+    def test_omits_the_reject_button_when_rejection_is_disabled_for_the_collection(self) -> None:
+        created = self.suggestion_service.create_database(
+            "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
+        )
+        inception = self.suggestion_service.suggest(
+            "Inception", database_id=created.database.database_id
+        ).watch_item
+
+        class FakeConfig:
+            class suggestion_rules:
+                rejection_enabled = False
+                rejection_threshold = 2
+
+        class FakeConfigRepository:
+            def get(self, guild_id, database_id):
+                return FakeConfig()
+
+        view = build_suggestion_view(self.suggestion_service, FakeConfigRepository(), inception, GUILD_ID)
+
+        self.assertEqual(len(view.children), 1)
+        self.assertNotIn("I WON'T WATCH", getattr(view.children[0], "label", ""))
 
 
 class RejectionConfirmationLinkTests(unittest.TestCase):

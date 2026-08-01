@@ -27,11 +27,12 @@ The current command list and short descriptions remain available through `/help`
 - `/list`
 - `/remove`
 - `/edit_suggestion`
+- `/reject` / `/unreject` -- Command-line equivalents of a suggestion post's "I Won't Watch" button (see [Administration](05-Administration.md#rejecting-suggestions-i-wont-watch)). Configured per collection, with its own dedicated Setup Wizard step and `/config` section; it can also be disabled entirely.
 
 ### Voting
 
-- `/vote start`
-- `/vote status`
+- `/vote start` -- Use Defaults, or Customize This Vote (Nominee Selection, Vote Visibility, candidate count, duration, and optional per-vote filters -- narrow nominees to one member's suggestions and/or one genre; see [Administration](05-Administration.md#custom-vote-filters)).
+- `/vote status` -- Shows the round's settings and, when active, its filters (Suggestion Source, Genre).
 - `/vote edit`
 
 Casting a vote itself happens through the interactive buttons on the voting post, not a slash command.
@@ -68,6 +69,7 @@ The complete definitions are maintained in [Terminology & Concepts](98-Glossary.
 - Journey
 - Eligible Pool
 - Voting Round
+- "I Won't Watch"
 
 ## Planned Expansion
 

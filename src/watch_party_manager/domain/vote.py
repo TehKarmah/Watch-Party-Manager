@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, Optional
 
+from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+
 # A member may use at most this many vote changes per round.
 MAX_VOTE_CHANGES = 1
 
@@ -122,6 +124,9 @@ class VoteRound:
     reminder_enabled: Optional[bool] = None
     reminder_minutes_before_close: Optional[int] = None
     reminder_sent_at: Optional[datetime] = None
+    candidate_selection_mode: Optional[CandidateSelectionMode] = None
+    filter_member_discord_user_id: Optional[int] = None
+    filter_genre: Optional[str] = None
 
     def __post_init__(self) -> None:
         self._validate_id()
@@ -135,6 +140,8 @@ class VoteRound:
         self._validate_candidate_suggestion_ids()
         self._validate_reminder_minutes_before_close()
         self._validate_reminder_sent_at()
+        self._validate_filter_member_discord_user_id()
+        self._validate_filter_genre()
 
     def _validate_id(self) -> None:
         if self.id <= 0:
@@ -193,3 +200,18 @@ class VoteRound:
     def _validate_reminder_sent_at(self) -> None:
         if self.reminder_sent_at is not None and self.reminder_sent_at.tzinfo is None:
             raise ValueError("reminder_sent_at must be timezone-aware when provided")
+
+    def _validate_filter_member_discord_user_id(self) -> None:
+        if self.filter_member_discord_user_id is not None and self.filter_member_discord_user_id <= 0:
+            raise ValueError("filter_member_discord_user_id must be a positive integer when provided")
+
+    def _validate_filter_genre(self) -> None:
+        # Trimmed here (rather than rejected) so a caller never has to
+        # pre-normalize a genre string pulled directly from a Discord
+        # select option value -- mirrors how display_name is trimmed
+        # elsewhere in this codebase rather than validated strictly.
+        if self.filter_genre is not None:
+            trimmed = self.filter_genre.strip()
+            if not trimmed:
+                raise ValueError("filter_genre must not be empty when provided")
+            self.filter_genre = trimmed

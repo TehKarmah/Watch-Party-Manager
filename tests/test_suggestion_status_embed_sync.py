@@ -599,6 +599,7 @@ class SuggestionRejectionThresholdEmbedSyncTests(unittest.IsolatedAsyncioTestCas
     class FakeConfigRepository:
         class _Config:
             class suggestion_rules:
+                rejection_enabled = True
                 rejection_threshold = 1
 
         def get(self, guild_id, database_id):

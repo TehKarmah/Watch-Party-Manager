@@ -464,14 +464,28 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 3.3a `/config`'s main menu explains Visible/Blind
+### 3.3a `/config`'s main menu is a clean numbered list with no descriptions
 
-- **Objective:** Confirm the Voting Defaults entry in `/config`'s main menu dropdown explains visibility, since its modal opens directly with no intro screen to show the fuller explanation on.
+- **Objective:** Confirm the main `/config` dropdown shows only numbered section names -- explanatory text (e.g. Visible/Blind) has moved to each section's own screen.
 - **Preconditions:** Setup completed.
 - **Steps:**
   1. Run `/config`; open the section dropdown without selecting anything yet.
-  2. Find the **Voting Defaults** entry and read its description text.
-- **Expected Result:** The description reads "Visible: totals shown live. Blind: hidden until voting closes." (or equivalent); no other menu entry shows this description.
+  2. Inspect every entry's description text.
+  3. Open **Voting Defaults** and confirm the Visible/Blind explanation ("Visible: totals shown live. Blind: hidden until voting closes." or equivalent) appears on that screen instead.
+- **Expected Result:** No main-menu entry (including Voting Defaults) shows description text; the Visible/Blind explanation is present on the Voting Defaults screen itself.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 3.3c `/config` Voting Defaults exposes Nominee Selection, scoped correctly
+
+- **Objective:** Confirm `/config`'s Voting Defaults screen mirrors the Setup Wizard by also exposing Nominee Selection, resolved/scoped per collection, and never applied to the wrong collection.
+- **Preconditions:** Setup completed; at least two collections exist.
+- **Steps:**
+  1. With only one collection in the server, run `/config` -> **Voting Defaults**; confirm the screen shows that collection's current Nominee Selection preselected in a dropdown, alongside Vote Visibility, with no separate collection-choice step.
+  2. Create a second collection. Run `/config` -> **Voting Defaults** again; confirm WASH now first asks which collection's Nominee Selection to edit, with each option's description naming its current mode.
+  3. Choose collection A, change its Nominee Selection to a different mode, and submit the modal (candidate count/duration) alongside it.
+  4. Re-run `/config` -> **Voting Defaults** and check collection B's Nominee Selection (via the picker, or `/config` -> Collections).
+- **Expected Result:** Collection A's Nominee Selection changed to the new mode; collection B's Nominee Selection is unchanged; the guild-wide candidate count/duration/visibility submitted in the same step apply regardless of which collection was chosen.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -751,7 +765,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 ### 4.10 Suggestion rejection ("I Won't Watch") and Crew Review
 
 - **Objective:** Confirm the configurable "I Won't Watch" threshold, the New Review Workflow (Pending Crew Review, Admin Channel notification, Retire/Keep Active/Reset Rejections), `/reject`, `/unreject`, and `/reject`'s Undo Rejection button.
-- **Preconditions:** A suggestion with its public confirmation post visible; the collection's "I Won't Watch" threshold set to 2 (`/config` -> Collections -> [Collection] -> Rejection Settings); an Admin Channel configured.
+- **Preconditions:** A suggestion with its public confirmation post visible; the collection's "I Won't Watch" enabled with its threshold set to 2 (`/config` -> "I Won't Watch" Settings -> [Collection]); an Admin Channel configured.
 - **Steps:**
   1. Click **I Won't Watch** on the confirmation post as one member; confirm the count updates (e.g. "I WON'T WATCH: 1 / 2") and the button state changes.
   2. Click it again as the same member; confirm the rejection is removed (toggle, not additive).
@@ -769,17 +783,40 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.10a "I Won't Watch" threshold configuration
+### 4.10a "I Won't Watch" Settings: dedicated Setup Wizard step and `/config` section
 
-- **Objective:** Confirm the per-collection "I Won't Watch" threshold is configurable during Setup and via `/config`, persists correctly, and defaults to 2 for existing collections.
-- **Preconditions:** WASH Crew role.
+- **Objective:** Confirm "I Won't Watch" has its own dedicated Setup Wizard step (immediately after Voting Defaults) and its own numbered `/config` section, separate from Voting Defaults; confirm Enable/Disable plus threshold (1-10, default 2) are configurable in both, persist correctly, are scoped per collection, and existing collections default to enabled with threshold 2.
+- **Preconditions:** WASH Crew role; a server with more than one collection for the multi-collection steps.
 - **Steps:**
-  1. During `/setup`'s Voting Defaults step, confirm the modal includes an "I Won't Watch threshold (1-10)" field alongside candidate count and duration, prefilled with 2 by default.
-  2. Enter a value outside 1-10 (e.g. 0 or 11); confirm a clear validation error and no state change.
-  3. Enter a valid value (e.g. 5) and complete setup; confirm the Review screen and completion summary both show it, and `/config` -> Collections -> [Collection] shows "I Won't Watch Threshold: 5".
-  4. Go to `/config` -> Collections -> [Collection] -> Rejection Settings; confirm the current threshold is prefilled, change it to a different valid value (e.g. 3), and confirm the confirmation message and the collection's settings menu both reflect the update.
-  5. For a collection created before this feature existed (or with no explicit override saved), confirm its threshold reads as 2 (the documented default) rather than an error or blank value.
-- **Expected Result:** The threshold is configurable in both Setup and `/config`, is validated to 1-10, is stored per collection (never affecting other collections), and existing collections default to 2 without any migration step.
+  1. Run `/setup`; confirm the Voting Defaults step's modal only has candidate count and vote duration fields (no threshold field), and confirm the very next step is titled "I Won't Watch" Settings with **Enable "I Won't Watch" (Recommended)** and **Disable "I Won't Watch"** buttons -- not a free-text field.
+  2. Click Enable; confirm a modal opens with only a "Threshold (1-10)" field, prefilled with 2.
+  3. Enter a value outside 1-10 (e.g. 0 or 11); confirm a clear validation error and the same Enable/Disable choice is shown again.
+  4. Enter a valid value (e.g. 5) and complete setup; confirm the Review screen and completion summary both show "I Won't Watch: Enabled, threshold: 5" as its own line, separate from the Voting Defaults line.
+  5. Restart `/setup` for a second, fresh collection and click Disable instead; confirm no modal opens and the wizard advances directly to Reminder Defaults; confirm the completion summary shows "I Won't Watch: Disabled".
+  6. Open `/config`; confirm the main numbered menu lists "I Won't Watch" Settings as its own section, positioned immediately after Voting Defaults, with no description text next to it.
+  7. With only one collection in the server, open the "I Won't Watch" Settings section; confirm it edits that collection directly (no collection picker) and shows its current Enabled/threshold or Disabled status.
+  8. With more than one collection, open the "I Won't Watch" Settings section; confirm it first asks which collection to edit, each option showing that collection's current status, before showing the Enable/Disable screen.
+  9. Change one collection's setting (e.g. disable it, or change its threshold to 3) and confirm only that collection changes -- a second collection's own setting is untouched.
+  10. Disable a collection that had threshold 7 configured, then re-enable it without entering a new value's worth of attention (skip straight to checking the prefill); confirm the threshold modal pre-fills 7, not the documented default of 2.
+  11. Open `/config` -> Collections -> [Collection] -> its per-collection settings menu; confirm it shows "I Won't Watch: Enabled (threshold N)" or "Disabled" for reference, but no longer offers a "Rejection Settings" item to edit it from there (editing only happens from the dedicated section).
+  12. For a collection created before this feature existed (or with no explicit override saved), confirm its status reads as Enabled with threshold 2 (the documented defaults) rather than an error or blank value.
+- **Expected Result:** "I Won't Watch" Settings is fully separate from Voting Defaults in both Setup and `/config`; Enable/Disable is a button choice, never a free-text field; the threshold is only ever asked for when enabling; both settings are per-collection, validated to 1-10, and disabling never discards a previously configured threshold; existing collections default to enabled with threshold 2 without any migration step.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 4.10b "I Won't Watch" disabled behavior
+
+- **Objective:** Confirm disabling "I Won't Watch" for a collection hides the button, blocks new rejection tracking, preserves existing rejection history, and that re-enabling never retroactively triggers Pending Crew Review.
+- **Preconditions:** WASH Crew role; a collection with "I Won't Watch" enabled, threshold 2; a suggestion in it with one existing rejection (below the threshold).
+- **Steps:**
+  1. Disable "I Won't Watch" for the collection via `/config`.
+  2. Post a new suggestion in that collection; confirm its public post has no **I Won't Watch** button at all (only Mark as Watched), not merely a disabled one.
+  3. Attempt `/reject suggestion_id:<id>` against any suggestion in that collection; confirm it's refused with a clear "disabled" message and no state change.
+  4. Check the suggestion with the pre-existing rejection from the precondition; confirm its recorded rejection is still present (`/list` or `/edit_suggestion` reference) and its status has not changed -- disabling never discards rejection history and never retroactively re-evaluates it against the threshold.
+  5. Re-enable "I Won't Watch" for the collection; confirm the suggestion from step 4 is still Available (not Pending Crew Review) purely from the re-enable itself.
+  6. Refresh or re-fetch that suggestion's post (e.g. via a bot restart / persistent view restoration); confirm the **I Won't Watch** button now reappears, showing the pre-existing rejection count.
+  7. Have a second distinct member reject that same suggestion now that it's re-enabled; confirm this fresh rejection correctly reaches the threshold and moves it to Pending Crew Review as normal.
+- **Expected Result:** Disabled means no button and no new tracking, but existing history is preserved untouched; re-enabling only resumes accepting new rejections going forward and never itself triggers Pending Crew Review for an existing below-threshold count.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -846,10 +883,42 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/vote start` -> **Customize This Vote**; confirm a dropdown appears (Nominee Selection Mode) with the same three options and descriptions as Test 2.8, with **Favor Older Additions** preselected. Confirm a **Continue to Vote Settings** button is present.
   2. Confirm the message body also explains Visible/Blind (same wording as Test 2.7).
-  3. Without touching the dropdown, press **Continue to Vote Settings** directly; confirm the familiar candidate count/duration/visibility/reminder modal opens (no nominee-selection field in it), then submit it and confirm the round is created using the collection's actual configured mode (Favor Older Additions) -- an untouched dropdown must never silently switch the round to a different mode.
-  4. Repeat `/vote start` -> **Customize This Vote**, this time selecting **Pure Random** before pressing **Continue to Vote Settings**; submit the modal and confirm the round is created successfully using Pure Random for this round only.
+  3. Without touching the dropdown, press **Continue to Vote Settings** directly; confirm the familiar candidate count/duration/reminder modal opens (no nominee-selection field in it), submit it, confirm a **Review This Vote** summary appears showing Favor Older Additions, and press **Start Vote**; confirm the round is created using the collection's actual configured mode (Favor Older Additions) -- an untouched dropdown must never silently switch the round to a different mode.
+  4. Repeat `/vote start` -> **Customize This Vote**, this time selecting **Pure Random** before pressing **Continue to Vote Settings**; submit the modal, confirm the review screen shows Pure Random, press **Start Vote**, and confirm the round is created successfully using Pure Random for this round only.
   5. Run `/config` -> **Collections** -> this collection -> **Nominee Selection**; confirm it still shows **Favor Older Additions**, unchanged by either override just used.
 - **Expected Result:** The override applies to that one round's nominee selection only; the collection's own configured Nominee Selection Mode is never modified by Customize This Vote.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 5.1c `/vote start` -- Custom Vote Filters: Suggestion Source (one member)
+
+- **Objective:** Confirm Customize This Vote can narrow nominees to one member's eligible suggestions, with correct validation, live eligible-count feedback, and insufficient-pool handling.
+- **Preconditions:** A collection with several eligible suggestions from at least two different Watch Party members, and at least one eligible suggestion from a member who has since left the Watch Party role (or a non-member).
+- **Steps:**
+  1. Run `/vote start` -> **Customize This Vote**; confirm a **Suggestion Source** dropdown (a Discord member picker) is present alongside Nominee Selection and Vote Visibility.
+  2. Select a current Watch Party member with eligible suggestions; confirm the screen updates to show how many eligible suggestions they have (e.g. "KC has 5 eligible suggestions.").
+  3. Select a member who is not a current Watch Party member (or has none); confirm the selection is rejected with a clear reason and no filter is applied.
+  4. Clear the Suggestion Source selection (or leave it untouched); confirm no member filter is applied.
+  5. With a member filter active and a valid selection, continue through the modal to the candidate count with a value higher than that member's eligible count; press **Start Vote** and confirm the round is *not* created, with a message naming the member, their eligible count, the requested count, and how to resolve it (e.g. "KC has 2 eligible suggestions, but this vote requires 3 nominees. Reduce the candidate count or choose another member.").
+  6. Repeat with a candidate count at or below that member's eligible count; confirm the round is created, and every resulting nominee was originally submitted by that member.
+- **Expected Result:** Only a valid, current Watch Party member with eligible suggestions can be selected; the eligible count shown matches reality; an insufficient pool blocks round creation with a clear, actionable message before anything is persisted; a successful round's nominees are exclusively that member's suggestions.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 5.1d `/vote start` -- Custom Vote Filters: Genre, and combining both filters
+
+- **Objective:** Confirm Customize This Vote can narrow nominees to one genre (from already-stored IMDb metadata), that the genre list and eligible counts are accurate, and that Suggestion Source and Genre combine correctly.
+- **Preconditions:** A collection with eligible suggestions spanning at least two different genres, including at least one with no genre metadata at all.
+- **Steps:**
+  1. Run `/vote start` -> **Customize This Vote**; confirm a **Genre** dropdown is present, listing only genres actually represented among eligible suggestions, each showing its own eligible count (e.g. "Horror -- 7 eligible suggestions").
+  2. Select a genre; confirm the summary/review screen (after continuing through the modal) shows that genre.
+  3. Clear the Genre selection (or leave it untouched); confirm no genre filter is applied and the review screen omits "Genre".
+  4. Select both a Suggestion Source and a Genre together; continue to the review screen and confirm both are shown, then press **Start Vote** and confirm every resulting nominee matches both filters (that member's suggestions, tagged with that genre).
+  5. Choose a genre/candidate-count combination that leaves fewer eligible suggestions than requested; confirm the round is *not* created, with a message naming the genre, the eligible count, the requested count, and how to resolve it (e.g. "The Horror filter leaves 2 eligible suggestions, but this vote requires 3 nominees. Reduce the candidate count or choose another genre.").
+  6. Run `/config` -> **Collections** -> this collection -> **Nominee Selection**, and separately inspect the collection's suggestion rules; confirm neither filter used above was saved anywhere on the collection.
+  7. Once a filtered round is open, run `/vote status` and observe the voting post; confirm both show the active filter(s) (e.g. "Suggestion Source: <mention>", "Genre: Comedy"), and that closing the round and viewing the results announcement shows the same filter lines. Confirm an *unused* filter (Any Member/Any Genre) never appears anywhere.
+  8. Restart the bot with the filtered round still open; confirm `/vote status` still shows the same filter lines after restart, and the voting post's interactive buttons still work.
+- **Expected Result:** The genre list only ever shows genres actually present, with accurate counts; a suggestion with no genre metadata never matches; combining both filters narrows to their intersection; an insufficient combined pool blocks round creation cleanly; neither filter is ever persisted to the collection's configuration; active filters are visible in the review screen, voting post, `/vote status`, and results, survive a restart, and an inactive filter is never shown.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

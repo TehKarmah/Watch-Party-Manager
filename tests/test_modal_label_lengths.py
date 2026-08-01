@@ -34,8 +34,8 @@ from watch_party_manager.setup_wizard_view import (
     CreateDatabaseNameModal,
     CreateThreadNameModal,
     HomeChannelNameModal,
+    RejectionThresholdModal,
     ReminderDefaultsModal,
-    SetupVotingDefaultsModal,
     VotingDefaultsModal,
 )
 from watch_party_manager.start_vote_view import CustomizeVoteModal
@@ -75,18 +75,19 @@ class ModalTextInputLabelLengthTests(unittest.TestCase):
         # VotingDefaultsIntroView instead -- Discord's API rejects a
         # Select embedded in a modal at submission time (see module
         # docstring), so neither can live in this modal. Only candidate
-        # count and duration remain as text fields here -- this modal is
-        # guild-wide only; see SetupVotingDefaultsModal for the Setup
-        # Wizard's own variant with a third, per-collection field.
+        # count and duration remain as text fields here -- shared
+        # unchanged between the Setup Wizard's own Voting Defaults step
+        # and /config's. "I Won't Watch" threshold is collected on its
+        # own dedicated step/section instead (see RejectionThresholdModal).
         modal = VotingDefaultsModal(_noop)
         self.assertEqual(len(_text_input_labels(modal)), 2)
 
-    def test_setup_voting_defaults_modal_labels_are_within_limit(self) -> None:
-        self._assert_all_labels_within_limit(SetupVotingDefaultsModal(_noop))
+    def test_rejection_threshold_modal_labels_are_within_limit(self) -> None:
+        self._assert_all_labels_within_limit(RejectionThresholdModal(_noop))
 
-    def test_setup_voting_defaults_modal_has_exactly_three_labeled_text_fields(self) -> None:
-        modal = SetupVotingDefaultsModal(_noop)
-        self.assertEqual(len(_text_input_labels(modal)), 3)
+    def test_rejection_threshold_modal_has_exactly_one_labeled_text_field(self) -> None:
+        modal = RejectionThresholdModal(_noop)
+        self.assertEqual(len(_text_input_labels(modal)), 1)
 
     def test_reminder_defaults_modal_labels_are_within_limit(self) -> None:
         self._assert_all_labels_within_limit(ReminderDefaultsModal(_noop))
@@ -121,7 +122,7 @@ class ModalComponentTypeTests(unittest.TestCase):
             HomeChannelNameModal(_noop),
             CreateThreadNameModal(_noop),
             VotingDefaultsModal(_noop),
-            SetupVotingDefaultsModal(_noop),
+            RejectionThresholdModal(_noop),
             ReminderDefaultsModal(_noop),
             BackupDefaultsModal(_noop),
             WatchedDateModal(1, _noop),
@@ -142,8 +143,8 @@ class ModalComponentTypeTests(unittest.TestCase):
     def test_voting_defaults_modal_serializes_with_only_type_4_components(self) -> None:
         self._assert_only_text_input_components(VotingDefaultsModal(_noop))
 
-    def test_setup_voting_defaults_modal_serializes_with_only_type_4_components(self) -> None:
-        self._assert_only_text_input_components(SetupVotingDefaultsModal(_noop))
+    def test_rejection_threshold_modal_serializes_with_only_type_4_components(self) -> None:
+        self._assert_only_text_input_components(RejectionThresholdModal(_noop))
 
     def test_reminder_defaults_modal_serializes_with_only_type_4_components(self) -> None:
         self._assert_only_text_input_components(ReminderDefaultsModal(_noop))

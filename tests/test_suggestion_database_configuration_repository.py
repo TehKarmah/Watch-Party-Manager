@@ -14,6 +14,7 @@ from watch_party_manager.domain.suggestion_database_configuration import (
     SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
     SuggestionDatabasePermissionsConfig,
+    SuggestionRulesConfig,
     VotingOverridesConfig,
 )
 from watch_party_manager.persistence.guild_configuration_repository import FutureSchemaVersionError
@@ -107,6 +108,17 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.voting_overrides.visibility, GuildVoteVisibility.BLIND)
         self.assertEqual(loaded.voting_overrides.tie_behavior, TieBehavior.ALL_WINNERS)
         self.assertEqual(loaded.permissions.moderator_role_ids, (5, 6))
+
+    def test_save_then_get_round_trips_rejection_enabled_and_threshold(self) -> None:
+        original = self._config(
+            suggestion_rules=SuggestionRulesConfig(rejection_enabled=False, rejection_threshold=7)
+        )
+
+        self.repository.save(original)
+        loaded = self.repository.get(100, 1)
+
+        self.assertFalse(loaded.suggestion_rules.rejection_enabled)
+        self.assertEqual(loaded.suggestion_rules.rejection_threshold, 7)
 
     def test_optional_channels_serialize_as_null(self) -> None:
         self.repository.save(self._config())
@@ -419,6 +431,40 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
 
         self.assertIsNotNone(loaded)
         self.assertEqual(loaded.suggestion_rules.rejection_threshold, 2)
+
+    def test_a_record_saved_before_the_rejection_enabled_field_existed_defaults_to_enabled(self) -> None:
+        # "I Won't Watch" Settings: rejection_enabled is a new field --
+        # every record saved before it existed has no
+        # suggestion_rules.rejection_enabled key at all, and must still
+        # load as enabled (the pre-existing, always-on behavior) rather
+        # than silently disabling the feature for every existing server.
+        now_iso = utc_now().isoformat()
+        legacy_json = json.dumps(
+            {
+                "guilds": {
+                    "100": {
+                        "databases": {
+                            "1": {
+                                "guild_id": 100,
+                                "database_id": 1,
+                                "display_name": "Movies",
+                                "created_at": now_iso,
+                                "updated_at": now_iso,
+                                "suggestion_rules": {"rejection_threshold": 4},
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        loaded = self.repository.get(100, 1)
+
+        self.assertIsNotNone(loaded)
+        self.assertTrue(loaded.suggestion_rules.rejection_enabled)
+        self.assertEqual(loaded.suggestion_rules.rejection_threshold, 4)
 
     # --- FR-033B: candidate_selection legacy value migration -------------------------
 

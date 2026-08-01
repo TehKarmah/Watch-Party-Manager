@@ -114,7 +114,9 @@ Duplicate suggestions are automatically detected.
 
 If a Watch Item has already been watched, administrators may choose whether it should become immediately eligible for rewatch or remain retired.
 
-Any Watch Party member may indicate they won't watch a suggestion using its "I Won't Watch" button. Each collection has a configurable "I Won't Watch" threshold (default 2, range 1-10) -- the number of distinct members who must do so before the suggestion requires WASH Crew review. Reaching the threshold does not automatically retire the suggestion: it moves to Pending Crew Review (see Section 2) and WASH Crew is notified in the Admin Channel to Retire it, Keep it Active, or Reset its recorded rejections.
+Any Watch Party member may indicate they won't watch a suggestion using its "I Won't Watch" button. This system is configured per collection, with its own dedicated Setup Wizard step and `/config` section: it may be enabled (the default) with a threshold (default 2, range 1-10) -- the number of distinct members who must reject a suggestion before it requires WASH Crew review -- or disabled entirely. Reaching the threshold does not automatically retire the suggestion: it moves to Pending Crew Review (see Section 2) and WASH Crew is notified in the Admin Channel to Retire it, Keep it Active, or Reset its recorded rejections.
+
+While disabled, a suggestion's post never displays the "I Won't Watch" button and no new rejection is ever recorded, but any rejection history recorded while it was previously enabled remains stored for historical purposes. Re-enabling only resumes accepting new rejections going forward -- it never retroactively re-evaluates a suggestion's existing rejection count against the threshold.
 
 ---
 
@@ -125,6 +127,8 @@ The Eligible Pool is every suggestion that is neither currently nominated, Pendi
 When a vote starts, nominees are drawn from the Eligible Pool using the collection's configured selection mode: Pure Random (no preference or exclusion), Favor New Additions (leans toward recently-suggested items), or Favor Older Additions (leans toward suggestions that have waited the longest). No suggestion is ever permanently excluded by any mode.
 
 Eligible Pool health is monitored to identify a shrinking pool: the Eligible Pool Warning fires once the pool drops to or below a configured threshold, and re-arms once it rises back above it.
+
+When starting a vote, an administrator may optionally narrow the Eligible Pool further for that one round only, before the collection's configured selection mode runs: to suggestions originally submitted by one chosen member (e.g. for a birthday vote, with no separate profile or birthday record required), to suggestions tagged with one chosen genre (drawn from already-stored metadata), or both combined. Neither narrowing is ever saved to the collection's own configuration -- the collection's selection mode remains one of the three standard modes above regardless of any per-vote narrowing applied.
 
 ---
 

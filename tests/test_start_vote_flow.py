@@ -62,9 +62,10 @@ class FakeRole:
 
 
 class FakeMember:
-    def __init__(self, user_id: int, roles=()) -> None:
+    def __init__(self, user_id: int, roles=(), display_name: str = None) -> None:
         self.id = user_id
         self.roles = list(roles)
+        self.display_name = display_name if display_name is not None else f"User {user_id}"
 
 
 class FakeResponse:
@@ -74,6 +75,8 @@ class FakeResponse:
         self.sent_ephemeral = None
         self.sent_view = None
         self.sent_modal = None
+        self.edited_content = None
+        self.edited_view = None
 
     async def send_message(self, content=None, ephemeral=False, view=None, embed=None) -> None:
         self.sent_message = content
@@ -83,6 +86,10 @@ class FakeResponse:
 
     async def send_modal(self, modal) -> None:
         self.sent_modal = modal
+
+    async def edit_message(self, content=None, view=None) -> None:
+        self.edited_content = content
+        self.edited_view = view
 
 
 class FakeSentMessage:
@@ -94,6 +101,7 @@ class FakeInteraction:
     def __init__(self, user_id: int, guild_id=100, channel_id=200) -> None:
         self.user = FakeMember(user_id, roles=[FakeRole(WASH_CREW_ROLE_ID)])
         self.guild_id = guild_id
+        self.guild = None
         self.channel_id = channel_id
         self.response = FakeResponse()
         self._original_response = FakeSentMessage(message_id=9999)
@@ -127,6 +135,19 @@ class StartVoteFlowTestCase(unittest.IsolatedAsyncioTestCase):
 
     def _interaction(self) -> FakeInteraction:
         return FakeInteraction(user_id=1)
+
+    async def _confirm_customize_vote(self, review_interaction: FakeInteraction) -> FakeInteraction:
+        """Click "Start Vote" on the Custom Vote Summary & Announcement
+        review screen a handle_customize_vote_submit call produced --
+        the round is only actually created once this fires (see
+        bot.handle_customize_vote_submit's on_confirm closure), mirroring
+        how each Discord component click is its own separate interaction.
+        """
+        view = review_interaction.response.sent_view
+        confirm_button = next(child for child in view.children if child.custom_id == "wpm_edit_vote_confirm")
+        confirm_interaction = self._interaction()
+        await confirm_button.callback(confirm_interaction)
+        return confirm_interaction
 
 
 class UseDefaultsTests(StartVoteFlowTestCase):
@@ -246,6 +267,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             nominee_count_text="5",
             duration_text=None,
         )
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         self.assertIsNotNone(vote_round)
@@ -265,6 +287,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             nominee_count_text=None,
             duration_text="3d",
         )
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         expected = before + timedelta(days=3)
@@ -284,6 +307,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             duration_text=None,
             visibility_override=GuildVoteVisibility.BLIND,
         )
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         self.assertEqual(vote_round.visibility, VoteVisibility.BLIND)
@@ -301,6 +325,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             nominee_count_text="",
             duration_text="   ",
         )
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         self.assertEqual(vote_round.visibility, VoteVisibility.VISIBLE)
@@ -409,6 +434,7 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
             duration_text="2d",
             visibility_override=GuildVoteVisibility.BLIND,
         )
+        await self._confirm_customize_vote(interaction)
         first_round = self.vote_service.get_open_round()
         self.vote_service.close_round(first_round.id)
 
@@ -469,8 +495,9 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
         self.addCleanup(setattr, bot_module, "build_candidate_selection_strategy", real_build_strategy)
 
     async def test_override_bypasses_the_configured_mode(self) -> None:
+        interaction = self._interaction()
         await handle_customize_vote_submit(
-            self._interaction(),
+            interaction,
             self.vote_service,
             self.suggestion_service,
             self.nominee_selection_service,
@@ -481,6 +508,7 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
             suggestion_database_configuration_repository=self.configuration_repository,
             candidate_selection_override=CandidateSelectionMode.INFINITE_POOL,
         )
+        await self._confirm_customize_vote(interaction)
 
         self.assertIsNotNone(self.vote_service.get_open_round())
         self.assertEqual(self.modes_used, [CandidateSelectionMode.INFINITE_POOL])
@@ -503,8 +531,9 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
         self.assertEqual(saved.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
     async def test_no_override_falls_back_to_the_configured_mode(self) -> None:
+        interaction = self._interaction()
         await handle_customize_vote_submit(
-            self._interaction(),
+            interaction,
             self.vote_service,
             self.suggestion_service,
             self.nominee_selection_service,
@@ -514,6 +543,7 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
             duration_text=None,
             suggestion_database_configuration_repository=self.configuration_repository,
         )
+        await self._confirm_customize_vote(interaction)
 
         self.assertIsNotNone(self.vote_service.get_open_round())
         # Confirms the (unset) override correctly fell back to the
@@ -539,10 +569,11 @@ class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
             suggestion_database_configuration_repository=self.configuration_repository,
             candidate_selection_override=CandidateSelectionMode.INFINITE_POOL,
         )
+        confirm_interaction = await self._confirm_customize_vote(interaction)
 
-        self.assertTrue(interaction.response.sent_ephemeral)
-        self.assertIn("requires 10 candidates", interaction.response.sent_message)
-        self.assertIn("only 5 are currently available", interaction.response.sent_message)
+        self.assertTrue(confirm_interaction.response.sent_ephemeral)
+        self.assertIn("requires 10 candidates", confirm_interaction.response.sent_message)
+        self.assertIn("only 5 are currently available", confirm_interaction.response.sent_message)
         self.assertIsNone(self.vote_service.get_open_round())
 
     async def test_use_defaults_never_applies_an_override(self) -> None:
@@ -683,8 +714,9 @@ class CandidateCountResolutionConsistencyTests(StartVoteFlowTestCase):
         self.assertEqual(self.selection_counts, [self.default_nominee_count])
 
     async def test_customized_vote_resolves_the_same_count_for_eligibility_and_selection(self) -> None:
+        interaction = self._interaction()
         await handle_customize_vote_submit(
-            self._interaction(),
+            interaction,
             self.vote_service,
             self.suggestion_service,
             self.nominee_selection_service,
@@ -694,6 +726,7 @@ class CandidateCountResolutionConsistencyTests(StartVoteFlowTestCase):
             duration_text=None,
             suggestion_database_configuration_repository=self.configuration_repository,
         )
+        await self._confirm_customize_vote(interaction)
 
         self.assertEqual(self.eligibility_requested_counts, [4])
         self.assertEqual(self.selection_counts, [4])
@@ -773,9 +806,10 @@ class CustomizeVoteOverridesViewTests(unittest.IsolatedAsyncioTestCase):
 class CustomizeVoteReminderTests(StartVoteFlowTestCase):
     """FR-027: reminder overrides threaded through /start_vote's "Customize This Vote" flow."""
 
-    async def _submit(self, reminder_enabled_text=None, reminder_minutes_text=None) -> None:
+    async def _submit(self, reminder_enabled_text=None, reminder_minutes_text=None) -> FakeInteraction:
+        interaction = self._interaction()
         await handle_customize_vote_submit(
-            self._interaction(),
+            interaction,
             self.vote_service,
             self.suggestion_service,
             self.nominee_selection_service,
@@ -786,42 +820,49 @@ class CustomizeVoteReminderTests(StartVoteFlowTestCase):
             reminder_enabled_text=reminder_enabled_text,
             reminder_minutes_text=reminder_minutes_text,
         )
+        return interaction
 
     async def test_default_reminder_is_enabled_when_not_customized(self) -> None:
         # Using defaults (no reminder override) leaves reminder_enabled as
         # None on the round -- resolved later against the guild's default,
         # which is itself enabled by default (see VoteNotificationsConfig).
-        await self._submit()
+        interaction = await self._submit()
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         self.assertIsNone(vote_round.reminder_enabled)
 
     async def test_default_reminder_timing_is_not_overridden_when_not_customized(self) -> None:
-        await self._submit()
+        interaction = await self._submit()
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         self.assertIsNone(vote_round.reminder_minutes_before_close)
 
     async def test_custom_reminder_timing_is_stored_on_the_round(self) -> None:
-        await self._submit(reminder_minutes_text="4h")
+        interaction = await self._submit(reminder_minutes_text="4h")
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         self.assertEqual(vote_round.reminder_minutes_before_close, 240)
 
     async def test_custom_reminder_timing_accepts_minutes(self) -> None:
-        await self._submit(reminder_minutes_text="10m")
+        interaction = await self._submit(reminder_minutes_text="10m")
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         self.assertEqual(vote_round.reminder_minutes_before_close, 10)
 
     async def test_reminder_can_be_explicitly_disabled(self) -> None:
-        await self._submit(reminder_enabled_text="no")
+        interaction = await self._submit(reminder_enabled_text="no")
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         self.assertEqual(vote_round.reminder_enabled, False)
 
     async def test_reminder_can_be_explicitly_enabled(self) -> None:
-        await self._submit(reminder_enabled_text="yes")
+        interaction = await self._submit(reminder_enabled_text="yes")
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         self.assertEqual(vote_round.reminder_enabled, True)
@@ -1237,8 +1278,9 @@ class VisibilityOverrideTests(StartVoteFlowTestCase):
         )
 
     async def test_override_bypasses_the_guilds_configured_visibility(self) -> None:
+        interaction = self._interaction()
         await handle_customize_vote_submit(
-            self._interaction(),
+            interaction,
             self.vote_service,
             self.suggestion_service,
             self.nominee_selection_service,
@@ -1249,6 +1291,7 @@ class VisibilityOverrideTests(StartVoteFlowTestCase):
             guild_configuration_repository=self.guild_configuration_repository,
             visibility_override=GuildVoteVisibility.BLIND,
         )
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         self.assertIsNotNone(vote_round)
@@ -1272,8 +1315,9 @@ class VisibilityOverrideTests(StartVoteFlowTestCase):
         self.assertEqual(saved.voting_defaults.visibility, GuildVoteVisibility.VISIBLE)
 
     async def test_no_override_falls_back_to_the_guilds_configured_visibility(self) -> None:
+        interaction = self._interaction()
         await handle_customize_vote_submit(
-            self._interaction(),
+            interaction,
             self.vote_service,
             self.suggestion_service,
             self.nominee_selection_service,
@@ -1283,6 +1327,7 @@ class VisibilityOverrideTests(StartVoteFlowTestCase):
             duration_text=None,
             guild_configuration_repository=self.guild_configuration_repository,
         )
+        await self._confirm_customize_vote(interaction)
 
         vote_round = self.vote_service.get_open_round()
         self.assertEqual(vote_round.visibility, VoteVisibility.VISIBLE)
@@ -1315,6 +1360,18 @@ class FakeSchedulerHostForCustomizeFlow:
         self.scheduler_service = None
 
 
+class FakeEligiblePoolWarningServiceForCustomizeFlow:
+    """Never actually warns -- only exists so handle_start_vote_completion's
+    post-creation Eligible Pool Warning check (unrelated to this feature)
+    has something to call.
+    """
+
+    def evaluate(self, *, guild_id: int, database_id: int):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(should_send=False, destination_channel_id=None, message="")
+
+
 class CustomizeVoteFlowUiConsistencyTests(StartVoteFlowTestCase):
     """UI Review: the real /vote start -> Customize This Vote screen must
     only describe controls that are actually present. General
@@ -1343,6 +1400,7 @@ class CustomizeVoteFlowUiConsistencyTests(StartVoteFlowTestCase):
         self.bot.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository(
             Path(self._temp_dir.name) / "suggestion_database_configurations.json"
         )
+        self.bot.eligible_pool_warning_service = FakeEligiblePoolWarningServiceForCustomizeFlow()
 
     async def _open_customize_screen(self):
         group = VotingGroup(self.bot)
@@ -1379,6 +1437,253 @@ class CustomizeVoteFlowUiConsistencyTests(StartVoteFlowTestCase):
         self.assertIsInstance(overrides_view, CustomizeVoteOverridesView)
         self.assertIsInstance(overrides_view.candidate_selection_select, CandidateSelectionSelectComponent)
         self.assertIsInstance(overrides_view.visibility_select, VisibilitySelectComponent)
+
+
+class FakeMembershipServiceForFilters:
+    """Minimal stand-in for MembershipService -- only get_role_config() is
+    ever called through bot.membership_service; is_current_member() is
+    always the real MembershipService staticmethod (see
+    bot.py's on_member_filter_changed).
+    """
+
+    def __init__(self, role_id: int) -> None:
+        self._role_id = role_id
+
+    def get_role_config(self, guild_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(role_id=self._role_id)
+
+
+class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
+    """Sections 3-8: the real /vote start -> Customize This Vote screen's
+    Member and Genre filter selects, exercised end-to-end through the
+    actual VotingGroup wiring (bot.py's on_customize closure) -- not just
+    the underlying filter/service logic (see test_nominee_pool_filter.py
+    for that).
+    """
+
+    WATCH_PARTY_FILTER_ROLE_ID = 777
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.bot.membership_service = FakeMembershipServiceForFilters(self.WATCH_PARTY_FILTER_ROLE_ID)
+        # KC (111): 2 eligible Comedy suggestions. Someone else (222): 1
+        # Horror suggestion. The base 5 suggestions from setUp have no
+        # recorded submitter/genre at all, so they never match either
+        # filter -- exactly the "legacy suggestion" case.
+        self.suggestion_service.suggest(
+            "Airplane!", database_id=self.database_id, original_suggester="111", genres=("Comedy",)
+        )
+        self.suggestion_service.suggest(
+            "Ghostbusters", database_id=self.database_id, original_suggester="111", genres=("Comedy",)
+        )
+        self.suggestion_service.suggest(
+            "The Shining", database_id=self.database_id, original_suggester="222", genres=("Horror",)
+        )
+
+    def _kc_member(self) -> FakeMember:
+        return FakeMember(user_id=111, roles=[FakeRole(self.WATCH_PARTY_FILTER_ROLE_ID)], display_name="KC")
+
+    def _member_select(self, overrides_view):
+        return next(
+            child for child in overrides_view.children if getattr(child, "custom_id", None)
+            == "wpm_start_vote_customize_member_filter"
+        )
+
+    def _genre_select(self, overrides_view):
+        return next(
+            child for child in overrides_view.children if getattr(child, "custom_id", None)
+            == "wpm_start_vote_customize_genre_filter"
+        )
+
+    async def test_screen_includes_member_and_genre_filter_selects(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+
+        self._member_select(overrides_view)  # raises StopIteration if missing
+        self._genre_select(overrides_view)
+
+    async def test_selecting_a_valid_member_shows_their_eligible_count(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [self._kc_member()]
+
+        select_interaction = self._interaction()
+        await member_select.callback(interaction=select_interaction)
+
+        self.assertIn("KC has 2 eligible suggestions", select_interaction.response.edited_content)
+
+    async def test_selecting_a_non_watch_party_member_is_rejected(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        non_member = FakeMember(user_id=333, roles=[], display_name="Stranger")
+        member_select._values = [non_member]
+
+        select_interaction = self._interaction()
+        await member_select.callback(interaction=select_interaction)
+
+        self.assertIn("not a current Watch Party member", select_interaction.response.edited_content)
+
+    async def test_selecting_a_member_with_no_eligible_suggestions_is_rejected(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        idle_member = FakeMember(
+            user_id=999, roles=[FakeRole(self.WATCH_PARTY_FILTER_ROLE_ID)], display_name="Idle"
+        )
+        member_select._values = [idle_member]
+
+        select_interaction = self._interaction()
+        await member_select.callback(interaction=select_interaction)
+
+        self.assertIn("has no eligible suggestions", select_interaction.response.edited_content)
+
+    async def test_genre_select_options_show_eligible_counts(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        genre_select = self._genre_select(overrides_view)
+
+        options_by_label = {option.label: option for option in genre_select.options}
+        self.assertIn("Comedy", options_by_label)
+        self.assertEqual(options_by_label["Comedy"].description, "2 eligible suggestions")
+        self.assertIn("Horror", options_by_label)
+        self.assertEqual(options_by_label["Horror"].description, "1 eligible suggestion")
+
+    async def _complete_customize_vote(
+        self, overrides_view, continue_interaction, *, nominee_count_text: str = "2", duration_text=None
+    ) -> FakeInteraction:
+        """Click Continue, submit the modal, then confirm the summary
+        screen -- the full remaining path from an already-open Customize
+        This Vote overrides screen to an actually-created (or rejected)
+        round.
+        """
+        continue_button = next(
+            child for child in overrides_view.children if getattr(child, "label", None) == "Continue to Vote Settings"
+        )
+        await continue_button.callback(interaction=continue_interaction)
+        modal = continue_interaction.response.sent_modal
+        modal.nominee_count_input._value = nominee_count_text
+        modal.duration_input._value = duration_text
+
+        submit_interaction = self._interaction()
+        await modal.on_submit(interaction=submit_interaction)
+        return await self._confirm_customize_vote(submit_interaction)
+
+    async def test_member_filter_narrows_the_created_rounds_candidates(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [self._kc_member()]
+        await member_select.callback(interaction=self._interaction())
+
+        confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertIsNotNone(vote_round, confirm_interaction.response.sent_message)
+        self.assertEqual(vote_round.filter_member_discord_user_id, 111)
+        candidates = [
+            self.suggestion_service.get_suggestion(candidate_id)
+            for candidate_id in vote_round.candidate_suggestion_ids
+        ]
+        self.assertTrue(all(candidate.journey.original_suggester == "111" for candidate in candidates))
+
+    async def test_genre_filter_narrows_the_created_rounds_candidates(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        genre_select = self._genre_select(overrides_view)
+        genre_select._values = ["Comedy"]
+        await genre_select.callback(interaction=self._interaction())
+
+        confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertIsNotNone(vote_round, confirm_interaction.response.sent_message)
+        self.assertEqual(vote_round.filter_genre, "Comedy")
+        candidates = [
+            self.suggestion_service.get_suggestion(candidate_id)
+            for candidate_id in vote_round.candidate_suggestion_ids
+        ]
+        self.assertTrue(all("Comedy" in candidate.genres for candidate in candidates))
+
+    async def test_combined_member_and_genre_filters_narrow_together(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [self._kc_member()]
+        await member_select.callback(interaction=self._interaction())
+        genre_select = self._genre_select(overrides_view)
+        genre_select._values = ["Comedy"]
+        await genre_select.callback(interaction=self._interaction())
+
+        confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertIsNotNone(vote_round, confirm_interaction.response.sent_message)
+        self.assertEqual(vote_round.filter_member_discord_user_id, 111)
+        self.assertEqual(vote_round.filter_genre, "Comedy")
+
+    async def test_member_filter_insufficient_pool_blocks_round_creation(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [self._kc_member()]
+        await member_select.callback(interaction=self._interaction())
+
+        confirm_interaction = await self._complete_customize_vote(
+            overrides_view, self._interaction(), nominee_count_text="3"
+        )
+
+        self.assertIsNone(self.vote_service.get_open_round())
+        self.assertTrue(confirm_interaction.response.sent_ephemeral)
+        self.assertIn("KC has 2 eligible suggestions", confirm_interaction.response.sent_message)
+        self.assertIn("requires 3 nominees", confirm_interaction.response.sent_message)
+        self.assertIn("Reduce the candidate count or choose another member", confirm_interaction.response.sent_message)
+
+    async def test_genre_filter_insufficient_pool_blocks_round_creation(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        genre_select = self._genre_select(overrides_view)
+        genre_select._values = ["Horror"]
+        await genre_select.callback(interaction=self._interaction())
+
+        confirm_interaction = await self._complete_customize_vote(
+            overrides_view, self._interaction(), nominee_count_text="3"
+        )
+
+        self.assertIsNone(self.vote_service.get_open_round())
+        self.assertTrue(confirm_interaction.response.sent_ephemeral)
+        self.assertIn("The Horror filter leaves 1 eligible suggestion", confirm_interaction.response.sent_message)
+        self.assertIn("requires 3 nominees", confirm_interaction.response.sent_message)
+        self.assertIn("Reduce the candidate count or choose another genre", confirm_interaction.response.sent_message)
+
+    async def test_filters_never_persist_to_the_collections_own_configuration(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [self._kc_member()]
+        await member_select.callback(interaction=self._interaction())
+
+        await self._complete_customize_vote(overrides_view, self._interaction())
+
+        configuration = self.bot.suggestion_database_configuration_repository.get(100, self.database_id)
+        self.assertIsNone(configuration)  # never created/touched by a per-vote filter
+
+    async def test_unfiltered_customize_vote_still_works_unchanged(self) -> None:
+        # Regression: Any Member / Any Genre (both selects left untouched)
+        # must behave exactly like before this feature existed.
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+
+        confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertIsNotNone(vote_round, confirm_interaction.response.sent_message)
+        self.assertIsNone(vote_round.filter_member_discord_user_id)
+        self.assertIsNone(vote_round.filter_genre)
+
 
 if __name__ == "__main__":
     unittest.main()

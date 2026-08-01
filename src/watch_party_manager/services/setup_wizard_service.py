@@ -338,7 +338,6 @@ class SetupWizardService:
         duration_minutes: int,
         visibility: GuildVoteVisibility,
         candidate_selection: CandidateSelectionMode,
-        rejection_threshold: int,
     ) -> SetupWizardState:
         draft = replace(
             state.draft,
@@ -346,9 +345,26 @@ class SetupWizardService:
             voting_duration_minutes=duration_minutes,
             voting_visibility=visibility,
             voting_candidate_selection=candidate_selection,
-            rejection_threshold=rejection_threshold,
         )
         return self._advance(state, SetupWizardStep.VOTING_DEFAULTS, draft)
+
+    def enable_rejection_settings(self, state: SetupWizardState, threshold: int) -> SetupWizardState:
+        """Enable "I Won't Watch" for this pass's collection, with the
+        given threshold (Fixed-Option UX Audit: "enabled?" is a button
+        choice, mirroring enable_vote_ending_reminder()'s identical
+        enable/disable-then-configure shape). Its own dedicated step,
+        separate from VOTING_DEFAULTS -- see SetupWizardStep.REJECTION_SETTINGS.
+        """
+        draft = replace(state.draft, rejection_enabled=True, rejection_threshold=threshold)
+        return self._advance(state, SetupWizardStep.REJECTION_SETTINGS, draft)
+
+    def disable_rejection_settings(self, state: SetupWizardState) -> SetupWizardState:
+        """Disable "I Won't Watch" for this pass's collection, skipping
+        threshold configuration entirely, mirroring
+        disable_vote_ending_reminder()'s identical shape.
+        """
+        draft = replace(state.draft, rejection_enabled=False, rejection_threshold=None)
+        return self._advance(state, SetupWizardStep.REJECTION_SETTINGS, draft)
 
     def enable_vote_ending_reminder(
         self, state: SetupWizardState, minutes_before_close: int
@@ -455,17 +471,26 @@ class SetupWizardService:
 
         if draft.voting_candidate_count is not None:
             candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[draft.voting_candidate_selection]
-            rejection_threshold = (
-                draft.rejection_threshold if draft.rejection_threshold is not None else DEFAULT_REJECTION_THRESHOLD
-            )
             lines.append(
                 "Voting Defaults: Configured "
                 f"({draft.voting_candidate_count} candidates, {format_duration_minutes(draft.voting_duration_minutes)}, "
-                f"{draft.voting_visibility.value.capitalize()}, {candidate_selection_label}, "
-                f"I Won't Watch threshold: {rejection_threshold})"
+                f"{draft.voting_visibility.value.capitalize()}, {candidate_selection_label})"
             )
         else:
             lines.append("Voting Defaults: Incomplete")
+
+        if draft.rejection_enabled is not None:
+            if draft.rejection_enabled:
+                rejection_threshold = (
+                    draft.rejection_threshold
+                    if draft.rejection_threshold is not None
+                    else DEFAULT_REJECTION_THRESHOLD
+                )
+                lines.append(f"I Won't Watch: Configured (Enabled, threshold: {rejection_threshold})")
+            else:
+                lines.append("I Won't Watch: Configured (Disabled)")
+        else:
+            lines.append("I Won't Watch: Incomplete")
 
         if draft.reminder_enabled is not None:
             if draft.reminder_enabled:
@@ -734,7 +759,7 @@ class SetupWizardService:
             return None
         if (
             draft.voting_candidate_selection is None
-            and draft.rejection_threshold is None
+            and draft.rejection_enabled is None
             and not draft.watch_destination_channel_id
         ):
             return None
@@ -756,11 +781,17 @@ class SetupWizardService:
                     updated.suggestion_rules, candidate_selection=draft.voting_candidate_selection
                 ),
             )
-        if draft.rejection_threshold is not None:
+        if draft.rejection_enabled is not None:
             updated = replace(
                 updated,
                 suggestion_rules=replace(
-                    updated.suggestion_rules, rejection_threshold=draft.rejection_threshold
+                    updated.suggestion_rules,
+                    rejection_enabled=draft.rejection_enabled,
+                    rejection_threshold=(
+                        draft.rejection_threshold
+                        if draft.rejection_threshold is not None
+                        else updated.suggestion_rules.rejection_threshold
+                    ),
                 ),
             )
         if draft.watch_destination_channel_id is not None:

@@ -50,9 +50,11 @@ OnConfigSectionChosen = Callable[[discord.Interaction, str], Awaitable[None]]
 OnBackToMenu = Callable[[discord.Interaction], Awaitable[None]]
 OnConfigRetry = Callable[[discord.Interaction], Awaitable[None]]
 OnConfigVotingDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
-OnConfigVisibilitySelected = Callable[[discord.Interaction, GuildVoteVisibility], Awaitable[None]]
 OnConfigRetryModalSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnConfigVotingDefaultsConfigure = Callable[[discord.Interaction, CandidateSelectionMode], Awaitable[None]]
+OnConfigVotingDefaultsIntroConfigure = Callable[
+    [discord.Interaction, GuildVoteVisibility, Optional[CandidateSelectionMode]], Awaitable[None]
+]
 OnConfigReminderDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 OnConfigBackupDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 
@@ -272,7 +274,6 @@ OnDatabaseSettingChosen = Callable[[discord.Interaction, str], Awaitable[None]]
 DATABASE_SETTING_SUGGESTION_DESTINATION = "suggestion_destination"
 DATABASE_SETTING_WATCH_DESTINATION = "watch_destination"
 DATABASE_SETTING_CANDIDATE_SELECTION = "candidate_selection"
-DATABASE_SETTING_REJECTION_THRESHOLD = "rejection_threshold"
 
 
 class DatabaseSettingSelect(discord.ui.Select):
@@ -281,7 +282,6 @@ class DatabaseSettingSelect(discord.ui.Select):
             discord.SelectOption(label="Suggestion Post Destination", value=DATABASE_SETTING_SUGGESTION_DESTINATION),
             discord.SelectOption(label="Watched Item Archive", value=DATABASE_SETTING_WATCH_DESTINATION),
             discord.SelectOption(label="Nominee Selection", value=DATABASE_SETTING_CANDIDATE_SELECTION),
-            discord.SelectOption(label="Rejection Settings", value=DATABASE_SETTING_REJECTION_THRESHOLD),
         ]
         super().__init__(
             placeholder="Choose a setting to edit...", options=options, custom_id="wpm_config_database_setting_select"
@@ -303,7 +303,10 @@ class ConfigDatabaseSettingsMenuView(discord.ui.View):
 
 class ConfigRejectionThresholdModal(discord.ui.Modal):
     """One database's "I Won't Watch" threshold: a single number field,
-    mirroring EligiblePoolWarningThresholdModal's shape.
+    mirroring EligiblePoolWarningThresholdModal's shape. Opened only from
+    the dedicated "I Won't Watch" Settings section's Enable button (see
+    ConfigRejectionSettingsView) -- whether the feature is enabled at all
+    is a separate, prior choice, not part of this modal.
     """
 
     def __init__(self, on_submit: OnConfigRetryModalSubmit, *, default: str) -> None:
@@ -314,6 +317,39 @@ class ConfigRejectionThresholdModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self._submit_callback(interaction, self.threshold_input.value)
+
+
+class ConfigEnableRejectionSettingsButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigRetry) -> None:
+        super().__init__(label="Enable", style=discord.ButtonStyle.primary, custom_id="wpm_config_rejection_enable")
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigDisableRejectionSettingsButton(discord.ui.Button):
+    def __init__(self, on_click: OnConfigRetry) -> None:
+        super().__init__(label="Disable", style=discord.ButtonStyle.secondary, custom_id="wpm_config_rejection_disable")
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ConfigRejectionSettingsView(discord.ui.View):
+    """/config's dedicated "I Won't Watch" Settings section for one
+    collection: Enable (opens ConfigRejectionThresholdModal) or Disable,
+    mirroring ConfigReminderDefaultsChoiceView/ConfigBackupDefaultsChoiceView's
+    identical enable/disable-then-configure shape (see also the Setup
+    Wizard's own RejectionSettingsChoiceView, which this mirrors).
+    """
+
+    def __init__(self, on_enable: OnConfigRetry, on_disable: OnConfigRetry, on_back: OnBackToMenu) -> None:
+        super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
+        self.add_item(ConfigEnableRejectionSettingsButton(on_enable))
+        self.add_item(ConfigDisableRejectionSettingsButton(on_disable))
+        self.add_item(BackToMenuButton(on_back))
 
 
 class ConfigDatabaseCandidateSelectionView(discord.ui.View):
@@ -347,24 +383,38 @@ class ConfigDatabaseCandidateSelectionView(discord.ui.View):
 
 
 class ConfigVotingDefaultsIntroView(discord.ui.View):
-    """/config's Voting Defaults entry screen: choose Visibility from a
-    dropdown, then press Set Voting Defaults to open the modal for the
+    """/config's Voting Defaults entry screen: mirrors the Setup Wizard's
+    own Voting Defaults step (VotingDefaultsIntroView) -- choose Nominee
+    Selection (when a collection is in scope) and Visibility from two
+    dropdowns, then press Set Voting Defaults to open the modal for the
     remaining, flexible fields (candidate count, duration). Discord
-    modals accept TextInput components only, so Visibility -- a small
-    fixed set of choices -- is collected here instead of inside the
-    modal (see setup_wizard_view.VotingDefaultsModal's own docstring for
-    the full explanation). Candidate Selection stays out of this screen
-    entirely -- it's per-database, under Manage Databases instead.
+    modals accept TextInput components only, so both fixed-choice values
+    are collected here instead of inside the modal (see
+    setup_wizard_view.VotingDefaultsModal's own docstring for the full
+    explanation).
+
+    Nominee Selection is stored per collection (see bot.py's
+    send_config_voting_defaults_screen, which resolves -- or asks the
+    administrator to choose -- which collection this screen's Nominee
+    Selection dropdown edits before this view is ever built). Passing
+    default_candidate_selection=None omits that dropdown entirely --
+    used only when the guild has no collections at all to edit Nominee
+    Selection for.
     """
 
     def __init__(
         self,
-        on_configure: OnConfigVisibilitySelected,
+        on_configure: OnConfigVotingDefaultsIntroConfigure,
         on_back: OnBackToMenu,
         *,
         default_visibility: GuildVoteVisibility,
+        default_candidate_selection: Optional[CandidateSelectionMode] = None,
     ) -> None:
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
+        self.candidate_selection_select: Optional[CandidateSelectionSelectComponent] = None
+        if default_candidate_selection is not None:
+            self.candidate_selection_select = CandidateSelectionSelectComponent(default=default_candidate_selection)
+            self.add_item(self.candidate_selection_select)
         self.visibility_select = VisibilitySelectComponent(default=default_visibility)
         self.add_item(self.visibility_select)
         self.add_item(
@@ -376,7 +426,10 @@ class ConfigVotingDefaultsIntroView(discord.ui.View):
         self._on_configure = on_configure
 
     async def _handle_configure(self, interaction: discord.Interaction) -> None:
-        await self._on_configure(interaction, self.visibility_select.selected)
+        candidate_selection = (
+            self.candidate_selection_select.selected if self.candidate_selection_select is not None else None
+        )
+        await self._on_configure(interaction, self.visibility_select.selected, candidate_selection)
 
 
 # --- Suggestion Post Destination ------------------------------------------------------------

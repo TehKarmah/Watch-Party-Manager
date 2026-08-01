@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional, Protocol
 
+from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
 from watch_party_manager.domain.vote import (
     MAX_VOTE_CHANGES,
     MIN_CANDIDATES_FOR_A_ROUND,
@@ -128,6 +129,9 @@ class VoteService:
         database_id: Optional[int] = None,
         reminder_enabled: Optional[bool] = None,
         reminder_minutes_before_close: Optional[int] = None,
+        candidate_selection_mode: Optional[CandidateSelectionMode] = None,
+        filter_member_discord_user_id: Optional[int] = None,
+        filter_genre: Optional[str] = None,
     ) -> VoteRoundResult:
         """Open a new voting round.
 
@@ -145,6 +149,22 @@ class VoteService:
             reminder_minutes_before_close: FR-027: a per-round override of
                 how many minutes before closing the reminder fires, or None
                 to use the guild default.
+            candidate_selection_mode: Custom Vote Filters: the Nominee
+                Selection mode this round's candidates were actually
+                chosen with (the collection's own configured mode, or a
+                Customize This Vote override) -- recorded purely for
+                later display (/vote_status, results, restored voting
+                views), never re-interpreted here. None for legacy
+                callers/tests that don't track it.
+            filter_member_discord_user_id: Custom Vote Filters: the
+                Discord user ID this round's nominee pool was narrowed to
+                before selection, or None if no member filter was active.
+                A per-vote override only -- never written back to the
+                collection's own configuration.
+            filter_genre: Custom Vote Filters: the genre this round's
+                nominee pool was narrowed to before selection, or None if
+                no genre filter was active. Same per-vote-only contract
+                as filter_member_discord_user_id.
 
         Returns:
             VoteRoundResult. Fails if a round is already open *for this
@@ -195,6 +215,9 @@ class VoteService:
             database_id=database_id,
             reminder_enabled=reminder_enabled,
             reminder_minutes_before_close=reminder_minutes_before_close,
+            candidate_selection_mode=candidate_selection_mode,
+            filter_member_discord_user_id=filter_member_discord_user_id,
+            filter_genre=filter_genre,
         )
         self._next_round_id += 1
         self._rounds[new_round.id] = new_round

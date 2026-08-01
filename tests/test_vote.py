@@ -329,3 +329,43 @@ class VoteRoundCancelledStatusTests(unittest.TestCase):
         )
 
         self.assertEqual(vote_round.votes[111].suggestion_id, 1)
+
+
+class VoteRoundCustomVoteFilterFieldsTests(unittest.TestCase):
+    """Custom Vote Filter Architecture: candidate_selection_mode/
+    filter_member_discord_user_id/filter_genre, added for display/audit
+    purposes -- narrowing itself happens entirely in
+    services/nominee_pool_filter.py, never here.
+    """
+
+    def test_fields_default_to_none(self) -> None:
+        vote_round = VoteRound(id=1)
+        self.assertIsNone(vote_round.candidate_selection_mode)
+        self.assertIsNone(vote_round.filter_member_discord_user_id)
+        self.assertIsNone(vote_round.filter_genre)
+
+    def test_accepts_a_candidate_selection_mode(self) -> None:
+        from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+
+        vote_round = VoteRound(id=1, candidate_selection_mode=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
+        self.assertEqual(vote_round.candidate_selection_mode, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
+
+    def test_accepts_a_filter_member_discord_user_id(self) -> None:
+        vote_round = VoteRound(id=1, filter_member_discord_user_id=111)
+        self.assertEqual(vote_round.filter_member_discord_user_id, 111)
+
+    def test_rejects_a_non_positive_filter_member_discord_user_id(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, filter_member_discord_user_id=0)
+
+    def test_accepts_a_filter_genre(self) -> None:
+        vote_round = VoteRound(id=1, filter_genre="Horror")
+        self.assertEqual(vote_round.filter_genre, "Horror")
+
+    def test_trims_a_filter_genre(self) -> None:
+        vote_round = VoteRound(id=1, filter_genre="  Horror  ")
+        self.assertEqual(vote_round.filter_genre, "Horror")
+
+    def test_rejects_an_empty_filter_genre(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, filter_genre="   ")
