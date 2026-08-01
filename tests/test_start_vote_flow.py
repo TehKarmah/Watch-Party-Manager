@@ -783,6 +783,15 @@ class CustomizeVoteOverridesViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(view.children), 3)
         self.assertEqual(view.children[2].label, "Continue to Vote Settings")
 
+    async def test_continue_button_is_exposed_and_enabled_by_default(self) -> None:
+        view = CustomizeVoteOverridesView(
+            self._noop,
+            default_candidate_selection=CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
+            default_visibility=GuildVoteVisibility.VISIBLE,
+        )
+        self.assertIs(view.continue_button, view.children[2])
+        self.assertFalse(view.continue_button.disabled)
+
     async def test_continue_button_forwards_the_selected_mode_and_visibility(self) -> None:
         received = []
 
@@ -1683,6 +1692,187 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         self.assertIsNotNone(vote_round, confirm_interaction.response.sent_message)
         self.assertIsNone(vote_round.filter_member_discord_user_id)
         self.assertIsNone(vote_round.filter_genre)
+
+    # --- Regression coverage for the live bug: a non-member or a member
+    # with zero eligible suggestions must never be silently discarded
+    # while letting Continue to Vote Settings (and, past it, Review This
+    # Vote / round creation) proceed. See services/member_filter_validation.py.
+
+    def _bot_member(self) -> FakeMember:
+        # A bot account is judged by the same two rules as a human: Watch
+        # Party membership plus at least one eligible suggestion tied to
+        # its stable Discord user ID -- never rejected merely for being a
+        # bot. 444 has one eligible Comedy suggestion, added below.
+        return FakeMember(user_id=444, roles=[FakeRole(self.WATCH_PARTY_FILTER_ROLE_ID)], display_name="Midjourney Bot")
+
+    def _continue_button(self, overrides_view):
+        return next(
+            child for child in overrides_view.children if getattr(child, "label", None) == "Continue to Vote Settings"
+        )
+
+    async def test_non_member_selection_disables_continue(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
+
+        await member_select.callback(interaction=self._interaction())
+
+        self.assertTrue(overrides_view.continue_button.disabled)
+
+    async def test_zero_eligible_suggestions_selection_disables_continue(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        idle_member = FakeMember(user_id=999, roles=[FakeRole(self.WATCH_PARTY_FILTER_ROLE_ID)], display_name="Idle")
+        member_select._values = [idle_member]
+
+        await member_select.callback(interaction=self._interaction())
+
+        self.assertTrue(overrides_view.continue_button.disabled)
+
+    async def test_valid_member_selection_keeps_continue_enabled(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [self._kc_member()]
+
+        await member_select.callback(interaction=self._interaction())
+
+        self.assertFalse(overrides_view.continue_button.disabled)
+
+    async def test_valid_bot_member_with_eligible_suggestions_is_accepted(self) -> None:
+        self.suggestion_service.suggest(
+            "Bot-Suggested Comedy", database_id=self.database_id, original_suggester="444", genres=("Comedy",)
+        )
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [self._bot_member()]
+
+        select_interaction = self._interaction()
+        await member_select.callback(interaction=select_interaction)
+
+        self.assertIn("Midjourney Bot has 1 eligible suggestion", select_interaction.response.edited_content)
+        self.assertFalse(overrides_view.continue_button.disabled)
+
+    async def test_clicking_continue_while_a_non_member_is_selected_is_blocked(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
+        await member_select.callback(interaction=self._interaction())
+
+        continue_interaction = self._interaction()
+        await self._continue_button(overrides_view).callback(interaction=continue_interaction)
+
+        self.assertIsNone(continue_interaction.response.sent_modal)
+        self.assertIn("not a current Watch Party member", continue_interaction.response.edited_content)
+        self.assertIsNone(self.vote_service.get_open_round())
+
+    async def test_clicking_continue_while_a_zero_eligible_member_is_selected_is_blocked(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        idle_member = FakeMember(user_id=999, roles=[FakeRole(self.WATCH_PARTY_FILTER_ROLE_ID)], display_name="Idle")
+        member_select._values = [idle_member]
+        await member_select.callback(interaction=self._interaction())
+
+        continue_interaction = self._interaction()
+        await self._continue_button(overrides_view).callback(interaction=continue_interaction)
+
+        self.assertIsNone(continue_interaction.response.sent_modal)
+        self.assertIn("has no eligible suggestions", continue_interaction.response.edited_content)
+        self.assertIsNone(self.vote_service.get_open_round())
+
+    async def test_clearing_an_invalid_selection_restores_any_member_and_reenables_continue(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
+        await member_select.callback(interaction=self._interaction())
+        self.assertTrue(overrides_view.continue_button.disabled)
+
+        member_select._values = []
+        clear_interaction = self._interaction()
+        await member_select.callback(interaction=clear_interaction)
+
+        self.assertFalse(overrides_view.continue_button.disabled)
+        self.assertNotIn("Stranger", clear_interaction.response.edited_content)
+
+    async def test_invalid_member_is_not_shown_in_review_this_vote(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
+        await member_select.callback(interaction=self._interaction())
+        # Explicitly clear back to Any Member -- the only way to unblock.
+        member_select._values = []
+        await member_select.callback(interaction=self._interaction())
+        genre_select = self._genre_select(overrides_view)
+        genre_select._values = ["Comedy"]
+        await genre_select.callback(interaction=self._interaction())
+
+        continue_interaction = self._interaction()
+        await self._continue_button(overrides_view).callback(interaction=continue_interaction)
+        modal = continue_interaction.response.sent_modal
+        self.assertIsNotNone(modal)
+        modal.nominee_count_input._value = "2"
+        modal.duration_input._value = None
+        submit_interaction = self._interaction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        self.assertNotIn("Stranger", submit_interaction.response.sent_message)
+        self.assertIn("Genre: Comedy", submit_interaction.response.sent_message)
+
+    async def test_invalid_member_is_never_persisted_to_the_vote_round(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
+        await member_select.callback(interaction=self._interaction())
+        member_select._values = []
+        await member_select.callback(interaction=self._interaction())
+
+        confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertIsNotNone(vote_round, confirm_interaction.response.sent_message)
+        self.assertIsNone(vote_round.filter_member_discord_user_id)
+
+    async def test_genre_only_vote_still_works_after_member_filter_explicitly_cleared(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [self._kc_member()]
+        await member_select.callback(interaction=self._interaction())
+        member_select._values = []
+        await member_select.callback(interaction=self._interaction())
+        genre_select = self._genre_select(overrides_view)
+        genre_select._values = ["Comedy"]
+        await genre_select.callback(interaction=self._interaction())
+
+        confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertIsNotNone(vote_round, confirm_interaction.response.sent_message)
+        self.assertIsNone(vote_round.filter_member_discord_user_id)
+        self.assertEqual(vote_round.filter_genre, "Comedy")
+
+    async def test_recovering_from_an_invalid_selection_with_a_valid_member_persists_only_the_valid_one(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
+        await member_select.callback(interaction=self._interaction())
+        member_select._values = [self._kc_member()]
+        await member_select.callback(interaction=self._interaction())
+
+        confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
+
+        vote_round = self.vote_service.get_open_round()
+        self.assertIsNotNone(vote_round, confirm_interaction.response.sent_message)
+        self.assertEqual(vote_round.filter_member_discord_user_id, 111)
 
 
 if __name__ == "__main__":

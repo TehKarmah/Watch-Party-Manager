@@ -146,7 +146,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Type `/vote`; confirm autocomplete offers exactly `start`, `status`, `edit`, and that `/start_vote`, `/vote_status`, `/edit_vote`, and the pre-release `/voting` group no longer exist.
   3. Type `/watch-party`; confirm autocomplete offers exactly `schedule`, `status`, `reschedule`, `cancel`, and that `/schedule_watch_party`, `/reschedule_watch_party`, `/cancel_watch_party`, `/watch_party_status` no longer exist.
   4. Type `/watch_party` (underscore); confirm it still exists, separately from `/watch-party` (hyphen), and still offers `members`, `pending`, `approved`, `denied`, `add`, `remove`, `search` -- membership administration is unaffected by this cleanup.
-  5. Confirm every other command named in [Command Reference](10-Command-Reference.md) (e.g. `/about`, `/add`, `/backup`, `/config`, `/help`, `/list`, `/restore`, `/setup`, `/stats`, `/remove`, `/edit_suggestion`, `/reject`, `/unreject`, `/repair_suggestions`, `/factory_reset`, `/import`, `/join_watch_party`) still appears as a plain top-level command, unchanged.
+  5. Confirm every other command named in [Command Reference](10-Command-Reference.md) (e.g. `/about`, `/add`, `/backup`, `/config`, `/help`, `/list`, `/random_watch`, `/restore`, `/setup`, `/stats`, `/remove`, `/edit_suggestion`, `/reject`, `/unreject`, `/repair_suggestions`, `/factory_reset`, `/import`, `/join_watch_party`) still appears as a plain top-level command, unchanged.
 - **Expected Result:** The live Discord command tree matches [Command Reference](10-Command-Reference.md) exactly -- no obsolete command remains reachable under its old name, no command was accidentally duplicated under both an old and new name, and `/watch_party`/`/watch-party` coexist as the two distinct, valid command names documented there.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -749,6 +749,26 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   1. As a regular member, run `/list public:true` -- confirm it's rejected.
   2. As WASH Crew, run `/list public:true` -- confirm it posts visibly in the channel.
 - **Expected Result:** Matches exactly.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 4.8b `/random_watch` -- true-random discovery, filters, and session behavior
+
+- **Objective:** Confirm `/random_watch` chooses uniformly at random from the collection's eligible pool, its optional member/genre filters combine correctly and reuse the same architecture as `/vote start`'s Custom Vote Filters, and it never changes any suggestion or vote state.
+- **Preconditions:** A collection with several `Available` suggestions across at least two members and two genres, plus at least one suggestion each in In an Active Vote, Pending Crew Review, Vote Winner, Watched, and Retired.
+- **Steps:**
+  1. With no collections configured in the guild, run `/random_watch`; confirm a clear "create a collection first" message, not a generic error.
+  2. With exactly one collection, run `/random_watch`; confirm it's used automatically and named on screen, with no picker.
+  3. With more than one collection and no unambiguous channel context, run `/random_watch`; confirm a picker is shown, consistent with `/list`'s own picker.
+  4. Press **Pick Random Item** repeatedly (at least ~15 times); confirm only `Available` suggestions are ever returned -- never one currently In an Active Vote, Pending Crew Review, a Vote Winner, Watched, or Retired.
+  5. Press **Pick Again** several times in a row; confirm each press performs a new draw and that picking the same item twice in a row is not blocked (no hidden no-repeat state).
+  6. Press **Add Filters**, choose a specific member via the member select, and confirm only that member's eligible suggestions are ever returned by **Pick Random Item**; clear the member filter (native "clear" on the select) and confirm the full pool returns.
+  7. Choose a specific genre via the genre select; confirm only suggestions tagged with that genre are ever returned, and that the genre options show eligible counts. Combine the member and genre filters together and confirm the result satisfies both.
+  8. Narrow the filters until no suggestion matches; confirm a clear message naming the collection and the active filter(s), with a way to change or clear filters or the collection -- not a generic error.
+  9. From a result screen, press **Change Filters**; confirm the collection stays the same and the current filters are shown. Press **Change Collection**; confirm it returns to the collection picker and that filters from the previous collection do not carry over (including genre options, which should rebuild for the new collection).
+  10. Confirm the result screen names the collection, states the pick was random, shows the item's usual details (title, year, poster, genre, IMDb link, original suggester) without duplicating the IMDb URL as a separate line, and includes a working **View Original Suggestion** link when the suggestion has a linkable original post (omitted when it doesn't).
+  11. After several picks, confirm via `/list` and `/database health` that no suggestion's status changed and no voting round was created.
+- **Expected Result:** Selection is always uniformly random over the eligible pool with no Favor New/Older Additions weighting; filters narrow correctly, combine correctly, and never persist beyond the session; collection/filter selection and result presentation match the behavior described above; the command never mutates any suggestion or vote state.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -1372,9 +1392,9 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm the participant command set is available to Watch Party members (and WASH Crew, who inherit it).
 - **Preconditions:** A member with only the Watch Party role.
 - **Steps:**
-  1. Run `/add`, `/list`, and `/stats` as this member.
+  1. Run `/add`, `/list`, `/random_watch`, and `/stats` as this member.
   2. Run `/help` and confirm the shown command list matches what's actually usable.
-- **Expected Result:** All three commands work; `/help` accurately reflects this member's permission tier.
+- **Expected Result:** All four commands work; `/help` accurately reflects this member's permission tier.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -1384,7 +1404,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** A member with the WASH Crew role.
 - **Steps:**
   1. Run a representative sample: `/vote start`, `/vote status`, `/database add`, `/config`, `/backup`.
-  2. Confirm the same member can also run `/add`/`/list`/`/stats` (inherited member access).
+  2. Confirm the same member can also run `/add`/`/list`/`/random_watch`/`/stats` (inherited member access).
 - **Expected Result:** All succeed; `/help` shows the full WASH Crew command list.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________

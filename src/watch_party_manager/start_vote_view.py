@@ -217,7 +217,10 @@ class CustomizeVoteOverridesView(discord.ui.View):
             self.add_item(MemberFilterSelectComponent(on_member_filter_changed))
         if on_genre_filter_changed is not None and genre_filter_options:
             self.add_item(GenreFilterSelectComponent(on_genre_filter_changed, options=genre_filter_options))
-        self.add_item(ContinueToVoteSettingsButton(on_continue, self.candidate_selection_select, self.visibility_select))
+        self.continue_button = ContinueToVoteSettingsButton(
+            on_continue, self.candidate_selection_select, self.visibility_select
+        )
+        self.add_item(self.continue_button)
 
 
 class CustomizeVoteModal(discord.ui.Modal):

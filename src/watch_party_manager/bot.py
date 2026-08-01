@@ -159,8 +159,11 @@ from watch_party_manager.services.nominee_pool_filter import (
     GenreFilter,
     MemberSuggestionFilter,
     NomineePoolFilter,
+    apply_nominee_pool_filters,
     genre_eligibility_counts,
 )
+from watch_party_manager.services.random_watch_service import choose_random_watch_item
+from watch_party_manager.services.member_filter_validation import validate_member_filter_selection
 from watch_party_manager.services.collection_eligibility_service import (
     CollectionEligibility,
     CollectionEligibilityService,
@@ -318,6 +321,11 @@ from watch_party_manager.start_vote_view import (
     CustomizeVoteModal,
     CustomizeVoteOverridesView,
     StartVoteChoiceView,
+)
+from watch_party_manager.random_watch_view import (
+    RandomWatchFilterView,
+    RandomWatchInitialView,
+    RandomWatchResultView,
 )
 from watch_party_manager.crew_review_view import CrewReviewView
 from watch_party_manager.suggestion_view import (
@@ -548,6 +556,12 @@ class WatchPartyBot(commands.Bot):
             public: bool = False,
         ) -> None:
             await handle_list_suggestions(interaction, self, status, public)
+
+        @self.tree.command(
+            name="random_watch", description="Pick one random eligible watch item from a collection."
+        )
+        async def random_watch(interaction: discord.Interaction) -> None:
+            await handle_random_watch(interaction, self)
 
         @self.tree.command(
             name="repair_suggestions", description="Repair suggestions with malformed or legacy data (WASH Crew only)."
@@ -4567,19 +4581,50 @@ class VotingGroup(discord.app_commands.Group):
                 # both depend on it) -- unlike "Use Defaults", whose
                 # collection resolution can safely stay late (see
                 # handle_start_vote_completion's own ambiguity check).
-                filter_state: dict[str, object] = {"member_id": None, "member_display": None, "genre": None}
+                filter_state: dict[str, object] = {
+                    "member_id": None,
+                    "member_display": None,
+                    "genre": None,
+                    "member_filter_invalid": False,
+                    "member_filter_status_line": "",
+                }
                 eligible_pool: List[WatchItem] = (
                     InfinitePoolStrategy(suggestion_source=bot.suggestion_service).candidate_pool(database_id)
                     if database_id is not None
                     else []
                 )
                 genre_options = build_genre_filter_select_options(eligible_pool)
+                collection_display_name = "this collection"
+                if database_id is not None:
+                    resolved_database = bot.suggestion_service.get_database(database_id)
+                    if resolved_database is not None:
+                        collection_display_name = format_collection_display(
+                            _resolve_collection_name(
+                                bot.suggestion_service,
+                                resolved_database,
+                                select_interaction.guild,
+                                bot.suggestion_database_configuration_repository,
+                            )
+                        )
 
                 async def on_overrides_continue(
                     continue_interaction: discord.Interaction,
                     candidate_selection_override: CandidateSelectionMode,
                     visibility_override: GuildVoteVisibility,
                 ) -> None:
+                    if filter_state["member_filter_invalid"]:
+                        # Defense in depth: the Continue button is already
+                        # disabled while a selection is invalid, but this
+                        # guard is what actually guarantees an invalid
+                        # member can never reach the modal, Review This
+                        # Vote, or VoteRound -- not merely Discord's
+                        # client-side disabled-button behavior.
+                        await continue_interaction.response.edit_message(
+                            content=build_overrides_body(filter_state["member_filter_status_line"]),
+                            view=overrides_view,
+                        )
+                        return
+
                     async def on_modal_submit(
                         modal_interaction: discord.Interaction,
                         nominee_count_text: Optional[str],
@@ -4638,43 +4683,21 @@ class VotingGroup(discord.app_commands.Group):
                 async def on_member_filter_changed(
                     member_interaction: discord.Interaction, member: Optional[discord.Member]
                 ) -> None:
-                    status_line = ""
-                    if member is None:
-                        filter_state["member_id"] = None
-                        filter_state["member_display"] = None
-                    else:
-                        role_config = bot.membership_service.get_role_config(member_interaction.guild_id)
-                        is_member = (
-                            role_config is not None
-                            and role_config.role_id is not None
-                            and MembershipService.is_current_member(member, role_config.role_id)
-                        )
-                        if not is_member:
-                            filter_state["member_id"] = None
-                            filter_state["member_display"] = None
-                            status_line = (
-                                f"⚠ {member.display_name} is not a current Watch Party member. "
-                                "Choose another member."
-                            )
-                        else:
-                            member_filter = MemberSuggestionFilter(
-                                discord_user_id=member.id, member_display=member.display_name
-                            )
-                            eligible = member_filter.apply(eligible_pool)
-                            if not eligible:
-                                filter_state["member_id"] = None
-                                filter_state["member_display"] = None
-                                status_line = (
-                                    f"⚠ {member.display_name} has no eligible suggestions in this "
-                                    "collection. Choose another member."
-                                )
-                            else:
-                                filter_state["member_id"] = member.id
-                                filter_state["member_display"] = member.display_name
-                                suggestion_word = "suggestion" if len(eligible) == 1 else "suggestions"
-                                status_line = f"{member.display_name} has {len(eligible)} eligible {suggestion_word}."
+                    role_config = bot.membership_service.get_role_config(member_interaction.guild_id)
+                    watch_party_role_id = role_config.role_id if role_config is not None else None
+                    result = validate_member_filter_selection(
+                        member,
+                        watch_party_role_id=watch_party_role_id,
+                        eligible_pool=eligible_pool,
+                        collection_display_name=collection_display_name,
+                    )
+                    filter_state["member_id"] = result.discord_user_id
+                    filter_state["member_display"] = result.member_display
+                    filter_state["member_filter_invalid"] = not result.valid
+                    filter_state["member_filter_status_line"] = result.status_line
+                    overrides_view.continue_button.disabled = not result.valid
                     await member_interaction.response.edit_message(
-                        content=build_overrides_body(status_line), view=overrides_view
+                        content=build_overrides_body(result.status_line), view=overrides_view
                     )
 
                 async def on_genre_filter_changed(
@@ -8969,6 +8992,348 @@ async def handle_database_health(interaction: discord.Interaction, bot: "WatchPa
         await send_collection_health(target_interaction, bot, database)
 
     await resolve_database_then(interaction, bot, guild_id, interaction.channel_id, on_resolved)
+
+
+# --- /random_watch -----------------------------------------------------------------------------
+#
+# A discovery command only: it never creates a voting round, changes a
+# suggestion's status, marks anything watched, or touches a collection's
+# own configuration. Everything here orchestrates existing services --
+# resolve_database_then/ListDatabaseSelectView for collection selection
+# (the same pattern /list and /database health use),
+# CollectionEligibilityService for eligibility (the same authoritative
+# source voting and /list use), services/nominee_pool_filter.py's
+# MemberSuggestionFilter/GenreFilter for optional filtering (the same
+# architecture Custom Vote Filters uses), and
+# services/random_watch_service.choose_random_watch_item for the one
+# genuinely new piece: an unweighted, uniform draw from the resolved
+# pool. No existing eligibility or filtering logic is duplicated.
+
+
+def build_random_watch_filter_status_line(filter_state: dict) -> str:
+    """Describe the currently active filters, or their absence, for the
+    Add Filters screen -- never says "Any Member"/"Any Genre" (Custom
+    Vote Filters' own convention), just omits an inactive filter.
+    """
+    member_display = filter_state.get("member_display")
+    genre = filter_state.get("genre")
+    if member_display and genre:
+        return f"Current filters -- Suggestion Source: {member_display} | Genre: {genre}"
+    if member_display:
+        return f"Current filters -- Suggestion Source: {member_display}"
+    if genre:
+        return f"Current filters -- Genre: {genre}"
+    return "Current filters -- none (Any Member, Any Genre)"
+
+
+def build_random_watch_filters_body(
+    collection_display_name: str, filter_state: dict, *, status_line: str = ""
+) -> str:
+    lines = [
+        f'**Random Watch -- "{collection_display_name}"**',
+        "",
+        "Optionally narrow the random pool to one member's eligible suggestions and/or one genre, "
+        "then press **Pick Random Item**. These filters apply only to this session -- they never "
+        "change the collection's or guild's own configuration, and never affect a future "
+        "`/random_watch` session.",
+        "",
+        build_random_watch_filter_status_line(filter_state),
+    ]
+    if status_line:
+        lines.append(status_line)
+    return "\n".join(lines)
+
+
+def build_random_watch_result_header(collection_display_name: str, filter_state: dict) -> str:
+    """The plain-text line shown above the result embed -- names the
+    collection and any active filter(s), and makes clear this was a
+    random pick. An inactive filter (Any Member/Any Genre) is never shown.
+    """
+    lines = [f'🎲 Random pick from "{collection_display_name}"']
+    member_display = filter_state.get("member_display")
+    genre = filter_state.get("genre")
+    if member_display:
+        lines.append(f"Suggestion Source: {member_display}")
+    if genre:
+        lines.append(f"Genre: {genre}")
+    return "\n".join(lines)
+
+
+def build_random_watch_empty_pool_message(
+    collection_display_name: str, *, member_display: Optional[str] = None, genre: Optional[str] = None
+) -> str:
+    """The "nothing to pick from" message for an empty (possibly
+    filtered) pool -- always names the collection and, when active, the
+    filter(s) responsible, and always offers a way forward (Filtered-
+    Pool Feedback).
+    """
+    if member_display and genre:
+        return (
+            f"{member_display}'s {genre} suggestions leave no eligible watch items in "
+            f'"{collection_display_name}" to pick from. Clear or change a filter, or choose another collection.'
+        )
+    if member_display:
+        return (
+            f'{member_display} has no eligible suggestions in "{collection_display_name}" to pick from. '
+            "Choose another member, clear the filter, or choose another collection."
+        )
+    if genre:
+        return (
+            f'The {genre} filter leaves no eligible watch items in "{collection_display_name}" to pick from. '
+            "Choose another genre, clear the filter, or choose another collection."
+        )
+    return (
+        f'"{collection_display_name}" has no eligible watch items to pick from right now. '
+        "Add more suggestions, or choose another collection."
+    )
+
+
+def build_random_watch_result_embed(watch_item: WatchItem, *, database_name: str, suggested_by: str) -> discord.Embed:
+    """Build /random_watch's result embed.
+
+    Reuses the same visual language as build_suggestion_confirmation_embed
+    (color, Details field, thumbnail) but is its own function, not a call
+    to it: it additionally shows Release Year (not part of the
+    suggestion-confirmation embed) and deliberately does NOT duplicate
+    the IMDb link as a separate description line -- the title itself is
+    already the link (via the embed's own url=), matching "do not
+    duplicate raw IMDb URLs when the title is already linked".
+    """
+    imdb_url = watch_item.metadata_ids.get(MetadataProvider.IMDB)
+    embed = discord.Embed(
+        title=watch_item.title,
+        description=watch_item.description or None,
+        url=imdb_url,
+        color=0xF5C518,
+    )
+    if watch_item.release_year:
+        embed.add_field(name="Year", value=str(watch_item.release_year), inline=True)
+    details: list[str] = []
+    if watch_item.genres:
+        details.append(" • ".join(watch_item.genres))
+    if watch_item.runtime_minutes:
+        details.append(f"{watch_item.runtime_minutes} min")
+    if watch_item.content_rating:
+        details.append(f"Rated {watch_item.content_rating}")
+    if details:
+        embed.add_field(name="Details", value=" • ".join(details), inline=False)
+    if watch_item.director:
+        embed.add_field(name="Director", value=watch_item.director, inline=True)
+    if watch_item.imdb_rating:
+        embed.add_field(name="IMDb Rating", value=f"{watch_item.imdb_rating}/10", inline=True)
+    embed.add_field(name="Suggested By", value=suggested_by, inline=True)
+    embed.add_field(name="Collection", value=format_collection_display(database_name), inline=True)
+    embed.add_field(name="Reference", value=watch_item.reference, inline=True)
+    if watch_item.poster_url:
+        embed.set_thumbnail(url=watch_item.poster_url)
+    embed.set_footer(text="Selected randomly by /random_watch")
+    return embed
+
+
+async def handle_random_watch(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """/random_watch: a discovery tool only -- never creates a voting
+    round, changes a suggestion's status, marks anything watched, or
+    changes any collection/nominee-selection setting.
+
+    Access (Section 1): any Watch Party member, the same rule /list and
+    /add already use -- not WASH Crew-only, since nothing here is an
+    administrative action.
+    """
+    permission = bot.permission_service.require_watch_party_member(interaction.user)
+    if not permission.allowed:
+        await interaction.response.send_message(permission.message, ephemeral=True)
+        return
+
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    async def on_resolved(target_interaction: discord.Interaction, database: SuggestionDatabase) -> None:
+        await send_random_watch_session(target_interaction, bot, database, edit=False)
+
+    await resolve_database_then(interaction, bot, guild_id, interaction.channel_id, on_resolved)
+
+
+async def show_random_watch_collection_picker(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, *, edit: bool
+) -> None:
+    """/random_watch's "choose a collection" screen: shown for the
+    initial ambiguous-collection case (via resolve_database_then) and
+    reused unchanged as the Change Collection target from within an
+    active session. Unlike Switch Collection elsewhere, this always
+    lists every active collection (never excludes the current one) --
+    Change Collection is an explicit request to choose again, including
+    re-choosing the same collection.
+    """
+    databases = [database for database in bot.suggestion_service.list_databases(guild_id) if database.active]
+    if not databases:
+        content = "WASH Crew must create a collection first -- run `/database add` or `/setup`."
+        if edit:
+            await interaction.response.edit_message(content=content, view=None)
+        else:
+            await interaction.response.send_message(content, ephemeral=True)
+        return
+
+    if len(databases) == 1:
+        await send_random_watch_session(interaction, bot, databases[0], edit=edit)
+        return
+
+    options = [
+        (
+            database.database_id,
+            format_collection_display(
+                _resolve_collection_name(
+                    bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+                )
+            ),
+        )
+        for database in databases
+    ]
+
+    async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
+        database = bot.suggestion_service.get_database(database_id)
+        if database is None:
+            await select_interaction.response.send_message("That collection no longer exists.", ephemeral=True)
+            return
+        await send_random_watch_session(select_interaction, bot, database, edit=True)
+
+    view = ListDatabaseSelectView(options, on_select)
+    content = "Choose a collection:"
+    if edit:
+        await interaction.response.edit_message(content=content, view=view)
+    else:
+        await interaction.response.send_message(content, view=view, ephemeral=True)
+
+
+async def send_random_watch_session(
+    interaction: discord.Interaction, bot: "WatchPartyBot", database: SuggestionDatabase, *, edit: bool
+) -> None:
+    """Show /random_watch's initial Pick Random Item / Add Filters screen
+    for one resolved collection, starting a fresh filter session (no
+    member/genre filter carried over from a previous collection -- see
+    on_change_collection below). Also the render target Change Collection
+    calls back into once a (possibly different) collection is chosen.
+    """
+    guild_id = database.guild_id
+    collection_display_name = format_collection_display(
+        _resolve_collection_name(
+            bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+        )
+    )
+    eligibility = bot.collection_eligibility_service.get_eligibility(database.database_id)
+    eligible_pool: List[WatchItem] = list(eligibility.available)
+    genre_options = build_genre_filter_select_options(eligible_pool)
+    filter_state: dict = {
+        "member_id": None,
+        "member_display": None,
+        "genre": None,
+        "member_filter_invalid": False,
+        "member_filter_status_line": "",
+    }
+
+    def resolve_filters() -> List[NomineePoolFilter]:
+        filters: List[NomineePoolFilter] = []
+        if filter_state["member_id"] is not None:
+            filters.append(
+                MemberSuggestionFilter(
+                    discord_user_id=filter_state["member_id"], member_display=filter_state["member_display"]
+                )
+            )
+        if filter_state["genre"] is not None:
+            filters.append(GenreFilter(genre=filter_state["genre"]))
+        return filters
+
+    async def show_filters(filters_interaction: discord.Interaction, *, status_line: str = "") -> None:
+        body = build_random_watch_filters_body(collection_display_name, filter_state, status_line=status_line)
+        view = RandomWatchFilterView(
+            on_member_filter_changed,
+            on_genre_filter_changed,
+            do_pick,
+            on_change_collection,
+            genre_filter_options=genre_options,
+            member_filter_invalid=filter_state["member_filter_invalid"],
+        )
+        await filters_interaction.response.edit_message(content=body, view=view)
+
+    async def on_member_filter_changed(
+        member_interaction: discord.Interaction, member: Optional[discord.Member]
+    ) -> None:
+        role_config = bot.membership_service.get_role_config(member_interaction.guild_id)
+        watch_party_role_id = role_config.role_id if role_config is not None else None
+        result = validate_member_filter_selection(
+            member,
+            watch_party_role_id=watch_party_role_id,
+            eligible_pool=eligible_pool,
+            collection_display_name=collection_display_name,
+        )
+        filter_state["member_id"] = result.discord_user_id
+        filter_state["member_display"] = result.member_display
+        filter_state["member_filter_invalid"] = not result.valid
+        filter_state["member_filter_status_line"] = result.status_line
+        await show_filters(member_interaction, status_line=result.status_line)
+
+    async def on_genre_filter_changed(genre_interaction: discord.Interaction, genre: Optional[str]) -> None:
+        filter_state["genre"] = genre
+        await show_filters(genre_interaction)
+
+    async def do_pick(pick_interaction: discord.Interaction) -> None:
+        if filter_state["member_filter_invalid"]:
+            # Defense in depth: the filtered Pick Random Item button is
+            # already disabled while a selection is invalid, but this
+            # guard is what actually guarantees an invalid member can
+            # never produce a result -- not merely Discord's client-side
+            # disabled-button behavior.
+            await show_filters(pick_interaction, status_line=filter_state["member_filter_status_line"])
+            return
+
+        filtered_pool = apply_nominee_pool_filters(eligible_pool, resolve_filters())
+        item = choose_random_watch_item(filtered_pool)
+        if item is None:
+            message = build_random_watch_empty_pool_message(
+                collection_display_name,
+                member_display=filter_state["member_display"],
+                genre=filter_state["genre"],
+            )
+            view = RandomWatchFilterView(
+                on_member_filter_changed,
+                on_genre_filter_changed,
+                do_pick,
+                on_change_collection,
+                genre_filter_options=genre_options,
+                member_filter_invalid=filter_state["member_filter_invalid"],
+            )
+            await pick_interaction.response.edit_message(content=message, view=view)
+            return
+
+        suggested_by = f"<@{item.journey.original_suggester}>" if item.journey.original_suggester else "Unknown"
+        embed = build_random_watch_result_embed(item, database_name=database.name, suggested_by=suggested_by)
+        original_url = build_suggestion_message_link(item)
+        content = build_random_watch_result_header(collection_display_name, filter_state)
+        view = RandomWatchResultView(
+            do_pick, on_change_filters, on_change_collection, original_suggestion_url=original_url
+        )
+        await pick_interaction.response.edit_message(content=content, embed=embed, view=view)
+
+    async def on_change_filters(change_filters_interaction: discord.Interaction) -> None:
+        await show_filters(change_filters_interaction)
+
+    async def on_add_filters(filters_interaction: discord.Interaction) -> None:
+        await show_filters(filters_interaction)
+
+    async def on_change_collection(change_interaction: discord.Interaction) -> None:
+        await show_random_watch_collection_picker(change_interaction, bot, guild_id, edit=True)
+
+    body = (
+        f'**Random Watch -- "{collection_display_name}"**\n\n'
+        "Pick a random eligible watch item, or add filters first (one member's suggestions "
+        "and/or one genre)."
+    )
+    view = RandomWatchInitialView(do_pick, on_add_filters)
+    if edit:
+        await interaction.response.edit_message(content=body, view=view)
+    else:
+        await interaction.response.send_message(body, view=view, ephemeral=True)
 
 
 async def handle_list_suggestions(

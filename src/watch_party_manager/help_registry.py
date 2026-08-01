@@ -84,6 +84,12 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WATCH_PARTY_MEMBER,
     ),
     CommandHelp(
+        "/random_watch",
+        "Pick one random eligible watch item from a collection.",
+        "Watch Items",
+        HelpAudience.WATCH_PARTY_MEMBER,
+    ),
+    CommandHelp(
         "/remove", "Remove a watch item.", "Watch Items", HelpAudience.WASH_CREW
     ),
     CommandHelp(
