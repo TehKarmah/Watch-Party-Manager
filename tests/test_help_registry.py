@@ -81,6 +81,7 @@ class HelpRegistryTests(unittest.TestCase):
         commands = [entry.name for _, entries in sections for entry in entries]
         self.assertIn("/database add", commands)
         self.assertIn("/database list", commands)
+        self.assertIn("/database health", commands)
         self.assertIn("/database manage", commands)
         self.assertIn("/repair_suggestions", commands)
         self.assertIn("/setup", commands)
@@ -260,10 +261,12 @@ class HelpRegistryTests(unittest.TestCase):
     # point crew members at them instead. The full list stays documented in
     # the Command Reference (docs/10-Command-Reference.md).
 
-    def test_collections_section_only_lists_add_list_and_manage(self) -> None:
+    def test_collections_section_only_lists_add_list_health_and_manage(self) -> None:
         sections = dict(command_sections(show_wash_crew=True))
         collection_names = [entry.name for entry in sections["WASH Crew: Collections"]]
-        self.assertEqual(collection_names, ["/database add", "/database list", "/database manage"])
+        self.assertEqual(
+            collection_names, ["/database add", "/database list", "/database health", "/database manage"]
+        )
 
     def test_shortcut_subcommands_no_longer_have_registry_entries(self) -> None:
         names = [entry.name for entry in COMMAND_HELP]

@@ -6,7 +6,7 @@
 | File | `08-Expanded-Help.md` |
 | Version | 1.0 |
 | Status | Active |
-| Last Updated | July 2026 |
+| Last Updated | August 2026 |
 | Authors | TehKarmah & ChatGPT |
 
 This guide expands on the concise command reference shown by `/help` in Discord. It is the starting point for setup instructions, workflows, definitions, administration guidance, and troubleshooting.
@@ -37,12 +37,15 @@ The current command list and short descriptions remain available through `/help`
 
 Casting a vote itself happens through the interactive buttons on the voting post, not a slash command.
 
+Wherever WASH asks for a duration (vote duration, reminder lead time, `/vote edit`'s Shorten/Extend Vote), it accepts a whole number immediately followed by a unit -- minutes, hours, or days -- for example `10m`, `1h`, or `7d`.
+
 ### WASH Crew
 
 - `/database add` -- Create a collection.
 - `/database list` -- View collections.
 - `/database health` -- Show a collection's eligibility and pool health (Eligible, In an Active Vote, Pending Crew Review, Vote Winners, Retired, Watched, Next Vote status, Low Pool status). Never changes any state.
-- `/database manage` -- Move, edit, back up, restore, reset, or remove collections (additional shortcuts -- `/database move`, `/database backup`, `/database restore`, `/database reset`, `/database remove` -- are documented in the [Command Reference](10-Command-Reference.md)).
+- `/database manage` -- Guided workflow: pick a collection, then move, edit, back up, restore, reset, or remove it. This is the only way to move, back up, reset, or remove a collection -- those actions have no separate top-level command (`/database restore` is the one exception; see the [Command Reference](10-Command-Reference.md)).
+- `/database restore` -- Restore one collection from a backup (Merge or Replace); stays a direct command since Discord can't collect a file upload through a button or menu.
 - `/repair_suggestions`
 - `/backup`
 - `/restore`

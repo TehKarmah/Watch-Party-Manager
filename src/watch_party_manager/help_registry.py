@@ -120,6 +120,12 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
+        "/database health",
+        "Show a collection's eligibility and pool health.",
+        "WASH Crew: Collections",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
         "/database manage",
         "Move, edit, back up, restore, reset, or remove collections.",
         "WASH Crew: Collections",

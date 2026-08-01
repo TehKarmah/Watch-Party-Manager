@@ -1182,6 +1182,40 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         await configure_button.callback(interaction=configure_interaction)
         return intro_view, configure_interaction.response.sent_modal
 
+    async def test_voting_defaults_screen_explains_duration_format(self) -> None:
+        # Vote Duration Wording: the modal's own duration field is
+        # pre-filled, so its label stays short ("Vote duration
+        # (1m-30d)") -- the fuller minutes/hours/days explanation lives
+        # on this screen instead.
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        await send_config_voting_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+
+        self.assertIn(
+            "Durations combine a number with a unit -- minutes (m), hours (h), or days (d). "
+            "Examples: 10m, 1h, 7d.",
+            interaction.response.edited_content,
+        )
+
+    async def test_reminder_defaults_screen_explains_duration_format(self) -> None:
+        self._seed_completed_setup()
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        await send_config_reminder_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+
+        self.assertIn(
+            "Durations combine a number with a unit -- minutes (m), hours (h), or days (d). "
+            "Examples: 10m, 1h, 7d.",
+            interaction.response.edited_content,
+        )
+
     async def test_voting_defaults_shows_a_visibility_select_before_the_modal(self) -> None:
         # Guild-wide default candidate count/duration/visibility --
         # candidate selection stays per-database, under Manage

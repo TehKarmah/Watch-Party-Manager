@@ -1003,6 +1003,15 @@ class VotingDefaultsModal(discord.ui.Modal):
     this guild-wide modal would reintroduce the "which database does
     this apply to?" ambiguity that model removes, so it stays a
     separate step regardless.
+
+    Vote Duration Wording: this field is pre-filled (default=), so any
+    placeholder text would never actually be visible -- the label names
+    only the field and its valid range ("Vote duration (1m-30d)"); the
+    fuller minutes/hours/days explanation with examples
+    (services.duration_parser.DURATION_FORMAT_HELP_TEXT) lives on the
+    screen shown immediately before this modal opens
+    (VotingDefaultsIntroView's own body text in bot.py) instead of being
+    crammed into the label itself.
     """
 
     def __init__(self, on_submit: OnVotingDefaultsSubmit, *, defaults: Optional[Tuple[str, str]] = None) -> None:
@@ -1013,7 +1022,7 @@ class VotingDefaultsModal(discord.ui.Modal):
             label="Default candidate count (2-10)", default=candidate_count_default
         )
         self.duration_input = discord.ui.TextInput(
-            label="Default vote duration (1m-30d; 10m,1h,7d)",
+            label="Vote duration (1m-30d)",
             default=duration_default,
         )
         self.add_item(self.candidate_count_input)
@@ -1189,13 +1198,19 @@ class ReminderDefaultsModal(discord.ui.Modal):
     submission time in a live server; see VotingDefaultsModal's own
     docstring for the full explanation). This modal only ever opens after
     Enable was chosen, so it collects just the flexible lead-time value.
+
+    Vote Duration Wording: like VotingDefaultsModal's own duration field,
+    this field is pre-filled (default=), so the label names only the
+    field and its valid range -- the fuller explanation with examples
+    lives on the screen shown immediately before this modal opens
+    (ReminderDefaultsChoiceView's body text in bot.py).
     """
 
     def __init__(self, on_submit: OnReminderDefaultsSubmit, *, defaults: Optional[str] = None) -> None:
         super().__init__(title="Reminder Defaults")
         self._submit_callback = on_submit
         self.minutes_input = discord.ui.TextInput(
-            label="Reminder before close (1m-30d; 10m,1h,7d)", default=defaults or "1d"
+            label="Reminder before close (1m-30d)", default=defaults or "1d"
         )
         self.add_item(self.minutes_input)
 

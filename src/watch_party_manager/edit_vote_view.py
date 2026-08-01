@@ -16,6 +16,8 @@ from typing import Awaitable, Callable
 
 import discord
 
+from watch_party_manager.services.duration_parser import DURATION_FORMAT_EXAMPLES
+
 OnChangeEndTime = Callable[[discord.Interaction], Awaitable[None]]
 OnCancelVote = Callable[[discord.Interaction], Awaitable[None]]
 OnEditVoteConfirmed = Callable[[discord.Interaction], Awaitable[None]]
@@ -281,7 +283,7 @@ class CustomDurationModal(discord.ui.Modal):
 
         self.duration_input = discord.ui.TextInput(
             label="Duration",
-            placeholder="Examples: 10m, 1h, 7d",
+            placeholder=f"Examples: {DURATION_FORMAT_EXAMPLES}",
             required=True,
         )
         self.add_item(self.duration_input)

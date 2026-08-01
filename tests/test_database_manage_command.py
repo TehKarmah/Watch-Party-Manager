@@ -1,7 +1,9 @@
-"""Tests for /database manage (Command Structure Cleanup Refinement): the
-guided workflow -- pick a collection, then choose what to do with it --
-alongside the existing direct /database subcommands (move/backup/
-restore/reset/remove), which remain available as shortcuts.
+"""Tests for /database manage: the guided workflow -- pick a collection,
+then choose what to do with it. Release UX & Command Surface Cleanup:
+Move/Backup/Reset/Remove no longer have their own top-level /database
+subcommands at all -- this workflow is their only Discord-native entry
+point (restore is the one exception; see DatabaseGroup's own docstring
+in bot.py for why it must stay a direct command).
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+import discord
 
 from watch_party_manager.bot import handle_database_manage
 from watch_party_manager.database_admin_view import CollectionManagementMenuView, DestinationChoiceView
@@ -216,6 +220,44 @@ class ManagementMenuTests(DatabaseManageCommandTestCase):
                 "wpm_database_manage_cancel",
             },
         )
+
+    async def test_administrative_actions_are_ordered_before_destructive_ones(self) -> None:
+        # Database Manage UX (Section 2): administrative actions (Edit,
+        # Backup, Move, Restore) come first, destructive ones (Reset,
+        # Remove) last, with Cancel always the final item.
+        select_interaction = await self._reach_management_menu()
+        menu_view = select_interaction.response.edited_view
+
+        custom_ids = [button.custom_id for button in menu_view.children]
+        administrative_ids = [
+            "wpm_database_manage_edit",
+            "wpm_database_manage_backup",
+            "wpm_database_manage_move",
+            "wpm_database_manage_restore",
+        ]
+        destructive_ids = ["wpm_database_manage_reset", "wpm_database_manage_remove"]
+
+        last_administrative_index = max(custom_ids.index(cid) for cid in administrative_ids)
+        first_destructive_index = min(custom_ids.index(cid) for cid in destructive_ids)
+        self.assertLess(last_administrative_index, first_destructive_index)
+        self.assertEqual(custom_ids[-1], "wpm_database_manage_cancel")
+
+    async def test_destructive_actions_use_the_danger_button_style(self) -> None:
+        select_interaction = await self._reach_management_menu()
+        menu_view = select_interaction.response.edited_view
+
+        for custom_id in ("wpm_database_manage_reset", "wpm_database_manage_remove"):
+            button = next(b for b in menu_view.children if b.custom_id == custom_id)
+            self.assertEqual(button.style, discord.ButtonStyle.danger)
+
+        for custom_id in (
+            "wpm_database_manage_edit",
+            "wpm_database_manage_backup",
+            "wpm_database_manage_move",
+            "wpm_database_manage_restore",
+        ):
+            button = next(b for b in menu_view.children if b.custom_id == custom_id)
+            self.assertNotEqual(button.style, discord.ButtonStyle.danger)
 
     async def test_a_deactivated_or_unknown_collection_is_reported_gracefully(self) -> None:
         interaction = FakeInteraction()

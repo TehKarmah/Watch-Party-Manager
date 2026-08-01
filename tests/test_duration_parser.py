@@ -5,7 +5,12 @@ Duration Syntax) used by vote duration, reminder-before-close, and
 
 import unittest
 
-from watch_party_manager.services.duration_parser import parse_duration_to_minutes
+from watch_party_manager.services.duration_parser import (
+    DURATION_FORMAT_EXAMPLES,
+    DURATION_FORMAT_HELP_TEXT,
+    DURATION_SYNTAX_HELP,
+    parse_duration_to_minutes,
+)
 
 
 class ParseDurationToMinutesTests(unittest.TestCase):
@@ -74,6 +79,37 @@ class ParseDurationToMinutesTests(unittest.TestCase):
     def test_rejects_none(self) -> None:
         with self.assertRaises(ValueError):
             parse_duration_to_minutes(None)
+
+    def test_bare_parse_failure_raises_the_syntax_help_text(self) -> None:
+        # A caller with no custom error wording of its own (e.g.
+        # /edit_vote's Shorten/Extend Vote Custom... modal) surfaces this
+        # exact message to the user.
+        with self.assertRaises(ValueError) as ctx:
+            parse_duration_to_minutes("banana")
+        self.assertEqual(str(ctx.exception), DURATION_SYNTAX_HELP)
+
+
+class DurationFormatExamplesTests(unittest.TestCase):
+    """Vote Duration Wording (Release UX & Command Surface Cleanup): one
+    canonical example string and explanation, reused by every modal
+    placeholder and pre-modal screen that mentions duration format.
+    """
+
+    def test_examples_uses_the_preferred_minute_hour_day_values(self) -> None:
+        self.assertEqual(DURATION_FORMAT_EXAMPLES, "10m, 1h, 7d")
+
+    def test_examples_are_individually_valid_durations(self) -> None:
+        for example in DURATION_FORMAT_EXAMPLES.split(", "):
+            # Must not raise -- every advertised example is itself parseable.
+            parse_duration_to_minutes(example)
+
+    def test_help_text_names_minutes_hours_and_days_explicitly(self) -> None:
+        self.assertIn("minutes", DURATION_FORMAT_HELP_TEXT.lower())
+        self.assertIn("hours", DURATION_FORMAT_HELP_TEXT.lower())
+        self.assertIn("days", DURATION_FORMAT_HELP_TEXT.lower())
+
+    def test_help_text_includes_the_canonical_examples(self) -> None:
+        self.assertIn(DURATION_FORMAT_EXAMPLES, DURATION_FORMAT_HELP_TEXT)
 
 
 if __name__ == "__main__":

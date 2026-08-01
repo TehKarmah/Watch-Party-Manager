@@ -8,7 +8,7 @@
 | File | `05-Administration.md` |
 | Version | 1.0 |
 | Status | Active |
-| Last Updated | July 2026 |
+| Last Updated | August 2026 |
 | Authors | TehKarmah & ChatGPT |
 
 > [!NOTE]
@@ -53,19 +53,21 @@ Run `/database add`. It first asks what type of collection to create: every stan
 
 Use `/database list` to review databases available to the current server.
 
-### Move a database's suggestion destination
+### Guided collection management
 
-Run `/database move`, choose the collection from the picker that appears, then choose its new destination using the exact same Create New Thread/Use Current Thread/Use Existing Thread choice `/database add` offers. Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, statistics, and every other setting are untouched. Existing Discord suggestion posts are never moved or edited; only suggestions added after the move post to the new destination. The chosen destination must not already be routed to another collection, must not be WASH's configured Home Channel, and a failure after a new thread is created (e.g. a duplicate destination) automatically deletes that thread rather than leaving it orphaned.
+Release UX & Command Surface Cleanup: `/database`'s top-level surface is intentionally minimal -- **add**, **list**, **health**, and **manage** cover everything except restoring a backup. Moving, editing, backing up, resetting, and removing a collection are not their own top-level subcommands at all -- run `/database manage`, choose a collection from the picker (name, Active/Inactive status, and current watch-item count -- never a typed ID), then choose an action from a menu ordered administrative actions first, destructive actions last: **Edit Collection**, **Backup Collection**, **Move Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, or **Cancel**. Destructive actions (Reset, Remove) are styled distinctly (red/danger buttons) so they're never mistaken for a routine action.
+
+- **Move Collection** changes only the chosen collection's suggestion destination, using the same Create New Thread/Use Current Thread/Use Existing Thread choice `/database add` offers. Its database ID, suggestions, statuses, vote history, statistics, and every other setting are untouched. Existing Discord suggestion posts are never moved or edited; only suggestions added after the move post to the new destination. The chosen destination must not already be routed to another collection, must not be WASH's configured Home Channel, and a failure after a new thread is created (e.g. a duplicate destination) automatically deletes that thread rather than leaving it orphaned.
+- **Edit Collection** opens the same per-collection settings menu `/config`'s Collections section already uses -- Suggestion Destination, Watched Item Archive, Nominee Selection -- with its Back button returning to this menu instead of `/config`'s own collection list.
+- **Backup Collection** and **Reset Collection** are covered in [Backup & Recovery](#9-backup--recovery) below.
+- **Restore Collection** can't be driven from a button click at all (Discord doesn't allow attaching a file upload in response to one), so it points at running `/database restore` directly instead -- the one collection-management action that remains its own top-level command, the same way the Setup Wizard's "Import Existing Database" option points at `/import`.
+- **Remove Collection** deactivates the collection (see below), applying the repository's safety and ownership validation.
 
 **Context Resolution Audit (bug fix):** every command that resolves "which collection applies here" (`/add`, `/list`, `/vote start`, `/stats`, and `/database add`'s own duplicate-channel check) shares one implementation, `resolve_database_for_channel`, itself built on the same single-channel resolver (`resolve_collection_channel_id`) `/database list` and `/config` already used for display. Previously, a moved collection's *original* channel kept resolving alongside its new one -- running a command from the old location could still silently reach the collection that had just been moved away from it. A collection's original channel now stops resolving the moment it's moved; only its current destination does, and that destination is also immediately free for a different collection to move into. This takes effect immediately (no restart needed) and survives one, since nothing about it is cached in memory -- resolution is always computed fresh from the same persisted records `/database list`/`/config` already read.
 
-### Guided collection management
-
-Run `/database manage` for a single guided entry point instead of remembering which direct subcommand to use: choose a collection from the same picker `/database move`/`backup`/`reset`/`remove` use, then choose an action from a menu -- **Move Collection**, **Edit Collection**, **Backup Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, or **Cancel**. Move/Backup/Reset/Remove run the exact same logic as their direct subcommand (nothing about their behavior differs based on which path reached them). Edit Collection opens the same per-collection settings menu `/config`'s Collections section already uses -- Suggestion Destination, Watched Item Archive, Nominee Selection -- with its Back button returning to this menu instead of `/config`'s own collection list. Restore Collection can't be driven from a button click at all (Discord doesn't allow attaching a file upload in response to one), so it points at running `/database restore` directly, the same way the Setup Wizard's "Import Existing Database" option points at `/import`. The direct subcommands (`/database move`, `/database backup`, `/database restore`, `/database reset`, `/database remove`) remain available as shortcuts and are unchanged by `/database manage`'s existence.
-
 ### Remove a database
 
-Run `/database remove`, then choose the database from the picker that appears -- each option shows the database's name, whether it's Active or Inactive, and its current watch-item count, so there's no need to look up an internal ID first. The command applies the repository's safety and ownership validation.
+Deactivating a collection (Remove Collection, under `/database manage`) applies the repository's safety and ownership validation before deactivating it.
 
 Database operations are server-scoped. A server must not access or change another server's databases.
 
@@ -390,9 +392,9 @@ Immediately before restoring, WASH creates a full safety backup of the current d
 
 **A bot restart is recommended after any restore.** Several in-memory caches (suggestions, votes, membership requests) are only loaded once at startup; restored data on disk won't be reflected in a running bot's behavior until it restarts. `GuildConfiguration` reads are not cached and take effect immediately.
 
-### `/database backup` and `/database restore`
+### Backup Collection and `/database restore`
 
-Back up or restore a single suggestion database instead of everything. Run `/database backup`, then choose the database from the picker that appears (name, Active/Inactive status, and watch-item count are all shown) -- WASH produces a scoped backup containing only that database's record, its suggestions, and its configuration (not its vote history), attached as `Watch_Party_Manager_Database_Backup_<safe-database-name>_YYYY-MM-DD_HH-MM-SS.zip`.
+Back up or restore a single suggestion database instead of everything. Choose **Backup Collection** from `/database manage`'s action menu, then pick the database from the picker that appears (name, Active/Inactive status, and watch-item count are all shown) -- WASH produces a scoped backup containing only that database's record, its suggestions, and its configuration (not its vote history), attached as `Watch_Party_Manager_Database_Backup_<safe-database-name>_YYYY-MM-DD_HH-MM-SS.zip`.
 
 `/database restore` requires choosing **Merge** or **Replace** explicitly -- WASH never infers which one you meant:
 
@@ -401,11 +403,11 @@ Back up or restore a single suggestion database instead of everything. Run `/dat
 
 A single-database backup can only be restored back into the server it came from; WASH rejects a mismatch rather than silently importing another server's data.
 
-### `/database reset`
+### Reset Collection
 
 Clears every suggestion (active and archived alike -- there is no separate archive store; both are just `WatchItem` records in the same file) from one suggestion database. The database record itself, its ID, its name, and its configuration are never touched, and no other database is affected.
 
-Flow: run `/database reset` -> choose the database from the picker that appears (name, Active/Inactive status, and watch-item count are all shown) -> WASH shows how many suggestions would be removed -> click **Reset** -> a modal asks you to type `RESET` exactly (case-sensitive) -> WASH creates a full safety backup, then performs the reset. Clicking **Cancel**, or submitting anything other than `RESET`, leaves all data unchanged.
+Flow: choose **Reset Collection** from `/database manage`'s action menu -> pick the database from the picker that appears (name, Active/Inactive status, and watch-item count are all shown) -> WASH shows how many suggestions would be removed -> click **Reset** -> a modal asks you to type `RESET` exactly (case-sensitive) -> WASH creates a full safety backup, then performs the reset. Clicking **Cancel**, or submitting anything other than `RESET`, leaves all data unchanged.
 
 ### `/factory_reset`
 
@@ -434,12 +436,12 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 
 ### Restart requirement
 
-**A bot restart is recommended after `/restore`, `/database restore`, `/database reset`, `/factory_reset`, or `/import`.** Several services (suggestions, votes, membership requests) load their data once at startup and cache it in memory; changes written to disk by any of these commands won't be reflected in a running bot's behavior until it restarts. `GuildConfiguration` reads are not cached, so configuration changes (including a factory reset requiring `/setup` again) take effect immediately even without a restart.
+**A bot restart is recommended after `/restore`, `/database restore`, Reset Collection (`/database manage`), `/factory_reset`, or `/import`.** Several services (suggestions, votes, membership requests) load their data once at startup and cache it in memory; changes written to disk by any of these commands won't be reflected in a running bot's behavior until it restarts. `GuildConfiguration` reads are not cached, so configuration changes (including a factory reset requiring `/setup` again) take effect immediately even without a restart.
 
 ### Recommended backup strategy
 
 - Run `/backup` before any release, dependency upgrade, or manual data edit.
-- Run `/database backup` before experimenting with a specific database's suggestion rules or content.
+- Run Backup Collection (`/database manage`) before experimenting with a specific database's suggestion rules or content.
 - Keep at least one backup downloaded outside of WASH's own `data/backups/` directory (e.g. before a factory reset, since a factory reset's automatic safety backup still only lives in the same `data/` tree it's resetting).
 - After using `/import`, review the reported conflicts and restart the bot before relying on the imported data.
 
@@ -449,7 +451,7 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 | --- | --- | --- |
 | "This backup failed validation and cannot be restored" / "Import validation failed" | Corrupt ZIP, missing/unreadable manifest, unsafe path, or a checksum mismatch (tampered or truncated file). | Unchanged -- validation never writes anything. |
 | "Unsupported backup type" | A full backup was offered to `/database restore`, a single-database backup was offered to `/restore` or `/import`, or an incompatible format version was found. | Unchanged. |
-| "That backup was created in a different Discord server" | A `/database backup` archive's recorded server ID doesn't match the server `/database restore` was run in. | Unchanged. |
+| "That backup was created in a different Discord server" | A Backup Collection (`/database manage`) archive's recorded server ID doesn't match the server `/database restore` was run in. | Unchanged. |
 | "No existing suggestion database with that ID was found to merge into" | Merge was chosen but the destination database doesn't exist yet. | Unchanged -- use Replace instead if that's intended. |
 | "N suggestion(s) were skipped as duplicates" (restore, reset, or import) | Merge detected a title already present in the destination database. | Only the non-conflicting suggestions were imported; nothing existing was overwritten. |
 | "Confirmation text did not match ... exactly" | The typed `RESET`/`REPLACE` phrase didn't match, or didn't match case. | Unchanged -- nothing runs until the exact phrase is submitted. |

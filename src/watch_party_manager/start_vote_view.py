@@ -15,6 +15,7 @@ import discord
 
 from watch_party_manager.domain.guild_configuration import GuildVoteVisibility
 from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+from watch_party_manager.services.duration_parser import DURATION_FORMAT_EXAMPLES
 from watch_party_manager.setup_wizard_view import CandidateSelectionSelectComponent, VisibilitySelectComponent
 
 OnUseDefaults = Callable[[discord.Interaction], Awaitable[None]]
@@ -277,7 +278,7 @@ class CustomizeVoteModal(discord.ui.Modal):
             label="Duration (1m-30d)",
             required=False,
             placeholder=(
-                "Examples: 10m, 1h, 7d -- blank uses the default"
+                f"Examples: {DURATION_FORMAT_EXAMPLES} -- blank uses the default"
                 + (f" ({default_duration_display})" if default_duration_display else "")
             ),
         )
@@ -290,7 +291,7 @@ class CustomizeVoteModal(discord.ui.Modal):
             label="Reminder timing (1m-30d)",
             required=False,
             placeholder=(
-                "Examples: 10m, 1h, 7d -- blank uses the default"
+                f"Examples: {DURATION_FORMAT_EXAMPLES} -- blank uses the default"
                 + (f" ({default_reminder_minutes_display})" if default_reminder_minutes_display else "")
             ),
         )

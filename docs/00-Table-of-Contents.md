@@ -8,13 +8,14 @@
 | File | `00-Table-of-Contents.md` |
 | Version | 1.0 |
 | Status | Active |
-| Last Updated | July 2026 |
+| Last Updated | August 2026 |
 | Authors | TehKarmah & ChatGPT |
 
 ## Start Here
 
 - [README](../README.md), for a concise project overview, Quick Start, and command list.
 - [Installation Guide](09-Installation-Guide.md), for a complete first-time setup walkthrough: environment setup, Discord bot creation, `.env` configuration, the Setup Wizard, verification, and troubleshooting.
+- [Troubleshooting Guide](12-Troubleshooting.md), the administrator's first stop whenever something goes wrong after installation.
 - [Current Project State](project_state.md), for the implemented status, current milestone, test baseline, and next work.
 
 ## Foundation
@@ -43,6 +44,7 @@ These documents distinguish currently available administration from planned post
 
 - [Commands Reference](10-Command-Reference.md), every implemented slash command grouped by required role -- the link `/help` points to in Discord.
 - [Expanded Help](08-Expanded-Help.md)
+- [Troubleshooting Guide](12-Troubleshooting.md), the first stop when something isn't working -- grouped by area (installation, Setup Wizard, configuration, voting, Crew Review, backups, Discord, and general log-reading/bug-report guidance).
 - [Glossary](98-Glossary.md)
 - [Decision Log](99-Decision-Log.md)
 - [Future Ideas](Future-Ideas.md)

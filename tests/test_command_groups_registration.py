@@ -80,10 +80,15 @@ class DatabaseGroupRegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(group.name, "database")
 
     def test_exposes_exactly_the_expected_subcommands(self) -> None:
+        # Release UX & Command Surface Cleanup: move/backup/reset/remove
+        # no longer have their own top-level slash commands -- every one
+        # of those actions is reachable only through /database manage
+        # now. /database restore is the one necessary exception (a file
+        # attachment can't be collected through a button/modal).
         group = DatabaseGroup(MinimalFakeBot())
         self.assertEqual(
             {command.name for command in group.commands},
-            {"add", "manage", "list", "health", "move", "backup", "restore", "remove", "reset"},
+            {"add", "manage", "list", "health", "restore"},
         )
 
     async def test_manage_delegates_to_handle_database_manage(self) -> None:

@@ -43,6 +43,23 @@ DURATION_SYNTAX_HELP = (
     "m/minutes, h/hours, or d/days (e.g. '10m', '1h', '7d')."
 )
 
+# The one canonical set of example values shown wherever WASH names
+# sample durations (modal placeholders, pre-modal screen explanations,
+# documentation) -- Release UX & Command Surface Cleanup (Vote Duration
+# Wording): every caller uses this exact string so examples can never
+# drift between features.
+DURATION_FORMAT_EXAMPLES = "10m, 1h, 7d"
+
+# A longer, screen-friendly explanation for use immediately before a
+# modal opens, where Discord's 45-character TextInput label limit has no
+# room to spell out minutes/hours/days on its own (see
+# setup_wizard_view.VotingDefaultsModal/ReminderDefaultsModal, whose
+# labels now only name the field and its valid range).
+DURATION_FORMAT_HELP_TEXT = (
+    f"Durations combine a number with a unit -- minutes (m), hours (h), or days (d). "
+    f"Examples: {DURATION_FORMAT_EXAMPLES}."
+)
+
 
 def parse_duration_to_minutes(text: str) -> int:
     """Parse a relative duration into whole minutes.

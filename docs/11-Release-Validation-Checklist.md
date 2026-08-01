@@ -8,7 +8,7 @@
 | File | `11-Release-Validation-Checklist.md` |
 | Version | 1.0 |
 | Status | Active |
-| Last Updated | July 2026 |
+| Last Updated | August 2026 |
 | Authors | TehKarmah & ChatGPT |
 
 ## Purpose
@@ -194,7 +194,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** All steps completed once, reaching Review, with a resource (e.g. the Admin Channel) that will fail validation (its permissions changed, or it was deleted, after being selected).
 - **Steps:**
   1. From Review, click **Save**.
-  2. Confirm WASH redirects to the specific failing step (e.g. "Step 3 of 10: Admin Channel") with a clear, actionable error -- not a generic failure, and not silently discarding the review state.
+  2. Confirm WASH redirects to the specific failing step (e.g. "Step 3 of 11: Admin Channel") with a clear, actionable error -- not a generic failure, and not silently discarding the review state.
   3. Fix the value there (pick a channel WASH can actually use).
   4. Confirm the result.
 - **Expected Result:** Step 4 returns directly to Review -- not Home Channel or any other step in between -- and every other section (roles, join mode, collection, voting defaults, reminders, backups) still shows exactly what was entered before Save was first clicked. Save now completes successfully without re-entering anything. The error names the channel directly (e.g. "WASH cannot send messages in #admin") and says exactly which permissions to grant (View Channel, Send Messages), suggests choosing a different Admin channel, and suggests creating a new one -- never a generic "no permission" message, never raw exception text, and never suggesting the Administrator permission. If the channel is private, the message also reminds that WASH's role must be explicitly added to it, and that WASH's role may need to sit higher in the role hierarchy if it also manages roles elsewhere.
@@ -222,7 +222,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Confirm the confirmation message explains how to resume.
   3. Run `/setup` again.
   4. Choose **Continue Setup**.
-- **Expected Result:** The save confirmation is clear and non-destructive (setup is not marked complete). Running `/setup` again shows a resume prompt naming how many of 10 steps are complete and the current step; **Continue Setup** returns to exactly where you left off with all prior answers intact.
+- **Expected Result:** The save confirmation is clear and non-destructive (setup is not marked complete). Running `/setup` again shows a resume prompt naming how many of 11 steps are complete and the current step; **Continue Setup** returns to exactly where you left off with all prior answers intact.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -320,8 +320,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm the Voting Defaults modal accepts and validates all four fields, and that the step explains what Visible/Blind actually mean.
 - **Preconditions:** Reached the Voting Defaults step.
 - **Steps:**
-  0. Before opening the modal, confirm the step's body text explains: "Visible -- everyone can see vote totals while voting is active. Blind -- results stay hidden until voting closes."
-  1. Open the modal (**Set Voting Defaults**); confirm the duration field's label reads "Default vote duration (1m-30d; 10m,1h,7d)" (Duration UX Standard -- range and examples in the label itself, since this field always has a value and its placeholder would never show) and the field is pre-filled `1d` (not "1 day") on a brand-new server.
+  0. Before opening the modal, confirm the step's body text explains: "Visible -- everyone can see vote totals while voting is active. Blind -- results stay hidden until voting closes." **and** explains duration in full: "Durations combine a number with a unit -- minutes (m), hours (h), or days (d). Examples: 10m, 1h, 7d." (Vote Duration Wording: the field itself is always pre-filled, so its placeholder would never actually be shown -- the full minutes/hours/days explanation lives on this screen instead of being crammed into the field's label.)
+  1. Open the modal (**Set Voting Defaults**); confirm the duration field's label reads simply "Vote duration (1m-30d)" -- just the field name and its valid range, no squeezed-in examples -- and the field is pre-filled `1d` (not "1 day") on a brand-new server.
   2. Enter a candidate count (try an in-range value, e.g. `4`).
   3. Enter a duration using WASH's shared duration syntax (try `4h`, then separately `3d`, then `3 days` -- confirm all are accepted and mean what you'd expect). Confirm a bare number with no unit (e.g. `3`) is rejected -- an explicit unit is always required. Separately, confirm `1m` (the new one-minute minimum) is accepted.
   4. Set visibility to `visible` or `blind`.
@@ -360,9 +360,9 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Reach the Reminder Defaults step; confirm it shows **Enable Vote-Ending Reminder (Recommended)** and **Disable Vote-Ending Reminder** buttons, not a modal.
   2. Press **Disable Vote-Ending Reminder**; confirm no modal opens and the wizard advances straight to Backup Defaults.
-  3. Go back and press **Enable Vote-Ending Reminder (Recommended)** instead; confirm a modal opens with exactly one field, labeled "Reminder before close (1m-30d; 10m,1h,7d)", pre-filled with a compact value (e.g. `1d`, not "1 day").
+  3. Before pressing Enable, confirm the step's body text explains duration in full: "Durations combine a number with a unit -- minutes (m), hours (h), or days (d). Examples: 10m, 1h, 7d." Go back and press **Enable Vote-Ending Reminder (Recommended)**; confirm a modal opens with exactly one field, labeled simply "Reminder before close (1m-30d)" (no squeezed-in examples -- the full explanation already lives on the screen behind it), pre-filled with a compact value (e.g. `1d`, not "1 day").
   4. Submit using WASH's shared duration syntax -- try minute precision (e.g. `10m`, `30m`, and the new one-minute minimum `1m`) as well as hours/days (e.g. `1h`, `7d`), and confirm an out-of-range or malformed value is rejected with a clear error while keeping the Enable choice (no need to re-pick Enable/Disable).
-- **Expected Result:** Disable saves immediately with no modal; Enable opens a single-field modal that accepts valid values (minute precision, not just whole hours) and rejects invalid ones with a clear error; the field's label and pre-filled value are both in compact form.
+- **Expected Result:** Disable saves immediately with no modal; Enable opens a single-field modal that accepts valid values (minute precision, not just whole hours) and rejects invalid ones with a clear error; the field's label and pre-filled value are both in compact form, with the fuller minutes/hours/days explanation shown on the screen before the modal.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -437,7 +437,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** Section 2 completed.
 - **Steps:**
   1. Run `/config` as WASH Crew.
-- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Collections, Watched Item Archive, Voting Defaults, Reminder Defaults, Backup Defaults) appears, each showing its current status.
+- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Home Channel, Collections, Watched Item Archive, Voting Defaults, "I Won't Watch" Settings, Reminder Defaults, Backup Defaults, Eligible Pool Warning) appears, each showing its current status, with no description text under any option.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -502,7 +502,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 3.4 Database management: create, list, remove
+### 3.4 Database management: create, list
 
 - **Objective:** Confirm suggestion database administration works outside the wizard, using `/database add`'s modernized type-then-destination flow, and that collections live in threads only.
 - **Preconditions:** WASH Crew role configured; at least one collection (e.g. "Movie Suggestions") already exists; a Home Channel is configured.
@@ -516,27 +516,27 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   7. Run `/database add` again from a location where nothing is usable (e.g. a voice channel's text chat, if reachable) and confirm **Use Current Thread** stays disabled rather than causing an error.
   8. Choose **Use Existing Thread**; confirm the picker lists threads only -- no text channels, including the Home Channel, ever appear.
   9. Run `/database list` and confirm the new database(s) appear.
-  10. Run `/database remove`, choose a new database from the picker, and confirm.
-- **Expected Result:** The type screen correctly excludes already-used standard types while always offering Special Collection/Custom; the new thread is created as a sibling under WASH's configured Home Channel and the collection is created on it immediately (rejects a duplicate name); **Use Current Thread** is enabled only inside a thread (a text channel, even the Home Channel, never qualifies) and disabled rather than broken otherwise; **Use Existing Thread** never offers a text channel; the list shows name, Active/Inactive status, and item count; removal applies the documented safety/ownership checks and the database no longer appears afterward.
+- **Expected Result:** The type screen correctly excludes already-used standard types while always offering Special Collection/Custom; the new thread is created as a sibling under WASH's configured Home Channel and the collection is created on it immediately (rejects a duplicate name); **Use Current Thread** is enabled only inside a thread (a text channel, even the Home Channel, never qualifies) and disabled rather than broken otherwise; **Use Existing Thread** never offers a text channel; the list shows name, Active/Inactive status, and item count.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 3.4b `/database move`
+### 3.4b Move Collection (`/database manage`)
 
-- **Objective:** Confirm a collection's suggestion destination can be moved to a different thread without affecting anything else about it, and that WASH's Home Channel can never become a destination.
+- **Objective:** Confirm a collection's suggestion destination can be moved to a different thread without affecting anything else about it, and that WASH's Home Channel can never become a destination. Move Collection has no separate top-level command -- it's only reachable through `/database manage`.
 - **Preconditions:** At least one collection with existing suggestions and at least one completed vote round; a Home Channel is configured.
 - **Steps:**
-  1. Run `/database move`, choose the collection from the picker.
+  1. Run `/database manage`, choose the collection from the picker, then choose **Move Collection**.
   2. Confirm the destination screen shows exactly **Create New Thread (Recommended)**, **Use Current Thread**, and **Use Existing Thread**, in that order (same order and options as `/database add`) -- no channel-based option is offered.
   3. Choose **Use Existing Thread** and select a destination thread not already used by another collection.
   4. Confirm the move succeeds; run `/add` in the new destination and confirm the suggestion is created there.
   5. Confirm the collection's earlier suggestion posts (from before the move) are still visible in their original thread, untouched.
   6. Attempt a second move to a destination already used by another collection; confirm it's rejected with a clear "already routed" message and nothing changes.
   7. Repeat step 1-4 choosing **Create New Thread** instead; confirm the new thread is created under WASH's configured Home Channel and the suggested default name can be renamed before creation (renaming here must not change the collection's own name -- only `/database add`'s Create New Thread renames the collection).
-  8. Run `/database move` again from inside a thread; confirm **Use Current Thread** is enabled and, when chosen, moves the collection's destination to that same thread with no further prompts.
-  9. Run `/database move` again from a plain text channel, including WASH's own Home Channel; confirm **Use Current Thread** stays disabled in both cases.
+  8. Reach Move Collection again from inside a thread; confirm **Use Current Thread** is enabled and, when chosen, moves the collection's destination to that same thread with no further prompts.
+  9. Reach Move Collection again from a plain text channel, including WASH's own Home Channel; confirm **Use Current Thread** stays disabled in both cases.
   10. Attempt to route a collection's suggestion destination to WASH's configured Home Channel (e.g. via `/config` -> Collections -> Suggestion Destination, if reachable, or by any other means available); confirm it's clearly rejected and nothing changes.
-- **Expected Result:** Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, and statistics are all unchanged (spot-check via `/stats type:Collection` or `/config` -> Collections before and after); existing Discord suggestion posts are never moved; only suggestions added after the move appear in the new destination; a duplicate destination is rejected cleanly; **Use Current Thread** behaves identically to `/database add`'s version (same enable/disable rule) but never renames the collection; WASH's Home Channel is never accepted as a destination, from any path.
+  11. Confirm `/database move` no longer exists as a slash command at all (it does not autocomplete after typing `/database `).
+- **Expected Result:** Only the collection's suggestion destination changes -- its database ID, suggestions, statuses, vote history, and statistics are all unchanged (spot-check via `/stats type:Collection` or `/config` -> Collections before and after); existing Discord suggestion posts are never moved; only suggestions added after the move appear in the new destination; a duplicate destination is rejected cleanly; **Use Current Thread** behaves identically to `/database add`'s version (same enable/disable rule) but never renames the collection; WASH's Home Channel is never accepted as a destination, from any path; there is no standalone `/database move` command.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -556,34 +556,34 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 3.4c `/database manage`
 
-- **Objective:** Confirm the guided management workflow correctly reuses the existing move, edit, backup, restore, reset, and remove logic without duplicating it.
+- **Objective:** Confirm the guided management workflow is the sole entry point for moving, editing, backing up, resetting, and removing a collection (Release UX & Command Surface Cleanup), ordered administrative actions first and destructive actions last, and that Restore Collection correctly hands off to the one action that must remain its own command.
 - **Preconditions:** At least one collection already exists.
 - **Steps:**
   1. Run `/database manage`; confirm the same collection picker used elsewhere in `/database` appears.
-  2. Choose a collection; confirm a management menu appears offering exactly: **Move Collection**, **Edit Collection**, **Backup Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, **Cancel**.
-  3. Choose **Move Collection**; confirm it launches the identical destination-choice screen used by `/database move` (same three thread-only options, same order) and completes the move.
+  2. Choose a collection; confirm a management menu appears offering exactly, in this order: **Edit Collection**, **Backup Collection**, **Move Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, **Cancel** -- with Reset Collection and Remove Collection visually distinct (red/danger-styled) from the four actions above them.
+  3. Choose **Move Collection**; confirm it launches the destination-choice screen (three thread-only options, same order as `/database add`) and completes the move.
   4. Return to `/database manage` and choose **Edit Collection**; confirm it shows the same settings menu `/config` -> Collections shows for that database, and that its **Back** button returns to the `/database manage` management menu (not to `/config`'s picker).
-  5. Choose **Backup Collection**; confirm a backup file is produced, matching `/database backup`'s output.
+  5. Choose **Backup Collection**; confirm a backup file is produced.
   6. Choose **Restore Collection**; confirm it points the user at running `/database restore` directly (a modal/component interaction cannot carry a file upload, so this cannot be button-driven) rather than silently failing.
-  7. Choose **Reset Collection**; confirm the same confirmation and behavior as `/database reset`.
-  8. Choose **Remove Collection**; confirm the same behavior as `/database remove` (the collection is deactivated).
+  7. Choose **Reset Collection**; confirm the same RESET-confirmation flow and behavior documented in [Backup & Recovery](05-Administration.md#9-backup--recovery).
+  8. Choose **Remove Collection**; confirm the collection is deactivated.
   9. Choose **Cancel** at the management menu; confirm the message states no changes were made and nothing is altered.
-  10. Confirm `/database move`, `/database backup`, `/database restore`, `/database reset`, and `/database remove` still work directly and unchanged, independent of `/database manage`.
-- **Expected Result:** `/database manage` is a thin guided wrapper around the same underlying move/edit/backup/restore/reset/remove logic used by the direct subcommands -- no behavior is duplicated or diverges between the guided and direct paths; the direct subcommands remain fully functional as shortcuts.
+  10. Confirm `/database move`, `/database backup`, `/database reset`, and `/database remove` do **not** exist as slash commands at all -- typing `/database ` in Discord's command picker offers only **add**, **list**, **health**, **manage**, and **restore**.
+- **Expected Result:** `/database manage` is the only way to move, edit, back up, reset, or remove a collection -- no behavior was lost, only the redundant standalone commands; its action menu is ordered administrative-then-destructive with destructive actions visually distinct; `/database restore` is the one action that remains a direct command, for the documented file-upload reason.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
 ### 3.4d `/help`'s simplified Collections section
 
-- **Objective:** Confirm `/help`'s Collections section is decluttered to the primary workflow, with the remaining shortcuts still fully documented elsewhere.
+- **Objective:** Confirm `/help`'s Collections section reflects the actual, simplified command surface -- not just a curated subset of a larger set of commands that still exist.
 - **Preconditions:** WASH Crew role configured.
 - **Steps:**
   1. Run `/help` as WASH Crew; find the Collections section.
-  2. Confirm it lists exactly `/database add`, `/database list`, and `/database manage` -- not `/database move`, `/database backup`, `/database restore`, `/database reset`, or `/database remove` individually.
+  2. Confirm it lists exactly `/database add`, `/database list`, `/database health`, and `/database manage` -- not `/database move`, `/database backup`, `/database restore`, `/database reset`, or `/database remove` individually.
   3. Confirm `/database manage`'s summary mentions move, edit, back up, restore, reset, and remove.
-  4. Confirm a note appears pointing at additional shortcuts under `/database` and the Command Reference.
-  5. Confirm every direct subcommand still runs correctly even though it's no longer individually listed (see 3.4/3.4b/3.4c above).
-- **Expected Result:** `/help` reads as a curated, primary-workflow-first summary; nothing about any subcommand's actual behavior changed -- only what `/help` chooses to list.
+  4. Confirm a note appears pointing at additional shortcuts (i.e. `/database restore`) under `/database` and the Command Reference.
+  5. Confirm `/database add`, `/database list`, `/database health`, `/database manage`, and `/database restore` all still run correctly, and that no other `/database` subcommand exists to run (see 3.4/3.4b/3.4c above).
+- **Expected Result:** `/help` accurately reflects the real, simplified command surface -- it is not merely hiding commands that still exist elsewhere.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -1001,7 +1001,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** An open round; WASH Crew role.
 - **Steps:**
   1. Run `/vote edit` -> **Change End Time**; confirm the menu offers **End Now**, **Shorten Vote**, **Extend Vote**, and **Set Exact End Time**.
-  2. Use **Shorten Vote** -> **1 Hour**; confirm the round's end time moves 1 hour *earlier than its current deadline* (not 1 hour from now), and that the public post and a public notice both reflect the new deadline with a Discord relative timestamp shown. Repeat with **Extend Vote** -> **1 Day** and confirm it moves 1 day *later* than the current deadline.
+  2. Use **Shorten Vote** -> **1 Hour**; confirm the round's end time moves 1 hour *earlier than its current deadline* (not 1 hour from now), and that the public post and a public notice both reflect the new deadline with a Discord relative timestamp shown. Repeat with **Extend Vote** -> **1 Day** and confirm it moves 1 day *later* than the current deadline. Before choosing a quick pick, confirm the prompt itself explains the Custom option's format: "...Custom... for any other amount of minutes, hours, or days (e.g. 10m, 1h, 7d)."
   3. Use **Shorten Vote** -> **Custom...**; confirm the modal is titled "Shorten Vote" with a "Duration" field (placeholder `Examples: 10m, 1h, 7d` -- this field has no fixed range of its own, since Shorten/Extend only rejects a result that would move the end time into the past). Try `10m`, `2h`. Repeat with **Extend Vote** -> **Custom...** (modal titled "Extend Vote"). Confirm a malformed value (e.g. a bare number with no unit) is rejected with a clear error.
   4. On a round closing soon, use **Shorten Vote** with an amount larger than the time remaining; confirm it's rejected with a clear "would move the end time into the past" message rather than silently succeeding.
   5. Use **Set Exact End Time**; confirm the modal presents a single "Discord Timestamp" field with placeholder `<t:1785639600:F>` and help text explaining how to generate one (type `@time` in any normal Discord message box, pick a date/time, then copy the generated timestamp here). Confirm a malformed value (e.g. plain text, or a timestamp missing the `<t:...>` wrapper), and a validly-formatted but past timestamp, are each rejected with a clear message; confirm a valid future timestamp (in any of the standard styles, e.g. `<t:1785639600:F>` or `<t:1785639600:R>`) reschedules correctly.
@@ -1241,12 +1241,12 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 9.4 `/database backup` and `/database restore`
+### 9.4 Backup Collection (`/database manage`) and `/database restore`
 
-- **Objective:** Confirm single-database backup/restore, including both Merge and Replace modes.
+- **Objective:** Confirm single-database backup/restore, including both Merge and Replace modes. Backup Collection has no separate top-level command -- it's only reachable through `/database manage`.
 - **Preconditions:** At least one suggestion database with several suggestions.
 - **Steps:**
-  1. Run `/database backup`, choose the database from the picker.
+  1. Run `/database manage`, choose the database from the picker, then choose **Backup Collection**.
   2. Add a new suggestion to the same database (so Merge has something new to reconcile against).
   3. Run `/database restore mode:Merge` with the backup; confirm existing suggestions are untouched and only non-conflicting ones are added.
   4. Repeat with `mode:Replace`; confirm the database is fully overwritten to match the backup.
@@ -1254,12 +1254,12 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 9.5 `/database reset`
+### 9.5 Reset Collection (`/database manage`)
 
-- **Objective:** Confirm the typed-confirmation-gated reset works and only affects the chosen database.
+- **Objective:** Confirm the typed-confirmation-gated reset works and only affects the chosen database. Reset Collection has no separate top-level command -- it's only reachable through `/database manage`.
 - **Preconditions:** A disposable test database with a few suggestions.
 - **Steps:**
-  1. Run `/database reset`, choose the database, confirm the shown "would remove" count.
+  1. Run `/database manage`, choose the database, then choose **Reset Collection**; confirm the shown "would remove" count.
   2. Click **Reset**, then submit anything other than `RESET` in the modal -- confirm nothing changes.
   3. Repeat and type `RESET` exactly.
 - **Expected Result:** Only an exact `RESET` proceeds; the database's own record/name/configuration and every other database are untouched; a safety backup is made first.

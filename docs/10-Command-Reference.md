@@ -6,7 +6,7 @@
 | File | `10-Command-Reference.md` |
 | Version | 1.0 |
 | Status | Active |
-| Last Updated | July 2026 |
+| Last Updated | August 2026 |
 | Authors | TehKarmah & ChatGPT |
 
 Every WASH slash command currently implemented, grouped by functional area, with the Discord role required to use it. This is the link `/help` points to in Discord (as a Commands Reference embed, not a raw GitHub link) so members always land on an accurate, complete list.
@@ -76,21 +76,21 @@ Casting a vote itself happens through the interactive buttons on the voting post
 
 ## WASH Crew: Collections
 
+Release UX & Command Surface Cleanup: `/database`'s top-level surface is now intentionally minimal -- **add**, **list**, **health**, and **manage** cover everything except restoring a backup (which needs its own command; see below). Moving, backing up, resetting, and removing a collection are no longer separate top-level subcommands -- every one of those actions is fully reachable through `/database manage`'s guided picker-then-menu workflow instead, with no functionality lost.
+
 | Command | Required Role | Description |
 | --- | --- | --- |
 | `/database add` | WASH Crew | Create a collection. |
-| `/database manage` | WASH Crew | Guided workflow: pick a collection, then choose what to do with it. |
 | `/database list` | WASH Crew | List this server's collections. |
 | `/database health` | WASH Crew | Show a collection's eligibility and pool health. |
-| `/database move` | WASH Crew | Move a collection's suggestion destination to a different thread. |
-| `/database backup` | WASH Crew | Back up a single collection. |
+| `/database manage` | WASH Crew | Guided workflow: pick a collection, then choose what to do with it (move, edit, back up, reset, or remove). |
 | `/database restore` | WASH Crew | Restore a collection backup. |
-| `/database remove` | WASH Crew | Deactivate a collection. |
-| `/database reset` | WASH Crew | Clear one collection's suggestions. |
 
-None of these take a raw ID parameter. `/database add` walks through a type choice (every standard collection type -- Movies, TV Shows, Anime, Holiday, Documentaries, Horror -- that this server doesn't already have a matching collection for, plus Special Collection and Custom, which are always available) and then a destination choice -- **Create New Thread** (Recommended; created under WASH's configured Home Channel, or the current channel if none is configured and it's a usable text channel), **Use Current Thread** (only enabled when the command was actually run inside a thread), or **Use Existing Thread** -- the same destination choice `/database move` offers. Collections live in threads only -- WASH's configured Home Channel can never itself become a collection's suggestion destination, whether via this choice, `/database move`, or `/config`. `/database move`, `/database backup`, `/database reset`, and `/database remove` all show a picker of this server's collections (name, Active/Inactive status, and watch-item count) to choose from instead of typing an ID. `/database move` changes only the chosen collection's suggestion destination -- its database ID, suggestions, statuses, vote history, statistics, and every other setting are untouched, and its existing Discord suggestion posts stay exactly where they are; only suggestions added after the move post to the new destination.
+None of these take a raw ID parameter. `/database add` walks through a type choice (every standard collection type -- Movies, TV Shows, Anime, Holiday, Documentaries, Horror -- that this server doesn't already have a matching collection for, plus Special Collection and Custom, which are always available) and then a destination choice -- **Create New Thread** (Recommended; created under WASH's configured Home Channel, or the current channel if none is configured and it's a usable text channel), **Use Current Thread** (only enabled when the command was actually run inside a thread), or **Use Existing Thread**. Collections live in threads only -- WASH's configured Home Channel can never itself become a collection's suggestion destination, whether via this choice, Move Collection, or `/config`.
 
-`/database manage` is a guided alternative to the direct subcommands above: pick a collection, then choose **Move Collection**, **Edit Collection**, **Backup Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, or **Cancel** from a menu. Move/Backup/Reset/Remove each launch the exact same flow as their direct subcommand; Edit Collection opens the same per-collection settings menu `/config`'s Collections section already uses (Suggestion Destination, Watched Item Archive, Nominee Selection -- "I Won't Watch" is shown there for reference but edited from its own dedicated `/config` section); Restore Collection points at running `/database restore` directly, since Discord doesn't allow attaching a file upload from inside a menu. The direct subcommands remain available as shortcuts for experienced administrators -- `/database manage` doesn't replace them.
+`/database manage` is the single guided entry point for every other collection-management action: pick a collection from a picker (name, Active/Inactive status, and watch-item count -- never a typed ID), then choose an action from a menu ordered administrative actions first, destructive actions last: **Edit Collection**, **Backup Collection**, **Move Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, or **Cancel**. Edit Collection opens the same per-collection settings menu `/config`'s Collections section already uses (Suggestion Destination, Watched Item Archive, Nominee Selection -- "I Won't Watch" is shown there for reference but edited from its own dedicated `/config` section). Move Collection changes only the chosen collection's suggestion destination -- its database ID, suggestions, statuses, vote history, statistics, and every other setting are untouched, and its existing Discord suggestion posts stay exactly where they are; only suggestions added after the move post to the new destination. Reset Collection and Remove Collection are destructive and require typing a confirmation phrase, kept visually distinct (red/danger-styled buttons) from the administrative actions above them.
+
+Restore Collection can't perform a restore itself -- Discord has no way to attach a file upload in response to a button or menu selection -- so it tells you to run `/database restore` directly instead, the only `/database` subcommand that remains a direct command for that reason. `/database restore` accepts a `mode` (Merge or Replace), and either a `backup_filename` (an existing local collection backup) or a `backup_file` upload -- exactly one of the two.
 
 `/database health` (Rotation & Collection Health) reports one collection's eligibility breakdown -- Total Watch Items, Active Watch Items (Eligible for Voting + In an Active Vote, shown indented beneath it), Pending Crew Review, Vote Winners, Retired, Watched, the guild's configured candidate count, a **Next Vote** status (Ready / Insufficient Suggestions), and a **Low Pool Status** (Healthy / Almost Complete / Insufficient). Collection selection works exactly like `/list`'s (automatic from thread context, with a **Switch Collection** button). `/database health` never modifies any state -- it only ever reports the current, computed state, so simply checking health can never change what a subsequent `/vote start` sees.
 

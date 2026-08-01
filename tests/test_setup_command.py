@@ -2144,6 +2144,41 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         self.assertEqual(database_configuration.suggestion_rules.rejection_threshold, 2)
 
 
+class VoteDurationWordingSetupIntegrationTests(SetupCommandTestCase):
+    """Vote Duration Wording (Release UX & Command Surface Cleanup): every
+    pre-filled duration modal (Voting Defaults, Reminder Defaults) has a
+    short label naming only the field and its range -- the fuller
+    minutes/hours/days explanation with examples lives on the screen
+    shown immediately before the modal opens instead.
+    """
+
+    async def test_voting_defaults_step_explains_duration_format_on_the_screen(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
+        interaction = FakeInteraction()
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        self.assertIn(
+            "Durations combine a number with a unit -- minutes (m), hours (h), or days (d). "
+            "Examples: 10m, 1h, 7d.",
+            interaction.response.sent_message,
+        )
+
+    async def test_reminder_defaults_step_explains_duration_format_on_the_screen(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REMINDER_DEFAULTS)
+        interaction = FakeInteraction()
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        self.assertIn(
+            "Durations combine a number with a unit -- minutes (m), hours (h), or days (d). "
+            "Examples: 10m, 1h, 7d.",
+            interaction.response.sent_message,
+        )
+
+
 class RejectionSettingsSetupIntegrationTests(SetupCommandTestCase):
     """"I Won't Watch" Settings: its own dedicated step, immediately after
     Voting Defaults -- an Enable/Disable choice, mirroring Reminder

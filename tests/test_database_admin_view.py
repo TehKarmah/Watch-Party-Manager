@@ -165,12 +165,15 @@ class CollectionManagementMenuViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_has_every_management_action_plus_cancel(self) -> None:
         view = CollectionManagementMenuView(_noop, _noop)
 
+        # Database Manage UX (Section 2): administrative actions ordered
+        # first (roughly most- to least-frequently used), destructive
+        # actions last, Cancel always the final item.
         self.assertEqual(
             [(button.label, button.custom_id) for button in view.children],
             [
-                ("Move Collection", "wpm_database_manage_move"),
                 ("Edit Collection", "wpm_database_manage_edit"),
                 ("Backup Collection", "wpm_database_manage_backup"),
+                ("Move Collection", "wpm_database_manage_move"),
                 ("Restore Collection", "wpm_database_manage_restore"),
                 ("Reset Collection", "wpm_database_manage_reset"),
                 ("Remove Collection", "wpm_database_manage_remove"),

@@ -542,6 +542,14 @@ class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(modal.candidate_count_input.default, "5")
         self.assertEqual(modal.duration_input.default, "2d")
 
+    async def test_duration_label_names_only_the_field_and_its_range(self) -> None:
+        # Vote Duration Wording: this field is always pre-filled, so any
+        # placeholder text would never be visible -- the label stays
+        # short (field name + range only); the fuller minutes/hours/days
+        # explanation lives on the screen shown before this modal opens.
+        modal = VotingDefaultsModal(_noop)
+        self.assertEqual(modal.duration_input.label, "Vote duration (1m-30d)")
+
 
 class RejectionThresholdModalTests(unittest.IsolatedAsyncioTestCase):
     async def test_has_exactly_one_field_a_text_input(self) -> None:
@@ -759,6 +767,10 @@ class ReminderDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
     async def test_uses_the_supplied_default(self) -> None:
         modal = ReminderDefaultsModal(_noop, defaults="2d")
         self.assertEqual(modal.minutes_input.default, "2d")
+
+    async def test_duration_label_names_only_the_field_and_its_range(self) -> None:
+        modal = ReminderDefaultsModal(_noop)
+        self.assertEqual(modal.minutes_input.label, "Reminder before close (1m-30d)")
 
     async def test_submission_forwards_the_value(self) -> None:
         calls = []

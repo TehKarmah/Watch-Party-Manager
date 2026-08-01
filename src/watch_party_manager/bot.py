@@ -136,7 +136,12 @@ from watch_party_manager.services.duration_formatter import (
     format_duration_minutes,
     format_duration_minutes_compact,
 )
-from watch_party_manager.services.duration_parser import parse_duration_to_minutes
+from watch_party_manager.services.duration_parser import (
+    DURATION_FORMAT_EXAMPLES,
+    DURATION_FORMAT_HELP_TEXT,
+    DURATION_SYNTAX_HELP,
+    parse_duration_to_minutes,
+)
 from watch_party_manager.services.embed_factory import EmbedFactory
 from watch_party_manager.services.help_service import HelpResponse, build_help_response
 from watch_party_manager.services.membership_service import (
@@ -1944,10 +1949,7 @@ def parse_setup_voting_duration_minutes(value: str) -> int:
     try:
         minutes = parse_duration_text_to_minutes(value)
     except ValueError:
-        raise ValueError(
-            "Default vote duration must be a whole number immediately followed by a unit "
-            "-- m/minutes, h/hours, or d/days (e.g. '10m', '1h', '7d')."
-        )
+        raise ValueError(DURATION_SYNTAX_HELP)
     if not (MIN_VOTE_DURATION_MINUTES <= minutes <= MAX_VOTE_DURATION_MINUTES):
         raise ValueError(
             f"Default vote duration must be between {format_duration_minutes(MIN_VOTE_DURATION_MINUTES)} and "
@@ -1968,10 +1970,7 @@ def parse_setup_reminder_minutes_before_close(value: str) -> int:
     try:
         minutes = parse_duration_to_minutes(value)
     except ValueError:
-        raise ValueError(
-            "Reminder before close must be a whole number immediately followed by a unit "
-            "-- m/minutes, h/hours, or d/days (e.g. '10m', '1h', '7d')."
-        )
+        raise ValueError(DURATION_SYNTAX_HELP)
     if not (MIN_VOTE_REMINDER_MINUTES_BEFORE_CLOSE <= minutes <= MAX_VOTE_REMINDER_MINUTES_BEFORE_CLOSE):
         raise ValueError(
             "Reminder before close must be between "
@@ -2822,7 +2821,7 @@ async def send_setup_wizard_step(
         body += (
             "\n\nChoose the server's default nominee selection mode and visibility below -- each option "
             "explains its own behavior when opened -- then press **Set Voting Defaults** to configure the "
-            "default candidate count and vote duration."
+            f"default candidate count and vote duration. {DURATION_FORMAT_HELP_TEXT}"
         )
 
     elif step == SetupWizardStep.REJECTION_SETTINGS:
@@ -2910,7 +2909,7 @@ async def send_setup_wizard_step(
         )
         body += (
             "\n\nShould WASH send a reminder shortly before a voting round closes? Choose below, "
-            "then -- if enabled -- set how long before close it's sent."
+            f"then -- if enabled -- set how long before close it's sent. {DURATION_FORMAT_HELP_TEXT}"
         )
 
     elif step == SetupWizardStep.BACKUP_DEFAULTS:
@@ -3865,7 +3864,8 @@ async def send_config_voting_defaults_screen(
         + collection_line
         + f"{VISIBILITY_HELP_TEXT_SHORT}\n\n"
         + nominee_selection_line
-        + "**Set Voting Defaults** to configure the guild-wide default candidate count and vote duration."
+        + "**Set Voting Defaults** to configure the guild-wide default candidate count and vote duration. "
+        + DURATION_FORMAT_HELP_TEXT
     )
     if edit:
         await interaction.response.edit_message(content=body, view=view)
@@ -4069,7 +4069,8 @@ async def send_config_reminder_defaults_modal(
 
     await interaction.response.edit_message(
         content="**WASH Configuration -- Reminder Defaults**\n\nShould WASH send a reminder shortly before a "
-        "voting round closes? Choose below, then -- if enabled -- set how long before close it's sent.",
+        "voting round closes? Choose below, then -- if enabled -- set how long before close it's sent. "
+        f"{DURATION_FORMAT_HELP_TEXT}",
         view=ConfigReminderDefaultsChoiceView(on_enable, on_disable, on_back),
     )
 
@@ -4426,27 +4427,38 @@ class WatchPartyAdminGroup(discord.app_commands.Group):
 
 
 class DatabaseGroup(discord.app_commands.Group):
-    """WASH Crew-only /database command group (Command Structure Cleanup, pre-v1,
-    refined to add /database manage and a shared "Use Current
-    Thread/Channel" destination option).
+    """WASH Crew-only /database command group.
 
-    Replaces the former top-level /database_add, /database_list,
-    /database_backup, /database_restore, /database_reset, and
-    /database_remove commands -- removed outright, with no compatibility
-    alias, since WASH has not yet been publicly released. /database move
-    and /database manage are both new capabilities; /database move,
-    /database backup, /database restore, /database reset, and /database
-    remove remain available as direct shortcuts for experienced
-    administrators alongside /database manage's guided picker-then-menu
-    workflow -- see handle_database_manage. Each subcommand only collects
-    Discord-native parameters and delegates to a module-level
-    handle_*/perform_*()/start_*() function, exactly like every other
-    command in this file, so behavior stays unit-testable without a live
-    Discord connection. No group-level interaction_check: every
-    subcommand already performs its own WASH Crew check internally (some,
-    like /vote edit, deliberately check only after resolving context)
-    -- unchanged from before this move so that ordering is preserved
-    exactly.
+    Release UX & Command Surface Cleanup: the top-level surface is now
+    intentionally minimal -- /database add, /database list, /database
+    health, and /database manage. /database move, /database backup,
+    /database reset, and /database remove are no longer registered as
+    standalone slash commands; every one of those actions is fully
+    reachable through /database manage's guided picker-then-menu
+    workflow instead (see show_database_management_menu), which calls
+    the exact same start_database_move/backup/reset/remove() logic those
+    former subcommands used -- no behavior was removed, only the extra,
+    redundant top-level entry points. Their own former command wrappers
+    (handle_database_move/backup/reset/remove) are deliberately left
+    intact and still fully tested, even though nothing in this class
+    calls them anymore, so the exact permission-check/"no collections"/
+    picker behavior they encode remains available and provably correct
+    if a future change ever needs it again.
+
+    /database restore is the one exception that stays a top-level
+    command: it takes a file-attachment parameter, and Discord's API has
+    no way to attach a file in response to a button or modal submission
+    -- only a slash command's own options can collect one. /database
+    manage's Restore Collection action reflects this honestly: it can't
+    perform a restore itself, so it just tells WASH Crew to run
+    `/database restore` directly (see show_database_management_menu).
+
+    Each remaining subcommand only collects Discord-native parameters
+    and delegates to a module-level handle_*/perform_*() function,
+    exactly like every other command in this file, so behavior stays
+    unit-testable without a live Discord connection. No group-level
+    interaction_check: every subcommand already performs its own WASH
+    Crew check internally.
     """
 
     def __init__(self, bot: "WatchPartyBot") -> None:
@@ -4456,12 +4468,6 @@ class DatabaseGroup(discord.app_commands.Group):
     @discord.app_commands.command(name="add", description="Create a new suggestion collection.")
     async def add(self, interaction: discord.Interaction) -> None:
         await handle_database_add(interaction, self.bot)
-
-    @discord.app_commands.command(
-        name="manage", description="Guided workflow: pick a collection, then choose what to do with it."
-    )
-    async def manage(self, interaction: discord.Interaction) -> None:
-        await handle_database_manage(interaction, self.bot)
 
     @discord.app_commands.command(name="list", description="List this server's collections.")
     async def list(self, interaction: discord.Interaction) -> None:
@@ -4481,14 +4487,11 @@ class DatabaseGroup(discord.app_commands.Group):
         await handle_database_health(interaction, self.bot)
 
     @discord.app_commands.command(
-        name="move", description="Move a collection's suggestion destination to a different thread."
+        name="manage",
+        description="Move, edit, back up, restore, reset, or remove collections.",
     )
-    async def move(self, interaction: discord.Interaction) -> None:
-        await handle_database_move(interaction, self.bot)
-
-    @discord.app_commands.command(name="backup", description="Back up a single collection.")
-    async def backup(self, interaction: discord.Interaction) -> None:
-        await handle_database_backup(interaction, self.bot)
+    async def manage(self, interaction: discord.Interaction) -> None:
+        await handle_database_manage(interaction, self.bot)
 
     @discord.app_commands.command(name="restore", description="Restore a collection backup.")
     @discord.app_commands.describe(
@@ -4510,15 +4513,10 @@ class DatabaseGroup(discord.app_commands.Group):
         backup_filename: Optional[str] = None,
         backup_file: Optional[discord.Attachment] = None,
     ) -> None:
+        # The one subcommand that can't move into /database manage --
+        # see this class's own docstring for why (Discord has no way to
+        # attach a file in response to a button/modal interaction).
         await handle_database_restore(interaction, self.bot, mode, backup_filename, backup_file)
-
-    @discord.app_commands.command(name="remove", description="Deactivate a collection.")
-    async def remove(self, interaction: discord.Interaction) -> None:
-        await handle_database_remove(interaction, self.bot)
-
-    @discord.app_commands.command(name="reset", description="Clear one collection's suggestions.")
-    async def reset(self, interaction: discord.Interaction) -> None:
-        await handle_database_reset(interaction, self.bot)
 
 
 class VotingGroup(discord.app_commands.Group):
@@ -6546,7 +6544,8 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
 
                 await pick_interaction.response.send_message(
                     f"Voting round {round_id} currently ends: {format_datetime_for_display(vote_round.closes_at)}\n\n"
-                    "Shorten it by how much?",
+                    f"Shorten it by how much? Choose 1 Hour or 1 Day, or Custom... for any other amount of "
+                    f"minutes, hours, or days (e.g. {DURATION_FORMAT_EXAMPLES}).",
                     view=DurationDeltaChoiceView(
                         on_quick_pick, on_choose_custom, on_cancel_delta, custom_id_prefix="wpm_edit_vote_shorten_pick"
                     ),
@@ -6575,7 +6574,8 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
 
                 await pick_interaction.response.send_message(
                     f"Voting round {round_id} currently ends: {format_datetime_for_display(vote_round.closes_at)}\n\n"
-                    "Extend it by how much?",
+                    f"Extend it by how much? Choose 1 Hour or 1 Day, or Custom... for any other amount of "
+                    f"minutes, hours, or days (e.g. {DURATION_FORMAT_EXAMPLES}).",
                     view=DurationDeltaChoiceView(
                         on_quick_pick, on_choose_custom, on_cancel_delta, custom_id_prefix="wpm_edit_vote_extend_pick"
                     ),
@@ -10813,10 +10813,12 @@ async def show_database_management_menu(
 
 
 async def handle_database_manage(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
-    """/database manage (Command Structure Cleanup Refinement): the
-    guided workflow -- pick a collection, then choose what to do with
-    it -- alongside the existing direct /database subcommands, which
-    remain available as shortcuts for experienced administrators.
+    """/database manage: the guided workflow -- pick a collection, then
+    choose what to do with it. Release UX & Command Surface Cleanup:
+    this is now the only way to move, back up, reset, or remove a
+    collection -- those four no longer have their own top-level slash
+    commands (see DatabaseGroup's own docstring for why, and for
+    /database restore's one necessary exception).
     """
     if bot.wash_crew_role_id is None:
         await interaction.response.send_message(
