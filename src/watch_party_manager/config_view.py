@@ -272,6 +272,7 @@ OnDatabaseSettingChosen = Callable[[discord.Interaction, str], Awaitable[None]]
 DATABASE_SETTING_SUGGESTION_DESTINATION = "suggestion_destination"
 DATABASE_SETTING_WATCH_DESTINATION = "watch_destination"
 DATABASE_SETTING_CANDIDATE_SELECTION = "candidate_selection"
+DATABASE_SETTING_REJECTION_THRESHOLD = "rejection_threshold"
 
 
 class DatabaseSettingSelect(discord.ui.Select):
@@ -280,6 +281,7 @@ class DatabaseSettingSelect(discord.ui.Select):
             discord.SelectOption(label="Suggestion Post Destination", value=DATABASE_SETTING_SUGGESTION_DESTINATION),
             discord.SelectOption(label="Watched Item Archive", value=DATABASE_SETTING_WATCH_DESTINATION),
             discord.SelectOption(label="Nominee Selection", value=DATABASE_SETTING_CANDIDATE_SELECTION),
+            discord.SelectOption(label="Rejection Settings", value=DATABASE_SETTING_REJECTION_THRESHOLD),
         ]
         super().__init__(
             placeholder="Choose a setting to edit...", options=options, custom_id="wpm_config_database_setting_select"
@@ -297,6 +299,21 @@ class ConfigDatabaseSettingsMenuView(discord.ui.View):
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
         self.add_item(DatabaseSettingSelect(on_select))
         self.add_item(BackToMenuButton(on_back))
+
+
+class ConfigRejectionThresholdModal(discord.ui.Modal):
+    """One database's "I Won't Watch" threshold: a single number field,
+    mirroring EligiblePoolWarningThresholdModal's shape.
+    """
+
+    def __init__(self, on_submit: OnConfigRetryModalSubmit, *, default: str) -> None:
+        super().__init__(title="I Won't Watch Threshold")
+        self._submit_callback = on_submit
+        self.threshold_input = discord.ui.TextInput(label="Threshold (1-10)", default=default)
+        self.add_item(self.threshold_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self._submit_callback(interaction, self.threshold_input.value)
 
 
 class ConfigDatabaseCandidateSelectionView(discord.ui.View):

@@ -212,6 +212,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
         self.suggestion_service.record_vote_win(item_a.id, date.today())
         self.suggestion_service.reject_suggestion(item_b.id, 1)
         self.suggestion_service.reject_suggestion(item_b.id, 2)
+        self.suggestion_service.retire_pending_review(item_b.id)
         self.bot.vote_service.create_round(
             candidate_suggestion_ids=[item_c.id, other.id], database_id=self.database.database_id
         )
@@ -224,8 +225,23 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
         self.assertIn("Active Watch Items: 2 (Eligible for Voting + In an Active Vote)", message)
         self.assertIn("Eligible for Voting: 0", message)
         self.assertIn("In an Active Vote: 2", message)
+        self.assertIn("Pending Crew Review: 0", message)
         self.assertIn("Vote Winners: 1", message)
         self.assertIn("Retired: 1", message)
+
+    async def test_pending_crew_review_is_reported_and_counted_in_the_total(self) -> None:
+        item_a = self.suggestion_service.suggest("Alien", database_id=self.database.database_id).watch_item
+        item_b = self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id).watch_item
+        self.suggestion_service.reject_suggestion(item_b.id, 1)
+        self.suggestion_service.reject_suggestion(item_b.id, 2)
+        interaction = FakeInteraction()
+
+        await handle_database_health(interaction, self.bot)
+
+        message = interaction.response.sent_message
+        self.assertIn("Total Watch Items: 2", message)
+        self.assertIn("⚠️ Pending Crew Review: 1", message)
+        self.assertIn("Eligible for Voting: 1", message)
 
     async def test_each_status_line_uses_the_same_emoji_list_uses_for_that_status(self) -> None:
         # Visual Consistency: /database health previously had no
@@ -239,6 +255,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
         self.suggestion_service.record_vote_win(item_a.id, date.today())
         self.suggestion_service.reject_suggestion(item_b.id, 1)
         self.suggestion_service.reject_suggestion(item_b.id, 2)
+        self.suggestion_service.retire_pending_review(item_b.id)
         self.bot.vote_service.create_round(
             candidate_suggestion_ids=[item_c.id, other.id], database_id=self.database.database_id
         )
@@ -249,6 +266,7 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
         message = interaction.response.sent_message
         self.assertIn("🟢 Eligible for Voting: 0", message)
         self.assertIn("🗳️ In an Active Vote: 2", message)
+        self.assertIn("⚠️ Pending Crew Review: 0", message)
         self.assertIn("🏆 Vote Winners: 1", message)
         self.assertIn("🗄️ Retired: 1", message)
 

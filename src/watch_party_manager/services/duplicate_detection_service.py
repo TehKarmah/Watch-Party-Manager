@@ -5,7 +5,7 @@ guesses: a title match where either side's release year is unknown is
 reported as a "possible" duplicate requiring explicit WASH Crew
 confirmation, never silently treated as unique or as a hard block.
 
-Archive "reason" (rejected via "I WILL NOT WATCH" vs. archived some
+Archive "reason" (rejected via "I Won't Watch" vs. archived some
 other way) is inferred entirely from data WatchItem/WatchItemJourney
 already track -- see categorize_watch_item(). No new archive-reason
 field is invented, per this milestone's own instruction not to invent
@@ -102,7 +102,7 @@ class DuplicateCheckResult:
 def categorize_watch_item(watch_item: WatchItem) -> DuplicateMatchCategory:
     """Classify an existing item for duplicate-detection/re-suggestion purposes.
 
-    An ARCHIVED item with at least one recorded "I will not watch"
+    An ARCHIVED item with at least one recorded "I won't watch"
     rejection is treated as rejection-archived; an ARCHIVED item with
     none was archived some other way (e.g. WASH Crew directly archiving
     it via /remove).

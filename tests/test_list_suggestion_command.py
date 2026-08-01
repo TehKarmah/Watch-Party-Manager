@@ -58,6 +58,7 @@ class ResolveSuggestionListEntriesTests(unittest.TestCase):
         self.winner_item = make_item(3, status=WatchItemStatus.VOTE_WINNER)
         self.retired_item = make_item(4, status=WatchItemStatus.ARCHIVED)
         self.watched_item = make_item(5, status=WatchItemStatus.WATCHED)
+        self.pending_crew_review_item = make_item(6, status=WatchItemStatus.PENDING_CREW_REVIEW)
         self.eligibility = CollectionEligibility(
             database_id=1,
             available=(self.available_item,),
@@ -65,6 +66,7 @@ class ResolveSuggestionListEntriesTests(unittest.TestCase):
             vote_winners=(self.winner_item,),
             retired=(self.retired_item,),
             watched=(self.watched_item,),
+            pending_crew_review=(self.pending_crew_review_item,),
         )
 
     def test_active_mixes_available_and_in_active_vote(self) -> None:
@@ -98,6 +100,12 @@ class ResolveSuggestionListEntriesTests(unittest.TestCase):
         entries = resolve_suggestion_list_entries(self.eligibility, SuggestionListStatusFilter.WATCHED)
         self.assertEqual([(self.watched_item, SuggestionDisplayStatus.WATCHED)], entries)
 
+    def test_pending_crew_review_shows_only_pending_crew_review(self) -> None:
+        entries = resolve_suggestion_list_entries(self.eligibility, SuggestionListStatusFilter.PENDING_CREW_REVIEW)
+        self.assertEqual(
+            [(self.pending_crew_review_item, SuggestionDisplayStatus.PENDING_CREW_REVIEW)], entries
+        )
+
     def test_all_shows_every_bucket(self) -> None:
         entries = resolve_suggestion_list_entries(self.eligibility, SuggestionListStatusFilter.ALL)
         items_and_statuses = {(item.id, status) for item, status in entries}
@@ -108,13 +116,23 @@ class ResolveSuggestionListEntriesTests(unittest.TestCase):
                 (self.winner_item.id, SuggestionDisplayStatus.VOTE_WINNER),
                 (self.retired_item.id, SuggestionDisplayStatus.RETIRED),
                 (self.watched_item.id, SuggestionDisplayStatus.WATCHED),
+                (self.pending_crew_review_item.id, SuggestionDisplayStatus.PENDING_CREW_REVIEW),
             },
             items_and_statuses,
         )
 
-    def test_seven_filters_exist(self) -> None:
+    def test_eight_filters_exist(self) -> None:
         self.assertEqual(
-            {"active", "eligible", "in_active_vote", "vote_winner", "retired", "watched", "all"},
+            {
+                "active",
+                "eligible",
+                "in_active_vote",
+                "pending_crew_review",
+                "vote_winner",
+                "retired",
+                "watched",
+                "all",
+            },
             {member.value for member in SuggestionListStatusFilter},
         )
 

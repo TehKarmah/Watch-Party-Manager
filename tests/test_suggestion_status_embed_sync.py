@@ -202,12 +202,24 @@ def make_discord_forbidden() -> discord.Forbidden:
     return discord.Forbidden(response=FakeForbiddenHTTPResponse(), message="Missing Access")
 
 
+class FakeGuildConfigurationRepository:
+    """No Admin Channel configured -- notify_crew_review's "gracefully no
+    Admin Channel configured" path, matching every FakeBot user in this
+    file that doesn't need to test the Crew Review notification itself.
+    """
+
+    def get(self, guild_id):
+        return None
+
+
 class FakeBot:
     def __init__(
         self, suggestion_service: SuggestionService, channel: FakeChannel, *, vote_service=None
     ) -> None:
         self.suggestion_service = suggestion_service
         self.suggestion_database_configuration_repository = None
+        self.guild_configuration_repository = FakeGuildConfigurationRepository()
+        self.wash_crew_role_id = None
         self.vote_service = vote_service
         self.permission_service = None
         self._channel = channel
@@ -577,10 +589,11 @@ class FakeRejectInteraction:
 
 class SuggestionRejectionThresholdEmbedSyncTests(unittest.IsolatedAsyncioTestCase):
     """Suggestion Status Synchronization, transition 4's two rejection
-    paths: both /reject (handle_reject_suggestion) and the "I WILL NOT
-    WATCH" button (handle_suggestion_rejection_toggle) must resync the
+    paths: both /reject (handle_reject_suggestion) and the "I Won't
+    Watch" button (handle_suggestion_rejection_toggle) must resync the
     suggestion's own public post -- not just its view/button -- when a
-    rejection crosses the configured threshold and archives it.
+    rejection crosses the configured threshold and it moves to Pending
+    Crew Review (New Review Workflow).
     """
 
     class FakeConfigRepository:
@@ -611,7 +624,7 @@ class SuggestionRejectionThresholdEmbedSyncTests(unittest.IsolatedAsyncioTestCas
     def _status_of(self, embed) -> str:
         return next(field.value for field in embed.fields if field.name == "Status")
 
-    async def test_reject_command_syncs_the_post_when_the_threshold_archives_it(self) -> None:
+    async def test_reject_command_syncs_the_post_when_the_threshold_reaches_crew_review(self) -> None:
         message = FakeMessage(message_id=555)
         channel = FakeChannel(message)
         bot = FakeBot(self.suggestion_service, channel)
@@ -622,12 +635,12 @@ class SuggestionRejectionThresholdEmbedSyncTests(unittest.IsolatedAsyncioTestCas
         await handle_reject_suggestion(interaction, bot, self.item.id)
 
         self.assertEqual(
-            WatchItemStatus.ARCHIVED, self.suggestion_service.get_suggestion(self.item.id).status
+            WatchItemStatus.PENDING_CREW_REVIEW, self.suggestion_service.get_suggestion(self.item.id).status
         )
         self.assertEqual(1, message.edit_calls)
-        self.assertEqual("🗄️ Retired", self._status_of(message.edited_embed))
+        self.assertEqual("⚠️ Pending Crew Review", self._status_of(message.edited_embed))
 
-    async def test_toggle_button_syncs_the_post_when_the_threshold_archives_it(self) -> None:
+    async def test_toggle_button_syncs_the_post_when_the_threshold_reaches_crew_review(self) -> None:
         message = FakeMessage(message_id=555)
         channel = FakeChannel(message)
         bot = FakeBot(self.suggestion_service, channel)
@@ -644,10 +657,10 @@ class SuggestionRejectionThresholdEmbedSyncTests(unittest.IsolatedAsyncioTestCas
         )
 
         self.assertEqual(
-            WatchItemStatus.ARCHIVED, self.suggestion_service.get_suggestion(self.item.id).status
+            WatchItemStatus.PENDING_CREW_REVIEW, self.suggestion_service.get_suggestion(self.item.id).status
         )
         self.assertEqual(1, message.edit_calls)
-        self.assertEqual("🗄️ Retired", self._status_of(message.edited_embed))
+        self.assertEqual("⚠️ Pending Crew Review", self._status_of(message.edited_embed))
 
     async def test_toggle_button_without_a_bot_falls_back_to_view_only_refresh(self) -> None:
         # Backward-compatible fallback: a caller with no bot instance

@@ -23,7 +23,7 @@ A pull method that attempts to create varied voting options by considering facto
 
 ### Eligible Pool
 
-The current set of Watch Items available for voting -- every suggestion that is neither currently nominated, nor a Vote Winner, Watched, nor Retired.
+The current set of Watch Items available for voting -- every suggestion that is neither currently nominated, Pending Crew Review, nor a Vote Winner, Watched, nor Retired.
 
 ---
 
@@ -38,6 +38,12 @@ Examples include weekly movie night, monthly special events, and television watc
 ### Watch Item
 
 A movie, television series, or other media item managed by Watch Party Manager.
+
+---
+
+### Pending Crew Review
+
+A Watch Item status reached once its collection's configured "I Won't Watch" threshold is met. Excluded from the Eligible Pool and its "I Won't Watch" button disabled until WASH Crew resolves it (Retire, Keep Active, or Reset Rejections) via the Admin Channel notification.
 
 ---
 

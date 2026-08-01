@@ -105,6 +105,7 @@ class SetupWizardDraft:
     voting_duration_minutes: Optional[int] = None
     voting_visibility: Optional[GuildVoteVisibility] = None
     voting_candidate_selection: Optional[CandidateSelectionMode] = None
+    rejection_threshold: Optional[int] = None
 
     reminder_enabled: Optional[bool] = None
     reminder_minutes_before_close: Optional[int] = None

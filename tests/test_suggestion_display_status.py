@@ -50,6 +50,15 @@ class ComputeDisplayStatusTests(unittest.TestCase):
         self.assertEqual(SuggestionDisplayStatus.WATCHED, compute_display_status(item, in_active_vote=True))
         self.assertEqual(SuggestionDisplayStatus.WATCHED, compute_display_status(item, in_active_vote=False))
 
+    def test_pending_crew_review_is_pending_crew_review_regardless_of_active_vote(self) -> None:
+        item = make_item(WatchItemStatus.PENDING_CREW_REVIEW)
+        self.assertEqual(
+            SuggestionDisplayStatus.PENDING_CREW_REVIEW, compute_display_status(item, in_active_vote=True)
+        )
+        self.assertEqual(
+            SuggestionDisplayStatus.PENDING_CREW_REVIEW, compute_display_status(item, in_active_vote=False)
+        )
+
     def test_in_active_vote_defaults_to_false(self) -> None:
         # Backward-compatible optional parameter: every pre-existing call
         # site that doesn't yet pass in_active_vote must behave exactly
@@ -95,12 +104,20 @@ class ResolveDisplayStatusTests(unittest.TestCase):
 
 
 class DisplayStatusLabelTests(unittest.TestCase):
-    def test_exactly_five_authoritative_states_exist(self) -> None:
-        # Rotation-removal Phase 2: Rotation Cooldown is gone -- Available,
-        # In an Active Vote, Vote Winner, Watched, Retired are the only
-        # five user-facing states.
+    def test_exactly_six_authoritative_states_exist(self) -> None:
+        # New Review Workflow: Pending Crew Review joins the five states
+        # Rotation Removal left -- Available, In an Active Vote, Pending
+        # Crew Review, Vote Winner, Watched, Retired are the only six
+        # user-facing states.
         self.assertEqual(
-            {"available", "in_active_vote", "vote_winner", "retired", "watched"},
+            {
+                "available",
+                "in_active_vote",
+                "pending_crew_review",
+                "vote_winner",
+                "retired",
+                "watched",
+            },
             {member.value for member in SuggestionDisplayStatus},
         )
 
@@ -115,6 +132,9 @@ class DisplayStatusLabelTests(unittest.TestCase):
         self.assertEqual("✅ Watched", display_status_label(SuggestionDisplayStatus.WATCHED))
         self.assertEqual(
             "🗳️ In an Active Vote", display_status_label(SuggestionDisplayStatus.IN_ACTIVE_VOTE)
+        )
+        self.assertEqual(
+            "⚠️ Pending Crew Review", display_status_label(SuggestionDisplayStatus.PENDING_CREW_REVIEW)
         )
 
     def test_every_status_has_a_bare_emoji(self) -> None:

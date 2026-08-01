@@ -1,7 +1,7 @@
 """The one authoritative implementation of "what suggestions are eligible
 right now?", computed entirely from WatchItemStatus and VoteService. The
-five authoritative, user-facing states are Available, In an Active Vote,
-Vote Winner, Watched, and Retired.
+six authoritative, user-facing states are Available, In an Active Vote,
+Pending Crew Review, Vote Winner, Watched, and Retired.
 
 Eligible Pool: "available" is the pool the Eligible Pool Warning and
 every other user-facing count is based on (see
@@ -39,6 +39,11 @@ class CollectionEligibility:
         now. Mode-agnostic; see module docstring.
     in_active_vote: currently nominated in this collection's open voting
         round (empty whenever no round is open).
+    pending_crew_review: awaiting a WASH Crew Retire/Keep Active/Reset
+        Rejections decision after reaching the configured "I Won't Watch"
+        threshold (see SuggestionService.reject_suggestion) -- excluded
+        from the eligible pool the moment it's reached, same as
+        vote_winners/retired/watched.
     vote_winners / retired / watched: terminal-state suggestions,
         included for Collection Health's reconciliation, never part of
         the eligible pool. watched is populated only by the explicit
@@ -52,6 +57,7 @@ class CollectionEligibility:
     vote_winners: Tuple[WatchItem, ...]
     retired: Tuple[WatchItem, ...]
     watched: Tuple[WatchItem, ...] = ()
+    pending_crew_review: Tuple[WatchItem, ...] = ()
 
     @property
     def active(self) -> Tuple[WatchItem, ...]:
@@ -61,8 +67,14 @@ class CollectionEligibility:
 
     @property
     def total(self) -> int:
-        """Total = Active + Vote Winners + Retired + Watched."""
-        return len(self.active) + len(self.vote_winners) + len(self.retired) + len(self.watched)
+        """Total = Active + Vote Winners + Retired + Watched + Pending Crew Review."""
+        return (
+            len(self.active)
+            + len(self.vote_winners)
+            + len(self.retired)
+            + len(self.watched)
+            + len(self.pending_crew_review)
+        )
 
     @property
     def eligible_pool_count(self) -> int:
@@ -86,6 +98,9 @@ class CollectionEligibilityService:
         retired = tuple(item for item in all_items if item.status is WatchItemStatus.ARCHIVED)
         vote_winners = tuple(item for item in all_items if item.status is WatchItemStatus.VOTE_WINNER)
         watched = tuple(item for item in all_items if item.status is WatchItemStatus.WATCHED)
+        pending_crew_review = tuple(
+            item for item in all_items if item.status is WatchItemStatus.PENDING_CREW_REVIEW
+        )
         active_items = [item for item in all_items if item.status is WatchItemStatus.SUGGESTED]
 
         nominated_ids = self._open_round_candidate_ids(database_id)
@@ -99,6 +114,7 @@ class CollectionEligibilityService:
             vote_winners=vote_winners,
             retired=retired,
             watched=watched,
+            pending_crew_review=pending_crew_review,
         )
 
     def _open_round_candidate_ids(self, database_id: int) -> frozenset:

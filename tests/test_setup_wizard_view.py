@@ -36,6 +36,7 @@ from watch_party_manager.setup_wizard_view import (
     SetupCancelButton,
     SetupPreparationView,
     SetupSaveForLaterButton,
+    SetupVotingDefaultsModal,
     SetupWizardResumeView,
     SuggestionDatabaseChoiceView,
     VisibilitySelectComponent,
@@ -505,6 +506,12 @@ class ModalStepIntroViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
+    """Guild-wide only (reused unchanged by /config's Voting Defaults
+    section) -- never a per-collection field like the "I Won't Watch"
+    threshold; see SetupVotingDefaultsModalTests below for the Setup
+    Wizard's own variant that bundles one in.
+    """
+
     async def test_has_exactly_two_fields_both_text_inputs(self) -> None:
         # Live-Discord regression: a Select embedded in a modal
         # constructs without error locally, but Discord's API rejects
@@ -534,6 +541,35 @@ class VotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
         modal = VotingDefaultsModal(_noop, defaults=("5", "2d"))
         self.assertEqual(modal.candidate_count_input.default, "5")
         self.assertEqual(modal.duration_input.default, "2d")
+
+
+class SetupVotingDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_exactly_three_fields_all_text_inputs(self) -> None:
+        modal = SetupVotingDefaultsModal(_noop)
+        self.assertEqual(len(modal.children), 3)
+        self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in modal.children))
+        self.assertEqual(modal.candidate_count_input.default, "3")
+        self.assertEqual(modal.duration_input.default, "1d")
+        self.assertEqual(modal.rejection_threshold_input.default, "2")
+
+    async def test_submission_forwards_all_three_values(self) -> None:
+        calls = []
+
+        async def on_submit(interaction, candidate_count, duration_text, rejection_threshold_text) -> None:
+            calls.append((candidate_count, duration_text, rejection_threshold_text))
+
+        modal = SetupVotingDefaultsModal(on_submit)
+        modal.candidate_count_input._value = "4"
+        modal.duration_input._value = "10"
+        modal.rejection_threshold_input._value = "5"
+        await modal.on_submit(interaction=object())
+        self.assertEqual(calls, [("4", "10", "5")])
+
+    async def test_uses_the_supplied_defaults(self) -> None:
+        modal = SetupVotingDefaultsModal(_noop, defaults=("5", "2d", "3"))
+        self.assertEqual(modal.candidate_count_input.default, "5")
+        self.assertEqual(modal.duration_input.default, "2d")
+        self.assertEqual(modal.rejection_threshold_input.default, "3")
 
 
 class VisibilitySelectComponentTests(unittest.IsolatedAsyncioTestCase):

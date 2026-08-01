@@ -1,12 +1,13 @@
-"""Discord UI components for the "I WILL NOT WATCH" suggestion button.
+"""Discord UI components for the "I Won't Watch" suggestion button.
 
 Mirrors voting_view.py's design: this module has no dependency on bot.py.
 RejectSuggestionButton and SuggestionView only know how to render
 themselves (including the rejection count/threshold shown on the button
 itself) and forward a click to a caller-supplied on_toggle callback. All
 actual rejection logic -- toggling between reject and remove-rejection,
-permission checks, threshold resolution, and archiving -- lives in bot.py
-and the existing SuggestionService, reused unchanged.
+permission checks, threshold resolution, and moving a suggestion to
+Pending Crew Review -- lives in bot.py and the existing SuggestionService,
+reused unchanged.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ REJECTION_CONFIRMATION_TIMEOUT_SECONDS = 300
 
 
 def build_reject_button_custom_id(suggestion_id: int) -> str:
-    """Build the stable custom_id for a suggestion's "I WILL NOT WATCH" button.
+    """Build the stable custom_id for a suggestion's "I Won't Watch" button.
 
     Shared between RejectSuggestionButton's construction and bot.py's
     startup migration (which must detect whether a fetched message
@@ -37,32 +38,48 @@ def build_reject_button_custom_id(suggestion_id: int) -> str:
     return f"wpm_suggestion_reject_{suggestion_id}"
 
 
-def build_reject_button_label(rejection_count: int, threshold: int, *, archived: bool, watched: bool = False) -> str:
-    """Build the "I WILL NOT WATCH" button's label.
+def build_reject_button_label(
+    rejection_count: int, threshold: int, *, archived: bool, watched: bool = False, pending_review: bool = False
+) -> str:
+    """Build the "I Won't Watch" button's label.
 
     The button label itself is how the suggestion message displays its
-    current rejection count and threshold (e.g. "I WILL NOT WATCH: 1 / 2")
+    current rejection count and threshold (e.g. "I WON'T WATCH: 1 / 2")
     -- there is no separate counter element, so refreshing this label
     after every interaction is what keeps the suggestion message current.
 
     Args:
         rejection_count: How many distinct members have rejected this suggestion.
-        threshold: The configured rejection threshold for automatic archiving.
+        threshold: The configured rejection threshold that triggers Crew Review.
         archived: Whether the suggestion has already been archived.
         watched: Whether the suggestion has been marked Watched (Watched
             Button & Archive Workflow) -- also disables the button, with
             its own, distinct label prefix so it never misleadingly
             claims the item was archived when it wasn't.
+        pending_review: Whether the suggestion is awaiting a WASH Crew
+            Retire/Keep Active/Reset Rejections decision (New Review
+            Workflow) -- also disables the button. Takes priority over
+            archived/watched (mutually exclusive in practice: a
+            suggestion's status is a single value).
 
     Returns:
         The button's label text.
     """
+    if pending_review:
+        # One line, matching the Archived/Watched prefix convention below
+        # (status word, em dash, base label) -- Discord button labels
+        # render as a single line, so a literal "\n" here would either be
+        # collapsed or read as a stray character rather than an actual
+        # line break. No counter: the count is already shown to WASH
+        # Crew in the Admin Channel notification, and it can't change
+        # again from here anyway (rejections are frozen while pending).
+        return "Review Pending — I WON'T WATCH"
     counter = f"{rejection_count} / {threshold}"
     if watched:
-        return f"Watched — I WILL NOT WATCH: {counter}"
+        return f"Watched — I WON'T WATCH: {counter}"
     if archived:
-        return f"Archived — I WILL NOT WATCH: {counter}"
-    return f"I WILL NOT WATCH: {counter}"
+        return f"Archived — I WON'T WATCH: {counter}"
+    return f"I WON'T WATCH: {counter}"
 
 
 class RejectSuggestionButton(discord.ui.Button):
@@ -83,6 +100,7 @@ class RejectSuggestionButton(discord.ui.Button):
         *,
         archived: bool,
         watched: bool = False,
+        pending_review: bool = False,
         on_toggle: OnToggleRejectionCallback,
     ) -> None:
         """Initialize the button.
@@ -95,13 +113,18 @@ class RejectSuggestionButton(discord.ui.Button):
                 once the suggestion has been archived -- an archived
                 suggestion's rejection history is final.
             watched: Disables the button once the suggestion has been
-                marked Watched -- "I WILL NOT WATCH" no longer applies
+                marked Watched -- "I Won't Watch" no longer applies
                 once the group has actually watched it.
+            pending_review: Disables the button once the suggestion is
+                awaiting a WASH Crew decision (New Review Workflow) --
+                its rejection record is frozen until that's resolved.
             on_toggle: Called with (interaction, suggestion_id) when clicked.
         """
-        disabled = archived or watched
+        disabled = archived or watched or pending_review
         super().__init__(
-            label=build_reject_button_label(rejection_count, threshold, archived=archived, watched=watched),
+            label=build_reject_button_label(
+                rejection_count, threshold, archived=archived, watched=watched, pending_review=pending_review
+            ),
             style=discord.ButtonStyle.secondary if disabled else discord.ButtonStyle.danger,
             custom_id=build_reject_button_custom_id(suggestion_id),
             disabled=disabled,
@@ -114,7 +137,7 @@ class RejectSuggestionButton(discord.ui.Button):
 
 
 def build_watched_button_custom_id(suggestion_id: int) -> str:
-    """Build the stable custom_id for a suggestion's "Watched" button.
+    """Build the stable custom_id for a suggestion's "Mark as Watched" button.
 
     Shared between WatchedSuggestionButton's construction and bot.py's
     startup migration, mirroring build_reject_button_custom_id's role
@@ -124,8 +147,8 @@ def build_watched_button_custom_id(suggestion_id: int) -> str:
 
 
 class WatchedSuggestionButton(discord.ui.Button):
-    """The suggestion message's "Watched" button (Watched Button & Archive
-    Workflow).
+    """The suggestion message's "Mark as Watched" button (Watched Button &
+    Archive Workflow).
 
     Visible to everyone -- so members notice an item hasn't been marked
     watched yet -- but only WASH Crew can successfully use it; the
@@ -142,11 +165,14 @@ class WatchedSuggestionButton(discord.ui.Button):
         Args:
             suggestion_id: The suggestion this button belongs to.
             watched: Disables the button once already marked Watched --
-                a suggestion is only ever confirmed watched once.
+                a suggestion is only ever confirmed watched once. Once
+                disabled it shows "✅ Watched" -- a completed-state
+                confirmation, not an action invitation, so it keeps its
+                own past-tense wording rather than "Mark as Watched".
             on_click: Called with (interaction, suggestion_id) when clicked.
         """
         super().__init__(
-            label="Watched" if not watched else "✅ Watched",
+            label="Mark as Watched" if not watched else "✅ Watched",
             style=discord.ButtonStyle.secondary if watched else discord.ButtonStyle.success,
             custom_id=build_watched_button_custom_id(suggestion_id),
             disabled=watched,
@@ -159,7 +185,7 @@ class WatchedSuggestionButton(discord.ui.Button):
 
 
 class SuggestionView(discord.ui.View):
-    """The "I WILL NOT WATCH" and Watched buttons for one suggestion message.
+    """The "I Won't Watch" and Mark as Watched buttons for one suggestion message.
 
     timeout=None and stable custom_ids make this a persistent Discord
     view. bot.py re-registers the view for every active suggestion's
@@ -177,11 +203,13 @@ class SuggestionView(discord.ui.View):
 
         Args:
             watch_item: The suggestion this view belongs to. Its current
-                rejection count, archived status, and watched status
-                drive both buttons' labels and disabled states.
-            threshold: The suggestion database's configured rejection threshold.
+                rejection count, archived status, watched status, and
+                pending-review status drive both buttons' labels and
+                disabled states.
+            threshold: The suggestion database's configured "I Won't
+                Watch" threshold.
             on_toggle: Passed through to the reject button.
-            on_watched: Passed through to the Watched button.
+            on_watched: Passed through to the Mark as Watched button.
         """
         if watch_item.id is None or watch_item.id <= 0:
             raise ValueError("SuggestionView requires a suggestion with a positive ID.")
@@ -190,6 +218,7 @@ class SuggestionView(discord.ui.View):
         rejection_count = len(watch_item.journey.rejected_by_discord_user_ids)
         archived = watch_item.status == WatchItemStatus.ARCHIVED
         watched = watch_item.status == WatchItemStatus.WATCHED
+        pending_review = watch_item.status == WatchItemStatus.PENDING_CREW_REVIEW
         self.add_item(
             RejectSuggestionButton(
                 watch_item.id,
@@ -197,6 +226,7 @@ class SuggestionView(discord.ui.View):
                 threshold,
                 archived=archived,
                 watched=watched,
+                pending_review=pending_review,
                 on_toggle=on_toggle,
             )
         )

@@ -35,6 +35,15 @@ class WatchItemStatus(str, Enum):
     since it must automatically revert to Available the moment its round
     closes. SUGGESTED covers both.
 
+    PENDING_CREW_REVIEW is reached when a suggestion's "I Won't Watch"
+    rejection count reaches its configured threshold (see
+    SuggestionService.reject_suggestion) -- it is deliberately not an
+    automatic archive: WASH Crew must explicitly Retire, Keep Active, or
+    Reset Rejections (see SuggestionService.retire_pending_review /
+    keep_suggestion_active / reset_suggestion_rejections) before it
+    leaves this status. Excluded from nomination eligibility the moment
+    it's reached, same as ARCHIVED and WATCHED.
+
     WATCHED is reachable from any other status via the dedicated
     Watched button/action only -- winning a vote or being retired never
     implies it automatically (see SuggestionService.mark_suggestion_watched).
@@ -44,6 +53,7 @@ class WatchItemStatus(str, Enum):
     VOTE_WINNER = "vote_winner"
     ARCHIVED = "archived"
     WATCHED = "watched"
+    PENDING_CREW_REVIEW = "pending_crew_review"
 
 
 @dataclass(slots=True)
@@ -66,6 +76,15 @@ class WatchItem:
     guild_id: Optional[int] = None
     channel_id: Optional[int] = None
     message_id: Optional[int] = None
+    # Where the Admin Channel's Crew Review notification (Retire/Keep
+    # Active/Reset Rejections) lives, if one is currently open -- set by
+    # SuggestionService.set_crew_review_notification_reference() and
+    # cleared whenever the review is resolved (see retire_pending_review/
+    # keep_suggestion_active/reset_suggestion_rejections). Distinct from
+    # channel_id/message_id above, which locate this suggestion's own
+    # public confirmation post, not the crew notification about it.
+    crew_review_channel_id: Optional[int] = None
+    crew_review_message_id: Optional[int] = None
     journey: WatchItemJourney = field(default_factory=WatchItemJourney)
     release_year: Optional[int] = None
     updated_at: Optional[datetime] = None
@@ -79,6 +98,8 @@ class WatchItem:
         self._validate_guild_id()
         self._validate_channel_id()
         self._validate_message_id()
+        self._validate_crew_review_channel_id()
+        self._validate_crew_review_message_id()
         self._validate_release_year()
         self._validate_updated_at()
         self.genres = self._normalize_genres(self.genres)
@@ -122,6 +143,14 @@ class WatchItem:
     def _validate_message_id(self) -> None:
         if self.message_id is not None and self.message_id <= 0:
             raise ValueError("message_id must be a positive integer when provided")
+
+    def _validate_crew_review_channel_id(self) -> None:
+        if self.crew_review_channel_id is not None and self.crew_review_channel_id <= 0:
+            raise ValueError("crew_review_channel_id must be a positive integer when provided")
+
+    def _validate_crew_review_message_id(self) -> None:
+        if self.crew_review_message_id is not None and self.crew_review_message_id <= 0:
+            raise ValueError("crew_review_message_id must be a positive integer when provided")
 
     def _validate_release_year(self) -> None:
         if self.release_year is None:

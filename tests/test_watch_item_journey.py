@@ -143,6 +143,38 @@ class RemoveRejectionTests(unittest.TestCase):
         self.assertEqual(journey.rejected_by_discord_user_ids, (2,))
 
 
+class ClearRejectionsTests(unittest.TestCase):
+    """New Review Workflow: Keep Active/Reset Rejections both clear every
+    recorded "I Won't Watch" rejection.
+    """
+
+    def test_clears_every_recorded_rejection(self) -> None:
+        journey = WatchItemJourney()
+        journey.record_rejection(1)
+        journey.record_rejection(2)
+
+        journey.clear_rejections()
+
+        self.assertEqual(journey.rejected_by_discord_user_ids, ())
+
+    def test_clearing_with_no_rejections_is_a_no_op(self) -> None:
+        journey = WatchItemJourney()
+
+        journey.clear_rejections()
+
+        self.assertEqual(journey.rejected_by_discord_user_ids, ())
+
+    def test_a_member_can_be_rejected_again_after_clearing(self) -> None:
+        journey = WatchItemJourney()
+        journey.record_rejection(1)
+        journey.clear_rejections()
+
+        recorded = journey.record_rejection(1)
+
+        self.assertTrue(recorded)
+        self.assertEqual(journey.rejected_by_discord_user_ids, (1,))
+
+
 class RetirementTests(unittest.TestCase):
     def test_defaults_have_no_retirement_recorded(self) -> None:
         journey = WatchItemJourney()

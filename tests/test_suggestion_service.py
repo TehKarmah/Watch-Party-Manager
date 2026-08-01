@@ -1477,9 +1477,9 @@ class RejectSuggestionTests(unittest.TestCase):
             reloaded.get_suggestion(self.matrix.id).journey.rejected_by_discord_user_ids, ()
         )
 
-    # --- Rejection threshold reached / automatic archive ------------------------
+    # --- Rejection threshold reached / New Review Workflow ----------------------
 
-    def test_reaching_the_threshold_archives_the_suggestion(self) -> None:
+    def test_reaching_the_threshold_moves_to_pending_crew_review(self) -> None:
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
 
         result = self.suggestion_service.reject_suggestion(
@@ -1487,11 +1487,11 @@ class RejectSuggestionTests(unittest.TestCase):
         )
 
         self.assertTrue(result.success)
-        self.assertIn("archived", result.message)
+        self.assertIn("pending WASH Crew review", result.message)
         watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
-        self.assertEqual(watch_item.status, WatchItemStatus.ARCHIVED)
+        self.assertEqual(watch_item.status, WatchItemStatus.PENDING_CREW_REVIEW)
 
-    def test_below_the_threshold_does_not_archive(self) -> None:
+    def test_below_the_threshold_does_not_reach_pending_review(self) -> None:
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
 
         watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
@@ -1502,9 +1502,9 @@ class RejectSuggestionTests(unittest.TestCase):
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2)
 
         watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
-        self.assertEqual(watch_item.status, WatchItemStatus.ARCHIVED)
+        self.assertEqual(watch_item.status, WatchItemStatus.PENDING_CREW_REVIEW)
 
-    def test_archiving_preserves_the_rejection_history(self) -> None:
+    def test_pending_review_preserves_the_rejection_history(self) -> None:
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2, rejection_threshold=2)
 
@@ -1520,12 +1520,12 @@ class RejectSuggestionTests(unittest.TestCase):
 
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=3, rejection_threshold=3)
         self.assertEqual(
-            self.suggestion_service.get_suggestion(self.matrix.id).status, WatchItemStatus.ARCHIVED
+            self.suggestion_service.get_suggestion(self.matrix.id).status, WatchItemStatus.PENDING_CREW_REVIEW
         )
 
-    # --- Archived suggestions reject additional rejections/removals -------------
+    # --- Pending Crew Review suggestions reject additional rejections/removals --
 
-    def test_archived_suggestions_reject_additional_rejections(self) -> None:
+    def test_pending_review_suggestions_reject_additional_rejections(self) -> None:
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2, rejection_threshold=2)
 
@@ -1534,33 +1534,52 @@ class RejectSuggestionTests(unittest.TestCase):
         )
 
         self.assertFalse(result.success)
-        self.assertIn("already been archived", result.message)
+        self.assertIn("pending WASH Crew review", result.message)
 
-    def test_archived_suggestions_reject_removal_of_a_rejection(self) -> None:
+    def test_pending_review_suggestions_reject_removal_of_a_rejection(self) -> None:
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2, rejection_threshold=2)
 
         result = self.suggestion_service.remove_rejection(self.matrix.id, discord_user_id=1)
 
         self.assertFalse(result.success)
-        self.assertIn("already been archived", result.message)
-        # The rejection history is untouched, exactly as it was when archived.
+        self.assertIn("pending WASH Crew review", result.message)
+        # The rejection history is untouched, exactly as it was when it reached review.
         journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
         self.assertEqual(journey.rejected_by_discord_user_ids, (1, 2))
 
+    def test_archived_suggestions_reject_additional_rejections(self) -> None:
+        self.suggestion_service.archive_suggestion(self.matrix.id)
+
+        result = self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1)
+
+        self.assertFalse(result.success)
+        self.assertIn("already been archived", result.message)
+
+    def test_archived_suggestions_reject_removal_of_a_rejection(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1)
+        self.suggestion_service.archive_suggestion(self.matrix.id)
+
+        result = self.suggestion_service.remove_rejection(self.matrix.id, discord_user_id=1)
+
+        self.assertFalse(result.success)
+        self.assertIn("already been archived", result.message)
+
     # --- FR-033B: the retired lifecycle -------------------------------------------
-
-    def test_reaching_the_threshold_records_a_retirement(self) -> None:
-        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
-
-        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2, rejection_threshold=2)
-
-        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
-        self.assertIsNotNone(journey.retired_at)
-        self.assertEqual(journey.retirement_reason, "rejection_threshold_reached")
 
     def test_below_the_threshold_does_not_record_a_retirement(self) -> None:
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+
+        journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
+        self.assertIsNone(journey.retired_at)
+
+    def test_reaching_the_threshold_alone_does_not_record_a_retirement(self) -> None:
+        # New Review Workflow: reaching the threshold moves the suggestion to
+        # Pending Crew Review, not straight to Retired -- the distinct
+        # "retired" lifecycle event is only recorded once WASH Crew
+        # actually retires it (see retire_pending_review, below).
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2, rejection_threshold=2)
 
         journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
         self.assertIsNone(journey.retired_at)
@@ -1570,6 +1589,95 @@ class RejectSuggestionTests(unittest.TestCase):
 
         journey = self.suggestion_service.get_suggestion(self.matrix.id).journey
         self.assertIsNone(journey.retired_at)
+
+
+class PendingCrewReviewDecisionTests(unittest.TestCase):
+    """New Review Workflow: WASH Crew's Retire/Keep Active/Reset Rejections
+    decisions on a suggestion pending Crew Review.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _reach_pending_review(self) -> None:
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+        self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=2, rejection_threshold=2)
+
+    def test_retire_pending_review_archives_and_records_a_retirement(self) -> None:
+        self._reach_pending_review()
+
+        result = self.suggestion_service.retire_pending_review(self.matrix.id)
+
+        self.assertTrue(result.success)
+        watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(watch_item.status, WatchItemStatus.ARCHIVED)
+        self.assertIsNotNone(watch_item.journey.retired_at)
+        self.assertEqual(watch_item.journey.retirement_reason, "rejection_threshold_reached")
+        # Retiring preserves who rejected it.
+        self.assertEqual(watch_item.journey.rejected_by_discord_user_ids, (1, 2))
+
+    def test_retire_pending_review_fails_when_not_pending(self) -> None:
+        result = self.suggestion_service.retire_pending_review(self.matrix.id)
+
+        self.assertFalse(result.success)
+        self.assertIn("not pending WASH Crew review", result.message)
+
+    def test_retire_pending_review_fails_for_a_nonexistent_suggestion(self) -> None:
+        result = self.suggestion_service.retire_pending_review(999)
+
+        self.assertFalse(result.success)
+        self.assertIn("doesn't exist", result.message)
+
+    def test_keep_suggestion_active_restores_available_and_clears_rejections(self) -> None:
+        self._reach_pending_review()
+
+        result = self.suggestion_service.keep_suggestion_active(self.matrix.id)
+
+        self.assertTrue(result.success)
+        watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(watch_item.status, WatchItemStatus.SUGGESTED)
+        self.assertEqual(watch_item.journey.rejected_by_discord_user_ids, ())
+
+    def test_keep_suggestion_active_fails_when_not_pending(self) -> None:
+        result = self.suggestion_service.keep_suggestion_active(self.matrix.id)
+
+        self.assertFalse(result.success)
+        self.assertIn("not pending WASH Crew review", result.message)
+
+    def test_reset_suggestion_rejections_restores_available_and_clears_rejections(self) -> None:
+        self._reach_pending_review()
+
+        result = self.suggestion_service.reset_suggestion_rejections(self.matrix.id)
+
+        self.assertTrue(result.success)
+        watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(watch_item.status, WatchItemStatus.SUGGESTED)
+        self.assertEqual(watch_item.journey.rejected_by_discord_user_ids, ())
+
+    def test_reset_suggestion_rejections_fails_when_not_pending(self) -> None:
+        result = self.suggestion_service.reset_suggestion_rejections(self.matrix.id)
+
+        self.assertFalse(result.success)
+        self.assertIn("not pending WASH Crew review", result.message)
+
+    def test_a_member_can_be_rejected_again_after_keep_active(self) -> None:
+        self._reach_pending_review()
+        self.suggestion_service.keep_suggestion_active(self.matrix.id)
+
+        result = self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=2)
+
+        self.assertTrue(result.success)
+        watch_item = self.suggestion_service.get_suggestion(self.matrix.id)
+        self.assertEqual(watch_item.journey.rejected_by_discord_user_ids, (1,))
 
 
 class GetSuggestionsForDatabaseArchivingTests(unittest.TestCase):
@@ -1597,6 +1705,7 @@ class GetSuggestionsForDatabaseArchivingTests(unittest.TestCase):
 
     def test_archived_suggestions_are_excluded_by_default(self) -> None:
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=1)
+        self.suggestion_service.retire_pending_review(self.matrix.id)
 
         items = self.suggestion_service.get_suggestions_for_database(self.database.database_id)
 
@@ -1606,6 +1715,7 @@ class GetSuggestionsForDatabaseArchivingTests(unittest.TestCase):
 
     def test_include_archived_true_still_returns_them(self) -> None:
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=1)
+        self.suggestion_service.retire_pending_review(self.matrix.id)
 
         items = self.suggestion_service.get_suggestions_for_database(
             self.database.database_id, include_archived=True
@@ -2103,5 +2213,42 @@ class SetConfirmationPostReferenceTests(unittest.TestCase):
 
     def test_returns_false_for_unknown_id(self) -> None:
         updated = self.service.set_confirmation_post_reference(999999, guild_id=1, channel_id=500, message_id=999)
+
+        self.assertFalse(updated)
+
+
+class SetCrewReviewNotificationReferenceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self._temp_dir.name)
+        self.service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.database = self.service.create_database("Movie Night", guild_id=1, channel_id=100).database
+        self.matrix = self.service.suggest("The Matrix", database_id=self.database.database_id).watch_item
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def test_updates_the_crew_review_channel_and_message(self) -> None:
+        updated = self.service.set_crew_review_notification_reference(self.matrix.id, channel_id=900, message_id=555)
+
+        self.assertTrue(updated)
+        item = self.service.get_suggestion(self.matrix.id)
+        self.assertEqual(900, item.crew_review_channel_id)
+        self.assertEqual(555, item.crew_review_message_id)
+
+    def test_persists_the_change(self) -> None:
+        self.service.set_crew_review_notification_reference(self.matrix.id, channel_id=900, message_id=555)
+
+        reloaded = SuggestionService(
+            repository=self.service._repository, database_repository=self.service._database_repository
+        )
+        self.assertEqual(900, reloaded.get_suggestion(self.matrix.id).crew_review_channel_id)
+        self.assertEqual(555, reloaded.get_suggestion(self.matrix.id).crew_review_message_id)
+
+    def test_returns_false_for_unknown_id(self) -> None:
+        updated = self.service.set_crew_review_notification_reference(999999, channel_id=900, message_id=555)
 
         self.assertFalse(updated)

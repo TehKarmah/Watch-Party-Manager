@@ -209,6 +209,43 @@ class JsonSuggestionRepositoryTests(unittest.TestCase):
         self.assertIsNone(loaded.channel_id)
         self.assertIsNone(loaded.message_id)
 
+    def test_save_then_load_round_trips_the_crew_review_notification_location(self) -> None:
+        # Release blocker fix: without this round-tripping, a Crew Review
+        # notification's buttons could never be reconnected after a
+        # restart -- see restore_persistent_crew_review_views in bot.py.
+        watch_item = WatchItem(
+            title="The Matrix",
+            media_type=MediaType.MOVIE,
+            id=1,
+            crew_review_channel_id=900,
+            crew_review_message_id=555,
+        )
+        self.repository.save([watch_item], next_id=2)
+
+        result = self.repository.load()
+        loaded = result.watch_items[0]
+        self.assertEqual(loaded.crew_review_channel_id, 900)
+        self.assertEqual(loaded.crew_review_message_id, 555)
+
+    def test_loading_a_file_without_crew_review_fields_defaults_them_to_none(self) -> None:
+        # A record saved before this feature existed (or one whose review
+        # was never actually reached/notified) has neither key at all.
+        legacy_json = """
+        {
+          "next_id": 2,
+          "suggestions": [
+            {"id": 1, "title": "The Matrix", "media_type": "movie", "metadata_ids": {}}
+          ]
+        }
+        """
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+        loaded = result.watch_items[0]
+        self.assertIsNone(loaded.crew_review_channel_id)
+        self.assertIsNone(loaded.crew_review_message_id)
+
     def test_save_then_load_round_trips_the_archived_status(self) -> None:
         from watch_party_manager.domain.watch_item import WatchItemStatus
 

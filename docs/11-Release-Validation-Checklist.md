@@ -748,18 +748,38 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.10 Suggestion rejection ("I WILL NOT WATCH") and retirement
+### 4.10 Suggestion rejection ("I Won't Watch") and Crew Review
 
-- **Objective:** Confirm the rejection-threshold/retirement workflow, including `/reject`, `/unreject`, and `/reject`'s Undo Rejection button.
-- **Preconditions:** A suggestion with its public confirmation post visible.
+- **Objective:** Confirm the configurable "I Won't Watch" threshold, the New Review Workflow (Pending Crew Review, Admin Channel notification, Retire/Keep Active/Reset Rejections), `/reject`, `/unreject`, and `/reject`'s Undo Rejection button.
+- **Preconditions:** A suggestion with its public confirmation post visible; the collection's "I Won't Watch" threshold set to 2 (`/config` -> Collections -> [Collection] -> Rejection Settings); an Admin Channel configured.
 - **Steps:**
-  1. Click **I WILL NOT WATCH** on the confirmation post as one member; confirm the count updates and the button state changes.
+  1. Click **I Won't Watch** on the confirmation post as one member; confirm the count updates (e.g. "I WON'T WATCH: 1 / 2") and the button state changes.
   2. Click it again as the same member; confirm the rejection is removed (toggle, not additive).
   3. As a Watch Party member (WASH Crew inherit this too, but it is not WASH Crew-only), run `/reject suggestion_id:<id>`; confirm the confirmation includes a link back to the suggestion's original public post and an **Undo Rejection** button.
   4. Click **Undo Rejection**; confirm the rejection is removed, the confirmation message updates to say so, and the suggestion post's rejection count refreshes. Confirm another member cannot use your Undo Rejection button.
   5. Reject again, then run `/unreject suggestion_id:<id>` directly to confirm it still works independently of the button.
-  6. Reach the configured rejection threshold and confirm the suggestion is retired (archived) and excluded from further selection.
-- **Expected Result:** Rejections never double-count per member; the Undo Rejection button works exactly once per rejection and gracefully reports "haven't rejected" if clicked after the rejection was already reverted another way; retirement happens automatically at the configured threshold; retired items remain visible via `/list status:Retired` and can be reactivated through `/add`.
+  6. As a second distinct member, click **I Won't Watch** to reach the configured threshold (2). Confirm: the suggestion is **not** retired automatically; its status becomes ⚠️ **Pending Crew Review**; it disappears from `/list status:Eligible for Voting`; its "I Won't Watch" button shows the single-line "Review Pending — I WON'T WATCH" and can no longer be clicked; and the configured Admin Channel receives a notification naming the suggestion, its collection, the rejection count, and who voted "I Won't Watch", with **Retire**, **Keep Active**, **Reset Rejections**, and **View Suggestion** buttons.
+  7. As a non-WASH-Crew member, attempt to click one of the Crew Review buttons; confirm it's rejected with a permission message.
+  8. As WASH Crew, click **View Suggestion**; confirm it links back to the original suggestion post.
+  9. As WASH Crew, click **Keep Active**; confirm the suggestion returns to 🟢 Available, its rejection count resets to 0/threshold, its "I Won't Watch" button re-enables, and the Crew Review notification updates to show the outcome with its buttons removed.
+  10. Repeat step 6 to reach Pending Crew Review again, then click **Reset Rejections**; confirm the same outcome as Keep Active (Available, rejections cleared, button re-enabled).
+  11. Repeat step 6 once more, then click **Retire**; confirm the suggestion's status becomes 🗄️ Retired, it remains visible via `/list status:Retired`, and it can be reactivated through `/add` like any other retired suggestion.
+  12. Attempt `/reject` or the button again on an already-Pending-Crew-Review suggestion (before resolving it); confirm it's rejected with a clear "pending WASH Crew review" message and no state change.
+- **Expected Result:** Rejections never double-count per member; the Undo Rejection button works exactly once per rejection and gracefully reports "haven't rejected" if clicked after the rejection was already reverted another way; reaching the threshold moves the suggestion to Pending Crew Review rather than retiring it automatically, notifies the Admin Channel, and freezes further rejection changes until WASH Crew resolves it; Retire/Keep Active/Reset Rejections each produce their documented outcome and are WASH-Crew-only; retired items remain visible via `/list status:Retired` and can be reactivated through `/add`.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 4.10a "I Won't Watch" threshold configuration
+
+- **Objective:** Confirm the per-collection "I Won't Watch" threshold is configurable during Setup and via `/config`, persists correctly, and defaults to 2 for existing collections.
+- **Preconditions:** WASH Crew role.
+- **Steps:**
+  1. During `/setup`'s Voting Defaults step, confirm the modal includes an "I Won't Watch threshold (1-10)" field alongside candidate count and duration, prefilled with 2 by default.
+  2. Enter a value outside 1-10 (e.g. 0 or 11); confirm a clear validation error and no state change.
+  3. Enter a valid value (e.g. 5) and complete setup; confirm the Review screen and completion summary both show it, and `/config` -> Collections -> [Collection] shows "I Won't Watch Threshold: 5".
+  4. Go to `/config` -> Collections -> [Collection] -> Rejection Settings; confirm the current threshold is prefilled, change it to a different valid value (e.g. 3), and confirm the confirmation message and the collection's settings menu both reflect the update.
+  5. For a collection created before this feature existed (or with no explicit override saved), confirm its threshold reads as 2 (the documented default) rather than an error or blank value.
+- **Expected Result:** The threshold is configurable in both Setup and `/config`, is validated to 1-10, is stored per collection (never affecting other collections), and existing collections default to 2 without any migration step.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -769,7 +789,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** WASH Crew role; at least one suggestion; at least two collections in the server.
 - **Steps:**
   1. Run `/edit_suggestion`; confirm it shows a read-only summary (title, year, collection, status, IMDb link) plus Change Status, Move to Another Collection, and Cancel -- no title/release year/IMDb link fields to type into. If the suggestion is currently a Vote Winner with a recorded win date, confirm the summary also shows a `Won: <date>` line right below the status.
-  2. Choose Change Status; confirm the dropdown offers only Available, Vote Winner (🏆), and Retired (🗄️) (never In an Active Vote); pick one and confirm the suggestion's status updates and its public confirmation post's Status field updates in place.
+  2. Choose Change Status; confirm the dropdown offers only Available, Vote Winner (🏆), and Retired (🗄️) (never In an Active Vote or Pending Crew Review, both of which are computed/workflow-driven, not directly settable); pick one and confirm the suggestion's status updates and its public confirmation post's Status field updates in place.
   3. Choose Move to Another Collection; confirm the duplicate check re-runs against the destination collection, and that the suggestion's status is unchanged after the move.
   4. Choose Cancel; confirm nothing changes.
   5. Run `/remove` with a reference number, then again with an exact title; confirm both resolve correctly and archive (not delete) the record.
@@ -1381,12 +1401,29 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 11.4 Suggestion rejection buttons survive restart
 
-- **Objective:** Confirm the "I WILL NOT WATCH" button on existing confirmation posts still works after a restart.
+- **Objective:** Confirm the "I Won't Watch" button on existing confirmation posts still works after a restart.
 - **Preconditions:** An existing suggestion confirmation post.
 - **Steps:**
   1. Restart the bot.
-  2. Click **I WILL NOT WATCH** on a pre-restart post.
+  2. Click **I Won't Watch** on a pre-restart post.
 - **Expected Result:** The click is handled correctly (rejection recorded, button state updates).
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 11.5 Crew Review notifications survive restart
+
+- **Objective:** Confirm a Crew Review notification's Retire/Keep Active/Reset Rejections buttons continue working after a restart, without posting a duplicate notification or restoring an already-resolved review.
+- **Preconditions:** At least one suggestion currently Pending Crew Review, with its Admin Channel notification still live.
+- **Steps:**
+  1. Note the existing Crew Review notification's message (and that only one exists for this suggestion).
+  2. Restart the bot.
+  3. Confirm no additional Crew Review notification was posted for the same suggestion.
+  4. Click **Keep Active** (or **Retire**/**Reset Rejections**) on the pre-restart notification.
+  5. Confirm it resolves correctly: the suggestion's status updates, the notification message updates to show the outcome with its buttons removed, and the suggestion's own public post's Status field refreshes.
+  6. Click **View Suggestion**; confirm it still opens the original suggestion post.
+  7. Separately, resolve a different Pending Crew Review suggestion's notification (any action) *before* restarting the bot, then restart. Confirm no notification is restored or re-sent for it, and its notification message is unaffected (still shows the resolved outcome from before the restart).
+  8. Separately, manually delete a Crew Review notification message (or its channel) while a suggestion is still Pending Crew Review, then restart the bot. Confirm startup completes normally (a warning is logged, not an error) and no new notification is posted to replace it.
+- **Expected Result:** Buttons on a still-open, pre-restart Crew Review notification work exactly as before the restart -- correct suggestion, correct rejection records, correct collection; no duplicate notification is ever created; an already-resolved review is never re-armed; a deleted message/channel is skipped gracefully with a logged warning, never a startup failure.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

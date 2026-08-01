@@ -386,6 +386,40 @@ class SuggestionDatabaseConfigurationRepositoryTests(unittest.TestCase):
     def test_migration_registry_has_exactly_the_registered_migrations(self) -> None:
         self.assertEqual(list(SuggestionDatabaseConfigurationRepository._MIGRATIONS.keys()), [1, 2])
 
+    def test_a_record_saved_before_the_rejection_threshold_field_existed_defaults_to_two(self) -> None:
+        # New Review Workflow: rejection_threshold existed before this
+        # milestone (default 2), but no persisted record before it had a
+        # UI to ever set it to anything else -- a legacy record with no
+        # suggestion_rules.rejection_threshold key at all must still load
+        # cleanly at the documented default, matching every other
+        # backward-compatibility guarantee this repository makes.
+        now_iso = utc_now().isoformat()
+        legacy_json = json.dumps(
+            {
+                "guilds": {
+                    "100": {
+                        "databases": {
+                            "1": {
+                                "guild_id": 100,
+                                "database_id": 1,
+                                "display_name": "Movies",
+                                "created_at": now_iso,
+                                "updated_at": now_iso,
+                                "suggestion_rules": {"candidate_selection": "favor_new_additions"},
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        loaded = self.repository.get(100, 1)
+
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.suggestion_rules.rejection_threshold, 2)
+
     # --- FR-033B: candidate_selection legacy value migration -------------------------
 
     def _write_legacy_candidate_selection(self, value: str) -> None:

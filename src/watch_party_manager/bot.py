@@ -181,6 +181,8 @@ from watch_party_manager.services.duplicate_detection_service import (
 from watch_party_manager.services.suggestion_input_service import SuggestionInputService
 from watch_party_manager.services.suggestion_service import (
     DEFAULT_REJECTION_THRESHOLD,
+    MAX_REJECTION_THRESHOLD,
+    MIN_REJECTION_THRESHOLD,
     DatabaseResolution,
     SuggestionService,
 )
@@ -233,6 +235,7 @@ from watch_party_manager.edit_vote_view import (
     VoteEndTimeMenuView,
 )
 from watch_party_manager.config_view import (
+    DATABASE_SETTING_REJECTION_THRESHOLD,
     DATABASE_SETTING_SUGGESTION_DESTINATION,
     DATABASE_SETTING_WATCH_DESTINATION,
     BackToMenuOnlyView,
@@ -247,6 +250,7 @@ from watch_party_manager.config_view import (
     ConfigMainMenuView,
     ConfigModalRetryView,
     ConfigReminderDefaultsChoiceView,
+    ConfigRejectionThresholdModal,
     ConfigRoleSectionView,
     ConfigSuggestionDestinationSectionView,
     ConfigVotingDefaultsIntroView,
@@ -284,6 +288,7 @@ from watch_party_manager.setup_wizard_view import (
     ReminderDefaultsModal,
     ReviewStepView,
     SetupPreparationView,
+    SetupVotingDefaultsModal,
     SetupWizardResumeView,
     SuggestionDatabaseChoiceView,
     VotingDefaultsIntroView,
@@ -297,6 +302,7 @@ from watch_party_manager.start_vote_view import (
     CustomizeVoteOverridesView,
     StartVoteChoiceView,
 )
+from watch_party_manager.crew_review_view import CrewReviewView
 from watch_party_manager.suggestion_view import (
     RejectionConfirmationView,
     SuggestionView,
@@ -512,6 +518,7 @@ class WatchPartyBot(commands.Bot):
                 ),
                 discord.app_commands.Choice(name="Eligible for Voting", value="eligible"),
                 discord.app_commands.Choice(name="In an Active Vote", value="in_active_vote"),
+                discord.app_commands.Choice(name="Pending Crew Review", value="pending_crew_review"),
                 discord.app_commands.Choice(name="Vote Winners", value="vote_winner"),
                 discord.app_commands.Choice(name="Retired", value="retired"),
                 discord.app_commands.Choice(name="Watched", value="watched"),
@@ -591,7 +598,7 @@ class WatchPartyBot(commands.Bot):
         async def edit_suggestion_command(interaction: discord.Interaction, reference: str) -> None:
             await handle_edit_suggestion(interaction, self, reference)
 
-        @self.tree.command(name="reject", description="Indicate you will not watch a suggestion.")
+        @self.tree.command(name="reject", description="Indicate you won't watch a suggestion.")
         @discord.app_commands.describe(suggestion_id="The suggestion's numeric ID (shown on its public post).")
         async def reject(interaction: discord.Interaction, suggestion_id: int) -> None:
             await handle_reject_suggestion(interaction, self, suggestion_id)
@@ -739,6 +746,10 @@ class WatchPartyBot(commands.Bot):
 
         self.membership_views_restored = restore_persistent_membership_approval_views(
             self, self.membership_service
+        )
+
+        self.crew_review_views_restored = await restore_persistent_crew_review_views(
+            self, self.suggestion_service
         )
 
         if self.guild_id:
@@ -1712,6 +1723,24 @@ def parse_setup_voting_candidate_count(value: str) -> int:
     return count
 
 
+def parse_setup_rejection_threshold(value: str) -> int:
+    """Validate a Voting Defaults modal's "I Won't Watch" threshold field.
+
+    Reuses SuggestionRulesConfig.rejection_threshold's own bounds
+    (MIN/MAX_REJECTION_THRESHOLD) so the value the wizard sets can never
+    be one the domain model itself would reject.
+    """
+    try:
+        threshold = int(value.strip())
+    except ValueError:
+        raise ValueError("I Won't Watch threshold must be a whole number.")
+    if not (MIN_REJECTION_THRESHOLD <= threshold <= MAX_REJECTION_THRESHOLD):
+        raise ValueError(
+            f"I Won't Watch threshold must be between {MIN_REJECTION_THRESHOLD} and {MAX_REJECTION_THRESHOLD}."
+        )
+    return threshold
+
+
 def parse_setup_voting_duration_minutes(value: str) -> int:
     """Validate a Voting Defaults modal's duration field, reusing /start_vote's bounds.
 
@@ -1811,12 +1840,16 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
         if draft.voting_candidate_selection is not None
         else CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.FAVOR_NEW_ADDITIONS]
     )
+    rejection_threshold = (
+        draft.rejection_threshold if draft.rejection_threshold is not None else DEFAULT_REJECTION_THRESHOLD
+    )
     lines.append(
         "Voting Defaults: "
         f"{configuration.voting_defaults.candidate_count} candidates, "
         f"{format_duration_minutes(configuration.voting_defaults.duration_minutes)}, "
         f"{configuration.voting_defaults.visibility.value.capitalize()}, "
-        f"nominee selection: {candidate_selection_label}"
+        f"nominee selection: {candidate_selection_label}, "
+        f"I Won't Watch threshold: {rejection_threshold}"
     )
     if configuration.notifications.vote.vote_ending_reminder:
         lines.append(
@@ -2533,6 +2566,11 @@ async def send_setup_wizard_step(
                 if state.draft.voting_duration_minutes is not None
                 else format_duration_minutes_compact(DEFAULT_VOTE_DURATION_MINUTES)
             ),
+            (
+                str(state.draft.rejection_threshold)
+                if state.draft.rejection_threshold is not None
+                else str(DEFAULT_REJECTION_THRESHOLD)
+            ),
         )
         default_candidate_selection = (
             state.draft.voting_candidate_selection
@@ -2554,10 +2592,12 @@ async def send_setup_wizard_step(
                 modal_interaction: discord.Interaction,
                 candidate_count_text: str,
                 duration_text: str,
+                rejection_threshold_text: str,
             ) -> None:
                 try:
                     candidate_count = parse_setup_voting_candidate_count(candidate_count_text)
                     duration_minutes = parse_setup_voting_duration_minutes(duration_text)
+                    rejection_threshold = parse_setup_rejection_threshold(rejection_threshold_text)
                 except ValueError as exc:
                     await modal_interaction.response.edit_message(
                         content=body + f"\n\n⚠ {exc}",
@@ -2574,12 +2614,12 @@ async def send_setup_wizard_step(
                     return
 
                 updated = setup_wizard_service.set_voting_defaults(
-                    state, candidate_count, duration_minutes, visibility, candidate_selection
+                    state, candidate_count, duration_minutes, visibility, candidate_selection, rejection_threshold
                 )
                 await send_setup_wizard_step(modal_interaction, bot, updated, edit=True, requester_id=requester_id)
 
             await configure_interaction.response.send_modal(
-                VotingDefaultsModal(on_submit, defaults=voting_defaults_prefill)
+                SetupVotingDefaultsModal(on_submit, defaults=voting_defaults_prefill)
             )
 
         view = VotingDefaultsIntroView(
@@ -2594,7 +2634,7 @@ async def send_setup_wizard_step(
         body += (
             "\n\nChoose the server's default nominee selection mode and visibility below -- each option "
             "explains its own behavior when opened -- then press **Set Voting Defaults** to configure the "
-            "default candidate count and vote duration."
+            "default candidate count, vote duration, and this collection's \"I Won't Watch\" threshold."
         )
 
     elif step == SetupWizardStep.REMINDER_DEFAULTS:
@@ -3173,12 +3213,14 @@ async def send_config_database_settings_menu(
     candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[
         database_configuration.suggestion_rules.candidate_selection
     ]
+    rejection_threshold = database_configuration.suggestion_rules.rejection_threshold
 
     body = (
         f'**WASH Configuration -- "{collection_name}" Settings**\n\n'
         f"Suggestion Destination: <#{suggestion_destination}>\n"
         f"Watched Item Archive: {f'<#{watch_destination}>' if watch_destination else 'Not configured (no per-collection override or server default set)'}\n"
-        f"Nominee Selection: {candidate_selection_label}"
+        f"Nominee Selection: {candidate_selection_label}\n"
+        f"I Won't Watch Threshold: {rejection_threshold}"
     )
 
     async def on_setting_chosen(select_interaction: discord.Interaction, setting: str) -> None:
@@ -3186,6 +3228,8 @@ async def send_config_database_settings_menu(
             await send_config_database_suggestion_destination(select_interaction, bot, guild_id, database_id, on_back)
         elif setting == DATABASE_SETTING_WATCH_DESTINATION:
             await send_config_database_watch_destination(select_interaction, bot, guild_id, database_id, on_back)
+        elif setting == DATABASE_SETTING_REJECTION_THRESHOLD:
+            await send_config_database_rejection_threshold(select_interaction, bot, guild_id, database_id, on_back)
         else:
             await send_config_database_candidate_selection(select_interaction, bot, guild_id, database_id, on_back)
 
@@ -3298,6 +3342,33 @@ async def send_config_database_candidate_selection(
 
     view = ConfigDatabaseCandidateSelectionView(on_save, on_back, default_candidate_selection=current)
     await interaction.response.edit_message(content=body, view=view)
+
+
+async def send_config_database_rejection_threshold(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    guild_id: int,
+    database_id: int,
+    on_back: OnBackToMenu,
+) -> None:
+    """One database's "I Won't Watch" threshold: opens the modal directly
+    from the settings Select's own interaction (a plain number field
+    needs no intermediate Select+Save screen, unlike Nominee Selection).
+    """
+    config_service = bot.config_service
+    database_configuration = config_service.get_database_configuration(guild_id, database_id)
+    current = database_configuration.suggestion_rules.rejection_threshold
+
+    async def on_submit(modal_interaction: discord.Interaction, threshold_text: str) -> None:
+        try:
+            threshold = parse_setup_rejection_threshold(threshold_text)
+        except ValueError as exc:
+            await send_config_result(modal_interaction, bot, guild_id, ConfigUpdateResult(False, str(exc)))
+            return
+        result = config_service.set_database_rejection_threshold(guild_id, database_id, threshold)
+        await send_config_result(modal_interaction, bot, guild_id, result)
+
+    await interaction.response.send_modal(ConfigRejectionThresholdModal(on_submit, default=str(current)))
 
 
 async def handle_config_wash_crew_role_selected(
@@ -5027,7 +5098,7 @@ def build_suggestion_view(
     permission_service: Optional[PermissionService] = None,
     bot: Optional["WatchPartyBot"] = None,
 ) -> SuggestionView:
-    """Build a suggestion's "I WILL NOT WATCH" view whose button uses the shared toggle handler.
+    """Build a suggestion's "I Won't Watch" view whose button uses the shared toggle handler.
 
     Args:
         suggestion_service: Used by the button's toggle callback.
@@ -5095,7 +5166,7 @@ async def restore_persistent_suggestion_views(
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
     permission_service: Optional[PermissionService] = None,
 ) -> int:
-    """Restore, and where needed migrate, the "I WILL NOT WATCH" button for every active suggestion post.
+    """Restore, and where needed migrate, the "I Won't Watch" button for every active suggestion post.
 
     Discord persistent views must be re-registered each time the bot
     starts. bot.add_view(view, message_id=...) alone only re-establishes
@@ -6234,7 +6305,7 @@ def build_vote_winner_duplicate_match_block(item: WatchItem) -> str:
 
 
 _ARCHIVE_CATEGORY_LABELS = {
-    DuplicateMatchCategory.ARCHIVED_REJECTED: 'been archived after being rejected ("I WILL NOT WATCH")',
+    DuplicateMatchCategory.ARCHIVED_REJECTED: 'been archived after being rejected ("I Won\'t Watch")',
     DuplicateMatchCategory.VOTE_WINNER: "already won a vote",
     DuplicateMatchCategory.ARCHIVED_OTHER: "already been archived",
 }
@@ -7671,25 +7742,27 @@ async def perform_repair_suggestions(
 class SuggestionListStatusFilter(str, Enum):
     """Which suggestions /list should include.
 
-    All six filters are resolved through CollectionEligibilityService --
+    All filters are resolved through CollectionEligibilityService --
     the same authoritative calculation every other command uses -- so
     none of them can ever disagree with what starting a vote would
     actually see. Every bucket below
-    (available, in_active_vote, vote_winners, retired, watched) is
-    already computed by CollectionEligibility itself; this filter only
-    chooses which of those (already-identical) buckets to show, never
-    recomputes eligibility.
+    (available, in_active_vote, pending_crew_review, vote_winners,
+    retired, watched) is already computed by CollectionEligibility
+    itself; this filter only chooses which of those (already-identical)
+    buckets to show, never recomputes eligibility.
 
     ACTIVE (the new default) is Available + In an Active Vote mixed
     together -- CollectionEligibility.active, unchanged. ELIGIBLE is the
     Eligible Pool (what actually feeds the next vote). IN_ACTIVE_VOTE,
-    VOTE_WINNER, RETIRED, and WATCHED are unchanged, plain-bucket
-    filters. ALL is every watch item in the collection, active or not.
+    PENDING_CREW_REVIEW, VOTE_WINNER, RETIRED, and WATCHED are unchanged,
+    plain-bucket filters. ALL is every watch item in the collection,
+    active or not.
     """
 
     ACTIVE = "active"
     ELIGIBLE = "eligible"
     IN_ACTIVE_VOTE = "in_active_vote"
+    PENDING_CREW_REVIEW = "pending_crew_review"
     VOTE_WINNER = "vote_winner"
     RETIRED = "retired"
     WATCHED = "watched"
@@ -7700,6 +7773,7 @@ SUGGESTION_LIST_STATUS_FILTER_LABELS: dict[SuggestionListStatusFilter, str] = {
     SuggestionListStatusFilter.ACTIVE: "Active Watch Items",
     SuggestionListStatusFilter.ELIGIBLE: "Eligible for Voting",
     SuggestionListStatusFilter.IN_ACTIVE_VOTE: "In an Active Vote",
+    SuggestionListStatusFilter.PENDING_CREW_REVIEW: "Pending Crew Review",
     SuggestionListStatusFilter.VOTE_WINNER: "Vote Winners",
     SuggestionListStatusFilter.RETIRED: "Retired",
     SuggestionListStatusFilter.WATCHED: "Watched",
@@ -7725,6 +7799,10 @@ def resolve_suggestion_list_entries(
         return [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.available]
     if status_filter is SuggestionListStatusFilter.IN_ACTIVE_VOTE:
         return [(item, SuggestionDisplayStatus.IN_ACTIVE_VOTE) for item in eligibility.in_active_vote]
+    if status_filter is SuggestionListStatusFilter.PENDING_CREW_REVIEW:
+        return [
+            (item, SuggestionDisplayStatus.PENDING_CREW_REVIEW) for item in eligibility.pending_crew_review
+        ]
     if status_filter is SuggestionListStatusFilter.VOTE_WINNER:
         return [(item, SuggestionDisplayStatus.VOTE_WINNER) for item in eligibility.vote_winners]
     if status_filter is SuggestionListStatusFilter.RETIRED:
@@ -7735,6 +7813,10 @@ def resolve_suggestion_list_entries(
     return (
         [(item, SuggestionDisplayStatus.AVAILABLE) for item in eligibility.available]
         + [(item, SuggestionDisplayStatus.IN_ACTIVE_VOTE) for item in eligibility.in_active_vote]
+        + [
+            (item, SuggestionDisplayStatus.PENDING_CREW_REVIEW)
+            for item in eligibility.pending_crew_review
+        ]
         + [(item, SuggestionDisplayStatus.VOTE_WINNER) for item in eligibility.vote_winners]
         + [(item, SuggestionDisplayStatus.RETIRED) for item in eligibility.retired]
         + [(item, SuggestionDisplayStatus.WATCHED) for item in eligibility.watched]
@@ -8003,9 +8085,9 @@ def build_collection_health_report(bot: "WatchPartyBot", database: SuggestionDat
     The numbers are guaranteed to reconcile by construction, not by
     coincidence: Active is literally len(available) + len(in_active_vote)
     (CollectionEligibility.active), and Total is literally Active +
-    Vote Winners + Retired + Watched (CollectionEligibility.total) --
-    both computed once, inside CollectionEligibilityService itself, never
-    recomputed separately here.
+    Vote Winners + Retired + Watched + Pending Crew Review
+    (CollectionEligibility.total) -- both computed once, inside
+    CollectionEligibilityService itself, never recomputed separately here.
     """
     eligibility = bot.collection_eligibility_service.get_eligibility(database.database_id)
 
@@ -8046,6 +8128,7 @@ def build_collection_health_report(bot: "WatchPartyBot", database: SuggestionDat
         f"Active Watch Items: {active_count} (Eligible for Voting + In an Active Vote)",
         f"    {SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.AVAILABLE]} Eligible for Voting: {eligible_count}",
         f"    {SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.IN_ACTIVE_VOTE]} In an Active Vote: {len(eligibility.in_active_vote)}",
+        f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.PENDING_CREW_REVIEW]} Pending Crew Review: {len(eligibility.pending_crew_review)}",
         f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.VOTE_WINNER]} Vote Winners: {len(eligibility.vote_winners)}",
         f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.RETIRED]} Retired: {len(eligibility.retired)}",
         f"{SUGGESTION_DISPLAY_STATUS_EMOJI[SuggestionDisplayStatus.WATCHED]} Watched: {len(eligibility.watched)}",
@@ -8254,12 +8337,16 @@ async def handle_reject_suggestion(
     then keep the suggestion's own public post in sync.
 
     Suggestion Status Synchronization: a rejection that crosses the
-    configured threshold archives the suggestion (see
+    configured threshold moves the suggestion to Pending Crew Review (see
     SuggestionService.reject_suggestion) -- its own public post must
     reflect that immediately via sync_suggestion_status_embed, the same
     mechanism every other status change goes through, not just the next
-    time something unrelated happens to sync it.
+    time something unrelated happens to sync it. New Review Workflow: a
+    fresh Pending Crew Review transition also notifies the Admin Channel.
     """
+    existing = bot.suggestion_service.get_suggestion(suggestion_id)
+    was_pending_review_before = existing is not None and existing.status is WatchItemStatus.PENDING_CREW_REVIEW
+
     message, ephemeral, watch_item = perform_reject_suggestion(
         suggestion_service=bot.suggestion_service,
         suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
@@ -8272,6 +8359,15 @@ async def handle_reject_suggestion(
     view = None
     if watch_item is not None:
         await sync_suggestion_status_embed(bot, watch_item)
+        # Notify only on a fresh transition into Pending Crew Review --
+        # was_pending_review_before guards against re-notifying on a
+        # repeated /reject attempt against an already-pending suggestion
+        # (rejected by reject_suggestion(), but perform_reject_suggestion
+        # still returns the current watch_item for display purposes, so
+        # checking watch_item.status alone can't tell "just reached" from
+        # "already was" apart).
+        if not was_pending_review_before and watch_item.status is WatchItemStatus.PENDING_CREW_REVIEW:
+            await notify_crew_review(bot, watch_item)
 
         async def on_undo(undo_interaction: discord.Interaction, undo_suggestion_id: int) -> None:
             await handle_undo_rejection(
@@ -8329,6 +8425,205 @@ def build_rejection_confirmation_text(message: str, watch_item: Optional[WatchIt
     if link is None:
         return message
     return f"{message}\n[View Suggestion]({link})"
+
+
+# --- New Review Workflow: Crew Review notification -------------------------------------
+
+
+def build_crew_review_notification_embed(watch_item: WatchItem, *, database_name: str) -> discord.Embed:
+    """Summarize a suggestion pending Crew Review for the Admin Channel
+    notification: the suggestion (title + reference, in the description --
+    never a separate field, which would only repeat it), its collection,
+    the current rejection count, and who voted "I Won't Watch". Kept to
+    exactly these four facts -- nothing else needed to make a Retire/Keep
+    Active/Reset Rejections decision.
+    """
+    voters = (
+        ", ".join(f"<@{discord_user_id}>" for discord_user_id in watch_item.journey.rejected_by_discord_user_ids)
+        or "None"
+    )
+    embed = discord.Embed(
+        title="⚠️ Pending Crew Review",
+        description=f"**{watch_item.title}** ({watch_item.reference}) needs a Retire / Keep Active / Reset Rejections decision.",
+        color=0xE67E22,
+    )
+    embed.add_field(name="Collection", value=format_collection_display(database_name), inline=True)
+    embed.add_field(
+        name="Rejections", value=str(len(watch_item.journey.rejected_by_discord_user_ids)), inline=True
+    )
+    embed.add_field(name="Rejected By", value=voters, inline=False)
+    return embed
+
+
+def build_crew_review_view(bot: "WatchPartyBot", watch_item: WatchItem) -> CrewReviewView:
+    async def on_retire(interaction: discord.Interaction, suggestion_id: int) -> None:
+        await handle_crew_review_decision(interaction, bot, suggestion_id, decision="retire")
+
+    async def on_keep_active(interaction: discord.Interaction, suggestion_id: int) -> None:
+        await handle_crew_review_decision(interaction, bot, suggestion_id, decision="keep_active")
+
+    async def on_reset_rejections(interaction: discord.Interaction, suggestion_id: int) -> None:
+        await handle_crew_review_decision(interaction, bot, suggestion_id, decision="reset_rejections")
+
+    return CrewReviewView(
+        watch_item.id,
+        on_retire,
+        on_keep_active,
+        on_reset_rejections,
+        suggestion_url=build_suggestion_message_link(watch_item),
+    )
+
+
+async def notify_crew_review(bot: "WatchPartyBot", watch_item: WatchItem) -> None:
+    """Notify the guild's Admin Channel that a suggestion has reached its
+    "I Won't Watch" rejection threshold and now needs a WASH Crew
+    Retire/Keep Active/Reset Rejections decision (New Review Workflow).
+
+    Records where the notification landed (see
+    SuggestionService.set_crew_review_notification_reference) so
+    restore_persistent_crew_review_views can reconnect its buttons after
+    a bot restart without posting a second, duplicate notification.
+
+    Best-effort, mirroring handle_join_watch_party's own Admin Channel
+    notification: logs a warning and never raises if the Admin Channel
+    isn't configured or reachable -- the suggestion's status change is
+    already persisted by SuggestionService.reject_suggestion regardless
+    of whether WASH Crew could be notified about it.
+    """
+    if watch_item.guild_id is None or watch_item.database_id is None or watch_item.id is None:
+        return
+
+    guild_configuration = bot.guild_configuration_repository.get(watch_item.guild_id)
+    channel_id = guild_configuration.channels.admin_channel_id if guild_configuration is not None else None
+    if channel_id is None:
+        logger.warning(
+            "Could not notify WASH Crew about suggestion %s's Crew Review: no Admin Channel configured",
+            watch_item.id,
+        )
+        return
+
+    database = bot.suggestion_service.get_database(watch_item.database_id)
+    database_name = database.name if database is not None else "Unknown Collection"
+
+    try:
+        channel = bot.get_channel(channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(channel_id)
+        wash_crew_mention = f"<@&{bot.wash_crew_role_id}>" if bot.wash_crew_role_id else "WASH Crew"
+        message = await channel.send(
+            f'{wash_crew_mention} "{watch_item.title}" needs review.',
+            embed=build_crew_review_notification_embed(watch_item, database_name=database_name),
+            view=build_crew_review_view(bot, watch_item),
+        )
+        bot.suggestion_service.set_crew_review_notification_reference(watch_item.id, channel.id, message.id)
+    except Exception:
+        logger.warning(
+            "Could not notify WASH Crew about suggestion %s's Crew Review", watch_item.id, exc_info=True
+        )
+
+
+async def restore_persistent_crew_review_views(bot: "WatchPartyBot", suggestion_service: SuggestionService) -> int:
+    """Restore Retire/Keep Active/Reset Rejections button handling for
+    every suggestion still pending Crew Review.
+
+    Every Crew Review notification is created fresh by this feature with
+    its buttons already attached (see notify_crew_review) -- there is no
+    legacy "message with no buttons" case to migrate, unlike
+    restore_persistent_suggestion_views. This still fetches each stored
+    message (rather than blindly calling bot.add_view(), the simpler
+    pattern restore_persistent_membership_approval_views uses) so a
+    notification whose message or channel has since been deleted is
+    detected and skipped here, at startup -- instead of only surfacing
+    when a WASH Crew member eventually clicks a dead button. View
+    Suggestion needs no restoration at all: Discord stores a link
+    button's URL directly on the message itself and opens it entirely
+    client-side, so it keeps working across a restart regardless of
+    whether this function ever runs.
+
+    A suggestion no longer PENDING_CREW_REVIEW (already resolved, by
+    whichever action) is never restored -- there's nothing to restore,
+    and re-registering a resolved review's buttons would let a stale
+    Retire/Keep Active/Reset Rejections click resolve it a second time. A
+    PENDING_CREW_REVIEW suggestion with no stored notification reference
+    (reached this status before this restoration feature existed) is
+    skipped too: there is no known message to reconnect to, and nothing
+    here ever posts a fresh notification on its behalf -- that would risk
+    a duplicate if the original notification (unknown to WASH) still
+    exists.
+
+    Returns:
+        The number of Crew Review notifications whose buttons were restored.
+    """
+    restored = 0
+    for watch_item in suggestion_service.get_suggestions():
+        if watch_item.status is not WatchItemStatus.PENDING_CREW_REVIEW:
+            continue
+        if watch_item.crew_review_channel_id is None or watch_item.crew_review_message_id is None:
+            continue
+
+        try:
+            channel = bot.get_channel(watch_item.crew_review_channel_id)
+            if channel is None:
+                channel = await bot.fetch_channel(watch_item.crew_review_channel_id)
+            await channel.fetch_message(watch_item.crew_review_message_id)
+        except Exception:
+            logger.warning(
+                "Could not fetch suggestion %s's Crew Review notification message %s for "
+                "persistent view restoration; skipping",
+                watch_item.id,
+                watch_item.crew_review_message_id,
+                exc_info=True,
+            )
+            continue
+
+        view = build_crew_review_view(bot, watch_item)
+        bot.add_view(view, message_id=watch_item.crew_review_message_id)
+        restored += 1
+
+    logger.info("Restored %s persistent Crew Review view(s)", restored)
+    return restored
+
+
+async def handle_crew_review_decision(
+    interaction: discord.Interaction, bot: "WatchPartyBot", suggestion_id: int, *, decision: str
+) -> None:
+    """Handle a click on a Crew Review notification's Retire, Keep
+    Active, or Reset Rejections button.
+
+    Only WASH Crew may resolve a Crew Review -- fails closed exactly
+    like every other WASH-gated interaction. Deciding on an
+    already-resolved or nonexistent suggestion fails gracefully (the
+    service returns success=False with a clear message; nothing raises).
+    """
+    permission = bot.permission_service.require_wash_crew(interaction.user)
+    if not permission.allowed:
+        await interaction.response.send_message(permission.message, ephemeral=True)
+        return
+
+    if decision == "retire":
+        result = bot.suggestion_service.retire_pending_review(suggestion_id)
+    elif decision == "keep_active":
+        result = bot.suggestion_service.keep_suggestion_active(suggestion_id)
+    else:
+        result = bot.suggestion_service.reset_suggestion_rejections(suggestion_id)
+
+    await interaction.response.send_message(result.message, ephemeral=True)
+
+    if not result.success or result.watch_item is None:
+        return
+
+    try:
+        await interaction.message.edit(
+            content=f"{result.message}\n(Decided by {interaction.user.mention})", embed=None, view=None
+        )
+    except Exception:
+        logger.warning(
+            "Could not update the Crew Review notification for suggestion %s after it was resolved",
+            suggestion_id,
+            exc_info=True,
+        )
+
+    await sync_suggestion_status_embed(bot, result.watch_item)
 
 
 async def handle_undo_rejection(
@@ -8399,7 +8694,7 @@ def perform_toggle_suggestion_rejection(
     guild_id: Optional[int],
     suggestion_id: int,
 ) -> tuple[str, bool, Optional[WatchItem]]:
-    """Core logic for the suggestion message's "I WILL NOT WATCH" button.
+    """Core logic for the suggestion message's "I Won't Watch" button.
 
     Toggles between SuggestionService.reject_suggestion() and
     remove_rejection() depending on whether `user` has already rejected
@@ -8457,7 +8752,7 @@ async def handle_suggestion_rejection_toggle(
     permission_service: Optional[PermissionService] = None,
     bot: Optional["WatchPartyBot"] = None,
 ) -> None:
-    """Handle a click on a suggestion's "I WILL NOT WATCH" button.
+    """Handle a click on a suggestion's "I Won't Watch" button.
 
     Reuses perform_toggle_suggestion_rejection() for all rejection logic,
     then refreshes the original suggestion message so its displayed
@@ -8492,6 +8787,9 @@ async def handle_suggestion_rejection_toggle(
         )
         return
 
+    existing = suggestion_service.get_suggestion(suggestion_id)
+    was_pending_review_before = existing is not None and existing.status is WatchItemStatus.PENDING_CREW_REVIEW
+
     message, ephemeral, watch_item = perform_toggle_suggestion_rejection(
         suggestion_service,
         suggestion_database_configuration_repository,
@@ -8507,6 +8805,12 @@ async def handle_suggestion_rejection_toggle(
 
     if bot is not None:
         await sync_suggestion_status_embed(bot, watch_item)
+        # See handle_reject_suggestion's identical guard for why
+        # was_pending_review_before is needed: without it, a repeated
+        # click on an already-pending suggestion would re-notify the
+        # Admin Channel every time.
+        if not was_pending_review_before and watch_item.status is WatchItemStatus.PENDING_CREW_REVIEW:
+            await notify_crew_review(bot, watch_item)
         return
 
     view = build_suggestion_view(

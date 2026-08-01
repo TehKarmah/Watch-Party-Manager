@@ -53,7 +53,7 @@ from watch_party_manager.services.configuration_validation import (
     validate_role_exists,
 )
 from watch_party_manager.services.duration_formatter import format_duration_minutes
-from watch_party_manager.services.suggestion_service import SuggestionService
+from watch_party_manager.services.suggestion_service import DEFAULT_REJECTION_THRESHOLD, SuggestionService
 
 # Backup schedule/retention have no dedicated persisted "Application
 # Configuration" model yet (see docs/guild_configuration_spec.md: "Application
@@ -338,6 +338,7 @@ class SetupWizardService:
         duration_minutes: int,
         visibility: GuildVoteVisibility,
         candidate_selection: CandidateSelectionMode,
+        rejection_threshold: int,
     ) -> SetupWizardState:
         draft = replace(
             state.draft,
@@ -345,6 +346,7 @@ class SetupWizardService:
             voting_duration_minutes=duration_minutes,
             voting_visibility=visibility,
             voting_candidate_selection=candidate_selection,
+            rejection_threshold=rejection_threshold,
         )
         return self._advance(state, SetupWizardStep.VOTING_DEFAULTS, draft)
 
@@ -453,10 +455,14 @@ class SetupWizardService:
 
         if draft.voting_candidate_count is not None:
             candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[draft.voting_candidate_selection]
+            rejection_threshold = (
+                draft.rejection_threshold if draft.rejection_threshold is not None else DEFAULT_REJECTION_THRESHOLD
+            )
             lines.append(
                 "Voting Defaults: Configured "
                 f"({draft.voting_candidate_count} candidates, {format_duration_minutes(draft.voting_duration_minutes)}, "
-                f"{draft.voting_visibility.value.capitalize()}, {candidate_selection_label})"
+                f"{draft.voting_visibility.value.capitalize()}, {candidate_selection_label}, "
+                f"I Won't Watch threshold: {rejection_threshold})"
             )
         else:
             lines.append("Voting Defaults: Incomplete")
@@ -726,7 +732,11 @@ class SetupWizardService:
         draft = state.draft
         if draft.suggestion_database_id is None:
             return None
-        if draft.voting_candidate_selection is None and not draft.watch_destination_channel_id:
+        if (
+            draft.voting_candidate_selection is None
+            and draft.rejection_threshold is None
+            and not draft.watch_destination_channel_id
+        ):
             return None
 
         database = self._suggestion_service.get_database(draft.suggestion_database_id)
@@ -744,6 +754,13 @@ class SetupWizardService:
                 updated,
                 suggestion_rules=replace(
                     updated.suggestion_rules, candidate_selection=draft.voting_candidate_selection
+                ),
+            )
+        if draft.rejection_threshold is not None:
+            updated = replace(
+                updated,
+                suggestion_rules=replace(
+                    updated.suggestion_rules, rejection_threshold=draft.rejection_threshold
                 ),
             )
         if draft.watch_destination_channel_id is not None:

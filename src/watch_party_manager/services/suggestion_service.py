@@ -21,6 +21,8 @@ _TRAILING_YEAR_PATTERN = re.compile(r"\s*\(\d{4}\)\s*$")
 # configuration value -- matches SuggestionRulesConfig.rejection_threshold's
 # own documented default (see domain/suggestion_database_configuration.py).
 DEFAULT_REJECTION_THRESHOLD = 2
+MIN_REJECTION_THRESHOLD = 1
+MAX_REJECTION_THRESHOLD = 10
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
 )
@@ -335,28 +337,33 @@ class SuggestionService:
         discord_user_id: int,
         rejection_threshold: int = DEFAULT_REJECTION_THRESHOLD,
     ) -> SuggestionResult:
-        """Record a Watch Party member's "I will not watch" rejection.
+        """Record a Watch Party member's "I Won't Watch" rejection.
 
-        Automatically archives the suggestion once rejection_threshold
-        distinct members have rejected it: its status becomes ARCHIVED,
-        which excludes it from get_suggestions_for_database()'s default
-        (active) results -- used by /list's standard view and nominee
-        selection -- without ever removing the suggestion or its
-        rejection history.
+        Once rejection_threshold distinct members have rejected it, the
+        suggestion moves to PENDING_CREW_REVIEW rather than being
+        automatically archived: it's immediately excluded from
+        get_suggestions_for_database()'s default (active) results --
+        used by /list's standard view and nominee selection -- but WASH
+        Crew must explicitly decide its outcome (see
+        retire_pending_review/keep_suggestion_active/
+        reset_suggestion_rejections) before anything is permanently
+        retired. The suggestion and its rejection history are never
+        removed by reaching the threshold.
 
         Args:
             suggestion_id: The suggestion being rejected.
             discord_user_id: The rejecting member's Discord user ID.
             rejection_threshold: How many distinct rejections trigger
-                automatic archiving. Callers should resolve the guild's
+                Crew Review. Callers should resolve the guild's
                 configured value when available (see
                 SuggestionRulesConfig.rejection_threshold) and pass it
                 here; defaults to this project's documented default of 2.
 
         Returns:
             SuggestionResult indicating success or failure. Fails if the
-            suggestion doesn't exist, has already been archived, or this
-            member has already rejected it.
+            suggestion doesn't exist, has already been archived or is
+            already pending Crew Review, or this member has already
+            rejected it.
         """
         watch_item = self.get_suggestion(suggestion_id)
         if watch_item is None:
@@ -368,32 +375,30 @@ class SuggestionService:
                 message="That suggestion has already been archived and can no longer be rejected.",
             )
 
+        if watch_item.status == WatchItemStatus.PENDING_CREW_REVIEW:
+            return SuggestionResult(
+                success=False,
+                message="That suggestion is already pending WASH Crew review.",
+            )
+
         if not watch_item.journey.record_rejection(discord_user_id):
             return SuggestionResult(
                 success=False,
-                message="You've already indicated you will not watch this.",
+                message="You've already indicated you won't watch this.",
             )
 
-        archived = len(watch_item.journey.rejected_by_discord_user_ids) >= rejection_threshold
-        if archived:
-            watch_item.status = WatchItemStatus.ARCHIVED
-            # FR-033B Section 8: the "I WILL NOT WATCH" rejection-threshold
-            # archive is the distinct "retired" lifecycle -- never applied
-            # to WASH Crew-initiated archival (see archive_suggestion),
-            # which duplicate_detection_service categorizes separately.
-            watch_item.journey.record_retirement(
-                datetime.now(timezone.utc),
-                "rejection_threshold_reached",
-            )
+        pending_review = len(watch_item.journey.rejected_by_discord_user_ids) >= rejection_threshold
+        if pending_review:
+            watch_item.status = WatchItemStatus.PENDING_CREW_REVIEW
 
         self._save()
 
-        if archived:
+        if pending_review:
             return SuggestionResult(
                 success=True,
                 message=(
-                    f'Your rejection was recorded. "{watch_item.title}" has been archived '
-                    "after reaching the rejection threshold."
+                    f'Your rejection was recorded. "{watch_item.title}" has reached the rejection '
+                    "threshold and is now pending WASH Crew review."
                 ),
                 watch_item=watch_item,
             )
@@ -404,7 +409,7 @@ class SuggestionService:
         )
 
     def remove_rejection(self, suggestion_id: int, discord_user_id: int) -> SuggestionResult:
-        """Remove a Watch Party member's earlier "I will not watch" rejection.
+        """Remove a Watch Party member's earlier "I Won't Watch" rejection.
 
         Args:
             suggestion_id: The suggestion to remove the rejection from.
@@ -412,9 +417,10 @@ class SuggestionService:
 
         Returns:
             SuggestionResult indicating success or failure. Fails if the
-            suggestion doesn't exist, has already been archived (its
-            rejection history is preserved and no longer editable), or
-            this member had not rejected it.
+            suggestion doesn't exist, has already been archived or is
+            pending Crew Review (either way its rejection record is
+            frozen until WASH Crew resolves it), or this member had not
+            rejected it.
         """
         watch_item = self.get_suggestion(suggestion_id)
         if watch_item is None:
@@ -426,6 +432,12 @@ class SuggestionService:
                 message="That suggestion has already been archived; its rejections can no longer be changed.",
             )
 
+        if watch_item.status == WatchItemStatus.PENDING_CREW_REVIEW:
+            return SuggestionResult(
+                success=False,
+                message="That suggestion is pending WASH Crew review; its rejections can no longer be changed.",
+            )
+
         if not watch_item.journey.remove_rejection(discord_user_id):
             return SuggestionResult(success=False, message="You haven't rejected this suggestion.")
 
@@ -435,6 +447,98 @@ class SuggestionService:
             message=f'Your rejection of "{watch_item.title}" has been removed.',
             watch_item=watch_item,
         )
+
+    def retire_pending_review(self, suggestion_id: int) -> SuggestionResult:
+        """WASH Crew's "Retire" decision on a suggestion pending Crew Review.
+
+        Permanently retires the suggestion: status becomes ARCHIVED and
+        the distinct "retired" lifecycle event is recorded (FR-033B
+        Section 8), matching what reject_suggestion() itself used to
+        record automatically before Crew Review existed -- see
+        record_retirement's own docstring. Only valid from
+        PENDING_CREW_REVIEW; use archive_suggestion() for a direct
+        WASH-Crew-initiated archive of a suggestion that was never
+        rejected past the threshold.
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return SuggestionResult(success=False, message="That suggestion doesn't exist.")
+
+        if watch_item.status is not WatchItemStatus.PENDING_CREW_REVIEW:
+            return SuggestionResult(success=False, message="That suggestion is not pending WASH Crew review.")
+
+        watch_item.status = WatchItemStatus.ARCHIVED
+        watch_item.journey.record_retirement(datetime.now(timezone.utc), "rejection_threshold_reached")
+        watch_item.crew_review_channel_id = None
+        watch_item.crew_review_message_id = None
+        self._save()
+        return SuggestionResult(
+            success=True, message=f'"{watch_item.title}" has been retired.', watch_item=watch_item
+        )
+
+    def keep_suggestion_active(self, suggestion_id: int) -> SuggestionResult:
+        """WASH Crew's "Keep Active" decision on a suggestion pending Crew Review.
+
+        Restores Available status and clears every recorded "I Won't
+        Watch" rejection, re-enabling the button exactly as if no one had
+        rejected it yet. Only valid from PENDING_CREW_REVIEW.
+        """
+        return self._return_pending_review_to_available(
+            suggestion_id, success_message='"{title}" is active again.'
+        )
+
+    def reset_suggestion_rejections(self, suggestion_id: int) -> SuggestionResult:
+        """WASH Crew's "Reset Rejections" decision on a suggestion pending
+        Crew Review.
+
+        Leaves the suggestion Available and clears every recorded "I
+        Won't Watch" rejection, re-enabling the button -- the same
+        underlying effect as keep_suggestion_active() (see both methods'
+        callers in bot.py), kept as a distinct, separately labeled Crew
+        Review action per product decision. Only valid from
+        PENDING_CREW_REVIEW.
+        """
+        return self._return_pending_review_to_available(
+            suggestion_id, success_message='"{title}"\'s rejections have been reset; it remains active.'
+        )
+
+    def _return_pending_review_to_available(self, suggestion_id: int, *, success_message: str) -> SuggestionResult:
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return SuggestionResult(success=False, message="That suggestion doesn't exist.")
+
+        if watch_item.status is not WatchItemStatus.PENDING_CREW_REVIEW:
+            return SuggestionResult(success=False, message="That suggestion is not pending WASH Crew review.")
+
+        watch_item.status = WatchItemStatus.SUGGESTED
+        watch_item.journey.clear_rejections()
+        watch_item.crew_review_channel_id = None
+        watch_item.crew_review_message_id = None
+        self._save()
+        return SuggestionResult(
+            success=True, message=success_message.format(title=watch_item.title), watch_item=watch_item
+        )
+
+    def set_crew_review_notification_reference(
+        self, suggestion_id: int, channel_id: int, message_id: int
+    ) -> bool:
+        """Record where a suggestion's Crew Review notification actually
+        lives, so it can be re-registered for persistent button handling
+        after a bot restart (see bot.py's
+        restore_persistent_crew_review_views) without posting a second,
+        duplicate notification.
+
+        Returns:
+            True if a matching suggestion was found and updated, False if
+            no suggestion has that ID.
+        """
+        for watch_item in self._suggestions.values():
+            if watch_item.id == suggestion_id:
+                watch_item.crew_review_channel_id = channel_id
+                watch_item.crew_review_message_id = message_id
+                self._save()
+                return True
+        return False
 
     # --- FR-033A: WASH Crew-initiated archive/reactivate -------------------------------
 

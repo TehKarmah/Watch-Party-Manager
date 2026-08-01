@@ -87,7 +87,7 @@ An active-item match blocks with "🔴 That title is already in this collection.
 | Matched item's status | Regular Watch Party member | WASH Crew |
 | --- | --- | --- |
 | Active (on the list already) | Blocked. Reference, title, IMDb link, and status are shown. | Blocked -- there is nothing to reactivate. |
-| Archived (rejected via "I WILL NOT WATCH") | Blocked. | May confirm to reactivate the existing record. |
+| Archived (retired after "I Won't Watch" review) | Blocked. | May confirm to reactivate the existing record. |
 | Vote Winner | Blocked. | May confirm to reactivate the existing record. |
 | Archived some other way (e.g. via `/remove`) | Blocked. | May confirm to reactivate the existing record. |
 | Possible duplicate (no confirmed year) | Blocked. | May confirm to proceed with a new suggestion. |
@@ -110,7 +110,7 @@ IMDb
 
 ### Listing suggestions
 
-`/list [status] [public]` is available to every Watch Party member. `status` selects **Active Watch Items** (default), **Eligible for Voting**, **In an Active Vote**, **Vote Winners**, **Retired**, **Watched**, or **All Watch Items**. Only WASH Crew may set `public:true` to post the list in the channel; everyone else always sees it privately, including Vote Winners and Retired.
+`/list [status] [public]` is available to every Watch Party member. `status` selects **Active Watch Items** (default), **Eligible for Voting**, **In an Active Vote**, **Pending Crew Review**, **Vote Winners**, **Retired**, **Watched**, or **All Watch Items**. Only WASH Crew may set `public:true` to post the list in the channel; everyone else always sees it privately, including Vote Winners and Retired.
 
 Active Watch Items = Eligible for Voting + In an Active Vote -- Vote Winners, Retired, and Watched are terminal statuses and are never part of Active. Active's own view shows a short summary before the mixed list, e.g.:
 
@@ -125,15 +125,36 @@ Eligible for Voting, In an Active Vote, Active Watch Items, and All Watch Items 
 
 ### Suggestion status model
 
-Every suggestion shows one of five statuses, both in `/list` and on its own public confirmation post's Status field:
+Every suggestion shows one of six statuses, both in `/list` and on its own public confirmation post's Status field, in this order:
 
 - 🟢 **Available** -- eligible for future voting.
 - 🗳️ **In an Active Vote** -- currently a candidate in an open voting round for its collection. Computed at display time from `VoteService` -- there is no separately stored value, so it automatically reverts to Available the moment its round closes, with no manual "clear" step.
+- ⚠️ **Pending Crew Review** -- reached once the collection's configured "I Won't Watch" threshold is met (see "Rejecting suggestions" below). Excluded from the Eligible Pool and its "I Won't Watch" button disabled until WASH Crew resolves it in the Admin Channel.
 - 🏆 **Vote Winner** -- won a voting round. This replaces the older, never-actually-produced "Watched" status: WASH knows a suggestion won a vote, not that the group actually watched it. Whenever a Vote Winner is displayed with a recorded win date, an additional `Won: <Month D, YYYY>` line appears right below it (date only, never a time) -- the actual date `/vote start`'s vote completion recorded. A Vote Winner from before this milestone, with no recorded win date, simply omits that line rather than showing a placeholder.
-- 🗄️ **Retired** -- archived, whether by `/remove`, an "I WILL NOT WATCH" rejection threshold, or WASH Crew directly setting it via `/edit_suggestion`.
 - ✅ **Watched** -- explicitly confirmed watched, via the watch-history workflow.
+- 🗄️ **Retired** -- archived, whether by `/remove`, WASH Crew retiring a suggestion pending Crew Review, or WASH Crew directly setting it via `/edit_suggestion`.
 
-WASH Crew may always override a suggestion's status directly through `/edit_suggestion`'s Change Status action (Available, Vote Winner, or Retired -- In an Active Vote is never a directly settable option, since it's computed). Whenever a suggestion's status changes, its existing public confirmation post is edited in place to reflect the new status -- it is never recreated.
+WASH Crew may always override a suggestion's status directly through `/edit_suggestion`'s Change Status action (Available, Vote Winner, or Retired -- In an Active Vote and Pending Crew Review are never directly settable options, since one is computed and the other is only reached via the "I Won't Watch" threshold). Whenever a suggestion's status changes, its existing public confirmation post is edited in place to reflect the new status -- it is never recreated.
+
+### Rejecting suggestions ("I Won't Watch")
+
+Every suggestion's public post has an **I Won't Watch** button, usable by any Watch Party member. Each collection has a configurable threshold (`/config` -> Collections -> [Collection] -> Rejection Settings, default 2, range 1-10) -- the number of distinct members who must press it before the suggestion needs WASH Crew review.
+
+Reaching the threshold does not automatically retire the suggestion. Instead:
+
+1. It's immediately removed from nominee eligibility.
+2. Its status becomes ⚠️ Pending Crew Review.
+3. Its "I Won't Watch" button is disabled.
+4. The configured Admin Channel is notified with the suggestion, its collection, the current rejection count, and who voted "I Won't Watch".
+
+The Admin Channel notification offers four actions:
+
+- **Retire** -- permanently retires the suggestion (status becomes Retired).
+- **Keep Active** -- restores Available status, clears every recorded "I Won't Watch" response, and re-enables the button.
+- **Reset Rejections** -- leaves the suggestion Available, clears every recorded response, and re-enables the button.
+- **View Suggestion** -- links back to the original suggestion post.
+
+Only WASH Crew may use these actions. Below the threshold, a member may remove their own rejection (via the button again, or `/unreject`) at any time; once a suggestion reaches Pending Crew Review, its recorded rejections are frozen until WASH Crew resolves it. The Admin Channel notification's buttons -- like every other persistent control in WASH (voting, "I Won't Watch"/Watched, membership approval) -- continue working after a bot restart, without posting a duplicate notification or re-arming a review already resolved before the restart.
 
 Database selection follows the same automatic-then-selector pattern used elsewhere: the current channel's configured database is used automatically; if none matches and the server has exactly one active database, that one is used; if several exist, WASH shows a picker. Each entry leads with its status emoji, followed by title and release year exactly once (`🟢 50 First Dates (2004)`, never `50 First Dates (2004) (2004)`), then `| [Original Suggestion](link)` when the original public post is known, or nothing after the title when it isn't. A Vote Winner entry additionally shows its `Won: <date>` line right below, when recorded. The reference number and IMDb link intentionally do not appear on this default view. Long lists page with Previous/Next buttons rather than being cut off or capped; both the initial response and every page suppress Discord's automatic link-preview embeds.
 
@@ -200,15 +221,15 @@ A server that never explicitly sets this defaults to Favor New Additions/`favor_
 
 Within whichever pool a mode produces, WASH still applies its existing genre/media-type diversity pass and its existing deprioritization of recently nominated or recently won suggestions -- nominee-selection mode and diversity are independent, layered concerns.
 
-**Retired suggestions.** A suggestion reaching the "I WILL NOT WATCH" rejection threshold is *retired*, a distinct lifecycle from a WASH Crew-initiated `/remove` archive: WASH records a retirement date and reason. Retired suggestions are excluded from further selection, but remain visible through `/list status:Retired` and may later be reactivated through `/add`, exactly like any other archived suggestion.
+**Retired suggestions.** A suggestion WASH Crew retires from Pending Crew Review (see "Rejecting suggestions" above) is *retired*, a distinct lifecycle from a WASH Crew-initiated `/remove` archive: WASH records a retirement date and reason. Retired suggestions are excluded from further selection, but remain visible through `/list status:Retired` and may later be reactivated through `/add`, exactly like any other archived suggestion.
 
 ### Rotation & Collection Health
 
 `CollectionEligibilityService` is the one authoritative implementation of "what suggestions are eligible right now" for a collection -- every command that needs an eligibility answer (`/vote start`, `/list`, `/database health`, and the Eligible Pool Warning below) calls it rather than computing its own. It's computed entirely from each suggestion's own status and `VoteService`. Its single `get_eligibility()` operation is always read-only.
 
-It reports the same reconciled buckets for a collection: **Available** (the Eligible Pool -- selectable right now), **In an Active Vote** (currently nominated in this collection's open round), **Vote Winners**, **Retired**, and **Watched**. These always reconcile: Active = Available + In an Active Vote, and Total = Active + Vote Winners + Retired + Watched.
+It reports the same reconciled buckets for a collection: **Available** (the Eligible Pool -- selectable right now), **In an Active Vote** (currently nominated in this collection's open round), **Pending Crew Review**, **Vote Winners**, **Retired**, and **Watched**. These always reconcile: Active = Available + In an Active Vote, and Total = Active + Pending Crew Review + Vote Winners + Retired + Watched.
 
-`/database health` (WASH Crew only) reports this breakdown for one collection: Collection Name, Total Watch Items, Active Watch Items, Eligible for Voting, In an Active Vote, Vote Winners, Retired, Watched, the guild's Configured Candidate Count, a **Next Vote** status, and a **Low Pool Status**. Eligible for Voting and In an Active Vote are shown indented beneath Active Watch Items, so the reconciliation identity (Active Watch Items = Eligible for Voting + In an Active Vote) is visible directly in the layout, not just stated in a parenthetical. Collection selection works exactly like `/list`'s -- automatic from thread context, with a **Switch Collection** button when more than one collection exists. Checking health is always side-effect-free.
+`/database health` (WASH Crew only) reports this breakdown for one collection: Collection Name, Total Watch Items, Active Watch Items, Eligible for Voting, In an Active Vote, Pending Crew Review, Vote Winners, Retired, Watched, the guild's Configured Candidate Count, a **Next Vote** status, and a **Low Pool Status**. Eligible for Voting and In an Active Vote are shown indented beneath Active Watch Items, so the reconciliation identity (Active Watch Items = Eligible for Voting + In an Active Vote) is visible directly in the layout, not just stated in a parenthetical. Collection selection works exactly like `/list`'s -- automatic from thread context, with a **Switch Collection** button when more than one collection exists. Checking health is always side-effect-free.
 
 **Next Vote** is one of:
 

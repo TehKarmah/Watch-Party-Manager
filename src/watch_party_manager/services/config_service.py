@@ -540,6 +540,23 @@ class ConfigService:
             True, f'Nominee selection for "{database.name}" updated to {label}.', self.get_configuration(guild_id)
         )
 
+    def set_database_rejection_threshold(
+        self, guild_id: int, database_id: int, rejection_threshold: int
+    ) -> ConfigUpdateResult:
+        database = self._get_database_for_guild(guild_id, database_id)
+        if database is None:
+            return ConfigUpdateResult(False, "That collection doesn't exist.")
+
+        base = self.get_database_configuration(guild_id, database_id)
+        self._suggestion_database_configuration_repository.save(
+            replace(base, suggestion_rules=replace(base.suggestion_rules, rejection_threshold=rejection_threshold))
+        )
+        return ConfigUpdateResult(
+            True,
+            f'"I Won\'t Watch" threshold for "{database.name}" updated to {rejection_threshold}.',
+            self.get_configuration(guild_id),
+        )
+
     def _save_database_channel(
         self, guild_id: int, database: SuggestionDatabase, channel_id: Optional[int], *, field_name: str
     ) -> None:

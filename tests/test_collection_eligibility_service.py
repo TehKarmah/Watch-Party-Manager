@@ -66,12 +66,25 @@ class BasicBucketingTests(CollectionEligibilityServiceTestCase):
         self.suggestion_service.record_vote_win(item_a.id, date.today())
         self.suggestion_service.reject_suggestion(item_b.id, 1)
         self.suggestion_service.reject_suggestion(item_b.id, 2)  # default threshold is 2
+        self.suggestion_service.retire_pending_review(item_b.id)
 
         result = self.eligibility_service.get_eligibility(DATABASE_ID)
 
         self.assertEqual({item.id for item in result.vote_winners}, {item_a.id})
         self.assertEqual({item.id for item in result.retired}, {item_b.id})
         self.assertEqual({item.id for item in result.available}, {item_c.id})
+
+    def test_pending_crew_review_items_are_bucketed_separately_and_excluded_from_available(self) -> None:
+        item_a = self._add("Alien")
+        item_b = self._add("The Matrix")
+        self.suggestion_service.reject_suggestion(item_b.id, 1)
+        self.suggestion_service.reject_suggestion(item_b.id, 2)  # default threshold is 2
+
+        result = self.eligibility_service.get_eligibility(DATABASE_ID)
+
+        self.assertEqual({item.id for item in result.pending_crew_review}, {item_b.id})
+        self.assertEqual({item.id for item in result.available}, {item_a.id})
+        self.assertEqual(result.total, 2)
 
     def test_watched_items_are_bucketed_separately_and_counted_in_total(self) -> None:
         item_a = self._add("Alien")
@@ -108,6 +121,7 @@ class BasicBucketingTests(CollectionEligibilityServiceTestCase):
         self.suggestion_service.record_vote_win(item_a.id, date.today())
         self.suggestion_service.reject_suggestion(item_b.id, 1)
         self.suggestion_service.reject_suggestion(item_b.id, 2)
+        self.suggestion_service.retire_pending_review(item_b.id)
         self.vote_service.create_round(candidate_suggestion_ids=[item_c.id, item_d.id], database_id=DATABASE_ID)
 
         result = self.eligibility_service.get_eligibility(DATABASE_ID)

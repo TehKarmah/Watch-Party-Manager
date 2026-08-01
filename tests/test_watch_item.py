@@ -119,6 +119,26 @@ class WatchItemModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             WatchItem(title="Arrival", media_type=MediaType.MOVIE, message_id=0)
 
+    def test_crew_review_channel_id_and_message_id_default_to_none(self) -> None:
+        item = WatchItem(title="Arrival", media_type=MediaType.MOVIE)
+        self.assertIsNone(item.crew_review_channel_id)
+        self.assertIsNone(item.crew_review_message_id)
+
+    def test_watch_item_accepts_a_valid_crew_review_reference(self) -> None:
+        item = WatchItem(
+            title="Arrival", media_type=MediaType.MOVIE, crew_review_channel_id=900, crew_review_message_id=555
+        )
+        self.assertEqual(item.crew_review_channel_id, 900)
+        self.assertEqual(item.crew_review_message_id, 555)
+
+    def test_watch_item_rejects_a_non_positive_crew_review_channel_id(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchItem(title="Arrival", media_type=MediaType.MOVIE, crew_review_channel_id=0)
+
+    def test_watch_item_rejects_a_non_positive_crew_review_message_id(self) -> None:
+        with self.assertRaises(ValueError):
+            WatchItem(title="Arrival", media_type=MediaType.MOVIE, crew_review_message_id=0)
+
 
 if __name__ == "__main__":
     unittest.main()

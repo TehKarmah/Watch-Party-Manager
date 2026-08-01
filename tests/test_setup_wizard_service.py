@@ -156,7 +156,7 @@ class WizardFlowTests(SetupWizardServiceTestCase):
         state, _ = self.service.create_new_database(state, "Movies", DESTINATION_CHANNEL_ID, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_NEW_ADDITIONS, 2
         )
         state = self.service.enable_vote_ending_reminder(state, 48)
         state = self.service.enable_automatic_backups(state, 2, 15)
@@ -281,7 +281,7 @@ class ReturnToStepServiceTests(SetupWizardServiceTestCase):
         state = self.service.set_admin_channel(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 3
         )
         state = self.service.go_to_step(state, SetupWizardStep.REVIEW)
 
@@ -498,7 +498,7 @@ class AdminChannelStepTests(SetupWizardServiceTestCase):
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
         )
         state = self.service.enable_vote_ending_reminder(state, 24)
         state = self.service.enable_automatic_backups(state, 1, 30)
@@ -602,12 +602,13 @@ class VotingDefaultsStepTests(SetupWizardServiceTestCase):
     def test_defaults_are_saved_and_restored(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
         updated = self.service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 4
         )
         self.assertEqual(updated.draft.voting_candidate_count, 5)
         self.assertEqual(updated.draft.voting_duration_minutes, 14)
         self.assertEqual(updated.draft.voting_visibility, GuildVoteVisibility.BLIND)
         self.assertEqual(updated.draft.voting_candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
+        self.assertEqual(updated.draft.rejection_threshold, 4)
         self.assertEqual(updated.current_step, SetupWizardStep.REMINDER_DEFAULTS)
 
         reloaded = self.wizard_repository.get(GUILD_ID)
@@ -725,7 +726,7 @@ class CompletionTests(SetupWizardServiceTestCase):
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_NEW_ADDITIONS, 2
         )
         state = self.service.enable_vote_ending_reminder(state, 24)
         state = self.service.enable_automatic_backups(state, 1, 30)
@@ -806,7 +807,7 @@ class FinalizePersistenceFailureTests(SetupWizardServiceTestCase):
         state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
         state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
         state = self.service.set_voting_defaults(
-            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 4, 10, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
         )
         state = self.service.enable_vote_ending_reminder(state, 24)
         state = self.service.enable_automatic_backups(state, 1, 30)

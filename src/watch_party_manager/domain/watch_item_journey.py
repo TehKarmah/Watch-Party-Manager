@@ -168,7 +168,7 @@ class WatchItemJourney:
         self.rewatch_count += 1
 
     def record_rejection(self, discord_user_id: int) -> bool:
-        """Record a member's "I will not watch" rejection.
+        """Record a member's "I won't watch" rejection.
 
         Args:
             discord_user_id: The rejecting member's Discord user ID.
@@ -203,3 +203,13 @@ class WatchItemJourney:
             if existing_id != discord_user_id
         )
         return True
+
+    def clear_rejections(self) -> None:
+        """Clear every recorded "I Won't Watch" rejection.
+
+        Used by WASH Crew's Keep Active / Reset Rejections decisions on a
+        suggestion pending Crew Review (see SuggestionService), so the
+        "I Won't Watch" count and button re-enable exactly as if no one
+        had rejected it yet.
+        """
+        self.rejected_by_discord_user_ids = ()

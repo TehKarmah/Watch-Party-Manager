@@ -124,7 +124,8 @@ class JsonSuggestionRepository:
         """Convert a WatchItem into a JSON-friendly dict.
 
         id, title, media_type, status, metadata_ids, database_id,
-        guild_id, channel_id, and message_id are persisted.
+        guild_id, channel_id, message_id, and crew_review_channel_id/
+        crew_review_message_id are persisted.
         """
         return {
             "id": watch_item.id,
@@ -139,6 +140,8 @@ class JsonSuggestionRepository:
             "guild_id": watch_item.guild_id,
             "channel_id": watch_item.channel_id,
             "message_id": watch_item.message_id,
+            "crew_review_channel_id": watch_item.crew_review_channel_id,
+            "crew_review_message_id": watch_item.crew_review_message_id,
             "runtime_minutes": watch_item.runtime_minutes,
             "genres": list(watch_item.genres),
             "description": watch_item.description,
@@ -173,7 +176,8 @@ class JsonSuggestionRepository:
     def _deserialize(entry: dict, entry_id: int) -> WatchItem:
         """Rebuild a WatchItem from a dict produced by _serialize().
 
-        database_id, guild_id, channel_id, and message_id all default to
+        database_id, guild_id, channel_id, message_id, and
+        crew_review_channel_id/crew_review_message_id all default to
         None when absent, so a file saved before this milestone (which has
         none of these keys) still loads without any special handling.
 
@@ -196,6 +200,8 @@ class JsonSuggestionRepository:
             guild_id=entry.get("guild_id"),
             channel_id=entry.get("channel_id"),
             message_id=entry.get("message_id"),
+            crew_review_channel_id=entry.get("crew_review_channel_id"),
+            crew_review_message_id=entry.get("crew_review_message_id"),
             runtime_minutes=entry.get("runtime_minutes"),
             genres=tuple(entry.get("genres", ())),
             description=entry.get("description"),

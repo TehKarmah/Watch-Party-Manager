@@ -274,6 +274,14 @@ class SuggestionRulesConfigTests(unittest.TestCase):
         rules = SuggestionRulesConfig(rejection_threshold=5)
         self.assertEqual(rules.rejection_threshold, 5)
 
+    def test_rejection_threshold_accepts_the_upper_bound_of_ten(self) -> None:
+        rules = SuggestionRulesConfig(rejection_threshold=10)
+        self.assertEqual(rules.rejection_threshold, 10)
+
+    def test_rejection_threshold_rejects_a_value_above_ten(self) -> None:
+        with self.assertRaises(ValueError):
+            SuggestionRulesConfig(rejection_threshold=11)
+
     def test_coerces_a_raw_string_candidate_selection(self) -> None:
         rules = SuggestionRulesConfig(candidate_selection="favor_older_additions")
         self.assertEqual(rules.candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)

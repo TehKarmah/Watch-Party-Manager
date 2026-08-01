@@ -1044,7 +1044,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         # confirms every field on the modal actually sent is a TextInput
         # with a label within Discord's 1-45 character limit.
         from watch_party_manager.domain.setup_wizard import SetupWizardStep
-        from watch_party_manager.setup_wizard_view import VotingDefaultsIntroView, VotingDefaultsModal
+        from watch_party_manager.setup_wizard_view import SetupVotingDefaultsModal, VotingDefaultsIntroView
 
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
@@ -1062,7 +1062,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         await configure_button.callback(interaction=configure_interaction)
 
         sent_modal = configure_interaction.response.sent_modal
-        self.assertIsInstance(sent_modal, VotingDefaultsModal)
+        self.assertIsInstance(sent_modal, SetupVotingDefaultsModal)
         self.assertTrue(all(isinstance(child, discord.ui.TextInput) for child in sent_modal.children))
         for child in sent_modal.children:
             label = getattr(child, "label", None)
@@ -1145,7 +1145,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 30)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 2, 15)
@@ -1223,7 +1223,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -1274,7 +1274,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 5, 14, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -1320,7 +1320,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -1365,7 +1365,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -1428,7 +1428,7 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 3, 15)
@@ -1523,7 +1523,7 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
     async def test_voting_defaults_modal_reopened_after_back_shows_previously_saved_values(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 5, 14, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
         )
         # Simulate returning to Voting Defaults later (e.g. via Back from
         # Reminder Defaults, or Review's edit-a-section) -- the modal must
@@ -1979,7 +1979,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 2
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -2011,7 +2011,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
     async def test_review_line_shows_the_friendly_candidate_selection_label(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_NEW_ADDITIONS, 2
         )
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
         interaction = FakeInteraction()
@@ -2023,7 +2023,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
     async def test_settings_persist_through_a_repository_round_trip(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         self.bot.setup_wizard_service.set_voting_defaults(
-            state, 7, 3, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.INFINITE_POOL
+            state, 7, 3, GuildVoteVisibility.VISIBLE, CandidateSelectionMode.INFINITE_POOL, 2
         )
 
         reloaded = self.wizard_repository.get(GUILD_ID)
@@ -2042,7 +2042,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS, 6
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -2063,9 +2063,10 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         result = self.bot.setup_wizard_service.finalize(state, GUILD_ID, "Test Guild", FakeGuild())
         self.assertTrue(result.success, result.message)
 
-        # Candidate selection is per-database (Manage Databases), not a
-        # guild-wide summary line -- read it back the same way /config's
-        # Manage Databases screen would, by database_id.
+        # Candidate selection and the "I Won't Watch" threshold are both
+        # per-database (Manage Databases), not guild-wide summary lines --
+        # read them back the same way /config's Manage Databases screen
+        # would, by database_id.
         config_service = ConfigService(
             self.guild_configuration_repository,
             self.suggestion_service,
@@ -2076,6 +2077,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
 
         self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
+        self.assertEqual(database_configuration.suggestion_rules.rejection_threshold, 6)
 
     async def test_older_persisted_database_configuration_defaults_to_favor_new_additions(self) -> None:
         # A database configuration saved before candidate_selection existed
@@ -2091,7 +2093,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
         )
         state = self.bot.setup_wizard_service.skip_watch_destination(state)
         state = self.bot.setup_wizard_service.set_voting_defaults(
-            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_NEW_ADDITIONS, 2
         )
         state = self.bot.setup_wizard_service.enable_vote_ending_reminder(state, 24)
         state = self.bot.setup_wizard_service.enable_automatic_backups(state, 1, 30)
@@ -2123,6 +2125,7 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
             GUILD_ID, database_result.database.database_id
         )
         self.assertEqual(database_configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+        self.assertEqual(database_configuration.suggestion_rules.rejection_threshold, 2)
 
 
 class ReminderDefaultsSetupIntegrationTests(SetupCommandTestCase):

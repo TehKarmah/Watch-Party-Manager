@@ -187,8 +187,7 @@ class SuggestionRulesConfig:
             raise ValueError(
                 "at least one input method (allow_imdb_links or allow_manual_titles) must be enabled"
             )
-        if self.rejection_threshold <= 0:
-            raise ValueError("rejection_threshold must be a positive integer")
+        _validate_positive_int(self.rejection_threshold, "rejection_threshold", 1, 10)
         self.candidate_selection = _coerce_enum(  # type: ignore[assignment]
             self.candidate_selection, CandidateSelectionMode, "candidate_selection"
         )

@@ -41,6 +41,7 @@ OnChannelSelected = Callable[[discord.Interaction, int], Awaitable[None]]
 OnSkip = Callable[[discord.Interaction], Awaitable[None]]
 OnCreateThreadClicked = Callable[[discord.Interaction], Awaitable[None]]
 OnVotingDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
+OnSetupVotingDefaultsSubmit = Callable[[discord.Interaction, str, str, str], Awaitable[None]]
 OnVotingDefaultsConfigure = Callable[[discord.Interaction, CandidateSelectionMode, GuildVoteVisibility], Awaitable[None]]
 OnReminderDefaultsSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnBackupDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
@@ -983,7 +984,11 @@ class VisibilitySelectComponent(discord.ui.Select):
 
 
 class VotingDefaultsModal(discord.ui.Modal):
-    """Default nominee count and vote duration only.
+    """Default nominee count and vote duration only -- guild-wide fields,
+    reused unchanged by /config's own (never per-collection) Voting
+    Defaults section. See SetupVotingDefaultsModal below for the Setup
+    Wizard's own variant, which additionally bundles a per-collection
+    field.
 
     Discord modals accept TextInput components only -- a Select embedded
     in a modal constructs without error client-side (discord.py doesn't
@@ -1014,6 +1019,52 @@ class VotingDefaultsModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self._submit_callback(interaction, self.candidate_count_input.value, self.duration_input.value)
+
+
+class SetupVotingDefaultsModal(discord.ui.Modal):
+    """Setup Wizard-only: default candidate count and vote duration
+    (guild-wide), plus this pass's collection's "I Won't Watch" threshold
+    -- bundled into the wizard's one Voting Defaults step the same way
+    Candidate Selection Mode already is (see VotingDefaultsIntroView),
+    even though both are actually stored per-collection
+    (SuggestionRulesConfig), not guild-wide. Kept as its own class,
+    rather than a shared/parameterized VotingDefaultsModal, so /config's
+    guild-wide-only Voting Defaults section can never accidentally show a
+    per-collection field with no collection context to anchor it to --
+    exactly the "which database does this apply to?" ambiguity
+    VotingDefaultsModal's own docstring describes avoiding. Unlike
+    candidate selection, the threshold is a plain number and needs no
+    Select, so it's collected here as a TextInput rather than needing its
+    own screen.
+    """
+
+    def __init__(
+        self, on_submit: OnSetupVotingDefaultsSubmit, *, defaults: Optional[Tuple[str, str, str]] = None
+    ) -> None:
+        super().__init__(title="Voting Defaults")
+        self._submit_callback = on_submit
+        candidate_count_default, duration_default, rejection_threshold_default = defaults or ("3", "1d", "2")
+        self.candidate_count_input = discord.ui.TextInput(
+            label="Default candidate count (2-10)", default=candidate_count_default
+        )
+        self.duration_input = discord.ui.TextInput(
+            label="Default vote duration (1m-30d; 10m,1h,7d)",
+            default=duration_default,
+        )
+        self.rejection_threshold_input = discord.ui.TextInput(
+            label="I Won't Watch threshold (1-10)", default=rejection_threshold_default
+        )
+        self.add_item(self.candidate_count_input)
+        self.add_item(self.duration_input)
+        self.add_item(self.rejection_threshold_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self._submit_callback(
+            interaction,
+            self.candidate_count_input.value,
+            self.duration_input.value,
+            self.rejection_threshold_input.value,
+        )
 
 
 class CandidateSelectionSelectComponent(discord.ui.Select):

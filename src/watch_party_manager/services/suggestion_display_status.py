@@ -1,13 +1,14 @@
 """Derives a suggestion's admin-facing display status.
 
-The authoritative runtime states are five -- Available, In an Active
-Vote, Vote Winner, Watched, Retired.
+The authoritative runtime states are six -- Available, In an Active
+Vote, Pending Crew Review, Vote Winner, Watched, Retired (this exact
+order; see SuggestionDisplayStatus/SUGGESTION_DISPLAY_STATUS_EMOJI below).
 
-Only three statuses are persisted on WatchItemStatus (SUGGESTED,
-VOTE_WINNER, ARCHIVED). In an Active Vote is computed fresh every time,
-from VoteService.get_open_round_for_suggestion() -- never persisted,
-since it must automatically revert to Available the moment its round
-closes, with no explicit "clear" step required.
+Four statuses are persisted on WatchItemStatus (SUGGESTED, VOTE_WINNER,
+ARCHIVED, PENDING_CREW_REVIEW). In an Active Vote is computed fresh every
+time, from VoteService.get_open_round_for_suggestion() -- never
+persisted, since it must automatically revert to Available the moment
+its round closes, with no explicit "clear" step required.
 """
 
 from __future__ import annotations
@@ -20,13 +21,18 @@ from watch_party_manager.domain.watch_item import WatchItem, WatchItemStatus
 
 
 class SuggestionDisplayStatus(str, Enum):
-    """One of the statuses shown on a suggestion's embed/listing."""
+    """One of the statuses shown on a suggestion's embed/listing.
+
+    Declaration order is the authoritative display/sort order: Available,
+    In an Active Vote, Pending Crew Review, Vote Winner, Watched, Retired.
+    """
 
     AVAILABLE = "available"
     IN_ACTIVE_VOTE = "in_active_vote"
+    PENDING_CREW_REVIEW = "pending_crew_review"
     VOTE_WINNER = "vote_winner"
-    RETIRED = "retired"
     WATCHED = "watched"
+    RETIRED = "retired"
 
 
 # UI Polish (Watch Item Status Presentation): Vote Winner and Retired use
@@ -38,6 +44,7 @@ class SuggestionDisplayStatus(str, Enum):
 SUGGESTION_DISPLAY_STATUS_EMOJI: dict[SuggestionDisplayStatus, str] = {
     SuggestionDisplayStatus.AVAILABLE: "🟢",
     SuggestionDisplayStatus.IN_ACTIVE_VOTE: "🗳️",
+    SuggestionDisplayStatus.PENDING_CREW_REVIEW: "⚠️",
     SuggestionDisplayStatus.VOTE_WINNER: "🏆",
     SuggestionDisplayStatus.RETIRED: "🗄️",
     SuggestionDisplayStatus.WATCHED: "✅",
@@ -46,6 +53,7 @@ SUGGESTION_DISPLAY_STATUS_EMOJI: dict[SuggestionDisplayStatus, str] = {
 _SUGGESTION_DISPLAY_STATUS_WORDS: dict[SuggestionDisplayStatus, str] = {
     SuggestionDisplayStatus.AVAILABLE: "Available",
     SuggestionDisplayStatus.IN_ACTIVE_VOTE: "In an Active Vote",
+    SuggestionDisplayStatus.PENDING_CREW_REVIEW: "Pending Crew Review",
     SuggestionDisplayStatus.VOTE_WINNER: "Vote Winner",
     SuggestionDisplayStatus.RETIRED: "Retired",
     SuggestionDisplayStatus.WATCHED: "Watched",
@@ -128,6 +136,8 @@ def compute_display_status(watch_item: WatchItem, *, in_active_vote: bool = Fals
         return SuggestionDisplayStatus.WATCHED
     if watch_item.status is WatchItemStatus.ARCHIVED:
         return SuggestionDisplayStatus.RETIRED
+    if watch_item.status is WatchItemStatus.PENDING_CREW_REVIEW:
+        return SuggestionDisplayStatus.PENDING_CREW_REVIEW
     if watch_item.status is WatchItemStatus.VOTE_WINNER:
         return SuggestionDisplayStatus.VOTE_WINNER
     if in_active_vote:

@@ -26,12 +26,12 @@ def make_watch_item(
 class BuildRejectButtonLabelTests(unittest.TestCase):
     def test_active_label_matches_the_documented_format(self) -> None:
         self.assertEqual(
-            build_reject_button_label(1, 2, archived=False), "I WILL NOT WATCH: 1 / 2"
+            build_reject_button_label(1, 2, archived=False), "I WON'T WATCH: 1 / 2"
         )
 
     def test_active_label_reflects_zero_rejections(self) -> None:
         self.assertEqual(
-            build_reject_button_label(0, 2, archived=False), "I WILL NOT WATCH: 0 / 2"
+            build_reject_button_label(0, 2, archived=False), "I WON'T WATCH: 0 / 2"
         )
 
     def test_archived_label_clearly_indicates_archived(self) -> None:
@@ -44,6 +44,20 @@ class BuildRejectButtonLabelTests(unittest.TestCase):
         self.assertIn("Watched", label)
         self.assertNotIn("Archived", label)
         self.assertIn("2 / 2", label)
+
+    def test_pending_review_label_is_disabled_and_shows_no_counter(self) -> None:
+        label = build_reject_button_label(2, 2, archived=False, pending_review=True)
+        self.assertEqual(label, "Review Pending — I WON'T WATCH")
+
+    def test_pending_review_label_is_a_single_line(self) -> None:
+        # Discord button labels render as a single line -- an embedded
+        # "\n" reads as a stray character rather than an actual break.
+        label = build_reject_button_label(2, 2, archived=False, pending_review=True)
+        self.assertNotIn("\n", label)
+
+    def test_pending_review_takes_priority_over_archived_and_watched(self) -> None:
+        label = build_reject_button_label(2, 2, archived=True, watched=True, pending_review=True)
+        self.assertEqual(label, "Review Pending — I WON'T WATCH")
 
 
 class SuggestionViewTests(unittest.IsolatedAsyncioTestCase):
@@ -69,7 +83,22 @@ class SuggestionViewTests(unittest.IsolatedAsyncioTestCase):
 
         view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
 
-        self.assertEqual(view.children[0].label, "I WILL NOT WATCH: 1 / 2")
+        self.assertEqual(view.children[0].label, "I WON'T WATCH: 1 / 2")
+
+    async def test_reject_button_is_disabled_for_a_pending_review_suggestion(self) -> None:
+        watch_item = make_watch_item(status=WatchItemStatus.PENDING_CREW_REVIEW, rejected_by=[111, 222])
+
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
+
+        self.assertTrue(view.children[0].disabled)
+        self.assertEqual(view.children[0].label, "Review Pending — I WON'T WATCH")
+
+    async def test_watched_button_is_still_enabled_for_a_pending_review_suggestion(self) -> None:
+        watch_item = make_watch_item(status=WatchItemStatus.PENDING_CREW_REVIEW, rejected_by=[111, 222])
+
+        view = SuggestionView(watch_item, threshold=2, on_toggle=self._noop, on_watched=self._noop)
+
+        self.assertFalse(view.children[1].disabled)
 
     async def test_button_is_enabled_for_an_active_suggestion(self) -> None:
         watch_item = make_watch_item(status=WatchItemStatus.SUGGESTED)
@@ -163,9 +192,17 @@ class WatchedSuggestionButtonTests(unittest.IsolatedAsyncioTestCase):
         button = WatchedSuggestionButton(suggestion_id=1, watched=False, on_click=self._noop)
         self.assertFalse(button.disabled)
 
+    def test_active_label_is_mark_as_watched(self) -> None:
+        button = WatchedSuggestionButton(suggestion_id=1, watched=False, on_click=self._noop)
+        self.assertEqual(button.label, "Mark as Watched")
+
     def test_disabled_once_watched(self) -> None:
         button = WatchedSuggestionButton(suggestion_id=1, watched=True, on_click=self._noop)
         self.assertTrue(button.disabled)
+
+    def test_watched_label_stays_past_tense_not_mark_as_watched(self) -> None:
+        button = WatchedSuggestionButton(suggestion_id=1, watched=True, on_click=self._noop)
+        self.assertEqual(button.label, "✅ Watched")
 
     async def test_click_calls_on_click_with_the_correct_suggestion_id(self) -> None:
         calls = []

@@ -413,9 +413,9 @@ class RejectionCommandTests(unittest.TestCase):
             inception.id,
         )
 
-        self.assertIn("archived", message)
+        self.assertIn("pending WASH Crew review", message)
         self.assertEqual(
-            self.suggestion_service.get_suggestion(inception.id).status.value, "archived"
+            self.suggestion_service.get_suggestion(inception.id).status.value, "pending_crew_review"
         )
 
     def test_reject_falls_back_to_default_threshold_when_unconfigured(self) -> None:
@@ -607,7 +607,7 @@ class SuggestionRejectionToggleTests(unittest.TestCase):
 
     # --- Threshold + automatic archive ----------------------------------------------
 
-    def test_threshold_reached_archives_the_suggestion(self) -> None:
+    def test_threshold_reached_moves_to_pending_crew_review(self) -> None:
         created = self.suggestion_service.create_database(
             "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
         )
@@ -632,8 +632,8 @@ class SuggestionRejectionToggleTests(unittest.TestCase):
             inception.id,
         )
 
-        self.assertIn("archived", message)
-        self.assertEqual(watch_item.status, WatchItemStatus.ARCHIVED)
+        self.assertIn("pending WASH Crew review", message)
+        self.assertEqual(watch_item.status, WatchItemStatus.PENDING_CREW_REVIEW)
 
     def test_archived_suggestion_can_no_longer_be_toggled(self) -> None:
         self.matrix.status = WatchItemStatus.ARCHIVED
@@ -699,7 +699,7 @@ class HandleSuggestionRejectionToggleTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsInstance(interaction.message.edited_view, SuggestionView)
-        self.assertEqual(interaction.message.edited_view.children[0].label, "I WILL NOT WATCH: 1 / 2")
+        self.assertEqual(interaction.message.edited_view.children[0].label, "I WON'T WATCH: 1 / 2")
 
     async def test_refreshes_the_button_back_to_zero_after_removing_a_rejection(self) -> None:
         first_interaction = FakeSuggestionInteraction(self._watch_party_member(1))
@@ -712,7 +712,7 @@ class HandleSuggestionRejectionToggleTests(unittest.IsolatedAsyncioTestCase):
             second_interaction, self.suggestion_service, None, self.matrix.id, permission_service=self.permission_service
         )
 
-        self.assertEqual(second_interaction.message.edited_view.children[0].label, "I WILL NOT WATCH: 0 / 2")
+        self.assertEqual(second_interaction.message.edited_view.children[0].label, "I WON'T WATCH: 0 / 2")
 
     async def test_button_is_disabled_once_the_threshold_is_reached(self) -> None:
         created = self.suggestion_service.create_database(
@@ -739,7 +739,7 @@ class HandleSuggestionRejectionToggleTests(unittest.IsolatedAsyncioTestCase):
         view = interaction.message.edited_view
         self.assertIsInstance(view, SuggestionView)
         self.assertTrue(view.children[0].disabled)
-        self.assertIn("Archived", view.children[0].label)
+        self.assertEqual(view.children[0].label, "Review Pending — I WON'T WATCH")
 
     async def test_no_message_refresh_when_permission_is_denied(self) -> None:
         interaction = FakeSuggestionInteraction(self._non_member(1))
@@ -797,7 +797,7 @@ class BuildSuggestionViewTests(unittest.TestCase):
     def test_uses_the_default_threshold_when_unconfigured(self) -> None:
         view = build_suggestion_view(self.suggestion_service, None, self.matrix, GUILD_ID)
 
-        self.assertEqual(view.children[0].label, "I WILL NOT WATCH: 0 / 2")
+        self.assertEqual(view.children[0].label, "I WON'T WATCH: 0 / 2")
 
     def test_uses_the_configured_threshold_when_available(self) -> None:
         created = self.suggestion_service.create_database(
@@ -817,7 +817,7 @@ class BuildSuggestionViewTests(unittest.TestCase):
 
         view = build_suggestion_view(self.suggestion_service, FakeConfigRepository(), inception, GUILD_ID)
 
-        self.assertEqual(view.children[0].label, "I WILL NOT WATCH: 0 / 5")
+        self.assertEqual(view.children[0].label, "I WON'T WATCH: 0 / 5")
 
 
 class RejectionConfirmationLinkTests(unittest.TestCase):
@@ -1021,7 +1021,7 @@ class HandleUndoRejectionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsInstance(message.edited_view, SuggestionView)
-        self.assertEqual(message.edited_view.children[0].label, "I WILL NOT WATCH: 0 / 2")
+        self.assertEqual(message.edited_view.children[0].label, "I WON'T WATCH: 0 / 2")
 
     async def test_gracefully_handles_a_deleted_suggestion_post(self) -> None:
         bot = FakeUndoBot(FakeUndoChannel(FakeUndoMessage(message_id=555), fail_fetch=True))

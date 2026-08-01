@@ -44,7 +44,7 @@ Where configuration options exist, this document describes the intended behavior
 
 # 2. Watch Item Lifecycle
 
-Every Watch Item shows one of five statuses:
+Every Watch Item shows one of six statuses, in this order: Available, In an Active Vote, Pending Crew Review, Vote Winner, Watched, Retired.
 
 ```text
 🟢 Available  ──▶  🗳️ In an Active Vote  ──▶  🏆 Vote Winner  ──▶  ✅ Watched
@@ -55,8 +55,15 @@ Every Watch Item shows one of five statuses:
 
 - **Available** -- eligible for future voting.
 - **In an Active Vote** -- currently a candidate in an open voting round for its collection; computed at display time, not separately stored, so it automatically returns to Available the moment its round closes.
+- **Pending Crew Review** -- reached once the configured "I Won't Watch" threshold is met (see Section 3). Immediately removed from the Eligible Pool and its "I Won't Watch" button disabled; WASH Crew is notified in the Admin Channel and must choose Retire, Keep Active, or Reset Rejections before the suggestion leaves this status. Keep Active and Reset Rejections both return it to Available with every recorded "I Won't Watch" response cleared; Retire moves it to Retired.
+
+  ```text
+  🟢 Available  ──▶  ⚠️ Pending Crew Review  ──▶  🗄️ Retired
+       ▲                     │
+       └── Keep Active / Reset Rejections ──┘
+  ```
 - **Vote Winner** -- won a voting round. WASH knows a suggestion won a vote; it does not yet know the group actually watched it, unless separately confirmed through the watch-history workflow (see Watched, below). Whenever displayed, a Vote Winner with a recorded win date also shows a `Won: <Month D, YYYY>` line; a legacy Vote Winner with none omits it gracefully.
-- **Retired** -- archived, whether by `/remove`, an "I WILL NOT WATCH" rejection threshold, or WASH Crew directly setting it via `/edit_suggestion`.
+- **Retired** -- archived, whether by `/remove`, WASH Crew retiring a suggestion pending Crew Review, or WASH Crew directly setting it via `/edit_suggestion`.
 - **Watched** -- explicitly confirmed watched.
 
 A Watch Item may return to In an Active Vote, and from there back to Available, multiple times throughout its lifetime as voting rounds open and close.
@@ -107,11 +114,13 @@ Duplicate suggestions are automatically detected.
 
 If a Watch Item has already been watched, administrators may choose whether it should become immediately eligible for rewatch or remain retired.
 
+Any Watch Party member may indicate they won't watch a suggestion using its "I Won't Watch" button. Each collection has a configurable "I Won't Watch" threshold (default 2, range 1-10) -- the number of distinct members who must do so before the suggestion requires WASH Crew review. Reaching the threshold does not automatically retire the suggestion: it moves to Pending Crew Review (see Section 2) and WASH Crew is notified in the Admin Channel to Retire it, Keep it Active, or Reset its recorded rejections.
+
 ---
 
 # 4. Nominee Selection
 
-The Eligible Pool is every suggestion that is neither currently nominated, a Vote Winner, Watched, nor Retired.
+The Eligible Pool is every suggestion that is neither currently nominated, Pending Crew Review, a Vote Winner, Watched, nor Retired.
 
 When a vote starts, nominees are drawn from the Eligible Pool using the collection's configured selection mode: Pure Random (no preference or exclusion), Favor New Additions (leans toward recently-suggested items), or Favor Older Additions (leans toward suggestions that have waited the longest). No suggestion is ever permanently excluded by any mode.
 

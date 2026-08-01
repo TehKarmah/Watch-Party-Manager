@@ -112,11 +112,13 @@ from watch_party_manager.config_view import (
     ConfigDatabaseSettingsMenuView,
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
+    ConfigRejectionThresholdModal,
     ConfigRoleSectionView,
     ConfigSuggestionDestinationSectionView,
     ConfigVotingDefaultsIntroView,
     ConfigWatchDestinationSectionView,
     DATABASE_SETTING_CANDIDATE_SELECTION,
+    DATABASE_SETTING_REJECTION_THRESHOLD,
     DATABASE_SETTING_SUGGESTION_DESTINATION,
     DATABASE_SETTING_WATCH_DESTINATION,
 )
@@ -569,6 +571,7 @@ class SectionRenderingTests(ConfigCommandTestCase):
 
         self.assertIn(f"<#{DESTINATION_CHANNEL_ID}>", interaction.response.edited_content)
         self.assertIn("Favor New Additions", interaction.response.edited_content)
+        self.assertIn("I Won't Watch Threshold: 2", interaction.response.edited_content)
 
     async def test_choosing_suggestion_destination_shows_the_channel_picker(self) -> None:
         self._seed_completed_setup()
@@ -636,6 +639,78 @@ class SectionRenderingTests(ConfigCommandTestCase):
             setting_interaction.response.edited_view.candidate_selection_select.selected,
             CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
         )
+
+    async def test_choosing_rejection_settings_opens_the_threshold_modal(self) -> None:
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_settings_menu
+
+        await send_config_database_settings_menu(
+            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        )
+        setting_select = interaction.response.edited_view.children[0]
+        setting_select._values = [DATABASE_SETTING_REJECTION_THRESHOLD]
+
+        setting_interaction = FakeInteraction()
+        await setting_select.callback(interaction=setting_interaction)
+
+        self.assertIsInstance(setting_interaction.response.sent_modal, ConfigRejectionThresholdModal)
+        self.assertEqual(setting_interaction.response.sent_modal.threshold_input.default, "2")
+
+    async def test_saving_a_rejection_threshold_persists_it(self) -> None:
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_rejection_threshold
+
+        await send_config_database_rejection_threshold(
+            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        )
+        modal = interaction.response.sent_modal
+        modal.threshold_input._value = "5"
+
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        self.assertIn("5", submit_interaction.response.edited_content)
+        database_configuration = self.suggestion_database_configuration_repository.get(
+            GUILD_ID, database_result.database.database_id
+        )
+        self.assertEqual(database_configuration.suggestion_rules.rejection_threshold, 5)
+
+    async def test_saving_a_rejection_threshold_outside_one_to_ten_shows_an_error(self) -> None:
+        self._seed_completed_setup()
+        database_result = self.suggestion_service.create_database("Movies", GUILD_ID, DESTINATION_CHANNEL_ID)
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        from watch_party_manager.bot import send_config_database_rejection_threshold
+
+        await send_config_database_rejection_threshold(
+            interaction, self.bot, GUILD_ID, database_result.database.database_id, on_back
+        )
+        modal = interaction.response.sent_modal
+        modal.threshold_input._value = "11"
+
+        submit_interaction = FakeInteraction()
+        await modal.on_submit(interaction=submit_interaction)
+
+        self.assertIn("⚠", submit_interaction.response.edited_content)
+        database_configuration = self.bot.config_service.get_database_configuration(
+            GUILD_ID, database_result.database.database_id
+        )
+        self.assertEqual(database_configuration.suggestion_rules.rejection_threshold, 2)
 
     async def test_selecting_a_suggestion_destination_saves_immediately(self) -> None:
         self._seed_completed_setup()
