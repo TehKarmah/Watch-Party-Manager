@@ -99,6 +99,24 @@ class PaginatedListViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("page 1", view.current_page)
         self.assertEqual(0, view.current_index)
 
+    def test_start_index_opens_on_that_page(self) -> None:
+        view = PaginatedListView(["page 1", "page 2", "page 3"], start_index=1)
+
+        self.assertEqual("page 2", view.current_page)
+        self.assertEqual(1, view.current_index)
+
+    def test_start_index_is_clamped_to_the_last_page(self) -> None:
+        view = PaginatedListView(["page 1", "page 2"], start_index=99)
+
+        self.assertEqual("page 2", view.current_page)
+        self.assertEqual(1, view.current_index)
+
+    def test_negative_start_index_is_clamped_to_zero(self) -> None:
+        view = PaginatedListView(["page 1", "page 2"], start_index=-5)
+
+        self.assertEqual("page 1", view.current_page)
+        self.assertEqual(0, view.current_index)
+
     def test_previous_disabled_on_first_page(self) -> None:
         view = PaginatedListView(["page 1", "page 2"])
 

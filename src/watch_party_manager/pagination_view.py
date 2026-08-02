@@ -91,12 +91,18 @@ class PaginatedListView(discord.ui.View):
         *,
         requester_id: Optional[int] = None,
         suppress_embeds: bool = False,
+        start_index: int = 0,
     ) -> None:
         if not pages:
             raise ValueError("pages must contain at least one page")
         super().__init__(timeout=PAGINATION_VIEW_TIMEOUT_SECONDS)
         self._pages = list(pages)
-        self._index = 0
+        # Clamped rather than trusted outright, so a caller passing an
+        # out-of-range index (e.g. a page count that shrank between
+        # computing it and constructing this view) can never produce a
+        # view whose current_page/current_index falls outside pages --
+        # defaults to 0 for every existing caller that doesn't pass one.
+        self._index = max(0, min(start_index, len(self._pages) - 1))
         self._requester_id = requester_id
         self._suppress_embeds = suppress_embeds
         self._previous_button = PaginationButton("Previous", self._go_previous)

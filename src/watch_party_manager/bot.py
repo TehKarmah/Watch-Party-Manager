@@ -383,6 +383,16 @@ from watch_party_manager.random_watch_view import (
     RandomWatchInitialView,
     RandomWatchResultView,
 )
+from watch_party_manager.browse_view import (
+    BrowseBackButton,
+    BrowsePublicResultsView,
+    ChangeCollectionButton as BrowseChangeCollectionButton,
+    ChangeFiltersButton as BrowseChangeFiltersButton,
+    PostPubliclyButton,
+    RandomPickButton,
+    StartVoteButton,
+)
+from watch_party_manager.services.browse_service import build_browse_entry_line, revalidate_browse_filter_state
 from watch_party_manager.crew_review_view import CrewReviewView
 from watch_party_manager.suggestion_view import (
     RejectionConfirmationView,
@@ -612,6 +622,10 @@ class WatchPartyBot(commands.Bot):
             public: bool = False,
         ) -> None:
             await handle_list_suggestions(interaction, self, status, public)
+
+        @self.tree.command(name="browse", description="Browse a collection with filters, paginated.")
+        async def browse(interaction: discord.Interaction) -> None:
+            await handle_browse(interaction, self)
 
         @self.tree.command(
             name="repair_suggestions", description="Repair suggestions with malformed or legacy data (WASH Crew only)."
@@ -5024,164 +5038,6 @@ class VotingGroup(discord.app_commands.Group):
             )
 
         async def on_customize(choice_interaction: discord.Interaction) -> None:
-            async def proceed_with_database(
-                select_interaction: discord.Interaction, database_id: Optional[int]
-            ) -> None:
-                # Custom Vote Filter Architecture: the collection must be
-                # known before the filter menu can be built (its eligible
-                # pool and eligible-count previews both depend on it) --
-                # unlike "Use Defaults", whose collection resolution can
-                # safely stay late (see handle_start_vote_completion's
-                # own ambiguity check).
-                eligible_pool: List[WatchItem] = (
-                    InfinitePoolStrategy(suggestion_source=bot.suggestion_service).candidate_pool(database_id)
-                    if database_id is not None
-                    else []
-                )
-                collection_display_name = "this collection"
-                if database_id is not None:
-                    resolved_database = bot.suggestion_service.get_database(database_id)
-                    if resolved_database is not None:
-                        collection_display_name = format_collection_display(
-                            _resolve_collection_name(
-                                bot.suggestion_service,
-                                resolved_database,
-                                select_interaction.guild,
-                                bot.suggestion_database_configuration_repository,
-                            )
-                        )
-
-                async def continue_with_overrides(
-                    continue_interaction: discord.Interaction,
-                    candidate_selection_override: CandidateSelectionMode,
-                    visibility_override: GuildVoteVisibility,
-                ) -> None:
-                    if filter_state["member_filter_invalid"]:
-                        # Defense in depth: the Continue button is already
-                        # disabled while a selection is invalid, but this
-                        # guard is what actually guarantees an invalid
-                        # member can never reach the modal, Review This
-                        # Vote, or VoteRound -- not merely Discord's
-                        # client-side disabled-button behavior.
-                        await continue_interaction.response.edit_message(
-                            content=build_overrides_body(filter_state["member_filter_status_line"]),
-                            view=overrides_view,
-                        )
-                        return
-
-                    async def on_modal_submit(
-                        modal_interaction: discord.Interaction,
-                        nominee_count_text: Optional[str],
-                        duration_text: Optional[str],
-                        reminder_enabled_text: Optional[str],
-                        reminder_minutes_text: Optional[str],
-                    ) -> None:
-                        await handle_customize_vote_submit(
-                            modal_interaction,
-                            vote_service=bot.vote_service,
-                            suggestion_service=bot.suggestion_service,
-                            nominee_selection_service=bot.nominee_selection_service,
-                            wash_crew_role_id=bot.wash_crew_role_id,
-                            default_nominee_count=bot.default_nominee_count,
-                            nominee_count_text=nominee_count_text,
-                            duration_text=duration_text,
-                            reminder_enabled_text=reminder_enabled_text,
-                            reminder_minutes_text=reminder_minutes_text,
-                            scheduler_service=bot.scheduler_host.scheduler_service,
-                            guild_configuration_repository=bot.guild_configuration_repository,
-                            suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
-                            bot=bot,
-                            candidate_selection_override=candidate_selection_override,
-                            visibility_override=visibility_override,
-                            resolved_database_id=database_id,
-                            filter_member_discord_user_id=filter_state["member_id"],
-                            filter_member_display=filter_state["member_display"],
-                            filter_genre=filter_state["genre"],
-                            filter_imdb_rating_min=filter_state["imdb_rating_min"],
-                            filter_imdb_rating_max=filter_state["imdb_rating_max"],
-                            filter_mpaa_rating=filter_state["mpaa_rating"],
-                            filter_actor=filter_state["actor"],
-                        )
-
-                    modal_defaults = build_customize_vote_modal_defaults(
-                        default_nominee_count=bot.default_nominee_count,
-                        guild_id=continue_interaction.guild_id,
-                        guild_configuration_repository=bot.guild_configuration_repository,
-                    )
-                    await continue_interaction.response.send_modal(CustomizeVoteModal(on_modal_submit, **modal_defaults))
-
-                def build_overrides_body(status_line: str = "") -> str:
-                    paragraphs = [
-                        "Optionally override this vote's Nominee Selection Mode and/or Vote Visibility "
-                        "below -- both apply to this round only and never change the collection's or "
-                        "guild's own configured setting."
-                    ]
-                    if database_id is not None:
-                        paragraphs.append(
-                            "Use Edit Filters to optionally narrow the eligible pool first (Genre, "
-                            "IMDb Rating, MPAA Rating, Actor, Member) -- Nominee Selection then chooses "
-                            "this round's nominees from that narrowed pool."
-                        )
-                        paragraphs.append(build_current_filters_summary(filter_state))
-                    if status_line:
-                        paragraphs.append(status_line)
-                    paragraphs.append("Then continue to the rest of this vote's settings (candidate count and duration).")
-                    return "\n\n".join(paragraphs)
-
-                async def on_filter_menu_continue(menu_interaction: discord.Interaction, _filter_state: dict) -> None:
-                    # Reachable directly from the filter menu screen too,
-                    # so WASH Crew never has to go Back just to finish --
-                    # reads whichever Nominee Selection/Visibility choices
-                    # are still selected on the (unmodified, still-alive)
-                    # overrides_view.
-                    await continue_with_overrides(
-                        menu_interaction, overrides_view.candidate_selection_select.selected, overrides_view.visibility_select.selected
-                    )
-
-                async def on_back_to_overrides(interaction: discord.Interaction) -> None:
-                    # Keep the two screens' Continue buttons in sync: an
-                    # invalid member filter set from within the filter
-                    # menu must also disable this screen's own Continue,
-                    # not just the filter menu's.
-                    overrides_view.continue_button.disabled = filter_state["member_filter_invalid"]
-                    await interaction.response.edit_message(content=build_overrides_body(), view=overrides_view)
-
-                filter_state, show_filter_menu = create_filter_menu_session(
-                    bot=bot,
-                    eligible_pool=eligible_pool,
-                    collection_display_name=collection_display_name,
-                    body_header=(
-                        f'**Customize This Vote -- "{collection_display_name}"**\n\n'
-                        "Optionally narrow the eligible pool below, then continue to this vote's settings."
-                    ),
-                    on_primary_action=on_filter_menu_continue,
-                    primary_action_label="Continue to Vote Settings",
-                    primary_action_custom_id="wpm_start_vote_customize_filter_menu_continue",
-                    on_secondary_action=on_back_to_overrides,
-                    secondary_action_label="Back to Vote Settings",
-                )
-
-                async def on_edit_filters(edit_filters_interaction: discord.Interaction) -> None:
-                    await show_filter_menu(edit_filters_interaction)
-
-                default_candidate_selection = (
-                    resolve_candidate_selection_mode(bot, select_interaction.guild_id, database_id)
-                    if database_id is not None
-                    else CandidateSelectionMode.FAVOR_NEW_ADDITIONS
-                )
-                default_visibility = resolve_customize_vote_default_visibility(
-                    select_interaction.guild_id, bot.guild_configuration_repository
-                )
-                overrides_view = CustomizeVoteOverridesView(
-                    continue_with_overrides,
-                    default_candidate_selection=default_candidate_selection,
-                    default_visibility=default_visibility,
-                    on_edit_filters=on_edit_filters if database_id is not None else None,
-                )
-                await select_interaction.response.send_message(
-                    build_overrides_body(), view=overrides_view, ephemeral=True
-                )
-
             # Custom Vote Filter Architecture: resolve the collection now
             # (before any filter select is ever built), reusing the same
             # ambiguity-picker pattern handle_start_vote_completion uses
@@ -5197,7 +5053,7 @@ class VotingGroup(discord.app_commands.Group):
                     async def on_database_chosen(
                         select_interaction: discord.Interaction, database_id: int
                     ) -> None:
-                        await proceed_with_database(select_interaction, database_id)
+                        await show_customize_vote_overrides(select_interaction, bot, database_id)
 
                     options = [
                         (
@@ -5225,7 +5081,7 @@ class VotingGroup(discord.app_commands.Group):
             else:
                 target_database_id = None
 
-            await proceed_with_database(choice_interaction, target_database_id)
+            await show_customize_vote_overrides(choice_interaction, bot, target_database_id)
 
         view = StartVoteChoiceView(on_use_defaults, on_customize)
         await interaction.response.send_message(
@@ -6013,6 +5869,179 @@ async def handle_customize_vote_submit(
         confirm_style=discord.ButtonStyle.primary,
     )
     await interaction.response.send_message(summary_text, view=confirmation_view, ephemeral=True)
+
+
+async def show_customize_vote_overrides(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    database_id: Optional[int],
+    *,
+    initial_filter_state: Optional[dict] = None,
+) -> None:
+    """Custom Vote's "Customize This Vote" screen (Nominee Selection/
+    Visibility overrides, Edit Filters, then Vote Settings/Review This
+    Vote) for an already-resolved collection.
+
+    Extracted from /vote start's own on_customize closure (Custom Vote
+    Filter Architecture) so /browse's Start Vote action (Crew only) can
+    launch the exact same screen -- reusing this function, not
+    reimplementing any of its filter menu wiring or Review This Vote
+    hand-off -- with /browse's collection already resolved and, via
+    initial_filter_state, its current filters carried over instead of
+    starting blank (Section 9: "reuse the existing Custom Vote workflow
+    ... do not rebuild filters"). initial_filter_state defaults to None
+    so /vote start's own call sites are unaffected -- a blank
+    new_filter_session_state() is used exactly as before.
+    """
+    # Custom Vote Filter Architecture: the collection must be known
+    # before the filter menu can be built (its eligible pool and
+    # eligible-count previews both depend on it) -- unlike "Use
+    # Defaults", whose collection resolution can safely stay late (see
+    # handle_start_vote_completion's own ambiguity check).
+    eligible_pool: List[WatchItem] = (
+        InfinitePoolStrategy(suggestion_source=bot.suggestion_service).candidate_pool(database_id)
+        if database_id is not None
+        else []
+    )
+    collection_display_name = "this collection"
+    if database_id is not None:
+        resolved_database = bot.suggestion_service.get_database(database_id)
+        if resolved_database is not None:
+            collection_display_name = format_collection_display(
+                _resolve_collection_name(
+                    bot.suggestion_service,
+                    resolved_database,
+                    interaction.guild,
+                    bot.suggestion_database_configuration_repository,
+                )
+            )
+
+    async def continue_with_overrides(
+        continue_interaction: discord.Interaction,
+        candidate_selection_override: CandidateSelectionMode,
+        visibility_override: GuildVoteVisibility,
+    ) -> None:
+        if filter_state["member_filter_invalid"]:
+            # Defense in depth: the Continue button is already disabled
+            # while a selection is invalid, but this guard is what
+            # actually guarantees an invalid member can never reach the
+            # modal, Review This Vote, or VoteRound -- not merely
+            # Discord's client-side disabled-button behavior.
+            await continue_interaction.response.edit_message(
+                content=build_overrides_body(filter_state["member_filter_status_line"]),
+                view=overrides_view,
+            )
+            return
+
+        async def on_modal_submit(
+            modal_interaction: discord.Interaction,
+            nominee_count_text: Optional[str],
+            duration_text: Optional[str],
+            reminder_enabled_text: Optional[str],
+            reminder_minutes_text: Optional[str],
+        ) -> None:
+            await handle_customize_vote_submit(
+                modal_interaction,
+                vote_service=bot.vote_service,
+                suggestion_service=bot.suggestion_service,
+                nominee_selection_service=bot.nominee_selection_service,
+                wash_crew_role_id=bot.wash_crew_role_id,
+                default_nominee_count=bot.default_nominee_count,
+                nominee_count_text=nominee_count_text,
+                duration_text=duration_text,
+                reminder_enabled_text=reminder_enabled_text,
+                reminder_minutes_text=reminder_minutes_text,
+                scheduler_service=bot.scheduler_host.scheduler_service,
+                guild_configuration_repository=bot.guild_configuration_repository,
+                suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
+                bot=bot,
+                candidate_selection_override=candidate_selection_override,
+                visibility_override=visibility_override,
+                resolved_database_id=database_id,
+                filter_member_discord_user_id=filter_state["member_id"],
+                filter_member_display=filter_state["member_display"],
+                filter_genre=filter_state["genre"],
+                filter_imdb_rating_min=filter_state["imdb_rating_min"],
+                filter_imdb_rating_max=filter_state["imdb_rating_max"],
+                filter_mpaa_rating=filter_state["mpaa_rating"],
+                filter_actor=filter_state["actor"],
+            )
+
+        modal_defaults = build_customize_vote_modal_defaults(
+            default_nominee_count=bot.default_nominee_count,
+            guild_id=continue_interaction.guild_id,
+            guild_configuration_repository=bot.guild_configuration_repository,
+        )
+        await continue_interaction.response.send_modal(CustomizeVoteModal(on_modal_submit, **modal_defaults))
+
+    def build_overrides_body(status_line: str = "") -> str:
+        paragraphs = [
+            "Optionally override this vote's Nominee Selection Mode and/or Vote Visibility "
+            "below -- both apply to this round only and never change the collection's or "
+            "guild's own configured setting."
+        ]
+        if database_id is not None:
+            paragraphs.append(
+                "Use Edit Filters to optionally narrow the eligible pool first (Genre, "
+                "IMDb Rating, MPAA Rating, Actor, Member) -- Nominee Selection then chooses "
+                "this round's nominees from that narrowed pool."
+            )
+            paragraphs.append(build_current_filters_summary(filter_state))
+        if status_line:
+            paragraphs.append(status_line)
+        paragraphs.append("Then continue to the rest of this vote's settings (candidate count and duration).")
+        return "\n\n".join(paragraphs)
+
+    async def on_filter_menu_continue(menu_interaction: discord.Interaction, _filter_state: dict) -> None:
+        # Reachable directly from the filter menu screen too, so WASH
+        # Crew never has to go Back just to finish -- reads whichever
+        # Nominee Selection/Visibility choices are still selected on the
+        # (unmodified, still-alive) overrides_view.
+        await continue_with_overrides(
+            menu_interaction, overrides_view.candidate_selection_select.selected, overrides_view.visibility_select.selected
+        )
+
+    async def on_back_to_overrides(back_interaction: discord.Interaction) -> None:
+        # Keep the two screens' Continue buttons in sync: an invalid
+        # member filter set from within the filter menu must also
+        # disable this screen's own Continue, not just the filter
+        # menu's.
+        overrides_view.continue_button.disabled = filter_state["member_filter_invalid"]
+        await back_interaction.response.edit_message(content=build_overrides_body(), view=overrides_view)
+
+    filter_state, show_filter_menu = create_filter_menu_session(
+        bot=bot,
+        eligible_pool=eligible_pool,
+        collection_display_name=collection_display_name,
+        body_header=(
+            f'**Customize This Vote -- "{collection_display_name}"**\n\n'
+            "Optionally narrow the eligible pool below, then continue to this vote's settings."
+        ),
+        on_primary_action=on_filter_menu_continue,
+        primary_action_label="Continue to Vote Settings",
+        primary_action_custom_id="wpm_start_vote_customize_filter_menu_continue",
+        on_secondary_action=on_back_to_overrides,
+        secondary_action_label="Back to Vote Settings",
+    )
+    if initial_filter_state is not None:
+        filter_state.update(initial_filter_state)
+
+    async def on_edit_filters(edit_filters_interaction: discord.Interaction) -> None:
+        await show_filter_menu(edit_filters_interaction)
+
+    default_candidate_selection = (
+        resolve_candidate_selection_mode(bot, interaction.guild_id, database_id)
+        if database_id is not None
+        else CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+    )
+    default_visibility = resolve_customize_vote_default_visibility(interaction.guild_id, bot.guild_configuration_repository)
+    overrides_view = CustomizeVoteOverridesView(
+        continue_with_overrides,
+        default_candidate_selection=default_candidate_selection,
+        default_visibility=default_visibility,
+        on_edit_filters=on_edit_filters if database_id is not None else None,
+    )
+    await interaction.response.send_message(build_overrides_body(), view=overrides_view, ephemeral=True)
 
 
 def perform_vote_status(
@@ -9823,6 +9852,338 @@ async def send_random_watch_session(
         await interaction.response.edit_message(content=body, view=view)
     else:
         await interaction.response.send_message(body, view=view, ephemeral=True)
+
+
+# --- /browse: WASH's interactive collection browser -------------------------------
+#
+# Another consumer of the shared filter engine (filter_menu_view.py,
+# services/nominee_pool_filter.py) -- alongside /random watch and Custom
+# Vote, never a second filtering implementation. Random Pick reuses
+# choose_random_watch_item()/build_random_watch_result_embed()/
+# RandomWatchResultView (the exact /random watch presentation); Start
+# Vote reuses show_customize_vote_overrides() (Custom Vote's own
+# "Customize This Vote" screen, extracted for this exact purpose -- see
+# its docstring). Only Browse's own results formatting
+# (services/browse_service.build_browse_entry_line) and collection-
+# change filter revalidation (revalidate_browse_filter_state) are new.
+
+
+async def handle_browse(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """/browse: explore a collection's eligible pool -- never starts a
+    vote automatically, changes a suggestion's status, modifies a
+    collection, or edits metadata (Section 1). Available to every Watch
+    Party member (Section 2); WASH Crew additionally see Random Pick,
+    Start Vote, and Post Publicly on the results screen.
+    """
+    permission = bot.permission_service.require_watch_party_member(interaction.user)
+    if not permission.allowed:
+        await interaction.response.send_message(permission.message, ephemeral=True)
+        return
+
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    async def on_resolved(target_interaction: discord.Interaction, database: SuggestionDatabase) -> None:
+        await send_browse_session(target_interaction, bot, database, edit=False)
+
+    await resolve_database_then(interaction, bot, guild_id, interaction.channel_id, on_resolved)
+
+
+async def show_browse_collection_picker(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    guild_id: int,
+    *,
+    edit: bool,
+    initial_filter_state: Optional[dict] = None,
+) -> None:
+    """/browse's "choose a collection" screen (Section 4) -- mirrors
+    /random watch's own show_random_watch_collection_picker exactly:
+    always lists every active collection (never excludes the current
+    one), since Change Collection is an explicit request to choose
+    again, including re-choosing the same collection.
+
+    initial_filter_state (Section 6) carries the previous collection's
+    filters through to whichever collection is ultimately chosen --
+    send_browse_session revalidates them against that collection's own
+    eligible pool, clearing only whichever no longer apply.
+    """
+    databases = [database for database in bot.suggestion_service.list_databases(guild_id) if database.active]
+    if not databases:
+        content = "WASH Crew must create a collection first -- run `/database add` or `/setup`."
+        if edit:
+            await interaction.response.edit_message(content=content, view=None)
+        else:
+            await interaction.response.send_message(content, ephemeral=True)
+        return
+
+    if len(databases) == 1:
+        await send_browse_session(interaction, bot, databases[0], edit=edit, initial_filter_state=initial_filter_state)
+        return
+
+    options = [
+        (
+            database.database_id,
+            format_collection_display(
+                _resolve_collection_name(
+                    bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+                )
+            ),
+        )
+        for database in databases
+    ]
+
+    async def on_select(select_interaction: discord.Interaction, database_id: int) -> None:
+        database = bot.suggestion_service.get_database(database_id)
+        if database is None:
+            await select_interaction.response.send_message("That collection no longer exists.", ephemeral=True)
+            return
+        await send_browse_session(
+            select_interaction, bot, database, edit=True, initial_filter_state=initial_filter_state
+        )
+
+    view = ListDatabaseSelectView(options, on_select)
+    content = "Choose a collection:"
+    if edit:
+        await interaction.response.edit_message(content=content, view=view)
+    else:
+        await interaction.response.send_message(content, view=view, ephemeral=True)
+
+
+def build_browse_header(*, collection_display_name: str, filter_state: dict, match_count: int) -> str:
+    """Section 5/7/10's shared header: collection, match count, and the
+    exact shared Current Filters summary (never a second presentation of
+    it) -- reused verbatim for both the ephemeral results screen and a
+    Post Publicly'd page, so the two can never show conflicting text for
+    the same underlying state.
+    """
+    return "\n\n".join(
+        [
+            f'**Browse -- "{collection_display_name}"**',
+            f"Matches: {match_count}",
+            build_current_filters_summary(filter_state),
+        ]
+    )
+
+
+async def perform_browse_random_pick(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    database: SuggestionDatabase,
+    collection_display_name: str,
+    filtered_pool: List[WatchItem],
+    filter_state: dict,
+) -> None:
+    """Section 8: Crew-only Random Pick -- reuses choose_random_watch_item
+    and /random watch's own result presentation exactly (same embed
+    builder, same result view), drawing from Browse's CURRENT filtered
+    results (`filtered_pool`, computed once by send_browse_session's own
+    render_results) -- never the whole collection, never an
+    independently rebuilt pool, and never disturbing the ephemeral
+    browse screen underneath it (deferred, not edited -- Section 10's
+    "do not convert the ephemeral interaction" spirit applies here too,
+    since the browse session must remain fully usable afterward).
+    """
+    item = choose_random_watch_item(filtered_pool)
+    await interaction.response.defer()
+    if item is None:
+        await interaction.followup.send("No suggestions match the current filters.", ephemeral=True)
+        return
+
+    suggested_by = f"<@{item.journey.original_suggester}>" if item.journey.original_suggester else "Unknown"
+    embed = build_random_watch_result_embed(item, database_name=database.name, suggested_by=suggested_by)
+    original_url = build_suggestion_message_link(item)
+    content = f'🎲 **Random Pick -- "{collection_display_name}"**\n\n{build_current_filters_summary(filter_state)}'
+
+    async def on_pick_again(pick_interaction: discord.Interaction) -> None:
+        await perform_browse_random_pick(
+            pick_interaction, bot, database, collection_display_name, filtered_pool, filter_state
+        )
+
+    async def on_change_filters(change_interaction: discord.Interaction) -> None:
+        await send_browse_session(change_interaction, bot, database, edit=False)
+
+    async def on_change_collection(change_interaction: discord.Interaction) -> None:
+        await show_browse_collection_picker(change_interaction, bot, database.guild_id, edit=False)
+
+    view = RandomWatchResultView(
+        on_pick_again,
+        on_change_filters,
+        on_change_collection,
+        original_suggestion_url=original_url,
+        requester_id=interaction.user.id,
+    )
+    await interaction.followup.send(content=content, embed=embed, view=view)
+
+
+async def perform_browse_post_publicly(
+    interaction: discord.Interaction, pages: List[str], requester_id: int, current_index: int
+) -> None:
+    """Section 10/11: post the CURRENT browse page publicly, starting on
+    whichever page the Crew member had paginated to, using a dedicated
+    public view (BrowsePublicResultsView) -- never the ephemeral
+    session's own view/message. `pages` already carries Collection,
+    Active Filters, and Match Count in its shared header (see
+    build_browse_header), and each page's own suggestions -- nothing
+    here reformats any of that a second time. Deferred rather than
+    edited, so the ephemeral browse screen underneath is completely
+    untouched -- "do not convert the ephemeral interaction into a public
+    one."
+    """
+    await interaction.response.defer()
+    if len(pages) == 1:
+        await interaction.followup.send(content=pages[0], ephemeral=False)
+        return
+    # Starts on the same page the Crew member was already viewing
+    # ephemeral-side (start_index), not always page 1.
+    view = BrowsePublicResultsView(pages, requester_id=requester_id, suppress_embeds=True, start_index=current_index)
+    await interaction.followup.send(content=view.current_page, view=view, ephemeral=False)
+
+
+async def send_browse_session(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    database: SuggestionDatabase,
+    *,
+    edit: bool,
+    initial_filter_state: Optional[dict] = None,
+) -> None:
+    """/browse's main results screen for one resolved collection
+    (Sections 5/6/7). Also the render target Change Collection calls
+    back into once a (possibly different) collection is chosen --
+    initial_filter_state carries over the previous collection's filters,
+    revalidated against the new collection's own eligible pool (Section
+    4/12: "clears only filters that become invalid").
+
+    The eligible pool is CollectionEligibilityService's own `available`
+    bucket -- the exact same pool /random watch and Custom Vote's
+    Customize flow already browse/filter/vote from, so Random Pick and
+    Start Vote launched from here are guaranteed to operate on
+    suggestions that could actually be nominated or watched next, not a
+    separately-defined "browsable" set.
+    """
+    guild_id = database.guild_id
+    is_crew = is_wash_crew_member(interaction.user, bot.wash_crew_role_id)
+    collection_display_name = format_collection_display(
+        _resolve_collection_name(
+            bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+        )
+    )
+    eligibility = bot.collection_eligibility_service.get_eligibility(database.database_id)
+    eligible_pool: List[WatchItem] = list(eligibility.available)
+
+    async def on_change_collection(change_interaction: discord.Interaction) -> None:
+        # Section 6: carries the current filters through so the newly
+        # chosen collection can revalidate and preserve whichever still
+        # apply, rather than always starting blank.
+        await show_browse_collection_picker(
+            change_interaction, bot, guild_id, edit=True, initial_filter_state=dict(filter_state)
+        )
+
+    async def render_results(target_interaction: discord.Interaction, *, edit_message: bool) -> None:
+        # Section 14: filtered once per state change (a filter edit or a
+        # collection change) -- Previous/Next never re-enters this
+        # function at all (PaginatedListView pages entirely on its own),
+        # so paginating never re-filters or re-fetches anything.
+        filtered_pool = apply_nominee_pool_filters(eligible_pool, resolve_active_filters_from_state(filter_state))
+        header = build_browse_header(
+            collection_display_name=collection_display_name, filter_state=filter_state, match_count=len(filtered_pool)
+        )
+
+        async def on_change_filters(filters_interaction: discord.Interaction) -> None:
+            await show_filter_menu(filters_interaction)
+
+        async def on_random_pick(pick_interaction: discord.Interaction) -> None:
+            await perform_browse_random_pick(
+                pick_interaction, bot, database, collection_display_name, filtered_pool, filter_state
+            )
+
+        async def on_start_vote(vote_interaction: discord.Interaction) -> None:
+            await show_customize_vote_overrides(
+                vote_interaction, bot, database.database_id, initial_filter_state=dict(filter_state)
+            )
+
+        async def on_post_publicly(post_interaction: discord.Interaction) -> None:
+            requester_id = getattr(post_interaction.user, "id", None)
+            # Reads the live view's current page at click time (not a
+            # value frozen when this screen was first rendered), so
+            # Post Publicly always starts on whichever page the Crew
+            # member has actually paginated to via Previous/Next.
+            current_index = getattr(view, "current_index", 0)
+            await perform_browse_post_publicly(post_interaction, pages, requester_id, current_index)
+
+        if not filtered_pool:
+            # Section 7: View Results never opens the paginated results
+            # screen for zero matches -- a plain, recoverable message
+            # instead, offering Change Filters, Change Collection, and
+            # Back (Back and Change Filters both return to the same
+            # filter menu; Back is the generic "undo this" affordance,
+            # Change Filters the more specific call to action -- neither
+            # traps the Crew/member here).
+            content = f"{header}\n\nNo suggestions match the current filters."
+            view = discord.ui.View(timeout=180)
+            view.add_item(BrowseChangeFiltersButton(on_change_filters))
+            view.add_item(BrowseChangeCollectionButton(on_change_collection))
+            view.add_item(BrowseBackButton(on_change_filters))
+            if edit_message:
+                await target_interaction.response.edit_message(content=content, view=view, suppress_embeds=True)
+            else:
+                await target_interaction.response.send_message(
+                    content, view=view, ephemeral=True, suppress_embeds=True
+                )
+            return
+
+        lines = [build_browse_entry_line(item, SuggestionDisplayStatus.AVAILABLE) for item in filtered_pool]
+        pages = paginate_lines(header, lines)
+        requester_id_for_view = getattr(target_interaction.user, "id", None)
+        if len(pages) == 1:
+            view = discord.ui.View(timeout=180)
+        else:
+            view = PaginatedListView(pages, requester_id=requester_id_for_view, suppress_embeds=True)
+        view.add_item(BrowseChangeFiltersButton(on_change_filters))
+        view.add_item(BrowseChangeCollectionButton(on_change_collection))
+        if is_crew:
+            view.add_item(RandomPickButton(on_random_pick))
+            view.add_item(StartVoteButton(on_start_vote))
+            view.add_item(PostPubliclyButton(on_post_publicly))
+
+        if edit_message:
+            await target_interaction.response.edit_message(content=pages[0], view=view, suppress_embeds=True)
+        else:
+            await target_interaction.response.send_message(
+                pages[0], view=view, ephemeral=True, suppress_embeds=True
+            )
+
+    async def on_view_results(menu_interaction: discord.Interaction, _filter_state: dict) -> None:
+        # Section 3/6: View Results is the only thing that ever builds
+        # the filtered pool/pages -- always lands on page 1, since
+        # render_results() rebuilds pages/view from scratch every time
+        # it's called.
+        await render_results(menu_interaction, edit_message=True)
+
+    filter_state, show_filter_menu = create_filter_menu_session(
+        bot=bot,
+        eligible_pool=eligible_pool,
+        collection_display_name=collection_display_name,
+        body_header=(
+            f'**Browse -- "{collection_display_name}"**\n\nChoose filters, then View Results.'
+        ),
+        on_primary_action=on_view_results,
+        primary_action_label="View Results",
+        primary_action_custom_id="wpm_browse_filter_menu_view_results",
+    )
+    if initial_filter_state is not None:
+        filter_state.update(revalidate_browse_filter_state(initial_filter_state, eligible_pool))
+
+    # Section 1/9: Browse now always starts at the shared filter menu --
+    # results (and therefore the filtered pool/pages) are never built
+    # until View Results is explicitly clicked. This also means a single-
+    # collection guild lands directly on the filter menu (Section 1),
+    # and Change Collection's own target (this same function) never
+    # jumps straight back to results either (Section 6).
+    await show_filter_menu(interaction, edit=edit)
 
 
 async def handle_list_suggestions(

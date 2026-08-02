@@ -20,6 +20,7 @@ Implemented capabilities include:
 - IMDb link normalization and duplicate detection (definite and possible-duplicate warnings) on add and edit
 - Configurable candidate-selection strategies (Rotation Pool, Soft Rotation, Infinite Pool) with rotation lifecycle tracking
 - Blind or visible voting rounds with interactive Discord controls, persistent restoration after restart, deterministic standings, and tie support
+- Shared Genre/IMDb Rating/MPAA Rating/Actor/Member filtering reused across `/random watch`, Custom Vote, and `/browse` (WASH's paginated, filterable collection browser -- WASH Crew additionally get Random Pick, Start Vote, and Post Publicly)
 - Automatic vote completion, winner announcements, and Watch Item Journey updates
 - Watch Party membership workflows (self-service, manual, approval-required, or Discord-managed) and scheduled watch parties with reminders
 - Server, member, suggestion, rotation, and database statistics (`/stats`), with privacy-scoped ephemeral/public output
@@ -64,7 +65,7 @@ WASH's in-Discord `/help` command always reflects the exact command set availabl
 
 ### Watch Party members (WASH Crew inherit these too)
 
-- `/add`, `/list`, `/random watch`, `/stats`, `/reject`, `/unreject`
+- `/add`, `/list`, `/random watch`, `/browse`, `/stats`, `/reject`, `/unreject`
 
 ### WASH Crew
 

@@ -90,6 +90,12 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WATCH_PARTY_MEMBER,
     ),
     CommandHelp(
+        "/browse",
+        "Browse a collection with filters, paginated.",
+        "Watch Items",
+        HelpAudience.WATCH_PARTY_MEMBER,
+    ),
+    CommandHelp(
         "/remove", "Remove a watch item.", "Watch Items", HelpAudience.WASH_CREW
     ),
     CommandHelp(

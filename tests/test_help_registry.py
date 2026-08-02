@@ -192,9 +192,9 @@ class HelpRegistryTests(unittest.TestCase):
         entries = {entry.name: entry for entry in COMMAND_HELP}
         self.assertIs(entries["/vote start"].audience, HelpAudience.WASH_CREW)
 
-    def test_add_list_random_watch_and_stats_are_the_only_watch_party_member_commands(self) -> None:
+    def test_add_list_random_watch_browse_and_stats_are_the_only_watch_party_member_commands(self) -> None:
         member_commands = [entry.name for entry in COMMAND_HELP if entry.audience is HelpAudience.WATCH_PARTY_MEMBER]
-        self.assertEqual(sorted(member_commands), ["/add", "/list", "/random watch", "/stats"])
+        self.assertEqual(sorted(member_commands), ["/add", "/browse", "/list", "/random watch", "/stats"])
 
     def test_remove_and_vote_status_are_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
@@ -312,7 +312,7 @@ class HelpRegistryTests(unittest.TestCase):
         ]
         self.assertEqual(
             sorted(member),
-            sorted(["/help", "/about", "/join_watch_party", "/add", "/list", "/random watch", "/stats"]),
+            sorted(["/help", "/about", "/join_watch_party", "/add", "/list", "/random watch", "/browse", "/stats"]),
         )
 
 
