@@ -3402,7 +3402,7 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         import_interaction = FakeInteraction()
         await import_button.callback(interaction=import_interaction)
 
-        self.assertIn("/import", import_interaction.response.edited_content)
+        self.assertIn("/maintenance import", import_interaction.response.edited_content)
         self.assertIsInstance(import_interaction.response.edited_view, ImportExistingDatabaseNoticeView)
 
     async def test_import_existing_back_button_returns_to_collection_type_choice(self) -> None:

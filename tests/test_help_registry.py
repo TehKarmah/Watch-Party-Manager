@@ -34,16 +34,16 @@ class HelpRegistryTests(unittest.TestCase):
         self.assertNotIn("/setup", commands)
         self.assertNotIn("/config", commands)
 
-    # --- FR-030: /join_watch_party is visible to everyone ------------------------
+    # --- FR-030: /join watch party is visible to everyone ------------------------
 
     def test_join_watch_party_is_visible_to_everyone(self) -> None:
         sections = command_sections(show_wash_crew=False)
         commands = [entry.name for _, entries in sections for entry in entries]
-        self.assertIn("/join_watch_party", commands)
+        self.assertIn("/join watch party", commands)
 
     def test_join_watch_party_has_everyone_audience(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        self.assertIs(entries["/join_watch_party"].audience, HelpAudience.EVERYONE)
+        self.assertIs(entries["/join watch party"].audience, HelpAudience.EVERYONE)
 
     def test_join_watch_party_is_visible_to_every_tier(self) -> None:
         for show_wash_crew, show_watch_party_member in ((False, False), (False, True), (True, False)):
@@ -51,7 +51,7 @@ class HelpRegistryTests(unittest.TestCase):
                 show_wash_crew=show_wash_crew, show_watch_party_member=show_watch_party_member
             )
             commands = [entry.name for _, entries in sections for entry in entries]
-            self.assertIn("/join_watch_party", commands)
+            self.assertIn("/join watch party", commands)
 
     def test_watch_party_member_sections_add_only_add_list_and_stats(self) -> None:
         # FR-033A: Watch Party members gain /add and /list (view-only,
@@ -68,8 +68,8 @@ class HelpRegistryTests(unittest.TestCase):
         self.assertIn("/add", commands)
         self.assertIn("/list", commands)
         self.assertIn("/stats", commands)
-        self.assertNotIn("/remove", commands)
-        self.assertNotIn("/edit_suggestion", commands)
+        self.assertNotIn("/suggestion remove", commands)
+        self.assertNotIn("/suggestion edit", commands)
         self.assertNotIn("/vote status", commands)
         self.assertNotIn("/watch-party status", commands)
         self.assertNotIn("/database add", commands)
@@ -83,7 +83,7 @@ class HelpRegistryTests(unittest.TestCase):
         self.assertIn("/database list", commands)
         self.assertIn("/database health", commands)
         self.assertIn("/database manage", commands)
-        self.assertIn("/repair_suggestions", commands)
+        self.assertIn("/maintenance repair", commands)
         self.assertIn("/setup", commands)
         self.assertIn("/config", commands)
 
@@ -109,6 +109,7 @@ class HelpRegistryTests(unittest.TestCase):
                 "WASH Crew: Membership",
                 "WASH Crew: Configuration",
                 "Watch Items",
+                "WASH Crew: Suggestions",
                 "WASH Crew: Voting",
                 "WASH Crew: Collections",
                 "WASH Crew: Maintenance",
@@ -198,7 +199,7 @@ class HelpRegistryTests(unittest.TestCase):
 
     def test_remove_and_vote_status_are_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        for name in ("/remove", "/vote status"):
+        for name in ("/suggestion remove", "/vote status"):
             self.assertIs(entries[name].audience, HelpAudience.WASH_CREW)
 
     def test_diagnostics_no_longer_exists_in_the_registry(self) -> None:
@@ -208,49 +209,51 @@ class HelpRegistryTests(unittest.TestCase):
 
     def test_edit_suggestion_is_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        self.assertIs(entries["/edit_suggestion"].audience, HelpAudience.WASH_CREW)
+        self.assertIs(entries["/suggestion edit"].audience, HelpAudience.WASH_CREW)
 
-    # --- FR-031: /watch_party is WASH Crew only, existing tiers unchanged --------
+    # --- FR-031: /membership is WASH Crew only, existing tiers unchanged ---------
+    # (Slash-Command UX Audit: renamed from /watch_party, which had an
+    # underscore -- audience/visibility behavior is unchanged.)
 
     def test_watch_party_admin_command_is_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        self.assertIs(entries["/watch_party"].audience, HelpAudience.WASH_CREW)
+        self.assertIs(entries["/membership"].audience, HelpAudience.WASH_CREW)
 
     def test_watch_party_admin_command_hidden_from_everyone_and_watch_party_member(self) -> None:
         for show_watch_party_member in (False, True):
             sections = command_sections(show_wash_crew=False, show_watch_party_member=show_watch_party_member)
             commands = [entry.name for _, entries in sections for entry in entries]
-            self.assertNotIn("/watch_party", commands)
+            self.assertNotIn("/membership", commands)
 
     def test_watch_party_admin_command_visible_to_wash_crew(self) -> None:
         sections = command_sections(show_wash_crew=True)
         commands = [entry.name for _, entries in sections for entry in entries]
-        self.assertIn("/watch_party", commands)
+        self.assertIn("/membership", commands)
 
     def test_watch_party_admin_command_text_hidden_from_everyone(self) -> None:
         text = build_command_help_text(show_wash_crew=False)
-        self.assertNotIn("/watch_party", text)
+        self.assertNotIn("/membership", text)
 
-    # --- FR-032B/C: /factory_reset and /import are WASH Crew only ---------------
+    # --- FR-032B/C: /maintenance reset and /maintenance import are WASH Crew only
     # (/database backup, /database restore, and /database reset no longer have
     # their own registry entries -- see Database Manage Cleanup below.)
 
     def test_reset_and_import_commands_are_wash_crew_only(self) -> None:
         entries = {entry.name: entry for entry in COMMAND_HELP}
-        for name in ("/factory_reset", "/import"):
+        for name in ("/maintenance reset", "/maintenance import"):
             self.assertIs(entries[name].audience, HelpAudience.WASH_CREW)
 
     def test_reset_and_import_commands_hidden_from_everyone_and_watch_party_member(self) -> None:
         for show_watch_party_member in (False, True):
             sections = command_sections(show_wash_crew=False, show_watch_party_member=show_watch_party_member)
             commands = [entry.name for _, entries in sections for entry in entries]
-            for name in ("/factory_reset", "/import"):
+            for name in ("/maintenance reset", "/maintenance import"):
                 self.assertNotIn(name, commands)
 
     def test_reset_and_import_commands_visible_to_wash_crew(self) -> None:
         sections = command_sections(show_wash_crew=True)
         commands = [entry.name for _, entries in sections for entry in entries]
-        for name in ("/factory_reset", "/import"):
+        for name in ("/maintenance reset", "/maintenance import"):
             self.assertIn(name, commands)
 
     # --- Database Manage Cleanup: /help's Collections section only lists ---------
@@ -295,7 +298,7 @@ class HelpRegistryTests(unittest.TestCase):
 
     def test_existing_help_tier_visibility_is_unchanged(self) -> None:
         # The Everyone tier has never changed across any FR: only
-        # /help, /about, /join_watch_party. The Watch Party Member tier
+        # /help, /about, /join watch party. The Watch Party Member tier
         # was /add-only through FR-032C; FR-033A deliberately extends it
         # with /list (Section 9: members may view lists privately), and
         # FR-034 extends it again with /stats (Section 4: members may
@@ -303,7 +306,7 @@ class HelpRegistryTests(unittest.TestCase):
         everyone = [
             entry.name for _, entries in command_sections(show_wash_crew=False) for entry in entries
         ]
-        self.assertEqual(sorted(everyone), sorted(["/help", "/about", "/join_watch_party"]))
+        self.assertEqual(sorted(everyone), sorted(["/help", "/about", "/join watch party"]))
 
         member = [
             entry.name
@@ -312,7 +315,7 @@ class HelpRegistryTests(unittest.TestCase):
         ]
         self.assertEqual(
             sorted(member),
-            sorted(["/help", "/about", "/join_watch_party", "/add", "/list", "/random watch", "/browse", "/stats"]),
+            sorted(["/help", "/about", "/join watch party", "/add", "/list", "/random watch", "/browse", "/stats"]),
         )
 
 

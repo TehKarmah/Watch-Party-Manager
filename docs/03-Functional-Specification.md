@@ -63,7 +63,7 @@ Every Watch Item shows one of six statuses, in this order: Available, In an Acti
        └── Keep Active / Reset Rejections ──┘
   ```
 - **Vote Winner** -- won a voting round. WASH knows a suggestion won a vote; it does not yet know the group actually watched it, unless separately confirmed through the watch-history workflow (see Watched, below). Whenever displayed, a Vote Winner with a recorded win date also shows a `Won: <Month D, YYYY>` line; a legacy Vote Winner with none omits it gracefully.
-- **Retired** -- archived, whether by `/remove`, WASH Crew retiring a suggestion pending Crew Review, or WASH Crew directly setting it via `/edit_suggestion`.
+- **Retired** -- archived, whether by `/suggestion remove`, WASH Crew retiring a suggestion pending Crew Review, or WASH Crew directly setting it via `/suggestion edit`.
 - **Watched** -- explicitly confirmed watched.
 
 A Watch Item may return to In an Active Vote, and from there back to Available, multiple times throughout its lifetime as voting rounds open and close.

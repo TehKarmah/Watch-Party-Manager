@@ -1,16 +1,15 @@
-"""Tests for FR-030's /join_watch_party wiring in bot.py.
+"""Tests for FR-031's /membership administration wiring in bot.py
+(Slash-Command UX Audit: renamed from /watch_party, which had an
+underscore; the group class itself was renamed from WatchPartyAdminGroup
+to MembershipGroup to match).
 
-Covers the pure/testable pieces bot.py adds: the async handlers
-handle_join_watch_party / handle_membership_approval_decision, exercised
-with fake interactions instead of a live Discord connection -- mirroring
-test_setup_command.py/test_config_command.py's FakeInteraction/
-FakeResponse pattern.
-
-FR-030 refinement: Approval-Required requests are now routed only to the
-guild's configured Admin channel (never the log channel, never a
-fallback to wherever /join_watch_party was invoked) -- see
-MembershipService._validate_admin_channel, which rejects the join
-request outright if no Admin channel is configured or usable.
+Mirrors test_join_watch_party_command.py's FakeInteraction/FakeResponse/
+FakeBot pattern -- these handlers are exercised directly
+(handle_watch_party_*) without a live Discord connection.
+handle_watch_party_*() function names are unchanged -- they describe the
+action, not this group's Discord-facing name. MembershipGroup itself is
+exercised too, since its interaction_check is the single point enforcing
+WASH Crew-only access for every /membership subcommand.
 """
 
 from __future__ import annotations
@@ -20,9 +19,14 @@ import unittest
 from pathlib import Path
 
 from watch_party_manager.bot import (
-    handle_join_watch_party,
-    handle_membership_approval_decision,
-    restore_persistent_membership_approval_views,
+    MembershipGroup,
+    handle_watch_party_add,
+    handle_watch_party_approved,
+    handle_watch_party_denied,
+    handle_watch_party_members,
+    handle_watch_party_pending,
+    handle_watch_party_remove,
+    handle_watch_party_search,
 )
 from watch_party_manager.domain.guild_configuration import (
     GuildChannelsConfig,
@@ -30,7 +34,7 @@ from watch_party_manager.domain.guild_configuration import (
     JoinMode,
     WatchPartyRoleConfig,
 )
-from watch_party_manager.membership_view import MembershipApprovalView
+from watch_party_manager.membership_view import MembershipApprovalView, PendingRequestSelectView
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.membership_request_repository import MembershipRequestRepository
 from watch_party_manager.services.membership_service import MembershipService
@@ -40,12 +44,6 @@ GUILD_ID = 100
 ROLE_ID = 222
 WASH_CREW_ROLE_ID = 999
 ADMIN_CHANNEL_ID = 500
-
-
-class FakeRole:
-    def __init__(self, role_id: int, position: int = 5) -> None:
-        self.id = role_id
-        self.position = position
 
 
 class FakePermissions:
@@ -60,10 +58,13 @@ class FakeMe:
 
 
 class FakeMember:
-    def __init__(self, user_id: int, roles=()) -> None:
+    def __init__(self, user_id: int, roles=(), display_name=None, name=None, joined_at=None) -> None:
         self.id = user_id
         self.roles = list(roles)
         self.mention = f"<@{user_id}>"
+        self.display_name = display_name or f"Member{user_id}"
+        self.name = name or f"member{user_id}"
+        self.joined_at = joined_at
         self.added_role_ids = []
         self.removed_role_ids = []
 
@@ -74,6 +75,17 @@ class FakeMember:
     async def remove_roles(self, role, reason=None) -> None:
         self.roles = [r for r in self.roles if r.id != role.id]
         self.removed_role_ids.append(role.id)
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class FakeRole:
+    def __init__(self, role_id: int, position: int = 5, name: str = "Watch Party", members=None) -> None:
+        self.id = role_id
+        self.position = position
+        self.name = name
+        self.members = members or []
 
 
 class FakeChannelPermissions:
@@ -95,58 +107,25 @@ class FakeGuild:
     def __init__(
         self,
         *,
-        role_ids=(ROLE_ID,),
-        members=None,
+        role: "FakeRole | None" = None,
         manage_roles: bool = True,
+        top_role_position: int = 10,
+        members=None,
         channel_ids=(ADMIN_CHANNEL_ID,),
-        unusable_channel_ids=(),
     ) -> None:
-        self._role_ids = set(role_ids)
-        self.me = FakeMe(manage_roles=manage_roles)
+        self._role = role if role is not None else FakeRole(ROLE_ID)
+        self.me = FakeMe(manage_roles=manage_roles, top_role_position=top_role_position)
         self._members = members or {}
-        self._channels = {
-            channel_id: FakeGuildChannel(channel_id, usable=channel_id not in unusable_channel_ids)
-            for channel_id in channel_ids
-        }
+        self._channels = {channel_id: FakeGuildChannel(channel_id) for channel_id in channel_ids}
 
     def get_role(self, role_id):
-        return FakeRole(role_id) if role_id in self._role_ids else None
-
-    def get_channel_or_thread(self, channel_id):
-        return self._channels.get(channel_id)
+        return self._role if role_id == self._role.id else None
 
     def get_member(self, user_id):
         return self._members.get(user_id)
 
-    async def fetch_member(self, user_id):
-        member = self._members.get(user_id)
-        if member is None:
-            raise RuntimeError("member not found")
-        return member
-
-
-class FakeMessage:
-    def __init__(self, message_id: int = 300) -> None:
-        self.id = message_id
-        self.edited_content = None
-        self.edited_view = "not-edited"
-
-    async def edit(self, content=None, view="not-edited") -> None:
-        self.edited_content = content
-        self.edited_view = view
-
-
-class FakeChannel:
-    def __init__(self, channel_id: int) -> None:
-        self.id = channel_id
-        self.sent = []
-        self._next_message_id = 300
-
-    async def send(self, content=None, view=None):
-        self.sent.append((content, view))
-        message = FakeMessage(self._next_message_id)
-        self._next_message_id += 1
-        return message
+    def get_channel_or_thread(self, channel_id):
+        return self._channels.get(channel_id)
 
 
 class FakeFollowup:
@@ -162,52 +141,50 @@ class FakeResponse:
         self.sent_message = None
         self.sent_ephemeral = None
         self.sent_view = None
+        self.edited_content = None
+        self.edited_view = "not-edited"
 
     async def send_message(self, content, ephemeral=False, view=None) -> None:
         self.sent_message = content
         self.sent_ephemeral = ephemeral
         self.sent_view = view
 
+    async def edit_message(self, content=None, view="not-edited") -> None:
+        self.edited_content = content
+        self.edited_view = view
+
+
+class FakeMessage:
+    def __init__(self) -> None:
+        self.edited_content = None
+        self.edited_view = "not-edited"
+
+    async def edit(self, content=None, view="not-edited") -> None:
+        self.edited_content = content
+        self.edited_view = view
+
 
 class FakeInteraction:
-    def __init__(self, user=None, guild=None, guild_id=GUILD_ID, channel_id=200) -> None:
+    def __init__(self, user=None, guild=None, guild_id=GUILD_ID) -> None:
         self.user = user if user is not None else FakeMember(1)
         self.guild = guild if guild is not None else FakeGuild()
         self.guild_id = guild_id
-        self.channel_id = channel_id
         self.response = FakeResponse()
         self.followup = FakeFollowup()
         self.message = FakeMessage()
 
 
 class FakeBot:
-    def __init__(self, membership_service, guild_configuration_repository, wash_crew_role_id=WASH_CREW_ROLE_ID) -> None:
+    def __init__(self, membership_service, membership_request_repository, wash_crew_role_id=WASH_CREW_ROLE_ID) -> None:
         self.membership_service = membership_service
-        self.guild_configuration_repository = guild_configuration_repository
+        self.membership_request_repository = membership_request_repository
         self.permission_service = PermissionService(
             watch_party_member_role_id=None, wash_crew_role_id=wash_crew_role_id
         )
         self.wash_crew_role_id = wash_crew_role_id
-        self._channels: dict[int, FakeChannel] = {}
-        self.added_views = []
-
-    def register_channel(self, channel: FakeChannel) -> None:
-        self._channels[channel.id] = channel
-
-    def get_channel(self, channel_id):
-        return self._channels.get(channel_id)
-
-    async def fetch_channel(self, channel_id):
-        channel = self._channels.get(channel_id)
-        if channel is None:
-            raise RuntimeError("channel not found")
-        return channel
-
-    def add_view(self, view, message_id=None) -> None:
-        self.added_views.append((view, message_id))
 
 
-class MembershipCommandTestCase(unittest.IsolatedAsyncioTestCase):
+class WatchPartyAdminCommandTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
         temp_path = Path(self._temp_dir.name)
@@ -216,13 +193,13 @@ class MembershipCommandTestCase(unittest.IsolatedAsyncioTestCase):
         self.membership_service = MembershipService(
             self.guild_configuration_repository, self.membership_request_repository
         )
-        self.bot = FakeBot(self.membership_service, self.guild_configuration_repository)
+        self.bot = FakeBot(self.membership_service, self.membership_request_repository)
 
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
 
     def _seed(
-        self, join_mode: JoinMode, *, role_id=ROLE_ID, allow_self_leave: bool = True, admin_channel_id=ADMIN_CHANNEL_ID
+        self, join_mode: JoinMode = JoinMode.APPROVAL, *, role_id=ROLE_ID, denial_cooldown_days: int = 7
     ) -> None:
         self.guild_configuration_repository.save(
             GuildConfiguration(
@@ -230,272 +207,378 @@ class MembershipCommandTestCase(unittest.IsolatedAsyncioTestCase):
                 guild_name="Test Guild",
                 setup_completed=True,
                 watch_party_role=WatchPartyRoleConfig(
-                    role_id=role_id, join_mode=join_mode, allow_self_leave=allow_self_leave
+                    role_id=role_id, join_mode=join_mode, denial_cooldown_days=denial_cooldown_days
                 ),
-                channels=GuildChannelsConfig(admin_channel_id=admin_channel_id),
+                channels=GuildChannelsConfig(admin_channel_id=ADMIN_CHANNEL_ID),
             )
         )
 
+    def _wash_crew_member(self, user_id: int = 42) -> FakeMember:
+        return FakeMember(user_id, roles=[FakeRole(WASH_CREW_ROLE_ID)])
 
-class HandleJoinWatchPartyPermissionTests(MembershipCommandTestCase):
-    """FR-030: Everyone can execute /join_watch_party -- no role required."""
 
-    async def test_unprivileged_user_can_join_under_self_service(self) -> None:
-        self._seed(JoinMode.SELF_SERVICE)
-        member = FakeMember(1, roles=[])  # no roles whatsoever
-        interaction = FakeInteraction(user=member)
+# --- Permission enforcement -----------------------------------------------------------
 
-        await handle_join_watch_party(interaction, self.bot)
 
-        self.assertIn("joined", interaction.response.sent_message.lower())
-        self.assertEqual(member.added_role_ids, [ROLE_ID])
+class WatchPartyGroupPermissionTests(WatchPartyAdminCommandTestCase):
+    async def test_wash_crew_passes_the_interaction_check(self) -> None:
+        group = MembershipGroup(self.bot)
+        interaction = FakeInteraction(user=self._wash_crew_member())
 
-    async def test_unprivileged_user_gets_manual_mode_info(self) -> None:
-        self._seed(JoinMode.MANUAL)
+        allowed = await group.interaction_check(interaction)
+
+        self.assertTrue(allowed)
+        self.assertIsNone(interaction.response.sent_message)
+
+    async def test_non_wash_crew_fails_the_interaction_check(self) -> None:
+        group = MembershipGroup(self.bot)
         interaction = FakeInteraction(user=FakeMember(1, roles=[]))
 
-        await handle_join_watch_party(interaction, self.bot)
+        allowed = await group.interaction_check(interaction)
 
+        self.assertFalse(allowed)
         self.assertIn("WASH Crew", interaction.response.sent_message)
         self.assertTrue(interaction.response.sent_ephemeral)
 
+    async def test_unconfigured_wash_crew_role_fails_closed(self) -> None:
+        bot = FakeBot(self.membership_service, self.membership_request_repository, wash_crew_role_id=None)
+        group = MembershipGroup(bot)
+        interaction = FakeInteraction(user=FakeMember(1, roles=[]))
 
-class HandleJoinWatchPartyModeTests(MembershipCommandTestCase):
+        allowed = await group.interaction_check(interaction)
+
+        self.assertFalse(allowed)
+
+
+# --- /membership members --------------------------------------------------------------
+
+
+class WatchPartyMembersTests(WatchPartyAdminCommandTestCase):
+    async def test_lists_current_members(self) -> None:
+        self._seed()
+        members = [FakeMember(1, display_name="Alice"), FakeMember(2, display_name="Bob")]
+        role = FakeRole(ROLE_ID, members=members)
+        interaction = FakeInteraction(guild=FakeGuild(role=role))
+
+        await handle_watch_party_members(interaction, self.bot)
+
+        self.assertIn("Alice", interaction.response.sent_message)
+        self.assertIn("Bob", interaction.response.sent_message)
+        self.assertIn("(2)", interaction.response.sent_message)
+
+    async def test_empty_membership_list(self) -> None:
+        self._seed()
+        interaction = FakeInteraction(guild=FakeGuild(role=FakeRole(ROLE_ID, members=[])))
+
+        await handle_watch_party_members(interaction, self.bot)
+
+        self.assertIn("no members", interaction.response.sent_message.lower())
+
+    async def test_missing_role_configuration(self) -> None:
+        self._seed(role_id=None)
+        interaction = FakeInteraction()
+
+        await handle_watch_party_members(interaction, self.bot)
+
+        self.assertIn("hasn't been configured", interaction.response.sent_message)
+
+    async def test_deleted_role(self) -> None:
+        self._seed()
+        interaction = FakeInteraction(guild=FakeGuild(role=None))
+        interaction.guild._role = FakeRole(role_id=ROLE_ID + 1)  # guild's only role no longer matches
+
+        await handle_watch_party_members(interaction, self.bot)
+
+        self.assertIn("no longer exists", interaction.response.sent_message)
+
     async def test_requires_a_server(self) -> None:
         interaction = FakeInteraction(guild_id=None)
         interaction.guild = None
 
-        await handle_join_watch_party(interaction, self.bot)
+        await handle_watch_party_members(interaction, self.bot)
 
         self.assertIn("server", interaction.response.sent_message.lower())
 
-    async def test_discord_managed_mode(self) -> None:
-        self._seed(JoinMode.DISCORD_MANAGED)
-        interaction = FakeInteraction()
 
-        await handle_join_watch_party(interaction, self.bot)
+# --- /membership add / remove ----------------------------------------------------------
 
-        self.assertIn("server staff", interaction.response.sent_message)
 
-    async def test_self_service_offer_leave_then_confirm(self) -> None:
-        self._seed(JoinMode.SELF_SERVICE)
+class WatchPartyAddRemoveTests(WatchPartyAdminCommandTestCase):
+    async def test_add_grants_the_role(self) -> None:
+        self._seed()
+        member = FakeMember(1)
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_watch_party_add(interaction, self.bot, member)
+
+        self.assertEqual(member.added_role_ids, [ROLE_ID])
+        self.assertIn("added", interaction.response.sent_message.lower())
+
+    async def test_add_rejects_an_existing_member(self) -> None:
+        self._seed()
         member = FakeMember(1, roles=[FakeRole(ROLE_ID)])
-        interaction = FakeInteraction(user=member)
+        interaction = FakeInteraction(user=self._wash_crew_member())
 
-        await handle_join_watch_party(interaction, self.bot)
+        await handle_watch_party_add(interaction, self.bot, member)
 
-        self.assertIn("leave", interaction.response.sent_message.lower())
-        view = interaction.response.sent_view
-        self.assertIsNotNone(view)
-        confirm_button = view.children[0]
+        self.assertEqual(member.added_role_ids, [])
+        self.assertIn("already", interaction.response.sent_message.lower())
 
-        confirm_interaction = FakeInteraction(user=member)
-        await confirm_button.callback(interaction=confirm_interaction)
+    async def test_remove_removes_the_role(self) -> None:
+        self._seed()
+        member = FakeMember(1, roles=[FakeRole(ROLE_ID)])
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_watch_party_remove(interaction, self.bot, member)
 
         self.assertEqual(member.removed_role_ids, [ROLE_ID])
-        self.assertIn("left", confirm_interaction.response.sent_message.lower())
+        self.assertIn("removed", interaction.response.sent_message.lower())
 
-    async def test_self_service_offer_leave_then_abort(self) -> None:
-        self._seed(JoinMode.SELF_SERVICE)
-        member = FakeMember(1, roles=[FakeRole(ROLE_ID)])
-        interaction = FakeInteraction(user=member)
-        await handle_join_watch_party(interaction, self.bot)
-        view = interaction.response.sent_view
-        abort_button = view.children[1]
+    async def test_remove_rejects_a_non_member(self) -> None:
+        self._seed()
+        member = FakeMember(1)
+        interaction = FakeInteraction(user=self._wash_crew_member())
 
-        abort_interaction = FakeInteraction(user=member)
-        await abort_button.callback(interaction=abort_interaction)
+        await handle_watch_party_remove(interaction, self.bot, member)
 
         self.assertEqual(member.removed_role_ids, [])
-        self.assertIn("no changes", abort_interaction.response.sent_message.lower())
+        self.assertIn("not currently", interaction.response.sent_message.lower())
 
-    async def test_approval_mode_notifies_wash_crew_and_persists_message_reference(self) -> None:
-        self._seed(JoinMode.APPROVAL)
-        channel = FakeChannel(ADMIN_CHANNEL_ID)
-        self.bot.register_channel(channel)
+    async def test_add_rejects_missing_manage_roles_permission(self) -> None:
+        self._seed()
         member = FakeMember(1)
-        interaction = FakeInteraction(user=member, channel_id=200)
+        interaction = FakeInteraction(user=self._wash_crew_member(), guild=FakeGuild(manage_roles=False))
 
-        await handle_join_watch_party(interaction, self.bot)
+        await handle_watch_party_add(interaction, self.bot, member)
 
-        self.assertIn("sent to WASH Crew", interaction.response.sent_message)
-        self.assertEqual(len(channel.sent), 1)
-        content, view = channel.sent[0]
-        self.assertIsInstance(view, MembershipApprovalView)
-        self.assertIn(member.mention, content)
+        self.assertIn("Manage Roles", interaction.response.sent_message)
 
-        pending = self.membership_service.list_pending_requests(GUILD_ID)
-        self.assertEqual(len(pending), 1)
-        self.assertEqual(pending[0].channel_id, ADMIN_CHANNEL_ID)
+    async def test_add_rejects_role_hierarchy_failure(self) -> None:
+        self._seed()
+        member = FakeMember(1)
+        interaction = FakeInteraction(user=self._wash_crew_member(), guild=FakeGuild(top_role_position=1))
 
-    async def test_approval_mode_never_uses_the_log_channel_or_invocation_channel(self) -> None:
-        # Even with a log channel configured and /join_watch_party
-        # invoked from yet another channel, only the Admin channel is used.
-        log_channel_id = 555
-        invocation_channel_id = 200
-        self.guild_configuration_repository.save(
-            GuildConfiguration(
-                guild_id=GUILD_ID,
-                guild_name="G",
-                setup_completed=True,
-                watch_party_role=WatchPartyRoleConfig(role_id=ROLE_ID, join_mode=JoinMode.APPROVAL),
-                channels=GuildChannelsConfig(log_channel_id=log_channel_id, admin_channel_id=ADMIN_CHANNEL_ID),
-            )
-        )
-        admin_channel = FakeChannel(ADMIN_CHANNEL_ID)
-        log_channel = FakeChannel(log_channel_id)
-        invocation_channel = FakeChannel(invocation_channel_id)
-        self.bot.register_channel(admin_channel)
-        self.bot.register_channel(log_channel)
-        self.bot.register_channel(invocation_channel)
-        interaction = FakeInteraction(channel_id=invocation_channel_id)
+        await handle_watch_party_add(interaction, self.bot, member)
 
-        await handle_join_watch_party(interaction, self.bot)
+        self.assertIn("positioned above", interaction.response.sent_message)
 
-        self.assertEqual(len(admin_channel.sent), 1)
-        self.assertEqual(len(log_channel.sent), 0)
-        self.assertEqual(len(invocation_channel.sent), 0)
+    async def test_add_rejects_a_deleted_role(self) -> None:
+        self._seed()
+        member = FakeMember(1)
+        interaction = FakeInteraction(user=self._wash_crew_member(), guild=FakeGuild(role=FakeRole(ROLE_ID + 1)))
 
-    async def test_missing_admin_channel_rejects_the_request_with_no_notification_attempt(self) -> None:
-        self._seed(JoinMode.APPROVAL, admin_channel_id=None)
-        interaction = FakeInteraction(channel_id=200)
+        await handle_watch_party_add(interaction, self.bot, member)
 
-        await handle_join_watch_party(interaction, self.bot)
+        self.assertIn("no longer exists", interaction.response.sent_message)
 
-        self.assertIn("Admin channel", interaction.response.sent_message)
-        self.assertEqual(self.membership_service.list_pending_requests(GUILD_ID), [])
 
-    async def test_approval_mode_notification_failure_still_confirms_request_recorded(self) -> None:
+# --- /membership search ----------------------------------------------------------------
+
+
+class WatchPartySearchTests(WatchPartyAdminCommandTestCase):
+    async def test_search_a_current_member(self) -> None:
+        self._seed()
+        member = FakeMember(1, roles=[FakeRole(ROLE_ID)], display_name="Alice")
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_watch_party_search(interaction, self.bot, member)
+
+        self.assertIn("Alice", interaction.response.sent_message)
+        self.assertIn("Current status: Member", interaction.response.sent_message)
+
+    async def test_search_an_unknown_member(self) -> None:
+        self._seed()
+        member = FakeMember(999999, display_name="Ghost")
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_watch_party_search(interaction, self.bot, member)
+
+        self.assertIn("Current status: Not a member", interaction.response.sent_message)
+        self.assertIn("Pending request: none", interaction.response.sent_message)
+        self.assertIn("Last approval: none", interaction.response.sent_message)
+        self.assertIn("Last denial: none", interaction.response.sent_message)
+
+    async def test_search_a_pending_requester(self) -> None:
         self._seed(JoinMode.APPROVAL)
-        # The Admin channel validates fine against interaction.guild (see
-        # FakeGuild's default channel_ids), but the bot itself can't
-        # fetch it -- simulating a last-second Discord-side hiccup after
-        # MembershipService already approved creating the request.
-        interaction = FakeInteraction(channel_id=200)
+        member = FakeMember(1)
+        outcome = await self.membership_service.handle_join_request(GUILD_ID, member, FakeGuild())
+        interaction = FakeInteraction(user=self._wash_crew_member())
 
-        await handle_join_watch_party(interaction, self.bot)
+        await handle_watch_party_search(interaction, self.bot, member)
 
-        self.assertIn("sent to WASH Crew", interaction.response.sent_message)
-        self.assertEqual(len(interaction.followup.sent), 1)
-        self.assertIn("could not be automatically notified", interaction.followup.sent[0][0])
+        self.assertIn("Pending request: submitted", interaction.response.sent_message)
+        self.assertTrue(outcome.request.is_pending)
 
-
-class HandleMembershipApprovalDecisionTests(MembershipCommandTestCase):
-    async def _create_pending_request(self, requester: FakeMember):
+    async def test_search_an_approved_requester(self) -> None:
         self._seed(JoinMode.APPROVAL)
-        channel = FakeChannel(ADMIN_CHANNEL_ID)
-        self.bot.register_channel(channel)
-        interaction = FakeInteraction(user=requester, channel_id=200)
-        await handle_join_watch_party(interaction, self.bot)
-        pending = self.membership_service.list_pending_requests(GUILD_ID)
-        return pending[0]
+        member = FakeMember(1)
+        guild = FakeGuild()
+        outcome = await self.membership_service.handle_join_request(GUILD_ID, member, guild)
+        await self.membership_service.approve_request(outcome.request.request_id, GUILD_ID, WASH_CREW_ROLE_ID, member, guild)
+        interaction = FakeInteraction(user=self._wash_crew_member())
 
-    async def test_wash_crew_can_approve(self) -> None:
+        await handle_watch_party_search(interaction, self.bot, member)
+
+        self.assertIn("Last approval:", interaction.response.sent_message)
+        self.assertNotIn("Last approval: none", interaction.response.sent_message)
+
+    async def test_search_a_denied_requester_shows_cooldown(self) -> None:
+        self._seed(JoinMode.APPROVAL, denial_cooldown_days=7)
+        member = FakeMember(1)
+        outcome = await self.membership_service.handle_join_request(GUILD_ID, member, FakeGuild())
+        self.membership_service.deny_request(outcome.request.request_id, GUILD_ID, WASH_CREW_ROLE_ID)
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_watch_party_search(interaction, self.bot, member)
+
+        self.assertIn("Last denial:", interaction.response.sent_message)
+        self.assertIn("cooldown", interaction.response.sent_message.lower())
+
+
+# --- /membership pending ---------------------------------------------------------------
+
+
+class WatchPartyPendingTests(WatchPartyAdminCommandTestCase):
+    async def test_empty_pending_list(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_watch_party_pending(interaction, self.bot)
+
+        self.assertIn("no pending", interaction.response.sent_message.lower())
+        self.assertIsNone(interaction.response.sent_view)
+
+    async def test_pending_list_shows_requesters_and_a_picker(self) -> None:
+        self._seed(JoinMode.APPROVAL)
         requester = FakeMember(1)
-        request = await self._create_pending_request(requester)
-        approver = FakeMember(WASH_CREW_ROLE_ID, roles=[FakeRole(WASH_CREW_ROLE_ID)])
-        guild = FakeGuild(members={requester.id: requester})
-        interaction = FakeInteraction(user=approver, guild=guild)
+        await self.membership_service.handle_join_request(GUILD_ID, requester, FakeGuild())
+        interaction = FakeInteraction(user=self._wash_crew_member())
 
-        await handle_membership_approval_decision(interaction, self.bot, request.request_id, approve=True)
+        await handle_watch_party_pending(interaction, self.bot)
+
+        self.assertIn(f"<@{requester.id}>", interaction.response.sent_message)
+        self.assertIsInstance(interaction.response.sent_view, PendingRequestSelectView)
+
+    async def test_approve_from_the_pending_picker_reuses_the_approval_workflow(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        requester = FakeMember(1)
+        outcome = await self.membership_service.handle_join_request(GUILD_ID, requester, FakeGuild())
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_watch_party_pending(interaction, self.bot)
+        select = interaction.response.sent_view.children[0]
+        select._values = [str(outcome.request.request_id)]
+
+        select_interaction = FakeInteraction(user=self._wash_crew_member())
+        await select.callback(select_interaction)
+
+        self.assertIsInstance(select_interaction.response.edited_view, MembershipApprovalView)
+        approval_view = select_interaction.response.edited_view
+        approver_interaction = FakeInteraction(
+            user=self._wash_crew_member(), guild=FakeGuild(members={requester.id: requester})
+        )
+        await approval_view.children[0].callback(interaction=approver_interaction)
 
         self.assertEqual(requester.added_role_ids, [ROLE_ID])
-        self.assertIn("approved", interaction.message.edited_content.lower())
-        self.assertIsNone(interaction.message.edited_view)
+        self.assertIn("approved", approver_interaction.response.sent_message.lower())
 
-    async def test_wash_crew_can_deny(self) -> None:
+    async def test_deny_from_the_pending_picker_reuses_the_approval_workflow(self) -> None:
+        self._seed(JoinMode.APPROVAL)
         requester = FakeMember(1)
-        request = await self._create_pending_request(requester)
-        approver = FakeMember(WASH_CREW_ROLE_ID, roles=[FakeRole(WASH_CREW_ROLE_ID)])
-        guild = FakeGuild(members={requester.id: requester})
-        interaction = FakeInteraction(user=approver, guild=guild)
+        outcome = await self.membership_service.handle_join_request(GUILD_ID, requester, FakeGuild())
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_watch_party_pending(interaction, self.bot)
+        select = interaction.response.sent_view.children[0]
+        select._values = [str(outcome.request.request_id)]
 
-        await handle_membership_approval_decision(interaction, self.bot, request.request_id, approve=False)
+        select_interaction = FakeInteraction(user=self._wash_crew_member())
+        await select.callback(select_interaction)
+
+        approval_view = select_interaction.response.edited_view
+        approver_interaction = FakeInteraction(
+            user=self._wash_crew_member(), guild=FakeGuild(members={requester.id: requester})
+        )
+        await approval_view.children[1].callback(interaction=approver_interaction)
 
         self.assertEqual(requester.added_role_ids, [])
-        self.assertIn("denied", interaction.message.edited_content.lower())
+        self.assertIn("denied", approver_interaction.response.sent_message.lower())
 
-    async def test_non_wash_user_cannot_approve(self) -> None:
-        requester = FakeMember(1)
-        request = await self._create_pending_request(requester)
-        non_wash_user = FakeMember(2, roles=[])
-        interaction = FakeInteraction(user=non_wash_user)
-
-        await handle_membership_approval_decision(interaction, self.bot, request.request_id, approve=True)
-
-        self.assertEqual(requester.added_role_ids, [])
-        self.assertIn("WASH Crew", interaction.response.sent_message)
-        self.assertIsNone(interaction.message.edited_content)
-
-    async def test_duplicate_approval_fails_gracefully(self) -> None:
-        requester = FakeMember(1)
-        request = await self._create_pending_request(requester)
-        approver = FakeMember(WASH_CREW_ROLE_ID, roles=[FakeRole(WASH_CREW_ROLE_ID)])
-        guild = FakeGuild(members={requester.id: requester})
-
-        first_interaction = FakeInteraction(user=approver, guild=guild)
-        await handle_membership_approval_decision(first_interaction, self.bot, request.request_id, approve=True)
-
-        second_interaction = FakeInteraction(user=approver, guild=guild)
-        await handle_membership_approval_decision(second_interaction, self.bot, request.request_id, approve=True)
-
-        self.assertEqual(requester.added_role_ids, [ROLE_ID])  # not granted twice
-        self.assertIn("already been processed", second_interaction.response.sent_message)
-
-    async def test_already_processed_request_rejected(self) -> None:
-        requester = FakeMember(1)
-        request = await self._create_pending_request(requester)
-        approver = FakeMember(WASH_CREW_ROLE_ID, roles=[FakeRole(WASH_CREW_ROLE_ID)])
-        guild = FakeGuild(members={requester.id: requester})
-
-        deny_interaction = FakeInteraction(user=approver, guild=guild)
-        await handle_membership_approval_decision(deny_interaction, self.bot, request.request_id, approve=False)
-
-        approve_interaction = FakeInteraction(user=approver, guild=guild)
-        await handle_membership_approval_decision(approve_interaction, self.bot, request.request_id, approve=True)
-
-        self.assertEqual(requester.added_role_ids, [])
-        self.assertIn("already been processed", approve_interaction.response.sent_message)
-
-
-class RestorePersistentMembershipApprovalViewsTests(MembershipCommandTestCase):
-    async def test_restores_a_view_for_every_pending_request_with_a_message(self) -> None:
+    async def test_selecting_an_already_processed_request_fails_gracefully(self) -> None:
         self._seed(JoinMode.APPROVAL)
-        channel = FakeChannel(ADMIN_CHANNEL_ID)
-        self.bot.register_channel(channel)
-        interaction = FakeInteraction(channel_id=200)
-        await handle_join_watch_party(interaction, self.bot)
-
-        restored_count = restore_persistent_membership_approval_views(self.bot, self.membership_service)
-
-        self.assertEqual(restored_count, 1)
-        self.assertEqual(len(self.bot.added_views), 1)
-        view, message_id = self.bot.added_views[0]
-        self.assertIsInstance(view, MembershipApprovalView)
-
-    async def test_skips_requests_without_a_stored_message(self) -> None:
-        self._seed(JoinMode.APPROVAL)
-        # No channel registered -- notification fails, so no message_id is ever attached.
-        interaction = FakeInteraction(channel_id=200)
-        await handle_join_watch_party(interaction, self.bot)
-
-        restored_count = restore_persistent_membership_approval_views(self.bot, self.membership_service)
-
-        self.assertEqual(restored_count, 0)
-
-    async def test_does_not_restore_already_processed_requests(self) -> None:
         requester = FakeMember(1)
+        outcome = await self.membership_service.handle_join_request(GUILD_ID, requester, FakeGuild())
+        interaction = FakeInteraction(user=self._wash_crew_member())
+        await handle_watch_party_pending(interaction, self.bot)
+        select = interaction.response.sent_view.children[0]
+        select._values = [str(outcome.request.request_id)]
+        self.membership_service.deny_request(outcome.request.request_id, GUILD_ID, WASH_CREW_ROLE_ID)
+
+        select_interaction = FakeInteraction(user=self._wash_crew_member())
+        await select.callback(select_interaction)
+
+        self.assertIn("no longer pending", select_interaction.response.edited_content.lower())
+
+
+# --- /membership approved / denied ------------------------------------------------------
+
+
+class WatchPartyApprovedDeniedTests(WatchPartyAdminCommandTestCase):
+    async def test_empty_approved_list(self) -> None:
         self._seed(JoinMode.APPROVAL)
-        channel = FakeChannel(ADMIN_CHANNEL_ID)
-        self.bot.register_channel(channel)
-        interaction = FakeInteraction(user=requester, channel_id=200)
-        await handle_join_watch_party(interaction, self.bot)
-        request = self.membership_service.list_pending_requests(GUILD_ID)[0]
-        self.membership_service.deny_request(request.request_id, GUILD_ID, WASH_CREW_ROLE_ID)
+        interaction = FakeInteraction(user=self._wash_crew_member())
 
-        restored_count = restore_persistent_membership_approval_views(self.bot, self.membership_service)
+        await handle_watch_party_approved(interaction, self.bot)
 
-        self.assertEqual(restored_count, 0)
+        self.assertIn("no approved", interaction.response.sent_message.lower())
+
+    async def test_approved_list_shows_approver(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        requester = FakeMember(1)
+        guild = FakeGuild()
+        outcome = await self.membership_service.handle_join_request(GUILD_ID, requester, guild)
+        await self.membership_service.approve_request(
+            outcome.request.request_id, GUILD_ID, WASH_CREW_ROLE_ID, requester, guild
+        )
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_watch_party_approved(interaction, self.bot)
+
+        self.assertIn(f"<@{requester.id}>", interaction.response.sent_message)
+        self.assertIn(f"<@{WASH_CREW_ROLE_ID}>", interaction.response.sent_message)
+
+    async def test_empty_denied_list(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_watch_party_denied(interaction, self.bot)
+
+        self.assertIn("no denied", interaction.response.sent_message.lower())
+
+    async def test_denied_list_shows_denier_and_cooldown_expiration(self) -> None:
+        self._seed(JoinMode.APPROVAL, denial_cooldown_days=7)
+        requester = FakeMember(1)
+        outcome = await self.membership_service.handle_join_request(GUILD_ID, requester, FakeGuild())
+        self.membership_service.deny_request(outcome.request.request_id, GUILD_ID, WASH_CREW_ROLE_ID)
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_watch_party_denied(interaction, self.bot)
+
+        self.assertIn(f"<@{requester.id}>", interaction.response.sent_message)
+        self.assertIn("cooldown until", interaction.response.sent_message)
+
+    async def test_approved_and_denied_lists_are_paginated(self) -> None:
+        self._seed(JoinMode.APPROVAL)
+        guild = FakeGuild()
+        for user_id in range(1, 13):
+            requester = FakeMember(user_id)
+            outcome = await self.membership_service.handle_join_request(GUILD_ID, requester, guild)
+            await self.membership_service.approve_request(
+                outcome.request.request_id, GUILD_ID, WASH_CREW_ROLE_ID, requester, guild
+            )
+        interaction = FakeInteraction(user=self._wash_crew_member())
+
+        await handle_watch_party_approved(interaction, self.bot)
+
+        self.assertIn("...and 2 more.", interaction.response.sent_message)
 
 
 if __name__ == "__main__":

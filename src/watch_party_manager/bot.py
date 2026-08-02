@@ -542,10 +542,6 @@ class WatchPartyBot(commands.Bot):
         async def about(interaction: discord.Interaction) -> None:
             await handle_about(interaction, self)
 
-        @self.tree.command(name="join_watch_party", description="Join or leave the Watch Party.")
-        async def join_watch_party(interaction: discord.Interaction) -> None:
-            await handle_join_watch_party(interaction, self)
-
         @self.tree.command(name="help", description="Show WASH's command reference.")
         async def help_command(interaction: discord.Interaction) -> None:
             show_wash_crew = self.permission_service.is_wash_crew(interaction.user)
@@ -626,72 +622,6 @@ class WatchPartyBot(commands.Bot):
         @self.tree.command(name="browse", description="Browse a collection with filters, paginated.")
         async def browse(interaction: discord.Interaction) -> None:
             await handle_browse(interaction, self)
-
-        @self.tree.command(
-            name="repair_suggestions", description="Repair suggestions with malformed or legacy data (WASH Crew only)."
-        )
-        async def repair_suggestions(interaction: discord.Interaction) -> None:
-            message, ephemeral = await perform_repair_suggestions(
-                repair_service=self.suggestion_repair_service,
-                user=interaction.user,
-                wash_crew_role_id=self.wash_crew_role_id,
-            )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
-
-        @self.tree.command(name="backup", description="Back up all of WASH's data (WASH Crew only).")
-        async def backup(interaction: discord.Interaction) -> None:
-            message, ephemeral, archive_path, display_filename = perform_backup(
-                backup_service=self.backup_service,
-                user=interaction.user,
-                wash_crew_role_id=self.wash_crew_role_id,
-            )
-            if archive_path is None or display_filename is None:
-                await interaction.response.send_message(message, ephemeral=ephemeral)
-                return
-
-            file = discord.File(archive_path, filename=display_filename)
-            await interaction.response.send_message(message, file=file, ephemeral=ephemeral)
-
-        @self.tree.command(name="restore", description="Restore WASH's data from a backup (WASH Crew only).")
-        @discord.app_commands.describe(
-            backup_filename="An existing local backup's filename (see /backup's response).",
-            backup_file="Upload a backup .zip to restore from instead of selecting a local one.",
-        )
-        async def restore(
-            interaction: discord.Interaction,
-            backup_filename: Optional[str] = None,
-            backup_file: Optional[discord.Attachment] = None,
-        ) -> None:
-            await handle_restore(interaction, self, backup_filename, backup_file)
-
-        @self.tree.command(
-            name="factory_reset", description="Erase all of WASH's data and start over (WASH Crew only)."
-        )
-        async def factory_reset_command(interaction: discord.Interaction) -> None:
-            await handle_factory_reset(interaction, self)
-
-        @self.tree.command(name="import", description="Import another WASH instance's backup (WASH Crew only).")
-        @discord.app_commands.describe(
-            backup_file="Upload a full backup .zip created by another WASH instance's /backup."
-        )
-        async def import_command(interaction: discord.Interaction, backup_file: discord.Attachment) -> None:
-            await handle_import(interaction, self, backup_file)
-
-        @self.tree.command(name="remove", description="Archive a suggestion (WASH Crew only).")
-        @discord.app_commands.describe(
-            query="A reference number (e.g. #0007), exact title, or title without its year."
-        )
-        async def remove_suggestion(interaction: discord.Interaction, query: str) -> None:
-            await handle_remove_suggestion(interaction, self, query)
-
-        @self.tree.command(
-            name="edit_suggestion", description="Change a suggestion's status or collection (WASH Crew only)."
-        )
-        @discord.app_commands.describe(
-            reference="The suggestion's reference number (e.g. #0007) or its current exact title.",
-        )
-        async def edit_suggestion_command(interaction: discord.Interaction, reference: str) -> None:
-            await handle_edit_suggestion(interaction, self, reference)
 
         @self.tree.command(name="reject", description="Indicate you won't watch a suggestion.")
         @discord.app_commands.describe(suggestion_id="The suggestion's numeric ID (shown on its public post).")
@@ -787,10 +717,13 @@ class WatchPartyBot(commands.Bot):
 
             await send_config_main_menu(interaction, self, guild_id, edit=False)
 
-        self.tree.add_command(WatchPartyAdminGroup(self))
+        self.tree.add_command(MembershipGroup(self))
         self.tree.add_command(DatabaseGroup(self))
         self.tree.add_command(VotingGroup(self))
         self.tree.add_command(RandomGroup(self))
+        self.tree.add_command(JoinGroup(self))
+        self.tree.add_command(MaintenanceGroup(self))
+        self.tree.add_command(SuggestionGroup(self))
         # v1 Final Polish: /watch-party schedule/reschedule/cancel/status
         # are intentionally not registered for v1 -- the scheduled watch
         # party workflow is being held back from this release, not
@@ -3078,7 +3011,7 @@ async def send_setup_wizard_step(
         async def on_import_existing(import_interaction: discord.Interaction) -> None:
             await import_interaction.response.edit_message(
                 content=(
-                    body + "\n\nRun `/import` in this server to bring in another WASH instance's backup -- "
+                    body + "\n\nRun `/maintenance import` in this server to bring in another WASH instance's backup -- "
                     "Discord doesn't allow attaching a file from inside this wizard. Once it's imported, "
                     "come back here and choose **Select Existing** to pick it up."
                 ),
@@ -3413,7 +3346,7 @@ async def send_setup_wizard_step(
         )
         body += (
             "\n\nAutomatic backups periodically save a snapshot of WASH's data on the schedule you "
-            "configure. Manual `/backup` always remains available either way, and existing backups are "
+            "configure. Manual `/maintenance backup` always remains available either way, and existing backups are "
             "never deleted by disabling this."
         )
 
@@ -4099,7 +4032,7 @@ async def send_configuration_missing_message(
     (see the `config` command) -- but every section that reads
     config_service.get_configuration() a second time, deeper inside its
     own nested callbacks, guards against it having become None or
-    incomplete in between (e.g. a concurrent /factory_reset), rather than
+    incomplete in between (e.g. a concurrent /maintenance reset), rather than
     raising an AttributeError the requester would just see as "this
     command failed" with no explanation.
     """
@@ -4676,7 +4609,7 @@ async def send_config_eligible_pool_warning_section(
         await interaction.response.send_message(body(), view=view(), ephemeral=True)
 
 
-# --- FR-030: /join_watch_party -----------------------------------------------------------
+# --- FR-030: /join watch party -----------------------------------------------------------
 
 
 def _build_membership_decision_callbacks(bot: "WatchPartyBot"):
@@ -4698,7 +4631,7 @@ def _build_membership_decision_callbacks(bot: "WatchPartyBot"):
 
 
 async def handle_join_watch_party(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
-    """Handle /join_watch_party: the single entry point for every join mode.
+    """Handle /join watch party: the single entry point for every join mode.
 
     Everyone may run this command (see PermissionService's approved
     model -- there is no gate here at all), since it's how a non-member
@@ -4823,26 +4756,34 @@ async def handle_membership_approval_decision(
         )
 
 
-# --- FR-031: /watch_party administration --------------------------------------------------
+# --- FR-031: /membership administration (formerly /watch_party) --------------------------
 
 WATCH_PARTY_LIST_PAGE_SIZE = 10
 
 
-class WatchPartyAdminGroup(discord.app_commands.Group):
-    """WASH Crew-only /watch_party command group.
+class MembershipGroup(discord.app_commands.Group):
+    """WASH Crew-only /membership command group (Slash-Command UX Audit).
 
-    Subcommands only collect Discord-native parameters and delegate to
-    module-level handle_watch_party_*() functions -- kept as thin as
-    every other command in this file -- so the actual behavior stays
-    unit-testable without a live Discord connection.
+    Renamed from the former /watch_party (underscore, pre-audit) --
+    "membership" both drops the underscore and eliminates the previous
+    naming collision-in-spirit with WatchPartyEventGroup's own
+    "watch-party" (hyphen, currently dormant/unregistered -- see its own
+    docstring). Subcommands themselves are unchanged: they only collect
+    Discord-native parameters and delegate to module-level
+    handle_watch_party_*() functions -- kept as thin as every other
+    command in this file, so the actual behavior stays unit-testable
+    without a live Discord connection. Those handler function names are
+    intentionally left as-is (they describe the *action*, not this
+    group's Discord-facing name, and renaming them would only churn
+    working code for no behavioral or clarity gain).
     """
 
     def __init__(self, bot: "WatchPartyBot") -> None:
-        super().__init__(name="watch_party", description="Manage Watch Party membership (WASH Crew only).")
+        super().__init__(name="membership", description="Manage Watch Party membership (WASH Crew only).")
         self.bot = bot
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Gate every /watch_party subcommand on WASH Crew, in one place.
+        """Gate every /membership subcommand on WASH Crew, in one place.
 
         Reuses PermissionService.require_wash_crew exactly like every
         other WASH-gated command -- fails closed when unconfigured.
@@ -4880,6 +4821,148 @@ class WatchPartyAdminGroup(discord.app_commands.Group):
     @discord.app_commands.command(name="search", description="Look up a member's Watch Party membership history.")
     async def search(self, interaction: discord.Interaction, member: discord.Member) -> None:
         await handle_watch_party_search(interaction, self.bot, member)
+
+
+class JoinWatchGroup(discord.app_commands.Group):
+    """The "watch" subcommand group nested inside /join, containing
+    exactly one subcommand ("party") -- see JoinGroup's own docstring
+    for why this three-level shape was chosen over a flatter one.
+    """
+
+    def __init__(self, bot: "WatchPartyBot") -> None:
+        super().__init__(name="watch", description="Join something related to watching.")
+        self.bot = bot
+
+    @discord.app_commands.command(name="party", description="Join or leave the Watch Party.")
+    async def party(self, interaction: discord.Interaction) -> None:
+        await handle_join_watch_party(interaction, self.bot)
+
+
+class JoinGroup(discord.app_commands.Group):
+    """/join command group (Slash-Command UX Audit) -- replaces the
+    former top-level /join_watch_party (underscore) with the grouped
+    /join watch party, exactly as directed. "watch party" is a nested
+    subcommand group ("watch") containing one subcommand ("party"),
+    matching the exact three-token invocation asked for, rather than a
+    single hyphenated subcommand name -- this is currently the only
+    subcommand under /join, but the shape leaves room for a future
+    sibling (e.g. a "/join <something else>") without another rename.
+    handle_join_watch_party itself is unchanged -- only its registration
+    moved.
+    """
+
+    def __init__(self, bot: "WatchPartyBot") -> None:
+        super().__init__(name="join", description="Join something in this server.")
+        self.bot = bot
+        self.add_command(JoinWatchGroup(bot))
+
+
+class MaintenanceGroup(discord.app_commands.Group):
+    """WASH Crew-only /maintenance command group (Slash-Command UX Audit).
+
+    Consolidates five previously-separate top-level commands that
+    help_registry.py's own COMMAND_HELP had already been documenting
+    together under one "WASH Crew: Maintenance" section, even before
+    this audit gave them a matching Discord-level group: the former
+    /backup, /restore (whole-instance restore -- distinct from
+    /database restore, which restores one collection), /import,
+    /factory_reset (renamed here to "reset", dropping both the
+    underscore and the redundant "factory" word now that "/maintenance
+    reset" already makes the scope clear), and /repair_suggestions
+    (renamed to "repair"). Every subcommand still calls the exact same
+    module-level handle_*/perform_*() logic its former top-level command
+    used -- only the registration moved, so behavior is unchanged.
+    """
+
+    def __init__(self, bot: "WatchPartyBot") -> None:
+        super().__init__(name="maintenance", description="Back up, restore, import, reset, or repair WASH's data (WASH Crew only).")
+        self.bot = bot
+
+    @discord.app_commands.command(name="backup", description="Back up all of WASH's data (WASH Crew only).")
+    async def backup(self, interaction: discord.Interaction) -> None:
+        message, ephemeral, archive_path, display_filename = perform_backup(
+            backup_service=self.bot.backup_service,
+            user=interaction.user,
+            wash_crew_role_id=self.bot.wash_crew_role_id,
+        )
+        if archive_path is None or display_filename is None:
+            await interaction.response.send_message(message, ephemeral=ephemeral)
+            return
+
+        file = discord.File(archive_path, filename=display_filename)
+        await interaction.response.send_message(message, file=file, ephemeral=ephemeral)
+
+    @discord.app_commands.command(name="restore", description="Restore WASH's data from a backup (WASH Crew only).")
+    @discord.app_commands.describe(
+        backup_filename="An existing local backup's filename (see /maintenance backup's response).",
+        backup_file="Upload a backup .zip to restore from instead of selecting a local one.",
+    )
+    async def restore(
+        self,
+        interaction: discord.Interaction,
+        backup_filename: Optional[str] = None,
+        backup_file: Optional[discord.Attachment] = None,
+    ) -> None:
+        await handle_restore(interaction, self.bot, backup_filename, backup_file)
+
+    @discord.app_commands.command(name="import", description="Import another WASH instance's backup (WASH Crew only).")
+    @discord.app_commands.describe(
+        backup_file="Upload a full backup .zip created by another WASH instance's /maintenance backup."
+    )
+    async def import_(self, interaction: discord.Interaction, backup_file: discord.Attachment) -> None:
+        await handle_import(interaction, self.bot, backup_file)
+
+    @discord.app_commands.command(name="reset", description="Erase all of WASH's data and start over (WASH Crew only).")
+    async def reset(self, interaction: discord.Interaction) -> None:
+        await handle_factory_reset(interaction, self.bot)
+
+    @discord.app_commands.command(
+        name="repair", description="Repair suggestions with malformed or legacy data (WASH Crew only)."
+    )
+    async def repair(self, interaction: discord.Interaction) -> None:
+        message, ephemeral = await perform_repair_suggestions(
+            repair_service=self.bot.suggestion_repair_service,
+            user=interaction.user,
+            wash_crew_role_id=self.bot.wash_crew_role_id,
+        )
+        await interaction.response.send_message(message, ephemeral=ephemeral)
+
+
+class SuggestionGroup(discord.app_commands.Group):
+    """WASH Crew-only /suggestion command group (Slash-Command UX Audit).
+
+    Consolidates the two remaining single-suggestion Crew administrative
+    actions that were each their own bare top-level command: the former
+    /edit_suggestion (underscore -- renamed here to "edit") and /remove
+    (already underscore-free, but pairing it here avoids leaving "edit"
+    as a lonely, single-subcommand group and gives both actions a
+    consistent, discoverable home). /reject and /unreject deliberately
+    stay separate, bare top-level commands -- they're available to every
+    Watch Party member, not WASH-Crew-only, so grouping them alongside
+    these two Crew-only actions would mix audiences under one command,
+    exactly the inconsistency this audit is meant to remove. Both
+    subcommands still delegate to the exact same handle_edit_suggestion/
+    handle_remove_suggestion functions their former top-level commands
+    used -- only the registration moved.
+    """
+
+    def __init__(self, bot: "WatchPartyBot") -> None:
+        super().__init__(name="suggestion", description="Edit or remove a suggestion (WASH Crew only).")
+        self.bot = bot
+
+    @discord.app_commands.command(name="edit", description="Change a suggestion's status or collection (WASH Crew only).")
+    @discord.app_commands.describe(
+        reference="The suggestion's reference number (e.g. #0007) or its current exact title.",
+    )
+    async def edit(self, interaction: discord.Interaction, reference: str) -> None:
+        await handle_edit_suggestion(interaction, self.bot, reference)
+
+    @discord.app_commands.command(name="remove", description="Archive a suggestion (WASH Crew only).")
+    @discord.app_commands.describe(
+        query="A reference number (e.g. #0007), exact title, or title without its year."
+    )
+    async def remove(self, interaction: discord.Interaction, query: str) -> None:
+        await handle_remove_suggestion(interaction, self.bot, query)
 
 
 class DatabaseGroup(discord.app_commands.Group):
@@ -4980,9 +5063,10 @@ class RandomGroup(discord.app_commands.Group):
 
     Replaces the former top-level /random_watch (underscore) command
     outright, with no compatibility alias -- the visible command name
-    now contains no underscore. This is a standalone, deliberately
-    narrow rename; it does not imply or start a project-wide underscore-
-    command cleanup (see /watch_party, which stays exactly as-is).
+    now contains no underscore. This was a standalone, narrow rename at
+    the time; the project-wide Slash-Command UX Audit later removed
+    every other remaining underscore command too (see MembershipGroup,
+    JoinGroup, MaintenanceGroup, SuggestionGroup).
     Permissions and behavior are unchanged from the former /random_watch:
     handle_random_watch performs its own Watch Party member check
     internally, so no group-level interaction_check is needed here.
@@ -5105,16 +5189,19 @@ class WatchPartyEventGroup(discord.app_commands.Group):
     commands -- removed outright, with no compatibility alias.
 
     Named with a hyphen ("watch-party") rather than an underscore
-    deliberately: the pre-existing /watch_party group (WatchPartyAdminGroup,
-    above) already owns that exact underscore name for Watch Party
-    *membership* administration (members/pending/approved/denied/add/
-    remove/search) and is unrelated to *scheduling* a watch party --
-    merging the two into one group would conflate two distinct concerns
-    under one command, and Discord command names are case- and character-
-    sensitive, so "watch-party" and "watch_party" are two entirely
-    distinct, valid command names that can coexist. This is the
-    documented resolution the task's own naming-conflict contingency
-    asked for.
+    deliberately: at the time, the pre-existing /watch_party group
+    (Watch Party *membership* administration -- members/pending/
+    approved/denied/add/remove/search) already owned that exact
+    underscore name, and merging the two into one group would have
+    conflated two distinct concerns under one command, so this group
+    used the hyphenated variant instead of colliding with it. The
+    Slash-Command UX Audit later renamed that membership group to
+    /membership (see MembershipGroup), which frees up "watch_party" and
+    would let this group revert to an underscore-free, un-hyphenated
+    name if it's ever re-registered -- left as "watch-party" for now
+    since renaming a currently-dormant, unregistered group isn't part of
+    that audit's scope (Section 1: "audit every *registered* slash
+    command").
     """
 
     def __init__(self, bot: "WatchPartyBot") -> None:
@@ -5173,7 +5260,7 @@ class WatchPartyEventGroup(discord.app_commands.Group):
 
 
 def build_watch_party_members_text(role_name: str, members: List[Any]) -> str:
-    """Build /watch_party members' response text.
+    """Build /membership members' response text.
 
     `members` is expected in the order the caller wants displayed (real
     discord.Role.members preserves no particular order, so callers that
@@ -7835,7 +7922,7 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
     Either way, the status itself is already correctly persisted
     regardless of whether the embed could be refreshed. Called after
     every status change this milestone introduces admin control over: archive,
-    reactivate, and /edit_suggestion's Change Status action. Vote
+    reactivate, and /suggestion edit's Change Status action. Vote
     completion is synchronized separately, once per candidate, by
     sync_vote_completion_status_embeds() -- called after both completion
     paths (a scheduled close_vote job and /edit_vote's "End Now").
@@ -8202,7 +8289,7 @@ def perform_backup(
 
     Returns:
         A (message, ephemeral, archive_path, display_filename) tuple.
-        Every /backup response is ephemeral -- this is an admin
+        Every /maintenance backup response is ephemeral -- this is an admin
         maintenance command. archive_path/display_filename are None
         whenever no backup was created (permission failure or
         BackupError), telling the caller there's nothing to attach.
@@ -8378,7 +8465,7 @@ async def handle_restore(
     backup_filename: Optional[str],
     backup_file: Optional[discord.Attachment],
 ) -> None:
-    """Handle /restore: select-or-upload -> validate -> summary -> confirm/cancel.
+    """Handle /maintenance restore: select-or-upload -> validate -> summary -> confirm/cancel.
 
     Downloading an uploaded attachment is a network call that can
     outlast Discord's 3-second initial-response window, so this always
@@ -11047,9 +11134,9 @@ def perform_remove_suggestion(
     wash_crew_role_id: Optional[int],
     title: str,
 ) -> tuple[str, bool, bool]:
-    """Core logic for /remove, kept free of Discord objects except `user`.
+    """Core logic for /suggestion remove, kept free of Discord objects except `user`.
 
-    FR-029's approved permission model restricts /remove to WASH Crew
+    FR-029's approved permission model restricts /suggestion remove to WASH Crew
     (an earlier revision of this milestone incorrectly allowed any Watch
     Party member; this is the corrected, fail-closed WASH Crew check).
 
@@ -11062,7 +11149,7 @@ def perform_remove_suggestion(
     Returns:
         A (message, ephemeral, success) tuple. Permission failures are
         ephemeral; the service's own result message is shown publicly on
-        success or failure, matching /remove's existing confirmation style.
+        success or failure, matching /suggestion remove's existing confirmation style.
     """
     if wash_crew_role_id is None:
         return (
@@ -11079,7 +11166,7 @@ def perform_remove_suggestion(
     return result.message, False, result.success
 
 
-# --- FR-033A: /remove with reference/title matching, a selector, and archival ------------
+# --- FR-033A: /suggestion remove with reference/title matching, a selector, and archival --
 
 
 def build_removal_option_label(
@@ -11087,7 +11174,7 @@ def build_removal_option_label(
     suggestion_service: SuggestionService,
     vote_service: Optional[VoteService] = None,
 ) -> str:
-    """Build one /remove selector option's label: reference, title, year,
+    """Build one /suggestion remove selector option's label: reference, title, year,
     database, and status (Section 6's "Show a selector including...").
 
     vote_service resolves In an Active Vote -- optional, defaulting to
@@ -11107,7 +11194,7 @@ async def send_removal_confirmation(interaction: discord.Interaction, bot: "Watc
 
     Prefers archival over permanent deletion (Section 6): the existing
     SuggestionService.remove_suggestion()/remove_suggestion_by_id()
-    hard-delete methods are untouched (still used by /repair_suggestions
+    hard-delete methods are untouched (still used by /maintenance repair
     for genuinely broken records) -- this reuses archive_suggestion()
     instead, which preserves identity, journey, and history.
     """
@@ -11175,7 +11262,7 @@ def build_edit_suggestion_summary(
     vote_service: Optional[VoteService] = None,
 ) -> str:
     """Build the read-only IMDb-metadata summary shown alongside
-    /edit_suggestion's action picker (Requirement 8: OMDb-derived fields
+    /suggestion edit's action picker (Requirement 8: OMDb-derived fields
     are for reference only, never manually edited here).
 
     Links to the suggestion's own Discord post rather than repeating its
@@ -11206,7 +11293,7 @@ def build_edit_suggestion_summary(
 
 
 async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPartyBot", reference: str) -> None:
-    """Show /edit_suggestion's action picker: Change Status, Move to
+    """Show /suggestion edit's action picker: Change Status, Move to
     Another Collection, or Cancel (Requirement 8). IMDb metadata (title,
     release year, director, etc.) is read-only here -- shown for
     reference in the summary, never manually editable.
@@ -11974,7 +12061,7 @@ async def show_database_management_menu(
     click at all -- Discord doesn't allow attaching a file upload in
     response to a component interaction -- so it points at running
     `/database restore` directly, the same way the Setup Wizard's
-    "Import Existing Backup" option points at `/import` for the exact
+    "Import Existing Backup" option points at `/maintenance import` for the exact
     same platform reason.
     """
     database = bot.suggestion_service.get_database(database_id)

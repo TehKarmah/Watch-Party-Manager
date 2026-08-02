@@ -60,7 +60,7 @@ Release UX & Command Surface Cleanup: `/database`'s top-level surface is intenti
 - **Move Collection** changes only the chosen collection's suggestion destination, using the same Create New Thread/Use Current Thread/Use Existing Thread choice `/database add` offers. Its database ID, suggestions, statuses, vote history, statistics, and every other setting are untouched. Existing Discord suggestion posts are never moved or edited; only suggestions added after the move post to the new destination. The chosen destination must not already be routed to another collection, must not be WASH's configured Home Channel, and a failure after a new thread is created (e.g. a duplicate destination) automatically deletes that thread rather than leaving it orphaned.
 - **Edit Collection** opens the same per-collection settings menu `/config`'s Collections section already uses -- Suggestion Destination, Watched Item Archive, Nominee Selection -- with its Back button returning to this menu instead of `/config`'s own collection list.
 - **Backup Collection** and **Reset Collection** are covered in [Backup & Recovery](#9-backup--recovery) below.
-- **Restore Collection** can't be driven from a button click at all (Discord doesn't allow attaching a file upload in response to one), so it points at running `/database restore` directly instead -- the one collection-management action that remains its own top-level command, the same way the Setup Wizard's "Import Existing Database" option points at `/import`.
+- **Restore Collection** can't be driven from a button click at all (Discord doesn't allow attaching a file upload in response to one), so it points at running `/database restore` directly instead -- the one collection-management action that remains its own top-level command, the same way the Setup Wizard's "Import Existing Database" option points at `/maintenance import`.
 - **Refresh IMDb Metadata** is covered in its own section, [IMDb Metadata Refresh](#imdb-metadata-refresh), below.
 - **Recover Missing IMDb Links** is covered in its own section, [IMDb Metadata Recovery](#imdb-metadata-recovery), below.
 - **Remove Collection** deactivates the collection (see below), applying the repository's safety and ownership validation.
@@ -149,7 +149,7 @@ An active-item match blocks with "🔴 That title is already in this collection.
 | Active (on the list already) | Blocked. Reference, title, IMDb link, and status are shown. | Blocked -- there is nothing to reactivate. |
 | Archived (retired after "I Won't Watch" review) | Blocked. | May confirm to reactivate the existing record. |
 | Vote Winner | Blocked. | May confirm to reactivate the existing record. |
-| Archived some other way (e.g. via `/remove`) | Blocked. | May confirm to reactivate the existing record. |
+| Archived some other way (e.g. via `/suggestion remove`) | Blocked. | May confirm to reactivate the existing record. |
 | Possible duplicate (no confirmed year) | Blocked. | May confirm to proceed with a new suggestion. |
 
 Reactivating always reuses the existing record's stable ID and full history (rejections, watch dates, vote appearances) rather than creating a second entry -- nothing is ever silently overwritten.
@@ -220,9 +220,9 @@ Every suggestion shows one of six statuses, both in `/list` and on its own publi
 - ⚠️ **Pending Crew Review** -- reached once the collection's configured "I Won't Watch" threshold is met (see "Rejecting suggestions" below). Excluded from the Eligible Pool and its "I Won't Watch" button disabled until WASH Crew resolves it in the Admin Channel.
 - 🏆 **Vote Winner** -- won a voting round. This replaces the older, never-actually-produced "Watched" status: WASH knows a suggestion won a vote, not that the group actually watched it. Whenever a Vote Winner is displayed with a recorded win date, an additional `Won: <Month D, YYYY>` line appears right below it (date only, never a time) -- the actual date `/vote start`'s vote completion recorded. A Vote Winner from before this milestone, with no recorded win date, simply omits that line rather than showing a placeholder.
 - ✅ **Watched** -- explicitly confirmed watched, via the watch-history workflow.
-- 🗄️ **Retired** -- archived, whether by `/remove`, WASH Crew retiring a suggestion pending Crew Review, or WASH Crew directly setting it via `/edit_suggestion`.
+- 🗄️ **Retired** -- archived, whether by `/suggestion remove`, WASH Crew retiring a suggestion pending Crew Review, or WASH Crew directly setting it via `/suggestion edit`.
 
-WASH Crew may always override a suggestion's status directly through `/edit_suggestion`'s Change Status action (Available, Vote Winner, or Retired -- In an Active Vote and Pending Crew Review are never directly settable options, since one is computed and the other is only reached via the "I Won't Watch" threshold). Whenever a suggestion's status changes, its existing public confirmation post is edited in place to reflect the new status -- it is never recreated.
+WASH Crew may always override a suggestion's status directly through `/suggestion edit`'s Change Status action (Available, Vote Winner, or Retired -- In an Active Vote and Pending Crew Review are never directly settable options, since one is computed and the other is only reached via the "I Won't Watch" threshold). Whenever a suggestion's status changes, its existing public confirmation post is edited in place to reflect the new status -- it is never recreated.
 
 ### Rejecting suggestions ("I Won't Watch")
 
@@ -251,15 +251,15 @@ Only WASH Crew may use these actions. Below the threshold, a member may remove t
 
 Database selection follows the same automatic-then-selector pattern used elsewhere: the current channel's configured database is used automatically; if none matches and the server has exactly one active database, that one is used; if several exist, WASH shows a picker. Each entry leads with its status emoji, followed by title and release year exactly once (`🟢 50 First Dates (2004)`, never `50 First Dates (2004) (2004)`), then `| [Original Suggestion](link)` when the original public post is known, or nothing after the title when it isn't. A Vote Winner entry additionally shows its `Won: <date>` line right below, when recorded. The reference number and IMDb link intentionally do not appear on this default view. Long lists page with Previous/Next buttons rather than being cut off or capped; both the initial response and every page suppress Discord's automatic link-preview embeds.
 
-Older suggestions saved before public confirmation posts existed (or whose post failed at the time) have no original-post link to show and never will -- WASH has no reliable way to locate a Discord message after the fact without inventing a URL or risking a duplicate public post, so `/repair_suggestions` (WASH Crew-only; repairs legacy IMDb-link titles and a few known malformed records) does not attempt to recover it.
+Older suggestions saved before public confirmation posts existed (or whose post failed at the time) have no original-post link to show and never will -- WASH has no reliable way to locate a Discord message after the fact without inventing a URL or risking a duplicate public post, so `/maintenance repair` (WASH Crew-only; repairs legacy IMDb-link titles and a few known malformed records) does not attempt to recover it.
 
 ### Removing suggestions
 
-`/remove query:<text>` is WASH Crew only. `query` may be a reference number (`#0007` or `7`), an exact title, or a title with its trailing "(YYYY)" year omitted. One match asks for confirmation before acting; several matches show a picker listing each candidate's reference, title, year, database, and status; no match reports that clearly. Confirmed removals **archive** the suggestion (its identity and full history are preserved) rather than deleting it -- see "Known limitations" for the one case where this isn't yet true everywhere.
+`/suggestion remove query:<text>` is WASH Crew only. `query` may be a reference number (`#0007` or `7`), an exact title, or a title with its trailing "(YYYY)" year omitted. One match asks for confirmation before acting; several matches show a picker listing each candidate's reference, title, year, database, and status; no match reports that clearly. Confirmed removals **archive** the suggestion (its identity and full history are preserved) rather than deleting it -- see "Known limitations" for the one case where this isn't yet true everywhere.
 
 ### Editing suggestions
 
-`/edit_suggestion reference:<text>` is WASH Crew only. `reference` is matched the same way `/remove` matches (reference number or exact title). It shows a read-only summary (title, release year, collection, status, IMDb link if any) alongside three actions:
+`/suggestion edit reference:<text>` is WASH Crew only. `reference` is matched the same way `/suggestion remove` matches (reference number or exact title). It shows a read-only summary (title, release year, collection, status, IMDb link if any) alongside three actions:
 
 - **Change Status** -- a dropdown of the three settable statuses (Available, Vote Winner, Retired; see "Suggestion status model" above). The suggestion's public confirmation post is updated in place once changed.
 - **Move to Another Collection** -- a dropdown of this server's collections, so it's never necessary to type a raw ID. The destination must exist, be active, and belong to the same server. The same duplicate check `/add` uses runs again against the destination collection (excluding the suggestion's own record) -- a definite duplicate blocks the move, a possible one requires confirmation ("Move Anyway"). Moving preserves the suggestion's status, stable ID, journey, and history unchanged; only its collection (and an internal "last updated" timestamp) changes.
@@ -273,7 +273,7 @@ A new suggestion is eligible for voting immediately, regardless of nominee-selec
 
 ### Known limitation: identical titles within one database
 
-A "possible duplicate" warning is only ever raised because a candidate's title already matches an existing item's title (that's what makes it a candidate). Suggestion storage has always been keyed by (database, normalized title), so two records can never share an exactly-matching title in the same database. In practice this means confirming "add/save anyway" (or `/edit_suggestion`'s "Move Anyway") on a possible-duplicate warning succeeds only when the new title differs at all from every matched title -- confirming with a byte-for-byte identical title still reports the pre-existing "a suggestion with that title already exists" message instead of creating a second record. Changing this would mean changing how suggestions are identified in storage, which this milestone intentionally leaves alone.
+A "possible duplicate" warning is only ever raised because a candidate's title already matches an existing item's title (that's what makes it a candidate). Suggestion storage has always been keyed by (database, normalized title), so two records can never share an exactly-matching title in the same database. In practice this means confirming "add/save anyway" (or `/suggestion edit`'s "Move Anyway") on a possible-duplicate warning succeeds only when the new title differs at all from every matched title -- confirming with a byte-for-byte identical title still reports the pre-existing "a suggestion with that title already exists" message instead of creating a second record. Changing this would mean changing how suggestions are identified in storage, which this milestone intentionally leaves alone.
 
 ## 4. Starting a Vote
 
@@ -316,7 +316,7 @@ A server that never explicitly sets this defaults to Favor New Additions/`favor_
 
 Within whichever pool a mode produces, WASH still applies its existing genre/media-type diversity pass and its existing deprioritization of recently nominated or recently won suggestions -- nominee-selection mode and diversity are independent, layered concerns.
 
-**Retired suggestions.** A suggestion WASH Crew retires from Pending Crew Review (see "Rejecting suggestions" above) is *retired*, a distinct lifecycle from a WASH Crew-initiated `/remove` archive: WASH records a retirement date and reason. Retired suggestions are excluded from further selection, but remain visible through `/list status:Retired` and may later be reactivated through `/add`, exactly like any other archived suggestion.
+**Retired suggestions.** A suggestion WASH Crew retires from Pending Crew Review (see "Rejecting suggestions" above) is *retired*, a distinct lifecycle from a WASH Crew-initiated `/suggestion remove` archive: WASH records a retirement date and reason. Retired suggestions are excluded from further selection, but remain visible through `/list status:Retired` and may later be reactivated through `/add`, exactly like any other archived suggestion.
 
 ### Custom Vote Filters
 
@@ -450,14 +450,14 @@ Before manual maintenance, stop the bot and make a copy of the data files.
 
 1. Confirm the full automated test suite passes before deployment.
 2. Stop the running bot.
-3. Back up the data directory manually (or run `/backup` beforehand).
+3. Back up the data directory manually (or run `/maintenance backup` beforehand).
 4. update the checked-out repository.
 5. Activate the virtual environment and install updated dependencies if needed.
 6. Start WASH and review startup logs.
 7. Run `/about` as a WASH Crew member to confirm Health, Configuration, and Runtime all look correct.
 8. Smoke-test any commands changed in the release.
 
-Automatic backups run on the schedule configured via the Setup Wizard or `/config` (see Section 9); manual `/backup` remains available at any time regardless of that setting. Import from another WASH instance is implemented via `/import`; that other instance's own `/backup` output is the "export" side of the exchange, so there is no separate export command.
+Automatic backups run on the schedule configured via the Setup Wizard or `/config` (see Section 9); manual `/maintenance backup` remains available at any time regardless of that setting. Import from another WASH instance is implemented via `/maintenance import`; that other instance's own `/maintenance backup` output is the "export" side of the exchange, so there is no separate export command.
 
 ## 9. Backup & Recovery
 
@@ -478,7 +478,7 @@ Every backup's `manifest.json` records:
 
 Backups created before this manifest existed are still accepted: any field it doesn't recognize is simply reported as unavailable rather than treated as an error.
 
-### `/backup`
+### `/maintenance backup`
 
 Creates an immediate manual backup of WASH's entire data directory, attaches it to the response as `Watch_Party_Manager_Backup_YYYY-MM-DD_HH-MM-SS.zip`, and reports its filename, creation time, and type. Responses are ephemeral. WASH Crew only.
 
@@ -486,9 +486,9 @@ Creates an immediate manual backup of WASH's entire data directory, attaches it 
 
 Automatic backups are **enabled by default and recommended**. They're configured through the Setup Wizard's Backup step or, afterward, `/config`'s Backup Defaults, either of which lets WASH Crew choose Enable (setting an interval in days and a retention count) or Disable. An existing configuration saved before this setting existed is treated as enabled, using the same defaults a new server gets.
 
-While enabled, WASH creates a backup on the configured interval and prunes older automatic backups down to the configured retention count -- a separate count from any manual backups kept, since automatic and manual backups are tracked as distinct pools (the manifest's `kind` field records which pool each archive belongs to). Disabling stops future automatic backups from being created; it never deletes backups that already exist, and `/backup` remains fully available regardless of the setting. Re-enabling resumes scheduling from the saved (or newly configured) interval and retention count. Changing these settings through `/setup` or `/config` takes effect immediately, and the schedule is also reconciled against the saved configuration whenever WASH starts up.
+While enabled, WASH creates a backup on the configured interval and prunes older automatic backups down to the configured retention count -- a separate count from any manual backups kept, since automatic and manual backups are tracked as distinct pools (the manifest's `kind` field records which pool each archive belongs to). Disabling stops future automatic backups from being created; it never deletes backups that already exist, and `/maintenance backup` remains fully available regardless of the setting. Re-enabling resumes scheduling from the saved (or newly configured) interval and retention count. Changing these settings through `/setup` or `/config` takes effect immediately, and the schedule is also reconciled against the saved configuration whenever WASH starts up.
 
-### `/restore`
+### `/maintenance restore`
 
 Restores WASH's entire dataset. The flow always is: select an existing local backup by filename **or** upload a `.zip` -> WASH validates it and shows a summary (application version, creation time, backup type, server ID, and whichever record counts it can determine -- suggestion databases, suggestions, vote rounds, membership requests, and whether a server configuration is present) -> WASH Crew explicitly clicks **Restore** or **Cancel**. Nothing is ever restored without that explicit confirmation, and validation never modifies live data.
 
@@ -503,7 +503,7 @@ Back up or restore a single suggestion database instead of everything. Choose **
 `/database restore` requires choosing **Merge** or **Replace** explicitly -- WASH never infers which one you meant:
 
 - **Merge** imports suggestions from the backup into the *existing* database with a matching ID. A suggestion whose title already exists for that database is skipped and reported as a conflict rather than overwritten. The destination database must already exist; Merge never creates one.
-- **Replace** overwrites the selected database's own record and all of its suggestions with the backup's version (creating it fresh if it no longer exists), while leaving every other database and all other server data untouched. A full safety backup is made first, exactly as with `/restore`.
+- **Replace** overwrites the selected database's own record and all of its suggestions with the backup's version (creating it fresh if it no longer exists), while leaving every other database and all other server data untouched. A full safety backup is made first, exactly as with `/maintenance restore`.
 
 A single-database backup can only be restored back into the server it came from; WASH rejects a mismatch rather than silently importing another server's data.
 
@@ -513,17 +513,17 @@ Clears every suggestion (active and archived alike -- there is no separate archi
 
 Flow: choose **Reset Collection** from `/database manage`'s action menu -> pick the database from the picker that appears (name, Active/Inactive status, and watch-item count are all shown) -> WASH shows how many suggestions would be removed -> click **Reset** -> a modal asks you to type `RESET` exactly (case-sensitive) -> WASH creates a full safety backup, then performs the reset. Clicking **Cancel**, or submitting anything other than `RESET`, leaves all data unchanged.
 
-### `/factory_reset`
+### `/maintenance reset`
 
 Removes every WASH-managed record belonging to the current server: server configuration, suggestion databases and their configuration, suggestions (including embedded watch history), vote rounds, membership requests, scheduled watch parties, and scheduled reminder jobs. Backup archives, `.env` files, the bot token, application code, the virtual environment, and logs are never touched -- this command only ever writes through WASH's own JSON repositories.
 
-Flow: `/factory_reset` -> WASH shows a count of everything that would be removed -> click **Factory Reset** -> type `RESET` exactly -> a full safety backup is made, then the reset runs. Afterward, `/setup` is required again (removing the server's configuration is what makes WASH treat the server as never having been set up -- the same check `/setup` already used before this milestone).
+Flow: `/maintenance reset` -> WASH shows a count of everything that would be removed -> click **Factory Reset** -> type `RESET` exactly -> a full safety backup is made, then the reset runs. Afterward, `/setup` is required again (removing the server's configuration is what makes WASH treat the server as never having been set up -- the same check `/setup` already used before this milestone).
 
-### `/import`
+### `/maintenance import`
 
-Imports a backup produced by *another* WASH instance's own `/backup`. Unlike `/restore`, `/import` only ever accepts an uploaded `.zip` -- there is no "select an existing local backup" option, since the whole point is bringing in data WASH doesn't already have on disk.
+Imports a backup produced by *another* WASH instance's own `/maintenance backup`. Unlike `/maintenance restore`, `/maintenance import` only ever accepts an uploaded `.zip` -- there is no "select an existing local backup" option, since the whole point is bringing in data WASH doesn't already have on disk.
 
-Flow: upload the backup -> WASH validates it and shows the same kind of summary `/restore` shows -> choose **Merge**, **Replace**, or **Cancel** -> (Replace only) type `REPLACE` exactly -> a full safety backup is made, then the import runs.
+Flow: upload the backup -> WASH validates it and shows the same kind of summary `/maintenance restore` shows -> choose **Merge**, **Replace**, or **Cancel** -> (Replace only) type `REPLACE` exactly -> a full safety backup is made, then the import runs.
 
 Only "portable" data is ever imported: suggestion databases, their configuration, their suggestions, and vote rounds. This server's configuration -- its configured roles, channels, and server ID -- is **never** changed by an import, in either mode. Membership requests, scheduled reminders, and scheduled watch parties are also never imported, since they reference the *source* server's Discord channels/messages/approval history and would be meaningless (or actively misleading) here.
 
@@ -540,27 +540,27 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 
 ### Restart requirement
 
-**A bot restart is recommended after `/restore`, `/database restore`, Reset Collection (`/database manage`), `/factory_reset`, or `/import`.** Several services (suggestions, votes, membership requests) load their data once at startup and cache it in memory; changes written to disk by any of these commands won't be reflected in a running bot's behavior until it restarts. `GuildConfiguration` reads are not cached, so configuration changes (including a factory reset requiring `/setup` again) take effect immediately even without a restart.
+**A bot restart is recommended after `/maintenance restore`, `/database restore`, Reset Collection (`/database manage`), `/maintenance reset`, or `/maintenance import`.** Several services (suggestions, votes, membership requests) load their data once at startup and cache it in memory; changes written to disk by any of these commands won't be reflected in a running bot's behavior until it restarts. `GuildConfiguration` reads are not cached, so configuration changes (including a factory reset requiring `/setup` again) take effect immediately even without a restart.
 
 ### Recommended backup strategy
 
-- Run `/backup` before any release, dependency upgrade, or manual data edit.
+- Run `/maintenance backup` before any release, dependency upgrade, or manual data edit.
 - Run Backup Collection (`/database manage`) before experimenting with a specific database's suggestion rules or content.
 - Keep at least one backup downloaded outside of WASH's own `data/backups/` directory (e.g. before a factory reset, since a factory reset's automatic safety backup still only lives in the same `data/` tree it's resetting).
-- After using `/import`, review the reported conflicts and restart the bot before relying on the imported data.
+- After using `/maintenance import`, review the reported conflicts and restart the bot before relying on the imported data.
 
 ### Troubleshooting
 
 | Symptom | Cause | What happened to live data |
 | --- | --- | --- |
 | "This backup failed validation and cannot be restored" / "Import validation failed" | Corrupt ZIP, missing/unreadable manifest, unsafe path, or a checksum mismatch (tampered or truncated file). | Unchanged -- validation never writes anything. |
-| "Unsupported backup type" | A full backup was offered to `/database restore`, a single-database backup was offered to `/restore` or `/import`, or an incompatible format version was found. | Unchanged. |
+| "Unsupported backup type" | A full backup was offered to `/database restore`, a single-database backup was offered to `/maintenance restore` or `/maintenance import`, or an incompatible format version was found. | Unchanged. |
 | "That backup was created in a different Discord server" | A Backup Collection (`/database manage`) archive's recorded server ID doesn't match the server `/database restore` was run in. | Unchanged. |
 | "No existing suggestion database with that ID was found to merge into" | Merge was chosen but the destination database doesn't exist yet. | Unchanged -- use Replace instead if that's intended. |
 | "N suggestion(s) were skipped as duplicates" (restore, reset, or import) | Merge detected a title already present in the destination database. | Only the non-conflicting suggestions were imported; nothing existing was overwritten. |
 | "Confirmation text did not match ... exactly" | The typed `RESET`/`REPLACE` phrase didn't match, or didn't match case. | Unchanged -- nothing runs until the exact phrase is submitted. |
 | "Safety backup failed, so the ... was aborted" (restore, reset, factory reset, or import) | WASH couldn't write the pre-action safety backup (e.g. disk full or permissions). | Unchanged -- the destructive action never began. |
-| "Restore failed after the safety backup succeeded" | The safety backup was made, but copying the backup's files onto live data failed partway through. | The safety backup archive is intact and named in the error message; use `/restore` again with it if needed. |
+| "Restore failed after the safety backup succeeded" | The safety backup was made, but copying the backup's files onto live data failed partway through. | The safety backup archive is intact and named in the error message; use `/maintenance restore` again with it if needed. |
 | No suggestions appear after a successful restore/reset/import | A bot restart is required for the running process's in-memory cache to reflect the change (see "Restart requirement" above). | Data on disk is already correct; only the live bot's view of it is stale. |
 
 ## 10. Statistics & Reporting
@@ -571,7 +571,7 @@ After an import completes, WASH reports databases and suggestions imported vs. s
 
 - **Server** (the default) -- watch parties, voting rounds (open/closed/cancelled, blind/visible, ties), participation, average candidates per round, and average vote duration.
 - **Member** -- the requesting member's own suggestions submitted/watched/retired, votes cast, participation percentage, and winning suggestions. There is no way to target another member's statistics, by design.
-- **Suggestion** -- one suggestion's created date, submitter, current status, nomination history (count, first/last nominated), and watch/retirement history. `suggestion` accepts the same reference-number-or-exact-title matching `/remove` and `/edit_suggestion` use; multiple matches show a picker.
+- **Suggestion** -- one suggestion's created date, submitter, current status, nomination history (count, first/last nominated), and watch/retirement history. `suggestion` accepts the same reference-number-or-exact-title matching `/suggestion remove` and `/suggestion edit` use; multiple matches show a picker.
 - **Collection** -- one collection's active/archived/watched/retired suggestion counts.
 
 ### Privacy

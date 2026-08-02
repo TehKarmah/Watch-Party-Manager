@@ -20,16 +20,16 @@ class HelpServiceTests(unittest.TestCase):
         self.assertNotIn("`/add`", response.command_text)
         self.assertNotIn("`/database add`", response.command_text)
         self.assertNotIn("`/diagnostics`", response.command_text)
-        self.assertNotIn("`/backup`", response.command_text)
-        self.assertNotIn("`/restore`", response.command_text)
+        self.assertNotIn("`/maintenance backup`", response.command_text)
+        self.assertNotIn("`/maintenance restore`", response.command_text)
         self.assertNotIn("`/setup`", response.command_text)
         self.assertNotIn("`/config`", response.command_text)
 
     def test_everyone_help_includes_join_watch_party(self) -> None:
-        # FR-030: /join_watch_party is public, alongside /help and /about.
+        # FR-030: /join watch party is public, alongside /help and /about.
         response = build_help_response(show_wash_crew=False)
 
-        self.assertIn("`/join_watch_party`", response.command_text)
+        self.assertIn("`/join watch party`", response.command_text)
         self.assertIn("`/help`", response.command_text)
         self.assertIn("`/about`", response.command_text)
 
@@ -81,14 +81,14 @@ class HelpServiceTests(unittest.TestCase):
     def test_watch_party_member_help_hides_wash_crew_and_other_member_commands(self) -> None:
         response = build_help_response(show_wash_crew=False, show_watch_party_member=True)
 
-        self.assertNotIn("`/remove`", response.command_text)
-        self.assertNotIn("`/edit_suggestion`", response.command_text)
+        self.assertNotIn("`/suggestion remove`", response.command_text)
+        self.assertNotIn("`/suggestion edit`", response.command_text)
         self.assertNotIn("`/vote status`", response.command_text)
         self.assertNotIn("`/watch-party status`", response.command_text)
         self.assertNotIn("`/database add`", response.command_text)
         self.assertNotIn("`/diagnostics`", response.command_text)
-        self.assertNotIn("`/backup`", response.command_text)
-        self.assertNotIn("`/restore`", response.command_text)
+        self.assertNotIn("`/maintenance backup`", response.command_text)
+        self.assertNotIn("`/maintenance restore`", response.command_text)
         self.assertNotIn("`/setup`", response.command_text)
         self.assertNotIn("`/config`", response.command_text)
         self.assertNotIn("`/vote start`", response.command_text)
@@ -98,8 +98,8 @@ class HelpServiceTests(unittest.TestCase):
         response = build_help_response(show_wash_crew=True)
 
         self.assertIn("`/database add`", response.command_text)
-        self.assertIn("`/backup`", response.command_text)
-        self.assertIn("`/restore`", response.command_text)
+        self.assertIn("`/maintenance backup`", response.command_text)
+        self.assertIn("`/maintenance restore`", response.command_text)
         self.assertIn("`/setup`", response.command_text)
         self.assertIn("`/config`", response.command_text)
 

@@ -62,6 +62,16 @@ class TopLevelCommandDescriptionsTests(unittest.TestCase):
         # A sanity check on the AST walk itself, so a refactor that
         # changes how commands are registered can't silently make the
         # test above pass by finding zero commands.
+        #
+        # Slash-Command UX Audit: join_watch_party, repair_suggestions,
+        # backup, restore, factory_reset, import, remove, and
+        # edit_suggestion are no longer bare @self.tree.command(...)
+        # registrations -- they moved into grouped subcommands (/join
+        # watch party, /maintenance repair/backup/restore/reset/import,
+        # /suggestion remove/edit), which this AST walk deliberately
+        # doesn't match (see _find_top_level_command_calls's own
+        # func.value.attr == "tree" check) -- their descriptions are
+        # covered by test_command_groups_registration.py instead.
         calls = _find_top_level_command_calls()
         names = {
             keyword.value.value
@@ -71,18 +81,11 @@ class TopLevelCommandDescriptionsTests(unittest.TestCase):
         }
         expected = {
             "about",
-            "join_watch_party",
             "help",
             "stats",
             "add",
             "list",
-            "repair_suggestions",
-            "backup",
-            "restore",
-            "factory_reset",
-            "import",
-            "remove",
-            "edit_suggestion",
+            "browse",
             "reject",
             "unreject",
             "setup",

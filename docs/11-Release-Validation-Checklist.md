@@ -133,7 +133,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/about` as any server member.
   2. Run `/help` as any server member.
-- **Expected Result:** `/about` shows WASH's identity and documentation links (no Health/Configuration/Runtime sections yet, since the member isn't WASH Crew). `/help` shows only the commands available to an unconfigured member (`/help`, `/about`, `/join_watch_party`).
+- **Expected Result:** `/about` shows WASH's identity and documentation links (no Health/Configuration/Runtime sections yet, since the member isn't WASH Crew). `/help` shows only the commands available to an unconfigured member (`/help`, `/about`, `/join watch party`).
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -145,9 +145,9 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   1. Type `/database` in Discord's command box; confirm autocomplete offers exactly `add`, `manage`, `list`, `move`, `backup`, `restore`, `remove`, `reset` as subcommands, and that typing `/database_add`, `/database_backup`, `/database_restore`, `/database_reset`, `/database_list`, or `/database_remove` (the old top-level names) finds nothing.
   2. Type `/vote`; confirm autocomplete offers exactly `start`, `status`, `edit`, and that `/start_vote`, `/vote_status`, `/edit_vote`, and the pre-release `/voting` group no longer exist.
   3. Type `/watch-party`; confirm autocomplete offers exactly `schedule`, `status`, `reschedule`, `cancel`, and that `/schedule_watch_party`, `/reschedule_watch_party`, `/cancel_watch_party`, `/watch_party_status` no longer exist.
-  4. Type `/watch_party` (underscore); confirm it still exists, separately from `/watch-party` (hyphen), and still offers `members`, `pending`, `approved`, `denied`, `add`, `remove`, `search` -- membership administration is unaffected by this cleanup.
-  5. Confirm every other command named in [Command Reference](10-Command-Reference.md) (e.g. `/about`, `/add`, `/backup`, `/config`, `/help`, `/list`, `/random watch`, `/restore`, `/setup`, `/stats`, `/remove`, `/edit_suggestion`, `/reject`, `/unreject`, `/repair_suggestions`, `/factory_reset`, `/import`, `/join_watch_party`) still appears as a plain top-level command, unchanged.
-- **Expected Result:** The live Discord command tree matches [Command Reference](10-Command-Reference.md) exactly -- no obsolete command remains reachable under its old name, no command was accidentally duplicated under both an old and new name, and `/watch_party`/`/watch-party` coexist as the two distinct, valid command names documented there.
+  4. Type `/membership`; confirm it still exists, separately from `/watch-party` (hyphen), and still offers `members`, `pending`, `approved`, `denied`, `add`, `remove`, `search` -- membership administration is unaffected by this cleanup.
+  5. Confirm every other command named in [Command Reference](10-Command-Reference.md) (e.g. `/about`, `/add`, `/maintenance backup`, `/config`, `/help`, `/list`, `/random watch`, `/maintenance restore`, `/setup`, `/stats`, `/suggestion remove`, `/suggestion edit`, `/reject`, `/unreject`, `/maintenance repair`, `/maintenance reset`, `/maintenance import`, `/join watch party`) still appears exactly as documented, unchanged.
+- **Expected Result:** The live Discord command tree matches [Command Reference](10-Command-Reference.md) exactly -- no obsolete command remains reachable under its old name, no command was accidentally duplicated under both an old and new name, and `/membership`/`/watch-party` coexist as the two distinct, valid command names documented there.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -248,7 +248,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Choose **Movies**; confirm no name prompt and no destination-choice screen appear -- a thread named "Movie Suggestions" (the descriptive default, not the bare type name "Movies") is created directly under the home channel and the wizard advances. Repeat with **TV Shows** and confirm its default thread name is "TV Suggestions".
   3. In the server, open the new "Movie Suggestions" thread and run `/add` with any title; confirm the public suggestion post is created immediately in that thread, with no "no suggestion channel is configured" error.
   4. Separately, repeat with **Special Collection** or **Custom**; confirm a name prompt appears first (still fully custom, unaffected by the Movies/TV Shows default naming), then the thread is created using that name.
-  5. Separately, click **Import Existing Database**; confirm WASH explains that `/import` must be run as its own command (Discord does not allow attaching a file from inside this wizard) and offers a way back to the type-choice screen.
+  5. Separately, click **Import Existing Database**; confirm WASH explains that `/maintenance import` must be run as its own command (Discord does not allow attaching a file from inside this wizard) and offers a way back to the type-choice screen.
 - **Expected Result:** The Collections step's buttons appear in the order and styles described in step 0 -- **Create New** is the recommended/default (primary) action, **Select Existing** is secondary, and **Cancel Setup** is styled as danger. Movies/TV Shows create a collection using their descriptive default thread name ("Movie Suggestions"/"TV Suggestions") with no name prompt; Special Collection/Custom collect a name first; every creation path ends with the collection's suggestion thread created as a sibling under the home channel and immediately persisted as that collection's Suggestion Destination (and, internally, all remain ordinary `SuggestionDatabase` records). `/add` works in the new thread right away. Import Existing never fakes an in-wizard upload.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -496,9 +496,9 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/config` -> **Backup Defaults**; confirm the summary line reads either "Automatic Backups: Disabled" or "Automatic Backups: Every N day(s), keep M" matching the current setting.
   2. Choose **Disable Automatic Backups** (if not already disabled); confirm the summary updates to "Automatic Backups: Disabled" and that any existing backup files in `data/backups/` are still present afterward.
-  3. Run `/backup` while automatic backups are disabled; confirm it still succeeds.
+  3. Run `/maintenance backup` while automatic backups are disabled; confirm it still succeeds.
   4. Choose **Enable Automatic Backups** again, setting an interval and retention count; confirm the summary updates to "Automatic Backups: Every N day(s), keep M" matching what you entered.
-- **Expected Result:** Disabling never deletes existing backups and never blocks manual `/backup`; enabling and disabling both take effect immediately and are reflected accurately in the summary line.
+- **Expected Result:** Disabling never deletes existing backups and never blocks manual `/maintenance backup`; enabling and disabling both take effect immediately and are reflected accurately in the summary line.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -768,9 +768,9 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 ### 4.7a Legacy Vote Winner with no recorded win date
 
 - **Objective:** Confirm a Vote Winner recorded before win dates existed degrades gracefully.
-- **Preconditions:** A suggestion manually set to Vote Winner via `/edit_suggestion`'s Change Status action (which does not record a win date), rather than through an actual completed vote.
+- **Preconditions:** A suggestion manually set to Vote Winner via `/suggestion edit`'s Change Status action (which does not record a win date), rather than through an actual completed vote.
 - **Steps:**
-  1. Run `/list status:Vote Winners` and separately `/edit_suggestion` against that suggestion.
+  1. Run `/list status:Vote Winners` and separately `/suggestion edit` against that suggestion.
 - **Expected Result:** Both views show 🏆 Vote Winner with no `Won:` line at all -- never a blank date, a placeholder, or an error.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -883,12 +883,12 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.9 `/repair_suggestions`
+### 4.9 `/maintenance repair`
 
 - **Objective:** Confirm the legacy-record repair command runs and reports a summary.
 - **Preconditions:** WASH Crew role.
 - **Steps:**
-  1. Run `/repair_suggestions`.
+  1. Run `/maintenance repair`.
 - **Expected Result:** A summary (scanned/repaired/removed/failed/unchanged counts) is returned. Note: this command repairs legacy IMDb-link titles and known malformed records only -- it does not and cannot recover a missing Original Suggestion link for a pre-existing suggestion (a documented limitation, not a defect).
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -943,7 +943,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   1. Disable "I Won't Watch" for the collection via `/config`.
   2. Post a new suggestion in that collection; confirm its public post has no **I Won't Watch** button at all (only Mark as Watched), not merely a disabled one.
   3. Attempt `/reject suggestion_id:<id>` against any suggestion in that collection; confirm it's refused with a clear "disabled" message and no state change.
-  4. Check the suggestion with the pre-existing rejection from the precondition; confirm its recorded rejection is still present (`/list` or `/edit_suggestion` reference) and its status has not changed -- disabling never discards rejection history and never retroactively re-evaluates it against the threshold.
+  4. Check the suggestion with the pre-existing rejection from the precondition; confirm its recorded rejection is still present (`/list` or `/suggestion edit` reference) and its status has not changed -- disabling never discards rejection history and never retroactively re-evaluates it against the threshold.
   5. Re-enable "I Won't Watch" for the collection; confirm the suggestion from step 4 is still Available (not Pending Crew Review) purely from the re-enable itself.
   6. Refresh or re-fetch that suggestion's post (e.g. via a bot restart / persistent view restoration); confirm the **I Won't Watch** button now reappears, showing the pre-existing rejection count.
   7. Have a second distinct member reject that same suggestion now that it's re-enabled; confirm this fresh rejection correctly reaches the threshold and moves it to Pending Crew Review as normal.
@@ -951,16 +951,16 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.11 `/remove` and `/edit_suggestion`
+### 4.11 `/suggestion remove` and `/suggestion edit`
 
 - **Objective:** Confirm WASH Crew administrative status-changing/moving/removal works, including the duplicate re-check on a collection move.
 - **Preconditions:** WASH Crew role; at least one suggestion; at least two collections in the server.
 - **Steps:**
-  1. Run `/edit_suggestion`; confirm it shows a read-only summary (title, year, collection, status, IMDb link) plus Change Status, Move to Another Collection, and Cancel -- no title/release year/IMDb link fields to type into. If the suggestion is currently a Vote Winner with a recorded win date, confirm the summary also shows a `Won: <date>` line right below the status.
+  1. Run `/suggestion edit`; confirm it shows a read-only summary (title, year, collection, status, IMDb link) plus Change Status, Move to Another Collection, and Cancel -- no title/release year/IMDb link fields to type into. If the suggestion is currently a Vote Winner with a recorded win date, confirm the summary also shows a `Won: <date>` line right below the status.
   2. Choose Change Status; confirm the dropdown offers only Available, Vote Winner (🏆), and Retired (🗄️) (never In an Active Vote or Pending Crew Review, both of which are computed/workflow-driven, not directly settable); pick one and confirm the suggestion's status updates and its public confirmation post's Status field updates in place.
   3. Choose Move to Another Collection; confirm the duplicate check re-runs against the destination collection, and that the suggestion's status is unchanged after the move.
   4. Choose Cancel; confirm nothing changes.
-  5. Run `/remove` with a reference number, then again with an exact title; confirm both resolve correctly and archive (not delete) the record.
+  5. Run `/suggestion remove` with a reference number, then again with an exact title; confirm both resolve correctly and archive (not delete) the record.
 - **Expected Result:** Matches [Administration](05-Administration.md) Section 3 exactly; history, stable ID, and (for a move) status are preserved throughout.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -970,7 +970,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm WASH proactively notifies WASH Crew when a collection's eligible pool drops to or below the configured threshold (default: configured candidate count × 5), fires once and suppresses duplicates while it stays at or below the threshold, re-arms once the pool rises back above it, and respects its configured Enabled/Threshold/Destination settings -- for every nominee-selection mode equally.
 - **Preconditions:** A collection with a known configured candidate count (e.g. 3, giving a default threshold of 15); Eligible Pool Warning enabled via `/config` (Test 3.2), with a known destination (Admin Channel by default).
 - **Steps:**
-  1. Reduce the collection's eligible count to or below the threshold (e.g. `/remove` suggestions, or mark some Vote Winner/Watched), then run `/add` or `/vote start`.
+  1. Reduce the collection's eligible count to or below the threshold (e.g. `/suggestion remove` suggestions, or mark some Vote Winner/Watched), then run `/add` or `/vote start`.
   2. Observe the configured destination (Admin Channel by default, or the Watch Party Home Channel if switched via `/config`) for a message reading "**Eligible Pool Warning** -- \<collection name\>", "Eligible Items Remaining: N", "Warning Threshold: T", and a nudge to use `/add`.
   3. Run `/add` again without raising the pool back above the threshold; confirm the warning does **not** repeat.
   4. Add enough suggestions to raise the eligible count back above the threshold, then run `/add` once more (to trigger re-evaluation); confirm no warning is sent (it's disarming, not firing).
@@ -1174,7 +1174,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 ### 6.1 Schedule a watch party
 
 - **Objective:** Confirm a watch party can be scheduled from a winning or existing suggestion.
-- **Preconditions:** WASH Crew role; a known suggestion ID. `watch_item_id` takes a plain integer, not a `#0007`-style reference -- strip the `#` and leading zeros from a suggestion's Reference field (shown on its confirmation post, or in `/remove`'s picker) to get the integer.
+- **Preconditions:** WASH Crew role; a known suggestion ID. `watch_item_id` takes a plain integer, not a `#0007`-style reference -- strip the `#` and leading zeros from a suggestion's Reference field (shown on its confirmation post, or in `/suggestion remove`'s picker) to get the integer.
 - **Steps:**
   1. Run `/watch-party schedule watch_item_id:<id> when:"YYYY-MM-DD HH:MM"` with a near-future time.
 - **Expected Result:** A confirmation is shown with the scheduled title and time; `/watch-party status` (Test 6.4) reflects it.
@@ -1241,40 +1241,40 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ## 7. Membership Management
 
-> This section was added during the release-validation review: `/join_watch_party` and the `/watch_party` administrative command group are a fully implemented, significant feature area not called out in the original checklist outline. See "Coverage Review" in the delivery notes.
+> This section was added during the release-validation review: `/join watch party` and the `/membership` administrative command group are a fully implemented, significant feature area not called out in the original checklist outline. See "Coverage Review" in the delivery notes.
 
-### 7.1 `/join_watch_party` -- Self-Service mode
+### 7.1 `/join watch party` -- Self-Service mode
 
 - **Objective:** Confirm a member can join (and leave) the Watch Party role directly when Self-Service mode is configured.
 - **Preconditions:** Watch Party join mode set to Self-Service (Test 2.2 or `/config`).
 - **Steps:**
-  1. As a member without the Watch Party role, run `/join_watch_party`.
+  1. As a member without the Watch Party role, run `/join watch party`.
   2. Run it again to leave.
 - **Expected Result:** The role is granted immediately on the first run, and removed on the second (if `allow_self_leave` is enabled).
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 7.2 `/join_watch_party` -- Manual and Approval-Required modes
+### 7.2 `/join watch party` -- Manual and Approval-Required modes
 
 - **Objective:** Confirm the other join modes behave as documented.
 - **Preconditions:** Join mode set to Manual, then separately to Approval-Required.
 - **Steps:**
-  1. In Manual mode, run `/join_watch_party` as a member; confirm it explains that WASH Crew must add them manually (see Test 7.3).
-  2. In Approval-Required mode, run `/join_watch_party`; confirm a request is created and appears in `/watch_party pending`.
+  1. In Manual mode, run `/join watch party` as a member; confirm it explains that WASH Crew must add them manually (see Test 7.3).
+  2. In Approval-Required mode, run `/join watch party`; confirm a request is created and appears in `/membership pending`.
 - **Expected Result:** Manual mode never grants the role directly. Approval-Required creates a pending request visible to WASH Crew, and (if an admin channel is configured) posts it there.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 7.3 `/watch_party` administrative subcommands
+### 7.3 `/membership` administrative subcommands
 
 - **Objective:** Confirm each WASH Crew membership-administration subcommand works.
 - **Preconditions:** WASH Crew role; at least one pending request (Test 7.2) and one existing member.
 - **Steps:**
-  1. Run `/watch_party members` -- confirm the current membership list appears.
-  2. Run `/watch_party pending` -- confirm the pending Approval-Required request appears.
-  3. Approve or deny it, then run `/watch_party approved` and `/watch_party denied` to confirm it moved to the correct list.
-  4. Run `/watch_party add member:<user>` and `/watch_party remove member:<user>` to manually grant/revoke the role.
-  5. Run `/watch_party search member:<user>` to confirm membership history is reported.
+  1. Run `/membership members` -- confirm the current membership list appears.
+  2. Run `/membership pending` -- confirm the pending Approval-Required request appears.
+  3. Approve or deny it, then run `/membership approved` and `/membership denied` to confirm it moved to the correct list.
+  4. Run `/membership add member:<user>` and `/membership remove member:<user>` to manually grant/revoke the role.
+  5. Run `/membership search member:<user>` to confirm membership history is reported.
 - **Expected Result:** Every subcommand works as named and is restricted to WASH Crew.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -1284,7 +1284,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm WASH correctly defers to an externally managed role.
 - **Preconditions:** Join mode set to Discord-Managed.
 - **Steps:**
-  1. Run `/join_watch_party` as a member.
+  1. Run `/join watch party` as a member.
 - **Expected Result:** WASH explains that this server manages the role outside of WASH (no action taken by the bot).
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -1340,12 +1340,12 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ## 9. Backup & Restore
 
-### 9.1 `/backup`
+### 9.1 `/maintenance backup`
 
 - **Objective:** Confirm a full manual backup can be created and downloaded.
 - **Preconditions:** WASH Crew role; some existing data (suggestions, a completed vote, etc.).
 - **Steps:**
-  1. Run `/backup`.
+  1. Run `/maintenance backup`.
 - **Expected Result:** An ephemeral response reports the filename, creation time, and type; a `.zip` file named `Watch_Party_Manager_Backup_YYYY-MM-DD_HH-MM-SS.zip` is attached and downloadable.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -1361,12 +1361,12 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 9.3 `/restore` -- full restore with confirmation
+### 9.3 `/maintenance restore` -- full restore with confirmation
 
 - **Objective:** Confirm the full-restore flow requires explicit confirmation and never silently overwrites data.
 - **Preconditions:** A known-good backup from Test 9.1; some data changed since it was made (so the restore is observable).
 - **Steps:**
-  1. Run `/restore backup_filename:<name>` (or upload the `.zip` via `backup_file`).
+  1. Run `/maintenance restore backup_filename:<name>` (or upload the `.zip` via `backup_file`).
   2. Review the validation summary WASH shows before doing anything.
   3. Click **Restore**.
   4. Restart the bot (see Test 11.1) and confirm the data matches the backup.
@@ -1399,23 +1399,23 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 9.6 `/factory_reset`
+### 9.6 `/maintenance reset`
 
 - **Objective:** Confirm the full-server reset works and correctly requires `/setup` again afterward.
 - **Preconditions:** A disposable test server (this is destructive) with existing configuration and data.
 - **Steps:**
-  1. Run `/factory_reset`, review the shown removal count, click **Factory Reset**, type `RESET` exactly.
+  1. Run `/maintenance reset`, review the shown removal count, click **Factory Reset**, type `RESET` exactly.
   2. Run `/setup` afterward.
 - **Expected Result:** Every WASH-managed record for the server is removed (server configuration, databases, suggestions, votes, membership requests, scheduled items); a safety backup is made first; `/setup` treats the server as brand new.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 9.7 `/import` (cross-instance)
+### 9.7 `/maintenance import` (cross-instance)
 
 - **Objective:** Confirm importing another instance's backup works in both Merge and Replace modes.
 - **Preconditions:** A full backup `.zip` from a *different* WASH instance/server (or a second local test server acting as the source).
 - **Steps:**
-  1. Run `/import backup_file:<upload>`.
+  1. Run `/maintenance import backup_file:<upload>`.
   2. Review the validation summary.
   3. Choose **Merge**; confirm the reported imported/skipped/reassigned counts.
   4. Repeat with **Replace**, typing `REPLACE` exactly to confirm.
@@ -1429,8 +1429,8 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** None.
 - **Steps:**
   1. Confirm no `/export` command exists in `/help`.
-  2. Confirm `/backup`'s output is what another instance would use as the "export" side of an `/import`.
-- **Expected Result:** Matches [Administration](05-Administration.md) Section 8: `/backup` doubles as the export mechanism; there is no dedicated export command.
+  2. Confirm `/maintenance backup`'s output is what another instance would use as the "export" side of an `/maintenance import`.
+- **Expected Result:** Matches [Administration](05-Administration.md) Section 8: `/maintenance backup` doubles as the export mechanism; there is no dedicated export command.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -1439,7 +1439,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm corrupt/invalid input fails safely with no data loss.
 - **Preconditions:** A deliberately corrupted `.zip` (e.g. truncate a valid backup file, or edit its manifest).
 - **Steps:**
-  1. Attempt `/restore` with the corrupted file.
+  1. Attempt `/maintenance restore` with the corrupted file.
   2. Attempt `/database restore` with a full (not single-database) backup, and vice versa.
   3. Attempt `/database restore` with a backup from a different server.
 - **Expected Result:** Each is rejected with a clear, specific message (see the troubleshooting table in [Administration](05-Administration.md) Section 9); live data is never modified by a failed or rejected attempt.
@@ -1454,7 +1454,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   1. Note the current contents of `data/backups/`.
   2. Wait until the configured interval has elapsed.
   3. Inspect `data/backups/` again.
-- **Expected Result:** A new backup archive appears with `kind: scheduled` in its manifest (distinct from a `kind: manual` backup created via `/backup`), with no WASH Crew action required.
+- **Expected Result:** A new backup archive appears with `kind: scheduled` in its manifest (distinct from a `kind: manual` backup created via `/maintenance backup`), with no WASH Crew action required.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -1465,21 +1465,21 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Let enough scheduled backups accumulate to exceed the configured retention count.
   2. Inspect `data/backups/`.
-  3. Create a manual `/backup` in the same window.
+  3. Create a manual `/maintenance backup` in the same window.
 - **Expected Result:** Only the newest N scheduled backups are kept (N = retention count); older scheduled backups are removed automatically. Manual backups are tracked in a separate pool and are never pruned by the automatic-backup retention setting.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
 ### 9.12 Disabling stops future automatic backups without deleting existing ones
 
-- **Objective:** Confirm disabling automatic backups (via `/config` -> Backup Defaults) stops future scheduled backups but leaves existing ones untouched, and that `/backup` keeps working.
+- **Objective:** Confirm disabling automatic backups (via `/config` -> Backup Defaults) stops future scheduled backups but leaves existing ones untouched, and that `/maintenance backup` keeps working.
 - **Preconditions:** Automatic backups enabled with at least one scheduled backup already created (Test 9.10).
 - **Steps:**
   1. Note the existing scheduled backups in `data/backups/`.
   2. Disable automatic backups via `/config` -> Backup Defaults.
   3. Wait past what would have been the next scheduled run.
-  4. Run `/backup` manually.
-- **Expected Result:** No new scheduled backup is created after disabling; the previously existing scheduled backups are still present; manual `/backup` succeeds regardless of the automatic setting.
+  4. Run `/maintenance backup` manually.
+- **Expected Result:** No new scheduled backup is created after disabling; the previously existing scheduled backups are still present; manual `/maintenance backup` succeeds regardless of the automatic setting.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -1516,7 +1516,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm WASH Crew-only commands are usable by WASH Crew and inherit member-level access too.
 - **Preconditions:** A member with the WASH Crew role.
 - **Steps:**
-  1. Run a representative sample: `/vote start`, `/vote status`, `/database add`, `/config`, `/backup`.
+  1. Run a representative sample: `/vote start`, `/vote status`, `/database add`, `/config`, `/maintenance backup`.
   2. Confirm the same member can also run `/add`/`/list`/`/random watch`/`/stats` (inherited member access).
 - **Expected Result:** All succeed; `/help` shows the full WASH Crew command list.
 - **Result:** [ ] Pass [ ] Fail
@@ -1528,7 +1528,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** A member with no configured role.
 - **Steps:**
   1. Run `/add` and a WASH Crew-only command (e.g. `/vote start`).
-- **Expected Result:** `/add` is rejected (member role required); the WASH Crew command is rejected with a message distinguishable from "role not configured" (Test 10.4). `/help`, `/about`, and `/join_watch_party` remain available to everyone.
+- **Expected Result:** `/add` is rejected (member role required); the WASH Crew command is rejected with a message distinguishable from "role not configured" (Test 10.4). `/help`, `/about`, and `/join watch party` remain available to everyone.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

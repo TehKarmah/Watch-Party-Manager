@@ -84,7 +84,7 @@ A command replies "WASH Crew permissions have not been configured," "Run `/setup
 
 ### IMDb Metadata Refresh: suggestion(s) reported as Skipped
 
-A suggestion is Skipped, never attempted, whenever it has no usable persisted IMDb link (added by plain title with no IMDb URL, or an unresolvable one). This is deliberate -- the refresh never guesses a title's IMDb match, so a Skipped suggestion needs a usable IMDb link added first before a future refresh can pick it up. **Recover Missing IMDb Links** (also under `/database manage`) is the easiest way to do that -- it searches OMDb by the suggestion's stored title/year and only saves a link once you explicitly approve it; `/edit_suggestion` or re-adding it with `/add` and a correct IMDb URL/link both still work too.
+A suggestion is Skipped, never attempted, whenever it has no usable persisted IMDb link (added by plain title with no IMDb URL, or an unresolvable one). This is deliberate -- the refresh never guesses a title's IMDb match, so a Skipped suggestion needs a usable IMDb link added first before a future refresh can pick it up. **Recover Missing IMDb Links** (also under `/database manage`) is the easiest way to do that -- it searches OMDb by the suggestion's stored title/year and only saves a link once you explicitly approve it; `/suggestion edit` or re-adding it with `/add` and a correct IMDb URL/link both still work too.
 
 ### IMDb Metadata Refresh: some suggestions reported as Failed
 
@@ -104,7 +104,7 @@ WASH searches OMDb using the suggestion's stored title and (when known) release 
 
 ### IMDb Metadata Recovery: a suggestion never appears in a recovery scan
 
-Recovery only ever offers suggestions with no usable, already-persisted IMDb identifier -- a suggestion that already has one (even one that later turned out to be wrong) belongs to **Refresh IMDb Metadata** instead, and Recovery never overwrites an existing identifier. If a suggestion's IMDb link is simply wrong, correct it via `/edit_suggestion` first, then let a normal Refresh IMDb Metadata run pick up the corrected metadata.
+Recovery only ever offers suggestions with no usable, already-persisted IMDb identifier -- a suggestion that already has one (even one that later turned out to be wrong) belongs to **Refresh IMDb Metadata** instead, and Recovery never overwrites an existing identifier. If a suggestion's IMDb link is simply wrong, correct it via `/suggestion edit` first, then let a normal Refresh IMDb Metadata run pick up the corrected metadata.
 
 ### IMDb Metadata Recovery: the bot restarted (or Cancel Recovery was clicked) partway through
 
@@ -160,11 +160,11 @@ Full command-by-command behavior, safety-backup guarantees, and a dedicated symp
 
 ### Backup
 
-Run `/backup` (full server) or `/database backup` (one collection) before any release, dependency upgrade, manual data edit, or experiment with a collection's rules -- see [Administration: Recommended backup strategy](05-Administration.md#recommended-backup-strategy). `/database backup` is reachable directly or through `/database manage`'s Backup Collection action; both run the exact same logic.
+Run `/maintenance backup` (full server) or `/database backup` (one collection) before any release, dependency upgrade, manual data edit, or experiment with a collection's rules -- see [Administration: Recommended backup strategy](05-Administration.md#recommended-backup-strategy). `/database backup` is reachable directly or through `/database manage`'s Backup Collection action; both run the exact same logic.
 
 ### Restore
 
-**A bot restart is required after `/restore`, `/database restore`, `/database reset`, `/factory_reset`, or `/import`** for the change to actually take effect -- several repositories cache their data in memory at startup, so "nothing happened" after a successful restore almost always just means WASH hasn't been restarted yet. See [Administration: Restart requirement](05-Administration.md#restart-requirement). `/database restore` remains its own top-level command (rather than living inside `/database manage`) because it requires uploading a file, and Discord has no way to attach a file in response to a button or menu selection -- `/database manage`'s Restore Collection action explains this and points you at `/database restore` directly.
+**A bot restart is required after `/maintenance restore`, `/database restore`, `/database reset`, `/maintenance reset`, or `/maintenance import`** for the change to actually take effect -- several repositories cache their data in memory at startup, so "nothing happened" after a successful restore almost always just means WASH hasn't been restarted yet. See [Administration: Restart requirement](05-Administration.md#restart-requirement). `/database restore` remains its own top-level command (rather than living inside `/database manage`) because it requires uploading a file, and Discord has no way to attach a file in response to a button or menu selection -- `/database manage`'s Restore Collection action explains this and points you at `/database restore` directly.
 
 ---
 

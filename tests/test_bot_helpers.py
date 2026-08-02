@@ -61,7 +61,7 @@ class BotHelperTests(unittest.TestCase):
             "/config",
             "/add",
             "/list",
-            "/remove",
+            "/suggestion remove",
             "/vote start",
             "/vote status",
             "/database add",

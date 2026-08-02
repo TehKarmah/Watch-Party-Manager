@@ -46,7 +46,7 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     CommandHelp("/help", "Show the WASH command guide.", "General"),
     CommandHelp("/about", "View WASH's status, health, and configuration info.", "General"),
     CommandHelp(
-        "/join_watch_party",
+        "/join watch party",
         "Join or leave the Watch Party.",
         "General",
     ),
@@ -57,7 +57,7 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WATCH_PARTY_MEMBER,
     ),
     CommandHelp(
-        "/watch_party",
+        "/membership",
         "Manage Watch Party membership.",
         "WASH Crew: Membership",
         HelpAudience.WASH_CREW,
@@ -96,13 +96,13 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WATCH_PARTY_MEMBER,
     ),
     CommandHelp(
-        "/remove", "Remove a watch item.", "Watch Items", HelpAudience.WASH_CREW
+        "/suggestion edit",
+        "Edit a suggestion's details or collection.",
+        "WASH Crew: Suggestions",
+        HelpAudience.WASH_CREW,
     ),
     CommandHelp(
-        "/edit_suggestion",
-        "Edit a suggestion's details or collection.",
-        "Watch Items",
-        HelpAudience.WASH_CREW,
+        "/suggestion remove", "Remove a watch item.", "WASH Crew: Suggestions", HelpAudience.WASH_CREW
     ),
     CommandHelp(
         "/vote start", "Start a new voting round.", "WASH Crew: Voting", HelpAudience.WASH_CREW
@@ -144,32 +144,32 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
-        "/repair_suggestions",
-        "Repair bad suggestion data.",
-        "WASH Crew: Maintenance",
-        HelpAudience.WASH_CREW,
-    ),
-    CommandHelp(
-        "/backup",
+        "/maintenance backup",
         "Create and download a WASH backup.",
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
-        "/restore",
+        "/maintenance restore",
         "Restore WASH's data from a backup.",
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
-        "/factory_reset",
+        "/maintenance import",
+        "Import a backup from another WASH instance.",
+        "WASH Crew: Maintenance",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
+        "/maintenance reset",
         "Erase all WASH data for this server.",
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(
-        "/import",
-        "Import a backup from another WASH instance.",
+        "/maintenance repair",
+        "Repair bad suggestion data.",
         "WASH Crew: Maintenance",
         HelpAudience.WASH_CREW,
     ),
