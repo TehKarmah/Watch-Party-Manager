@@ -944,6 +944,102 @@ class SuggestionService:
         self._save()
         return SuggestionResult(success=True, message=f'Updated "{new_title}".', watch_item=updated)
 
+    def apply_imdb_metadata_refresh(
+        self,
+        suggestion_id: int,
+        *,
+        title: str,
+        imdb_url: Optional[str],
+        runtime_minutes: Optional[int],
+        genres: tuple[str, ...],
+        description: Optional[str],
+        content_rating: Optional[str],
+        director: Optional[str],
+        imdb_rating: Optional[str],
+        poster_url: Optional[str],
+        cast: tuple[str, ...],
+    ) -> SuggestionResult:
+        """Persist freshly re-fetched IMDb-derived metadata onto an
+        existing suggestion (IMDb Metadata Refresh), preserving every
+        other field untouched.
+
+        Every keyword argument here must already be the FINAL desired
+        value -- merge logic (e.g. "keep the existing value when the
+        provider omitted this field this time") is the caller's
+        responsibility (see services/imdb_metadata_refresh_service.py),
+        not this method's. This never creates a new record, never
+        changes database_id/status/journey/channel_id/message_id/
+        crew_review_*/release_year, and never moves a suggestion between
+        collections -- everything not explicitly listed above is copied
+        forward unchanged via dataclasses.replace().
+
+        The suggestion list is keyed by (database_id, title.casefold()),
+        so a refreshed canonical title that would collide with a
+        different suggestion already in the same collection is refused
+        rather than silently overwriting that other record.
+
+        Args:
+            suggestion_id: The suggestion to refresh.
+            title: The refreshed canonical title (already merged).
+            imdb_url: The canonical IMDb URL to store.
+            runtime_minutes: Refreshed runtime, or the preserved existing value.
+            genres: Refreshed genres, or the preserved existing value.
+            description: Refreshed plot/summary, or the preserved existing value.
+            content_rating: Refreshed MPAA/content rating, or the preserved existing value.
+            director: Refreshed director, or the preserved existing value.
+            imdb_rating: Refreshed IMDb rating, or the preserved existing value.
+            poster_url: Refreshed poster URL, or the preserved existing value.
+            cast: Refreshed cast, or the preserved existing value.
+
+        Returns:
+            SuggestionResult with the updated WatchItem on success.
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return SuggestionResult(success=False, message="That suggestion doesn't exist.")
+
+        new_title = title.strip() if title else watch_item.title
+        if not new_title:
+            return SuggestionResult(success=False, message="Title cannot be empty.")
+
+        old_key = (watch_item.database_id, watch_item.title.casefold())
+        new_key = (watch_item.database_id, new_title.casefold())
+        if new_key != old_key and new_key in self._suggestions:
+            return SuggestionResult(
+                success=False,
+                message=(
+                    "Refreshing this suggestion's title would collide with another "
+                    "suggestion already in this collection."
+                ),
+            )
+
+        metadata_ids = dict(watch_item.metadata_ids)
+        if imdb_url:
+            metadata_ids[MetadataProvider.IMDB] = imdb_url
+
+        updated = replace(
+            watch_item,
+            title=new_title,
+            metadata_ids=metadata_ids,
+            runtime_minutes=runtime_minutes,
+            genres=genres,
+            description=description,
+            content_rating=content_rating,
+            director=director,
+            imdb_rating=imdb_rating,
+            poster_url=poster_url,
+            cast=cast,
+            updated_at=datetime.now(timezone.utc),
+        )
+
+        if new_key != old_key:
+            del self._suggestions[old_key]
+        self._suggestions[new_key] = updated
+        self._save()
+        return SuggestionResult(
+            success=True, message=f'Refreshed IMDb metadata for "{new_title}".', watch_item=updated
+        )
+
     def _save(self) -> None:
         """Persist the current suggestion list via the repository."""
         self._repository.save(self.get_suggestions(), self._next_id)

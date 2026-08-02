@@ -80,7 +80,23 @@ A command replies "WASH Crew permissions have not been configured," "Run `/setup
 - **A collection doesn't appear where expected**: collections default to threads created under the configured Home Channel -- check `/database list` for its Active/Inactive status and current destination.
 - **Can't tell which collection a command will use**: most commands resolve the collection automatically from the thread they're run in; use the **Switch Collection** button (offered whenever more than one collection exists) rather than guessing.
 - **A setting doesn't seem to apply**: several settings are per-collection (Nominee Selection, "I Won't Watch" Enable/threshold, Suggestion Destination) while others are guild-wide (Vote Visibility, candidate count, vote duration) -- see [Administration, Section 4](05-Administration.md#4-starting-a-vote) and the "I Won't Watch" section below for exactly which is which.
-- **Need to change a collection's destination, back it up, reset it, or remove it**: all of these live under `/database manage` -- pick the collection, then choose the action. See [Command Reference](10-Command-Reference.md) for the full `/database` command list.
+- **Need to change a collection's destination, back it up, refresh its IMDb metadata, reset it, or remove it**: all of these live under `/database manage` -- pick the collection, then choose the action. See [Command Reference](10-Command-Reference.md) for the full `/database` command list.
+
+### IMDb Metadata Refresh: suggestion(s) reported as Skipped
+
+A suggestion is Skipped, never attempted, whenever it has no usable persisted IMDb link (added by plain title with no IMDb URL, or an unresolvable one). This is deliberate -- the refresh never guesses a title's IMDb match, so a Skipped suggestion needs a usable IMDb link added first (e.g. via `/edit_suggestion`, or by re-adding it with `/add` and a correct IMDb URL/link) before a future refresh can pick it up.
+
+### IMDb Metadata Refresh: some suggestions reported as Failed
+
+A Failed suggestion had a usable IMDb link but the lookup, parsing, or save step didn't succeed -- check the bot's logs around the time of the refresh for the specific guild, collection, suggestion, and IMDb ID involved (never a secret or API key). Common causes: OMDb temporarily unreachable or rate-limited, an IMDb ID that no longer resolves, or (rare) a refreshed title colliding with another suggestion's title already in the same collection. Simply running Refresh IMDb Metadata again is safe -- it's idempotent, and only re-attempts what still needs it; anything already successfully refreshed is reported as Unchanged, not redone or duplicated.
+
+### IMDb Metadata Refresh: the bot restarted partway through
+
+Nothing is lost. Every suggestion that had already been successfully refreshed and saved before the restart stays saved -- there's no separate "in-progress" state that a restart could corrupt. Run Refresh IMDb Metadata again (This Collection or All Collections, whichever was interrupted) to pick up any suggestions that weren't reached yet; anything already refreshed reports as Unchanged and is never reprocessed or duplicated.
+
+### IMDb Metadata Refresh: it's taking a while / the bot's log still shows an occasional 429
+
+A refresh deliberately paces suggestion-post edits landing in the same Discord channel to avoid tripping Discord's message-edit rate limit, so a collection with many refreshed suggestions in one channel will visibly take longer than the lookups alone would. This is expected and does not affect the final results -- metadata is saved as soon as each lookup succeeds, independent of whether or when its post gets resynced. An occasional 429 in the log with a short automatic retry is still normal (Discord's own client-side retry handling, not a failure); it should simply be rarer than before. A post-sync failure (not the same as a metadata Failed) is reported separately and never rolls back an already-saved metadata update -- see "some suggestions reported as Failed" above for the distinct metadata-lookup failure case.
 
 ---
 

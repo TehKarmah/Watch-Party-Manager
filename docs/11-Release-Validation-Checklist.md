@@ -560,7 +560,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** At least one collection already exists.
 - **Steps:**
   1. Run `/database manage`; confirm the same collection picker used elsewhere in `/database` appears.
-  2. Choose a collection; confirm a management menu appears offering exactly, in this order: **Edit Collection**, **Backup Collection**, **Move Collection**, **Restore Collection**, **Reset Collection**, **Remove Collection**, **Cancel** -- with Reset Collection and Remove Collection visually distinct (red/danger-styled) from the four actions above them.
+  2. Choose a collection; confirm a management menu appears offering exactly, in this order: **Edit Collection**, **Backup Collection**, **Move Collection**, **Restore Collection**, **Refresh IMDb Metadata**, **Reset Collection**, **Remove Collection**, **Cancel** -- with Reset Collection and Remove Collection visually distinct (red/danger-styled) from the five actions above them, and Refresh IMDb Metadata styled like the other administrative (non-destructive) actions.
   3. Choose **Move Collection**; confirm it launches the destination-choice screen (three thread-only options, same order as `/database add`) and completes the move.
   4. Return to `/database manage` and choose **Edit Collection**; confirm it shows the same settings menu `/config` -> Collections shows for that database, and that its **Back** button returns to the `/database manage` management menu (not to `/config`'s picker).
   5. Choose **Backup Collection**; confirm a backup file is produced.
@@ -573,6 +573,30 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 3.4c-1 IMDb Metadata Refresh (`/database manage`)
+
+- **Objective:** Confirm the IMDb Metadata Refresh workflow's scope selection, confirmation, execution, per-suggestion merge behavior, post-sync, progress, final summary, cross-guild isolation, and idempotency all work as documented.
+- **Preconditions:** WASH Crew role; a server with at least two active collections, each with a mix of suggestions -- some with a valid, resolvable IMDb link (including at least one pair sharing the identical IMDb link within the same collection, and one pair sharing an IMDb link across two different collections), some with no IMDb link at all, and at least one whose stored metadata is already fully up to date. A second Discord server this same WASH process also serves, with its own collection and at least one suggestion.
+- **Steps:**
+  1. Run `/database manage`, choose a collection, choose **Refresh IMDb Metadata**; confirm a screen offering **Refresh This Collection**, **Refresh All Collections**, and **Back** -- both scope options shown even if the server has only one active collection.
+  2. Choose **Refresh This Collection**; confirm a confirmation screen naming that one collection, the number of collections (1), the number of suggestions eligible for refresh vs. the total considered, a statement that IMDb/OMDb requests will be made, a statement that existing WASH history/statuses are never changed, and a note that this may take time. Confirm no IMDb/OMDb request has been made yet (check logs/network if possible).
+  3. Click **Back**; confirm it returns to the scope-choice screen (not the collection's management menu). Click **Cancel** from the confirmation screen; confirm a "cancelled, no changes were made" message and that nothing changed.
+  4. Re-enter and choose **Refresh All Collections**; confirm the confirmation screen's collection count matches only this server's *active* collections, and that no collection from the second Discord server appears anywhere on this screen.
+  5. Click **Start Refresh**; confirm an immediate acknowledgment that processing has started, followed by periodic (not one-per-suggestion) progress updates showing collections/suggestions processed and running Refreshed/Unchanged/Skipped/Failed/posts-updated counts.
+  6. Once complete, confirm the final ephemeral summary shows correct overall totals, and (for the All Collections run) a per-collection breakdown.
+  7. Confirm every suggestion that had a valid IMDb link and actually-changed metadata is now updated (check `/list` or the suggestion directly) with fields such as cast, IMDb rating, and MPAA/content rating newly populated where they were previously blank, while its reference ID, original suggester, suggestion date, collection, status, and any vote/watch history are all unchanged.
+  8. Confirm the two suggestions sharing one IMDb link within the same collection were both evaluated (one refreshed, and confirm the second is handled gracefully -- either also refreshed if titles don't collide, or reported as Failed without corrupting the first) and that only one IMDb/OMDb request total was made for that shared link (check logs). Confirm the two suggestions sharing an IMDb link *across* two different collections both refresh successfully from a single shared lookup.
+  9. Confirm a suggestion with no IMDb link at all is reported as Skipped and is completely untouched.
+  10. Confirm the suggestion whose metadata was already fully up to date is reported as Unchanged, and that its public post was not re-edited (if this is separately observable, e.g. via a "last edited" indicator).
+  11. Confirm each refreshed suggestion's own public confirmation post was updated in place (poster/runtime/genres/IMDb rating/content rating/director/plot, wherever shown) -- not a new post, and its Status field is unchanged.
+  12. Temporarily make a refreshed suggestion's channel inaccessible to WASH (or delete its post) before running the refresh again on it; confirm the metadata update itself still succeeds and is reported as Refreshed, with the post-sync failure counted and shown separately in the summary -- the metadata change is not rolled back.
+  13. Run the exact same refresh again (same scope); confirm every previously-refreshed suggestion now reports Unchanged, no suggestion is duplicated, and no new post is created anywhere.
+  14. As a non-WASH-Crew member, confirm `/database manage` (and therefore this whole workflow) is unreachable.
+  15. With a collection containing several suggestions whose posts all live in the *same* channel, run a refresh and watch the bot's log for `PATCH /channels/{id}/messages/{id}` 429 responses -- confirm they're rare-to-absent compared to before pacing was added, and that the operation still completes with correct totals (an occasional 429 with an automatic retry is fine and doesn't affect the result).
+- **Expected Result:** Both scopes work as documented; Refresh All Collections never includes another guild's collections or an inactive collection; nothing external happens before Start Refresh; progress and the final summary are accurate and never flood Discord with one edit per suggestion; suggestion-post edits to the same channel are paced to avoid bursts, significantly reducing Discord 429 responses without changing the final counts; a shared IMDb link is looked up once and applied to every matching suggestion; missing IMDb links are skipped, not guessed; every WASH-owned field (status, history, votes, Discord references) is preserved; post-sync failures are recorded separately and never roll back an already-persisted metadata update; the operation is safely rerunnable and fully idempotent.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 3.4d `/help`'s simplified Collections section
 
 - **Objective:** Confirm `/help`'s Collections section reflects the actual, simplified command surface -- not just a curated subset of a larger set of commands that still exist.
@@ -580,7 +604,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/help` as WASH Crew; find the Collections section.
   2. Confirm it lists exactly `/database add`, `/database list`, `/database health`, and `/database manage` -- not `/database move`, `/database backup`, `/database restore`, `/database reset`, or `/database remove` individually.
-  3. Confirm `/database manage`'s summary mentions move, edit, back up, restore, reset, and remove.
+  3. Confirm `/database manage`'s summary mentions move, edit, back up, restore, refresh IMDb metadata, reset, and remove.
   4. Confirm a note appears pointing at additional shortcuts (i.e. `/database restore`) under `/database` and the Command Reference.
   5. Confirm `/database add`, `/database list`, `/database health`, `/database manage`, and `/database restore` all still run correctly, and that no other `/database` subcommand exists to run (see 3.4/3.4b/3.4c above).
 - **Expected Result:** `/help` accurately reflects the real, simplified command surface -- it is not merely hiding commands that still exist elsewhere.

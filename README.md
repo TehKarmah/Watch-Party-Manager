@@ -70,7 +70,7 @@ WASH's in-Discord `/help` command always reflects the exact command set availabl
 
 - Suggestions: `/remove`, `/edit_suggestion`, `/repair_suggestions`
 - Voting: `/vote start`, `/vote status`, `/vote edit`
-- Suggestion databases: `/database add`, `/database list`, `/database health`, `/database manage` (guided: move, edit, back up, reset, or remove a collection), `/database restore`
+- Suggestion databases: `/database add`, `/database list`, `/database health`, `/database manage` (guided: move, edit, back up, refresh IMDb metadata, reset, or remove a collection), `/database restore`
 - Membership: `/watch_party`
 - Configuration: `/setup`, `/config`
 - Maintenance: `/backup`, `/restore`, `/factory_reset`, `/import`

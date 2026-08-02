@@ -19,6 +19,7 @@ import discord
 
 from watch_party_manager.bot import handle_database_manage
 from watch_party_manager.database_admin_view import CollectionManagementMenuView, DestinationChoiceView
+from watch_party_manager.imdb_refresh_view import ImdbRefreshScopeSelectionView
 from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, GuildConfiguration
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
@@ -215,6 +216,7 @@ class ManagementMenuTests(DatabaseManageCommandTestCase):
                 "wpm_database_manage_edit",
                 "wpm_database_manage_backup",
                 "wpm_database_manage_restore",
+                "wpm_database_manage_refresh_imdb",
                 "wpm_database_manage_reset",
                 "wpm_database_manage_remove",
                 "wpm_database_manage_cancel",
@@ -223,8 +225,9 @@ class ManagementMenuTests(DatabaseManageCommandTestCase):
 
     async def test_administrative_actions_are_ordered_before_destructive_ones(self) -> None:
         # Database Manage UX (Section 2): administrative actions (Edit,
-        # Backup, Move, Restore) come first, destructive ones (Reset,
-        # Remove) last, with Cancel always the final item.
+        # Backup, Move, Restore, Refresh IMDb Metadata) come first,
+        # destructive ones (Reset, Remove) last, with Cancel always the
+        # final item.
         select_interaction = await self._reach_management_menu()
         menu_view = select_interaction.response.edited_view
 
@@ -234,6 +237,7 @@ class ManagementMenuTests(DatabaseManageCommandTestCase):
             "wpm_database_manage_backup",
             "wpm_database_manage_move",
             "wpm_database_manage_restore",
+            "wpm_database_manage_refresh_imdb",
         ]
         destructive_ids = ["wpm_database_manage_reset", "wpm_database_manage_remove"]
 
@@ -255,6 +259,7 @@ class ManagementMenuTests(DatabaseManageCommandTestCase):
             "wpm_database_manage_backup",
             "wpm_database_manage_move",
             "wpm_database_manage_restore",
+            "wpm_database_manage_refresh_imdb",
         ):
             button = next(b for b in menu_view.children if b.custom_id == custom_id)
             self.assertNotEqual(button.style, discord.ButtonStyle.danger)
@@ -284,6 +289,17 @@ class ManagementActionTests(DatabaseManageCommandTestCase):
         await move_button.callback(interaction=action_interaction)
 
         self.assertIsInstance(action_interaction.response.edited_view, DestinationChoiceView)
+
+    async def test_refresh_imdb_metadata_launches_the_scope_selection(self) -> None:
+        select_interaction = await self._reach_management_menu()
+        menu_view = select_interaction.response.edited_view
+        refresh_button = self._button(menu_view, "wpm_database_manage_refresh_imdb")
+
+        action_interaction = FakeInteraction()
+        await refresh_button.callback(interaction=action_interaction)
+
+        self.assertIsInstance(action_interaction.response.edited_view, ImdbRefreshScopeSelectionView)
+        self.assertIn("Refresh IMDb Metadata", action_interaction.response.edited_content)
 
     async def test_edit_collection_launches_the_settings_menu(self) -> None:
         select_interaction = await self._reach_management_menu()

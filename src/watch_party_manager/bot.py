@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import platform
@@ -129,6 +130,19 @@ from watch_party_manager.database_admin_view import (
     DestinationChoiceView,
     ExistingThreadSelectView,
 )
+from watch_party_manager.imdb_refresh_view import (
+    REFRESH_SCOPE_ALL_COLLECTIONS,
+    REFRESH_SCOPE_THIS_COLLECTION,
+    ImdbRefreshConfirmationView,
+    ImdbRefreshScopeSelectionView,
+)
+from watch_party_manager.services.imdb_metadata_refresh_service import (
+    ImdbMetadataRefreshService,
+    ImdbMetadataRefreshSummary,
+    RefreshProgress,
+    resolve_refreshable_databases,
+)
+from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService
 from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
 )
@@ -7743,7 +7757,20 @@ _STATUS_EMBED_SYNC_MAX_ATTEMPTS = 2
 _STATUS_EMBED_SYNC_RETRY_DELAY_SECONDS = 0.5
 
 
-async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchItem) -> None:
+class SuggestionPostSyncResult(str, Enum):
+    """sync_suggestion_status_embed's outcome, for callers (e.g. IMDb
+    Metadata Refresh) that need to know whether the post was actually
+    updated rather than only fire-and-forgetting it. Every existing
+    caller predating this still just awaits the call and ignores the
+    return value, so adding this is fully backward compatible.
+    """
+
+    NO_POST = "no_post"  # nothing to sync (no known message/channel, or no resolvable database) -- not a failure.
+    SYNCED = "synced"  # the existing post was found and edited successfully.
+    FAILED = "failed"  # a post exists but could not be edited (deleted, inaccessible, or a persistent error).
+
+
+async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchItem) -> SuggestionPostSyncResult:
     """Edit a suggestion's existing public post in place after its status
     changes (Requirement 7), so its Status field never goes stale.
 
@@ -7765,13 +7792,13 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
     paths (a scheduled close_vote job and /edit_vote's "End Now").
     """
     if watch_item.channel_id is None or watch_item.message_id is None:
-        return
+        return SuggestionPostSyncResult.NO_POST
 
     database = (
         bot.suggestion_service.get_database(watch_item.database_id) if watch_item.database_id is not None else None
     )
     if database is None:
-        return
+        return SuggestionPostSyncResult.NO_POST
 
     suggested_by = (
         f"<@{watch_item.journey.original_suggester}>"
@@ -7814,18 +7841,18 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
                 channel = await bot.fetch_channel(watch_item.channel_id)
             message = await channel.fetch_message(watch_item.message_id)
             await message.edit(embed=embed, view=view)
-            return
+            return SuggestionPostSyncResult.SYNCED
         except (discord.NotFound, discord.Forbidden):
             # The message/channel is gone or no longer accessible -- a
             # permanent condition retrying can't fix (message deleted,
             # permissions revoked) -- so this is logged and skipped
             # without spending the remaining retry attempts.
             log_final_failure("permanent: message/channel unreachable")
-            return
+            return SuggestionPostSyncResult.FAILED
         except Exception:
             if attempt + 1 >= _STATUS_EMBED_SYNC_MAX_ATTEMPTS:
                 log_final_failure("transient failure persisted past the retry budget")
-                return
+                return SuggestionPostSyncResult.FAILED
             # Reliability fix (rotation-state consistency audit): a
             # transient failure (network blip, Discord-side 5xx) used to
             # leave a post permanently stale with no retry. One short,
@@ -11598,6 +11625,8 @@ async def show_database_management_menu(
                 ),
                 view=None,
             )
+        elif action == "refresh_imdb":
+            await show_imdb_refresh_scope_selection(action_interaction, bot, guild_id, database_id)
         elif action == "reset":
             await start_database_reset(action_interaction, bot, guild_id, database_id)
         else:
@@ -11659,6 +11688,346 @@ async def handle_database_manage(interaction: discord.Interaction, bot: "WatchPa
         options, on_database_selected, custom_id="wpm_database_manage_select", placeholder="Choose a collection to manage..."
     )
     await interaction.response.send_message("Choose which collection to manage:", view=view, ephemeral=True)
+
+
+# IMDb Metadata Refresh: how often a running refresh's progress message is
+# actually re-edited on Discord -- every suggestion reports progress to
+# perform_imdb_metadata_refresh's on_progress callback, but that callback
+# only issues a real Discord edit at a collection boundary or after this
+# many seconds have passed since the last edit, whichever comes first
+# (Section 9: "do not edit... for every single suggestion").
+IMDB_REFRESH_PROGRESS_EDIT_MIN_INTERVAL_SECONDS = 2.0
+
+# A plain message's content is capped at 2000 characters by Discord; kept
+# a little under that so the final summary always has headroom.
+IMDB_REFRESH_SUMMARY_MAX_CONTENT_LENGTH = 1900
+
+# Rate-limit friendliness: minimum gap between two suggestion-post edits
+# (sync_suggestion_status_embed's message.edit call) in the SAME channel
+# during a bulk IMDb Metadata Refresh. Live testing surfaced repeated
+# Discord 429s on PATCH /channels/{id}/messages/{id} when many refreshed
+# suggestions in one channel were resynced back-to-back -- discord.py's
+# own retry-after handling already recovers from those, but pacing our
+# side of it means we hit that path far less often. 1.25s sits in the
+# middle of the 1.0-1.5s range Discord's own edit rate limit tolerates
+# comfortably for a single channel.
+IMDB_REFRESH_POST_EDIT_MIN_INTERVAL_SECONDS = 1.25
+
+
+class _ChannelEditPacer:
+    """Centralized pacing for the suggestion-post edits IMDb Metadata
+    Refresh issues in bulk. Refresh processing is already strictly
+    sequential (Section 6), so this only needs to insert a wait before an
+    edit that would otherwise land too soon after the previous edit to
+    the SAME channel -- Discord's message-edit rate limit is bucketed per
+    channel, so edits to a different channel never need to wait on this.
+    Deliberately scoped to this one workflow (not sync_suggestion_status_
+    embed itself), since every other caller of that function edits at
+    most one post per user action, never in bulk.
+    """
+
+    def __init__(
+        self,
+        *,
+        min_interval_seconds: float,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Optional[Callable[[], float]] = None,
+    ) -> None:
+        self._min_interval_seconds = min_interval_seconds
+        self._sleep = sleep
+        self._clock = clock or (lambda: asyncio.get_event_loop().time())
+        self._last_edit_at_by_channel: dict[int, float] = {}
+
+    async def wait_for_turn(self, channel_id: int) -> None:
+        last_edit_at = self._last_edit_at_by_channel.get(channel_id)
+        if last_edit_at is not None:
+            remaining = self._min_interval_seconds - (self._clock() - last_edit_at)
+            if remaining > 0:
+                await self._sleep(remaining)
+        self._last_edit_at_by_channel[channel_id] = self._clock()
+
+
+def _imdb_metadata_service_for(bot: "WatchPartyBot") -> ImdbMetadataService:
+    """The one, already-configured ImdbMetadataService instance /add's
+    own suggestion-input pipeline uses -- reused as-is (Section 5: no
+    parallel metadata client), so the refresh workflow shares the exact
+    same API key resolution and (in tests) the exact same injected
+    fetch_json.
+    """
+    return bot.suggestion_input_service.imdb_metadata_service
+
+
+async def show_imdb_refresh_scope_selection(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, database_id: int
+) -> None:
+    """IMDb Metadata Refresh, Section 2: choose Refresh This Collection,
+    Refresh All Collections (active collections in this guild only), or
+    go back to this collection's management menu.
+    """
+    database = bot.suggestion_service.get_database(database_id)
+    if database is None or database.guild_id != guild_id:
+        await interaction.response.edit_message(content="That collection no longer exists.", view=None)
+        return
+
+    collection_name = format_collection_display(
+        _resolve_collection_name(
+            bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+        )
+    )
+
+    async def on_back(back_interaction: discord.Interaction) -> None:
+        await show_database_management_menu(back_interaction, bot, guild_id, database_id)
+
+    async def on_scope_chosen(scope_interaction: discord.Interaction, scope: str) -> None:
+        if scope == REFRESH_SCOPE_THIS_COLLECTION:
+            scope_databases = [database]
+        else:
+            scope_databases = resolve_refreshable_databases(
+                bot.suggestion_service.list_databases(guild_id), guild_id=guild_id
+            )
+        await show_imdb_refresh_confirmation(
+            scope_interaction, bot, guild_id, database_id, scope_databases, scope=scope
+        )
+
+    view = ImdbRefreshScopeSelectionView(on_scope_chosen, on_back)
+    await interaction.response.edit_message(
+        content=(
+            f'**Refresh IMDb Metadata -- "{collection_name}"**\n\n'
+            "Re-fetch IMDb-derived details (title, year, plot, poster, runtime, genres, IMDb rating, "
+            "MPAA/content rating, director, and cast) for suggestions that already have a usable IMDb link. "
+            "Existing WASH history and statuses are never changed. Choose a scope:"
+        ),
+        view=view,
+    )
+
+
+def build_imdb_refresh_confirmation_text(
+    *, scope: str, database_names: List[str], eligible_count: int, suggestion_count: int
+) -> str:
+    """Section 3: the confirmation screen's body -- scope, collection
+    count, and how many suggestions are actually eligible (have a usable
+    IMDb identifier) out of the total considered, plus the required
+    disclosures before any external request is made.
+    """
+    if scope == REFRESH_SCOPE_THIS_COLLECTION:
+        collection_name = database_names[0] if database_names else "this collection"
+        scope_line = f'Scope: Refresh This Collection -- "{collection_name}"'
+    else:
+        scope_line = (
+            "Scope: Refresh All Collections -- every active collection in this server "
+            f"({len(database_names)} collection{'s' if len(database_names) != 1 else ''})"
+        )
+    return "\n\n".join(
+        [
+            "**Refresh IMDb Metadata -- Confirm**",
+            scope_line,
+            f"Collections: {len(database_names)}",
+            f"Suggestions eligible for refresh: {eligible_count} (of {suggestion_count} total considered)",
+            (
+                "This will make IMDb/OMDb requests for each eligible suggestion's already-linked title. "
+                "Existing WASH history, statuses, votes, and Discord post references are never changed -- "
+                "only already-persisted IMDb-derived details (title, year, plot, poster, runtime, genres, "
+                "IMDb rating, MPAA/content rating, director, cast) are refreshed."
+            ),
+            "This may take some time depending on how many suggestions are eligible.",
+        ]
+    )
+
+
+async def show_imdb_refresh_confirmation(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    guild_id: int,
+    origin_database_id: int,
+    databases: List[SuggestionDatabase],
+    *,
+    scope: str,
+) -> None:
+    """IMDb Metadata Refresh, Section 3: require confirmation, showing
+    counts computed with zero external requests (count_refreshable only
+    ever reads already-persisted metadata), before Start Refresh can
+    make a single IMDb/OMDb request.
+    """
+    refresh_service = ImdbMetadataRefreshService(bot.suggestion_service, _imdb_metadata_service_for(bot))
+    eligible_total = 0
+    suggestion_total = 0
+    database_names: List[str] = []
+    for database in databases:
+        usable, total = refresh_service.count_refreshable(database.database_id)
+        eligible_total += usable
+        suggestion_total += total
+        database_names.append(
+            format_collection_display(
+                _resolve_collection_name(
+                    bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+                )
+            )
+        )
+
+    async def on_back(back_interaction: discord.Interaction) -> None:
+        await show_imdb_refresh_scope_selection(back_interaction, bot, guild_id, origin_database_id)
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        await cancel_interaction.response.edit_message(
+            content="IMDb metadata refresh cancelled. No changes were made.", view=None
+        )
+
+    async def on_start(start_interaction: discord.Interaction) -> None:
+        await perform_imdb_metadata_refresh(start_interaction, bot, databases)
+
+    view = ImdbRefreshConfirmationView(on_start, on_back, on_cancel)
+    text = build_imdb_refresh_confirmation_text(
+        scope=scope, database_names=database_names, eligible_count=eligible_total, suggestion_count=suggestion_total
+    )
+    await interaction.response.edit_message(content=text, view=view)
+
+
+def build_imdb_refresh_progress_text(progress: RefreshProgress) -> str:
+    """Section 9's suggested progress fields, rendered as a compact block."""
+    collection_line = f"Collections: {progress.collections_completed}/{progress.collections_total}"
+    if progress.collections_completed < progress.collections_total:
+        collection_line += f" (currently refreshing: {progress.current_collection_name})"
+    return "\n".join(
+        [
+            "**Refreshing IMDb Metadata...**",
+            "",
+            collection_line,
+            f"Suggestions: {progress.suggestions_processed}/{progress.suggestions_total}",
+            f"Refreshed: {progress.refreshed}",
+            f"Unchanged: {progress.unchanged}",
+            f"Skipped: {progress.skipped}",
+            f"Failed: {progress.failed}",
+            f"Suggestion posts updated: {progress.posts_updated}",
+            f"Suggestion post sync failures: {progress.post_sync_failures}",
+        ]
+    )
+
+
+def _build_imdb_refresh_totals_lines(summary: ImdbMetadataRefreshSummary) -> List[str]:
+    return [
+        "**IMDb Metadata Refresh Complete**",
+        "",
+        f"Collections processed: {summary.collections_processed}",
+        f"Suggestions processed: {summary.processed}",
+        f"Refreshed: {summary.refreshed}",
+        f"Unchanged: {summary.unchanged}",
+        f"Skipped: {summary.skipped}",
+        f"Failed: {summary.failed}",
+        f"Suggestion posts updated: {summary.posts_updated}",
+        f"Suggestion post sync failures: {summary.post_sync_failures}",
+    ]
+
+
+def _build_imdb_refresh_breakdown_lines(summary: ImdbMetadataRefreshSummary) -> List[str]:
+    lines = ["", "**Per-Collection Breakdown**"]
+    for collection in summary.collections:
+        lines.append(
+            f"• {collection.database_name}: {collection.processed} processed, {collection.refreshed} refreshed, "
+            f"{collection.unchanged} unchanged, {collection.skipped} skipped, {collection.failed} failed, "
+            f"{collection.posts_updated} posts updated, {collection.post_sync_failures} post sync failures"
+        )
+    return lines
+
+
+def build_imdb_refresh_summary_message(
+    summary: ImdbMetadataRefreshSummary, *, multi_collection: bool
+) -> tuple[str, Optional[str]]:
+    """Section 10: the final ephemeral completion summary. For Refresh
+    All Collections, also includes a concise per-collection breakdown --
+    unless that would push the plain message content over Discord's
+    2000-character limit, in which case the totals stay inline and the
+    full per-collection breakdown is returned separately as
+    attachment_text for the caller to send as a text file instead
+    (never a truncated/invalid payload).
+
+    Returns:
+        (content, attachment_text) -- attachment_text is None unless the
+        full breakdown had to be moved out of the message body.
+    """
+    totals_lines = _build_imdb_refresh_totals_lines(summary)
+    if not multi_collection or not summary.collections:
+        return "\n".join(totals_lines), None
+
+    breakdown_lines = _build_imdb_refresh_breakdown_lines(summary)
+    full_text = "\n".join(totals_lines + breakdown_lines)
+    if len(full_text) <= IMDB_REFRESH_SUMMARY_MAX_CONTENT_LENGTH:
+        return full_text, None
+
+    attachment_text = "\n".join(breakdown_lines[2:])  # drop the leading blank line + header; the file stands alone.
+    content = "\n".join(
+        totals_lines
+        + [
+            "",
+            f"Per-collection breakdown attached ({len(summary.collections)} collections) -- too long to show inline.",
+        ]
+    )
+    return content, attachment_text
+
+
+async def perform_imdb_metadata_refresh(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    databases: List[SuggestionDatabase],
+    *,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """IMDb Metadata Refresh, Sections 6/8/9/10: run the refresh, posting
+    bounded progress updates and a final ephemeral summary. Stays
+    ephemeral throughout -- Start Refresh's own click is the interaction
+    this edits in place, so nothing here is ever visible to anyone but
+    the WASH Crew member who started it.
+
+    `sleep` is injectable purely for tests (see _ChannelEditPacer) --
+    production callers always use the real asyncio.sleep default.
+    """
+    await interaction.response.edit_message(
+        content="**Refreshing IMDb Metadata...**\n\nStarting -- progress will update periodically.", view=None
+    )
+
+    refresh_service = ImdbMetadataRefreshService(bot.suggestion_service, _imdb_metadata_service_for(bot))
+    # Anchored to "now" (not 0.0) so the very first per-suggestion
+    # progress event is correctly throttled too -- asyncio's loop clock
+    # is monotonic from an arbitrary starting point (often process
+    # start), not from zero, so a 0.0 starting point would make that
+    # first check always look like "well over the interval" and issue
+    # an extra, unwanted edit immediately.
+    last_edit_at = asyncio.get_event_loop().time()
+    post_edit_pacer = _ChannelEditPacer(min_interval_seconds=IMDB_REFRESH_POST_EDIT_MIN_INTERVAL_SECONDS, sleep=sleep)
+
+    async def on_progress(progress: RefreshProgress) -> None:
+        nonlocal last_edit_at
+        loop = asyncio.get_event_loop()
+        now = loop.time()
+        if not progress.collection_boundary and (now - last_edit_at) < IMDB_REFRESH_PROGRESS_EDIT_MIN_INTERVAL_SECONDS:
+            return
+        last_edit_at = now
+        try:
+            await interaction.edit_original_response(content=build_imdb_refresh_progress_text(progress))
+        except discord.HTTPException:
+            logger.warning("Could not update IMDb metadata refresh progress message", exc_info=True)
+
+    async def post_sync(watch_item: WatchItem) -> Optional[bool]:
+        # Only pace when an edit will actually be attempted -- mirrors
+        # sync_suggestion_status_embed's own NO_POST guard, so suggestions
+        # with no existing post never incur a needless wait.
+        if watch_item.channel_id is not None and watch_item.message_id is not None:
+            await post_edit_pacer.wait_for_turn(watch_item.channel_id)
+        result = await sync_suggestion_status_embed(bot, watch_item)
+        if result is SuggestionPostSyncResult.NO_POST:
+            return None
+        return result is SuggestionPostSyncResult.SYNCED
+
+    summary = await refresh_service.refresh_databases(databases, on_progress=on_progress, post_sync=post_sync)
+
+    content, attachment_text = build_imdb_refresh_summary_message(summary, multi_collection=len(databases) > 1)
+    try:
+        if attachment_text is not None:
+            report_file = discord.File(io.BytesIO(attachment_text.encode("utf-8")), filename="imdb_refresh_report.txt")
+            await interaction.edit_original_response(content=content, attachments=[report_file])
+        else:
+            await interaction.edit_original_response(content=content)
+    except discord.HTTPException:
+        logger.warning("Could not post the final IMDb metadata refresh summary", exc_info=True)
 
 
 def parse_watch_party_schedule_time(value: str) -> datetime:

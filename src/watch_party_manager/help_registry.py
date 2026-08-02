@@ -133,7 +133,7 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
     ),
     CommandHelp(
         "/database manage",
-        "Move, edit, back up, restore, reset, or remove collections.",
+        "Move, edit, back up, restore, refresh IMDb metadata, reset, or remove collections.",
         "WASH Crew: Collections",
         HelpAudience.WASH_CREW,
     ),

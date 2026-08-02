@@ -37,6 +37,15 @@ class SuggestionInputService:
         """Whether OMDb title lookups are configured (see ImdbMetadataService.is_configured)."""
         return self._imdb_metadata_service.is_configured
 
+    @property
+    def imdb_metadata_service(self) -> ImdbMetadataService:
+        """The underlying OMDb-backed client, exposed so other features
+        (e.g. IMDb Metadata Refresh) reuse this exact configured
+        instance rather than constructing a second, parallel one --
+        same API key resolution, and same injected fetch_json in tests.
+        """
+        return self._imdb_metadata_service
+
     async def resolve(
         self,
         title: str,
