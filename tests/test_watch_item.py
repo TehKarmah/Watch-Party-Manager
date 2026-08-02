@@ -41,6 +41,20 @@ class WatchItemModelTests(unittest.TestCase):
         self.assertEqual(item.metadata_ids[MetadataProvider.IMDB], "tt0133093")
         self.assertEqual(item.status, WatchItemStatus.SUGGESTED)
 
+    def test_watch_item_normalizes_cast_the_same_way_as_genres(self) -> None:
+        item = WatchItem(
+            title="The Mask",
+            media_type=MediaType.MOVIE,
+            cast=(" Jim Carrey ", "Cameron Diaz", "  "),
+        )
+
+        self.assertEqual(item.cast, ("Jim Carrey", "Cameron Diaz"))
+
+    def test_watch_item_cast_defaults_to_empty(self) -> None:
+        item = WatchItem(title="Blade Runner", media_type=MediaType.MOVIE)
+
+        self.assertEqual(item.cast, ())
+
     def test_watch_item_status_can_be_updated(self) -> None:
         item = WatchItem(title="Blade Runner", media_type=MediaType.MOVIE, runtime_minutes=117)
 

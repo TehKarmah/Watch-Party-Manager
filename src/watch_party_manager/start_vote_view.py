@@ -9,7 +9,7 @@ paths -- this module adds presentation only.
 
 from __future__ import annotations
 
-from typing import Awaitable, Callable, List, Optional
+from typing import Awaitable, Callable, Optional
 
 import discord
 
@@ -27,8 +27,7 @@ OnCustomizeSubmit = Callable[
     [discord.Interaction, Optional[str], Optional[str], Optional[str], Optional[str]],
     Awaitable[None],
 ]
-OnMemberFilterChanged = Callable[[discord.Interaction, Optional[discord.Member]], Awaitable[None]]
-OnGenreFilterChanged = Callable[[discord.Interaction, Optional[str]], Awaitable[None]]
+OnEditFilters = Callable[[discord.Interaction], Awaitable[None]]
 
 START_VOTE_CHOICE_TIMEOUT_SECONDS = 180
 
@@ -120,57 +119,21 @@ class ContinueToVoteSettingsButton(discord.ui.Button):
         await self._callback(interaction, self._candidate_selection_select.selected, self._visibility_select.selected)
 
 
-class MemberFilterSelectComponent(discord.ui.UserSelect):
-    """Custom Vote Filter Architecture: an optional, per-vote narrowing of
-    the nominee pool to one Discord member's eligible suggestions
-    (Suggestions From One Member). A discord.ui.UserSelect rather than a
-    plain Select, so it never fails on servers with more than 25 members
-    -- Discord resolves member options dynamically as the admin types,
-    unlike a fixed SelectOption list.
-
-    min_values=0 so Discord's own "clear this selection" affordance is
-    how an administrator returns to Any Member -- no separate button is
-    needed, and leaving this untouched already means Any Member, exactly
-    like CandidateSelectionSelectComponent/VisibilitySelectComponent's
-    own "untouched = default" contract.
+class EditFiltersButton(discord.ui.Button):
+    """Opens the shared filter_menu_view.FilterMenuView session (Genre,
+    IMDb Rating, MPAA Rating, Actor, Member) -- see bot.py's
+    create_filter_menu_session, shared unchanged with /random watch so
+    the filter-editing experience can never diverge between the two.
     """
 
-    def __init__(self, on_change: OnMemberFilterChanged) -> None:
+    def __init__(self, on_click: OnEditFilters) -> None:
         super().__init__(
-            placeholder="Suggestion Source: Any Member (optional)",
-            min_values=0,
-            max_values=1,
-            custom_id="wpm_start_vote_customize_member_filter",
+            label="Edit Filters", style=discord.ButtonStyle.secondary, custom_id="wpm_start_vote_customize_edit_filters"
         )
-        self._on_change = on_change
+        self._on_click = on_click
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await self._on_change(interaction, self.values[0] if self.values else None)
-
-
-class GenreFilterSelectComponent(discord.ui.Select):
-    """Custom Vote Filter Architecture: an optional, per-vote narrowing of
-    the nominee pool to one genre (Genre Filter). `options` is built by
-    the caller from genres actually represented in the resolved
-    collection's eligible pool (see bot.py's build_genre_filter_select_options),
-    each already Discord-safe and eligible-count-annotated.
-
-    min_values=0 for the same "native clear = Any Genre" reason as
-    MemberFilterSelectComponent.
-    """
-
-    def __init__(self, on_change: OnGenreFilterChanged, *, options: List[discord.SelectOption]) -> None:
-        super().__init__(
-            placeholder="Genre: Any Genre (optional)",
-            min_values=0,
-            max_values=1,
-            options=options,
-            custom_id="wpm_start_vote_customize_genre_filter",
-        )
-        self._on_change = on_change
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await self._on_change(interaction, self.values[0] if self.values else None)
+        await self._on_click(interaction)
 
 
 class CustomizeVoteOverridesView(discord.ui.View):
@@ -183,15 +146,12 @@ class CustomizeVoteOverridesView(discord.ui.View):
     unchanged, so their option labels, help text, and persisted values can
     never drift from the Setup Wizard's or /config's own dropdowns.
 
-    Also optionally offers the Custom Vote Filter Architecture's Member
-    and Genre filters on this same screen -- on_member_filter_changed/
-    on_genre_filter_changed are omitted (None) when there's no resolved
-    collection (member/genre filters are meaningless with no collection
-    pool to narrow) or, for genre, no genres represented in that pool at
-    all -- avoiding forcing WASH Crew through an empty or irrelevant
-    screen when they don't want filters. Candidate Selection + Visibility
-    + Member filter + Genre filter + the Continue button is exactly 5
-    rows -- Discord's per-message action-row limit.
+    Also optionally offers an Edit Filters entry point into the shared
+    filter_menu_view.FilterMenuView session -- omitted (None) when
+    there's no resolved collection (filters are meaningless with no
+    collection pool to narrow). Candidate Selection + Visibility +
+    [Edit Filters, Continue] is only 3 rows, comfortably under Discord's
+    5-row limit even as more filters are added to the shared menu.
 
     A separate step from CustomizeVoteModal because Discord modals cannot
     contain Select menus -- the same reason the Setup Wizard's Voting
@@ -204,22 +164,18 @@ class CustomizeVoteOverridesView(discord.ui.View):
         *,
         default_candidate_selection: CandidateSelectionMode,
         default_visibility: GuildVoteVisibility,
-        on_member_filter_changed: Optional[OnMemberFilterChanged] = None,
-        on_genre_filter_changed: Optional[OnGenreFilterChanged] = None,
-        genre_filter_options: Optional[List[discord.SelectOption]] = None,
+        on_edit_filters: Optional[OnEditFilters] = None,
     ) -> None:
         super().__init__(timeout=START_VOTE_CHOICE_TIMEOUT_SECONDS)
         self.candidate_selection_select = CandidateSelectionSelectComponent(default=default_candidate_selection)
         self.visibility_select = VisibilitySelectComponent(default=default_visibility)
         self.add_item(self.candidate_selection_select)
         self.add_item(self.visibility_select)
-        if on_member_filter_changed is not None:
-            self.add_item(MemberFilterSelectComponent(on_member_filter_changed))
-        if on_genre_filter_changed is not None and genre_filter_options:
-            self.add_item(GenreFilterSelectComponent(on_genre_filter_changed, options=genre_filter_options))
         self.continue_button = ContinueToVoteSettingsButton(
             on_continue, self.candidate_selection_select, self.visibility_select
         )
+        if on_edit_filters is not None:
+            self.add_item(EditFiltersButton(on_edit_filters))
         self.add_item(self.continue_button)
 
 

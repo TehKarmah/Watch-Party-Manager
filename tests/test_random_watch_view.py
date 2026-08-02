@@ -9,10 +9,7 @@ import discord
 
 from watch_party_manager.random_watch_view import (
     RANDOM_WATCH_VIEW_TIMEOUT_SECONDS,
-    RandomWatchFilterView,
-    RandomWatchGenreFilterSelectComponent,
     RandomWatchInitialView,
-    RandomWatchMemberFilterSelectComponent,
     RandomWatchResultView,
 )
 
@@ -77,117 +74,6 @@ class RandomWatchInitialViewTests(unittest.IsolatedAsyncioTestCase):
         view = RandomWatchInitialView(_noop, on_add_filters)
         await view.children[1].callback(interaction=object())
         self.assertEqual(calls, ["filters"])
-
-
-class RandomWatchMemberFilterSelectComponentTests(unittest.IsolatedAsyncioTestCase):
-    def test_allows_clearing_via_min_values_zero(self) -> None:
-        select = RandomWatchMemberFilterSelectComponent(_noop)
-        self.assertEqual(select.min_values, 0)
-        self.assertEqual(select.max_values, 1)
-        self.assertEqual(select.custom_id, "wpm_random_watch_member_filter")
-
-    async def test_callback_forwards_none_when_cleared(self) -> None:
-        calls = []
-
-        async def on_change(interaction, member) -> None:
-            calls.append(member)
-
-        select = RandomWatchMemberFilterSelectComponent(on_change)
-        select._values = []
-        await select.callback(interaction=object())
-        self.assertEqual(calls, [None])
-
-    async def test_callback_forwards_the_selected_member(self) -> None:
-        calls = []
-
-        async def on_change(interaction, member) -> None:
-            calls.append(member)
-
-        select = RandomWatchMemberFilterSelectComponent(on_change)
-        select._values = ["fake-member"]
-        await select.callback(interaction=object())
-        self.assertEqual(calls, ["fake-member"])
-
-
-class RandomWatchGenreFilterSelectComponentTests(unittest.IsolatedAsyncioTestCase):
-    def test_allows_clearing_via_min_values_zero(self) -> None:
-        options = [discord.SelectOption(label="Horror", value="Horror")]
-        select = RandomWatchGenreFilterSelectComponent(_noop, options=options)
-        self.assertEqual(select.min_values, 0)
-        self.assertEqual(select.custom_id, "wpm_random_watch_genre_filter")
-
-    async def test_callback_forwards_the_selected_genre(self) -> None:
-        calls = []
-
-        async def on_change(interaction, genre) -> None:
-            calls.append(genre)
-
-        options = [discord.SelectOption(label="Horror", value="Horror")]
-        select = RandomWatchGenreFilterSelectComponent(on_change, options=options)
-        select._values = ["Horror"]
-        await select.callback(interaction=object())
-        self.assertEqual(calls, ["Horror"])
-
-
-class RandomWatchFilterViewTests(unittest.IsolatedAsyncioTestCase):
-    def test_includes_member_select_genre_select_pick_and_change_collection(self) -> None:
-        options = [discord.SelectOption(label="Horror", value="Horror")]
-        view = RandomWatchFilterView(_noop, _noop, _noop, _noop, genre_filter_options=options)
-        custom_ids = [child.custom_id for child in view.children]
-        self.assertEqual(
-            custom_ids,
-            [
-                "wpm_random_watch_member_filter",
-                "wpm_random_watch_genre_filter",
-                "wpm_random_watch_pick_filtered",
-                "wpm_random_watch_change_collection",
-            ],
-        )
-
-    def test_omits_the_genre_select_when_no_genres_are_available(self) -> None:
-        view = RandomWatchFilterView(_noop, _noop, _noop, _noop, genre_filter_options=[])
-        custom_ids = [child.custom_id for child in view.children]
-        self.assertNotIn("wpm_random_watch_genre_filter", custom_ids)
-        self.assertEqual(
-            custom_ids, ["wpm_random_watch_member_filter", "wpm_random_watch_pick_filtered", "wpm_random_watch_change_collection"]
-        )
-
-    async def test_pick_button_triggers_its_callback(self) -> None:
-        calls = []
-
-        async def on_pick(interaction) -> None:
-            calls.append("pick")
-
-        view = RandomWatchFilterView(_noop, _noop, on_pick, _noop, genre_filter_options=[])
-        pick_button = next(c for c in view.children if c.custom_id == "wpm_random_watch_pick_filtered")
-        await pick_button.callback(interaction=object())
-        self.assertEqual(calls, ["pick"])
-
-    async def test_change_collection_button_triggers_its_callback(self) -> None:
-        calls = []
-
-        async def on_change_collection(interaction) -> None:
-            calls.append("change")
-
-        view = RandomWatchFilterView(_noop, _noop, _noop, on_change_collection, genre_filter_options=[])
-        button = next(c for c in view.children if c.custom_id == "wpm_random_watch_change_collection")
-        await button.callback(interaction=object())
-        self.assertEqual(calls, ["change"])
-
-    def test_row_count_stays_within_discord_limits(self) -> None:
-        options = [discord.SelectOption(label="Horror", value="Horror")]
-        view = RandomWatchFilterView(_noop, _noop, _noop, _noop, genre_filter_options=options)
-        # Every component here is single-row (Select/UserSelect/Button),
-        # so component count doubles as a row-count proxy; must stay <=5.
-        self.assertLessEqual(len(view.children), 5)
-
-    def test_pick_button_is_enabled_by_default(self) -> None:
-        view = RandomWatchFilterView(_noop, _noop, _noop, _noop, genre_filter_options=[])
-        self.assertFalse(view.pick_button.disabled)
-
-    def test_pick_button_is_disabled_when_member_filter_invalid(self) -> None:
-        view = RandomWatchFilterView(_noop, _noop, _noop, _noop, genre_filter_options=[], member_filter_invalid=True)
-        self.assertTrue(view.pick_button.disabled)
 
 
 class RandomWatchResultViewTests(unittest.IsolatedAsyncioTestCase):

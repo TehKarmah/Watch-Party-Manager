@@ -71,6 +71,7 @@ class WatchItem:
     director: Optional[str] = None
     imdb_rating: Optional[str] = None
     poster_url: Optional[str] = None
+    cast: Tuple[str, ...] = field(default_factory=tuple)
     id: Optional[int] = None
     database_id: Optional[int] = None
     guild_id: Optional[int] = None
@@ -102,7 +103,8 @@ class WatchItem:
         self._validate_crew_review_message_id()
         self._validate_release_year()
         self._validate_updated_at()
-        self.genres = self._normalize_genres(self.genres)
+        self.genres = self._normalize_string_tuple(self.genres)
+        self.cast = self._normalize_string_tuple(self.cast)
         self.metadata_ids = self._normalize_metadata_ids(self.metadata_ids)
 
     @property
@@ -167,7 +169,7 @@ class WatchItem:
             raise ValueError("updated_at must be timezone-aware when provided")
 
     @staticmethod
-    def _normalize_genres(genres: Tuple[str, ...] | list[str] | None) -> Tuple[str, ...]:
+    def _normalize_string_tuple(genres: Tuple[str, ...] | list[str] | None) -> Tuple[str, ...]:
         if not genres:
             return ()
 

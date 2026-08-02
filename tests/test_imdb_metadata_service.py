@@ -54,6 +54,50 @@ class ImdbMetadataServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.imdb_id, "tt0076759")
         self.assertEqual(result.imdb_url, "https://www.imdb.com/title/tt0076759/")
 
+    async def test_resolves_cast_from_the_actors_field(self) -> None:
+        service = ImdbMetadataService(
+            api_key="test-key",
+            fetch_json=lambda _: {
+                "Title": "The Mask",
+                "Year": "1994",
+                "Response": "True",
+                "Actors": "Jim Carrey, Cameron Diaz, Peter Riegert",
+                "Rated": "PG-13",
+                "imdbRating": "6.9",
+            },
+        )
+
+        result = await service.resolve_title("https://www.imdb.com/title/tt0110475/")
+
+        self.assertEqual(result.cast, ("Jim Carrey", "Cameron Diaz", "Peter Riegert"))
+        self.assertEqual(result.content_rating, "PG-13")
+        self.assertEqual(result.imdb_rating, "6.9")
+
+    async def test_missing_actors_field_resolves_to_an_empty_cast(self) -> None:
+        service = ImdbMetadataService(
+            api_key="test-key",
+            fetch_json=lambda _: {"Title": "The Odyssey", "Year": "2026", "Response": "True"},
+        )
+
+        result = await service.resolve_title("https://www.imdb.com/title/tt33764258/")
+
+        self.assertEqual(result.cast, ())
+
+    async def test_actors_field_of_n_a_resolves_to_an_empty_cast(self) -> None:
+        service = ImdbMetadataService(
+            api_key="test-key",
+            fetch_json=lambda _: {
+                "Title": "The Odyssey",
+                "Year": "2026",
+                "Response": "True",
+                "Actors": "N/A",
+            },
+        )
+
+        result = await service.resolve_title("https://www.imdb.com/title/tt33764258/")
+
+        self.assertEqual(result.cast, ())
+
     async def test_accepts_json_text_from_injected_fetcher(self) -> None:
         service = ImdbMetadataService(
             api_key="test-key",

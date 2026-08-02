@@ -36,8 +36,16 @@ from watch_party_manager.persistence.suggestion_database_configuration_repositor
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
+from watch_party_manager.filter_menu_view import (
+    ANY_MPAA_RATING_VALUE,
+    FILTER_CATEGORY_ACTOR,
+    FILTER_CATEGORY_GENRE,
+    FILTER_CATEGORY_IMDB_RATING,
+    FILTER_CATEGORY_MEMBER,
+    FILTER_CATEGORY_MPAA_RATING,
+    FilterMenuView,
+)
 from watch_party_manager.random_watch_view import (
-    RandomWatchFilterView,
     RandomWatchInitialView,
     RandomWatchResultView,
 )
@@ -70,6 +78,7 @@ class FakeResponse:
         self.sent_embed = None
         self.sent_ephemeral = None
         self.sent_view = None
+        self.sent_modal = None
         self.edited_content = None
         self.edited_embed = "not-edited"
         self.edited_view = "not-edited"
@@ -80,6 +89,9 @@ class FakeResponse:
         self.sent_ephemeral = ephemeral
         self.sent_view = view
         self.sent_embed = embed
+
+    async def send_modal(self, modal) -> None:
+        self.sent_modal = modal
 
     async def edit_message(self, content=None, view=None, embed=None) -> None:
         self.edited_content = content
@@ -180,6 +192,157 @@ class RandomWatchCommandTestCase(unittest.IsolatedAsyncioTestCase):
     def _member(self, user_id: int, *, watch_party: bool = True) -> FakeMember:
         roles = [FakeRole(WATCH_PARTY_ROLE_ID)] if watch_party else []
         return FakeMember(user_id, roles=roles)
+
+    # --- Shared FilterMenuView navigation helpers (Genre/IMDb Rating/
+    # MPAA Rating/Actor/Member all share this one menu architecture --
+    # see bot.py's create_filter_menu_session) ------------------------
+
+    async def _reach_filter_menu(self, database_id: int):
+        """/random watch -> Add Filters -> the FilterMenuView."""
+        interaction = FakeInteraction(user=self._member(1))
+        await handle_random_watch(interaction, self.bot)
+        initial_view = interaction.response.sent_view
+        add_filters_button = next(c for c in initial_view.children if c.custom_id == "wpm_random_watch_add_filters")
+        filters_interaction = FakeInteraction(user=self._member(1))
+        await add_filters_button.callback(interaction=filters_interaction)
+        return filters_interaction.response.edited_view
+
+    async def _open_category_edit(self, menu_view):
+        """Click the category select on a FilterMenuView, returning the
+        resulting edit screen for whichever category was selected --
+        menu_view.children[0]._values must already be set by the caller.
+        """
+        category_select = menu_view.children[0]
+        interaction = FakeInteraction(user=self._member(1))
+        await category_select.callback(interaction=interaction)
+        return interaction.response.edited_view
+
+    async def _set_member_filter(self, menu_view, fake_user):
+        """Navigate Filters -> Member -> select fake_user -> Back to
+        Filters. Returns (menu_view, status_line_content) -- the status
+        line is whatever validate_member_filter_selection produced,
+        shown on the Member edit screen itself before returning.
+        """
+        menu_view.children[0]._values = [FILTER_CATEGORY_MEMBER]
+        member_edit_view = await self._open_category_edit(menu_view)
+        member_select = member_edit_view.children[0]
+        member_select._values = [fake_user]
+        member_interaction = FakeInteraction(user=self._member(1))
+        await member_select.callback(interaction=member_interaction)
+        status_content = member_interaction.response.edited_content
+        updated_member_edit_view = member_interaction.response.edited_view
+        back_button = updated_member_edit_view.children[-1]
+        back_interaction = FakeInteraction(user=self._member(1))
+        await back_button.callback(interaction=back_interaction)
+        return back_interaction.response.edited_view, status_content
+
+    async def _clear_member_filter(self, menu_view):
+        menu_view.children[0]._values = [FILTER_CATEGORY_MEMBER]
+        member_edit_view = await self._open_category_edit(menu_view)
+        member_select = member_edit_view.children[0]
+        member_select._values = []
+        member_interaction = FakeInteraction(user=self._member(1))
+        await member_select.callback(interaction=member_interaction)
+        updated_member_edit_view = member_interaction.response.edited_view
+        back_button = updated_member_edit_view.children[-1]
+        back_interaction = FakeInteraction(user=self._member(1))
+        await back_button.callback(interaction=back_interaction)
+        return back_interaction.response.edited_view
+
+    async def _set_genre_filter(self, menu_view, genre: str):
+        """Navigate Filters -> Genre -> select genre. Genre selection
+        returns directly to the FilterMenuView (no Back step needed --
+        unlike Member, which shows its own inline validation feedback
+        first)."""
+        menu_view.children[0]._values = [FILTER_CATEGORY_GENRE]
+        genre_edit_view = await self._open_category_edit(menu_view)
+        genre_select = genre_edit_view.children[0]
+        genre_select._values = [genre]
+        interaction = FakeInteraction(user=self._member(1))
+        await genre_select.callback(interaction=interaction)
+        return interaction.response.edited_view
+
+    async def _clear_genre_filter(self, menu_view):
+        menu_view.children[0]._values = [FILTER_CATEGORY_GENRE]
+        genre_edit_view = await self._open_category_edit(menu_view)
+        genre_select = genre_edit_view.children[0]
+        genre_select._values = []
+        interaction = FakeInteraction(user=self._member(1))
+        await genre_select.callback(interaction=interaction)
+        return interaction.response.edited_view
+
+    @staticmethod
+    def _pick_button(menu_view):
+        return next(c for c in menu_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
+
+    async def _set_imdb_rating_filter(self, menu_view, *, minimum=None, maximum=None):
+        """Navigate Filters -> IMDb Rating -> Set Minimum/Maximum... ->
+        submit modal. Returns the submit interaction -- success lands
+        back on the refreshed menu (edited_view), a validation error
+        stays on the IMDb Rating edit screen with an inline warning."""
+        menu_view.children[0]._values = [FILTER_CATEGORY_IMDB_RATING]
+        imdb_edit_view = await self._open_category_edit(menu_view)
+        set_button = next(c for c in imdb_edit_view.children if c.custom_id == "wpm_filter_menu_imdb_rating_set")
+        open_interaction = FakeInteraction(user=self._member(1))
+        await set_button.callback(interaction=open_interaction)
+        modal = open_interaction.response.sent_modal
+        modal.minimum_input._value = minimum
+        modal.maximum_input._value = maximum
+        submit_interaction = FakeInteraction(user=self._member(1))
+        await modal.on_submit(interaction=submit_interaction)
+        return submit_interaction
+
+    async def _clear_imdb_rating_filter(self, menu_view):
+        menu_view.children[0]._values = [FILTER_CATEGORY_IMDB_RATING]
+        imdb_edit_view = await self._open_category_edit(menu_view)
+        any_button = next(c for c in imdb_edit_view.children if c.custom_id == "wpm_filter_menu_imdb_rating_any")
+        interaction = FakeInteraction(user=self._member(1))
+        await any_button.callback(interaction=interaction)
+        return interaction.response.edited_view
+
+    async def _set_mpaa_rating_filter(self, menu_view, rating: str):
+        menu_view.children[0]._values = [FILTER_CATEGORY_MPAA_RATING]
+        mpaa_edit_view = await self._open_category_edit(menu_view)
+        mpaa_select = mpaa_edit_view.children[0]
+        mpaa_select._values = [rating]
+        interaction = FakeInteraction(user=self._member(1))
+        await mpaa_select.callback(interaction=interaction)
+        return interaction.response.edited_view
+
+    async def _clear_mpaa_rating_filter(self, menu_view):
+        menu_view.children[0]._values = [FILTER_CATEGORY_MPAA_RATING]
+        mpaa_edit_view = await self._open_category_edit(menu_view)
+        mpaa_select = mpaa_edit_view.children[0]
+        mpaa_select._values = [ANY_MPAA_RATING_VALUE]
+        interaction = FakeInteraction(user=self._member(1))
+        await mpaa_select.callback(interaction=interaction)
+        return interaction.response.edited_view
+
+    async def _search_actor_filter(self, menu_view, query):
+        """Navigate Filters -> Actor -> Search for an Actor... -> submit
+        modal. Returns the submit interaction; caller inspects
+        edited_view/edited_content to see whether it landed back on the
+        refreshed menu (single match), a disambiguation picker (multiple
+        matches), or stayed on the Actor edit screen with a warning (no
+        matches)."""
+        menu_view.children[0]._values = [FILTER_CATEGORY_ACTOR]
+        actor_edit_view = await self._open_category_edit(menu_view)
+        search_button = next(c for c in actor_edit_view.children if c.custom_id == "wpm_filter_menu_actor_search")
+        open_interaction = FakeInteraction(user=self._member(1))
+        await search_button.callback(interaction=open_interaction)
+        modal = open_interaction.response.sent_modal
+        modal.query_input._value = query
+        submit_interaction = FakeInteraction(user=self._member(1))
+        await modal.on_submit(interaction=submit_interaction)
+        return submit_interaction
+
+    async def _clear_actor_filter(self, menu_view):
+        menu_view.children[0]._values = [FILTER_CATEGORY_ACTOR]
+        actor_edit_view = await self._open_category_edit(menu_view)
+        any_button = next(c for c in actor_edit_view.children if c.custom_id == "wpm_filter_menu_actor_any")
+        interaction = FakeInteraction(user=self._member(1))
+        await any_button.callback(interaction=interaction)
+        return interaction.response.edited_view
 
 
 # --- Section 1: Command access ------------------------------------------------------------------
@@ -490,87 +653,65 @@ class RandomSelectionAndEligibilityTests(RandomWatchCommandTestCase):
 
 
 class MemberFilterTests(RandomWatchCommandTestCase):
-    async def _reach_filter_screen(self, database_id: int):
-        interaction = FakeInteraction(user=self._member(1))
-        await handle_random_watch(interaction, self.bot)
-        initial_view = interaction.response.sent_view
-        add_filters_button = next(c for c in initial_view.children if c.custom_id == "wpm_random_watch_add_filters")
-        filters_interaction = FakeInteraction(user=self._member(1))
-        await add_filters_button.callback(interaction=filters_interaction)
-        return filters_interaction.response.edited_view
-
     async def test_matches_by_stable_discord_user_id(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, original_suggester="111")
         self._add("The Matrix", database_id, original_suggester="222")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "KC"
             roles = [FakeRole(WATCH_PARTY_ROLE_ID)]
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
+        _, status_content = await self._set_member_filter(menu_view, FakeUser())
 
-        self.assertIn("1 eligible suggestion", member_interaction.response.edited_content)
+        self.assertIn("1 eligible suggestion", status_content)
 
     async def test_legacy_suggestions_without_a_stored_id_never_match(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id)  # no original_suggester recorded
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "KC"
             roles = [FakeRole(WATCH_PARTY_ROLE_ID)]
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
+        _, status_content = await self._set_member_filter(menu_view, FakeUser())
 
-        self.assertIn("no eligible suggestions", member_interaction.response.edited_content)
+        self.assertIn("no eligible suggestions", status_content)
 
     async def test_rejects_a_non_watch_party_member_selection(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, original_suggester="111")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "NotAMember"
             roles = []
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
+        _, status_content = await self._set_member_filter(menu_view, FakeUser())
 
         self.assertIn(
             "is not the server owner, a WASH Crew member, or a current Watch Party member",
-            member_interaction.response.edited_content,
+            status_content,
         )
 
     async def test_only_the_selected_members_suggestions_remain_in_the_pool(self) -> None:
         database_id = self._create_database("Movies")
-        kc_item = self._add("Alien", database_id, original_suggester="111")
+        self._add("Alien", database_id, original_suggester="111")
         self._add("The Matrix", database_id, original_suggester="222")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "KC"
             roles = [FakeRole(WATCH_PARTY_ROLE_ID)]
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
-        updated_view = member_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
+        menu_view, _ = await self._set_member_filter(menu_view, FakeUser())
+        pick_button = self._pick_button(menu_view)
 
         for _ in range(10):
             pick_interaction = FakeInteraction(user=self._member(1))
@@ -581,26 +722,20 @@ class MemberFilterTests(RandomWatchCommandTestCase):
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, original_suggester="111")
         self._add("The Matrix", database_id, original_suggester="222")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "KC"
             roles = [FakeRole(WATCH_PARTY_ROLE_ID)]
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
+        menu_view, _ = await self._set_member_filter(menu_view, FakeUser())
+        menu_view = await self._clear_member_filter(menu_view)
 
-        cleared_view = member_interaction.response.edited_view
-        member_select_again = next(c for c in cleared_view.children if c.custom_id == "wpm_random_watch_member_filter")
-        member_select_again._values = []
-        clear_interaction = FakeInteraction(user=self._member(1))
-        await member_select_again.callback(interaction=clear_interaction)
-
-        self.assertIn("Member: Any Member", clear_interaction.response.edited_content)
-        self.assertIn("Genre: Any Genre", clear_interaction.response.edited_content)
+        category_select = menu_view.children[0]
+        current_values = {option.value: option.label for option in category_select.options}
+        self.assertIn("Any Member", current_values["member"])
+        self.assertIn("Any Genre", current_values["genre"])
 
     # --- Regression coverage for the live bug (shared with /vote start's
     # Custom Vote Filters -- see services/member_filter_validation.py): an
@@ -610,139 +745,115 @@ class MemberFilterTests(RandomWatchCommandTestCase):
     async def test_non_member_selection_disables_pick_random_item(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, original_suggester="111")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "Midjourney Bot"
             roles = []
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
+        menu_view, _ = await self._set_member_filter(menu_view, FakeUser())
 
-        updated_view = member_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
-        self.assertTrue(pick_button.disabled)
+        self.assertTrue(self._pick_button(menu_view).disabled)
 
     async def test_zero_eligible_suggestions_selection_disables_pick_random_item(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, original_suggester="222")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "KC"
             roles = [FakeRole(WATCH_PARTY_ROLE_ID)]
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
+        menu_view, status_content = await self._set_member_filter(menu_view, FakeUser())
 
-        updated_view = member_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
-        self.assertTrue(pick_button.disabled)
-        self.assertIn("Movies", member_interaction.response.edited_content)
+        self.assertTrue(self._pick_button(menu_view).disabled)
+        self.assertIn("Movies", status_content)
 
     async def test_valid_selection_keeps_pick_random_item_enabled(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, original_suggester="111")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "KC"
             roles = [FakeRole(WATCH_PARTY_ROLE_ID)]
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
+        menu_view, _ = await self._set_member_filter(menu_view, FakeUser())
 
-        updated_view = member_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
-        self.assertFalse(pick_button.disabled)
+        self.assertFalse(self._pick_button(menu_view).disabled)
 
     async def test_valid_bot_member_with_eligible_suggestions_is_accepted(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Bot Suggested Movie", database_id, original_suggester="444")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeBotUser:
             id = 444
             display_name = "Midjourney Bot"
             roles = [FakeRole(WATCH_PARTY_ROLE_ID)]
 
-        member_select._values = [FakeBotUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
+        menu_view, status_content = await self._set_member_filter(menu_view, FakeBotUser())
 
-        self.assertIn("Midjourney Bot has 1 eligible suggestion", member_interaction.response.edited_content)
-        updated_view = member_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
-        self.assertFalse(pick_button.disabled)
+        self.assertIn("Midjourney Bot has 1 eligible suggestion", status_content)
+        self.assertFalse(self._pick_button(menu_view).disabled)
 
     async def test_server_owner_is_a_valid_member_even_without_any_configured_role(self) -> None:
         from types import SimpleNamespace
 
         database_id = self._create_database("Movies")
-        self._add("Owner's Pick", database_id, original_suggester="555")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        self._add("Owners Pick", database_id, original_suggester="555")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeOwner:
             id = 555
             display_name = "HeidiTheGreat"
             roles = []
 
+        menu_view.children[0]._values = [FILTER_CATEGORY_MEMBER]
+        member_edit_view = await self._open_category_edit(menu_view)
+        member_select = member_edit_view.children[0]
         member_select._values = [FakeOwner()]
         member_interaction = FakeInteraction(user=self._member(1), guild=SimpleNamespace(owner_id=555))
         await member_select.callback(interaction=member_interaction)
+        status_content = member_interaction.response.edited_content
+        back_button = member_interaction.response.edited_view.children[-1]
+        back_interaction = FakeInteraction(user=self._member(1))
+        await back_button.callback(interaction=back_interaction)
+        menu_view = back_interaction.response.edited_view
 
-        self.assertIn("HeidiTheGreat has 1 eligible suggestion", member_interaction.response.edited_content)
-        updated_view = member_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
-        self.assertFalse(pick_button.disabled)
+        self.assertIn("HeidiTheGreat has 1 eligible suggestion", status_content)
+        self.assertFalse(self._pick_button(menu_view).disabled)
 
     async def test_wash_crew_member_is_a_valid_member_even_without_the_watch_party_role(self) -> None:
         database_id = self._create_database("Movies")
-        self._add("Crew's Pick", database_id, original_suggester="666")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        self._add("Crews Pick", database_id, original_suggester="666")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeCrewMember:
             id = 666
             display_name = "Crew"
             roles = [FakeRole(WASH_CREW_ROLE_ID)]
 
-        member_select._values = [FakeCrewMember()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
+        menu_view, status_content = await self._set_member_filter(menu_view, FakeCrewMember())
 
-        self.assertIn("Crew has 1 eligible suggestion", member_interaction.response.edited_content)
-        updated_view = member_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
-        self.assertFalse(pick_button.disabled)
+        self.assertIn("Crew has 1 eligible suggestion", status_content)
+        self.assertFalse(self._pick_button(menu_view).disabled)
 
     async def test_clicking_pick_random_item_while_invalid_produces_no_result(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, original_suggester="111")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "Midjourney Bot"
             roles = []
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
-        updated_view = member_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
+        menu_view, _ = await self._set_member_filter(menu_view, FakeUser())
+        pick_button = self._pick_button(menu_view)
 
         pick_interaction = FakeInteraction(user=self._member(1))
         await pick_button.callback(interaction=pick_interaction)
@@ -756,54 +867,42 @@ class MemberFilterTests(RandomWatchCommandTestCase):
     async def test_clearing_an_invalid_selection_restores_any_member_and_reenables_pick(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, original_suggester="111")
-        filter_view = await self._reach_filter_screen(database_id)
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "Midjourney Bot"
             roles = []
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
-        invalid_view = member_interaction.response.edited_view
-        invalid_pick_button = next(c for c in invalid_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
-        self.assertTrue(invalid_pick_button.disabled)
+        menu_view, _ = await self._set_member_filter(menu_view, FakeUser())
+        self.assertTrue(self._pick_button(menu_view).disabled)
 
-        member_select_again = next(c for c in invalid_view.children if c.custom_id == "wpm_random_watch_member_filter")
-        member_select_again._values = []
-        clear_interaction = FakeInteraction(user=self._member(1))
-        await member_select_again.callback(interaction=clear_interaction)
-
-        cleared_view = clear_interaction.response.edited_view
-        cleared_pick_button = next(c for c in cleared_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
+        menu_view = await self._clear_member_filter(menu_view)
+        cleared_pick_button = self._pick_button(menu_view)
         self.assertFalse(cleared_pick_button.disabled)
-        self.assertNotIn("Midjourney Bot", clear_interaction.response.edited_content)
+
+        category_select = menu_view.children[0]
+        member_option = next(o for o in category_select.options if o.value == FILTER_CATEGORY_MEMBER)
+        self.assertNotIn("Midjourney Bot", member_option.label)
 
         pick_interaction = FakeInteraction(user=self._member(1))
         await cleared_pick_button.callback(interaction=pick_interaction)
         self.assertEqual(pick_interaction.response.edited_embed.title, "Alien")
 
 
+
+
 # --- Section 7: Genre filter -----------------------------------------------------------------------
 
 
 class GenreFilterTests(RandomWatchCommandTestCase):
-    async def _reach_filter_screen(self, database_id: int):
-        interaction = FakeInteraction(user=self._member(1))
-        await handle_random_watch(interaction, self.bot)
-        initial_view = interaction.response.sent_view
-        add_filters_button = next(c for c in initial_view.children if c.custom_id == "wpm_random_watch_add_filters")
-        filters_interaction = FakeInteraction(user=self._member(1))
-        await add_filters_button.callback(interaction=filters_interaction)
-        return filters_interaction.response.edited_view
-
     async def test_genre_options_are_derived_from_stored_metadata(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, genres=("Horror", "Sci-Fi"))
-        filter_view = await self._reach_filter_screen(database_id)
-        genre_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_genre_filter")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view.children[0]._values = [FILTER_CATEGORY_GENRE]
+        genre_edit_view = await self._open_category_edit(menu_view)
+        genre_select = genre_edit_view.children[0]
 
         values = {option.value for option in genre_select.options}
         self.assertEqual(values, {"Horror", "Sci-Fi"})
@@ -811,13 +910,9 @@ class GenreFilterTests(RandomWatchCommandTestCase):
     async def test_matching_is_case_insensitive(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, genres=("Horror",))
-        filter_view = await self._reach_filter_screen(database_id)
-        genre_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_genre_filter")
-        genre_select._values = ["horror"]
-        genre_interaction = FakeInteraction(user=self._member(1))
-        await genre_select.callback(interaction=genre_interaction)
-        updated_view = genre_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
+        menu_view = await self._reach_filter_menu(database_id)
+        updated_view = await self._set_genre_filter(menu_view, "horror")
+        pick_button = self._pick_button(updated_view)
 
         pick_interaction = FakeInteraction(user=self._member(1))
         await pick_button.callback(interaction=pick_interaction)
@@ -827,13 +922,9 @@ class GenreFilterTests(RandomWatchCommandTestCase):
     async def test_multi_genre_suggestion_matches_any_of_its_genres(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, genres=("Horror", "Sci-Fi"))
-        filter_view = await self._reach_filter_screen(database_id)
-        genre_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_genre_filter")
-        genre_select._values = ["Sci-Fi"]
-        genre_interaction = FakeInteraction(user=self._member(1))
-        await genre_select.callback(interaction=genre_interaction)
-        updated_view = genre_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
+        menu_view = await self._reach_filter_menu(database_id)
+        updated_view = await self._set_genre_filter(menu_view, "Sci-Fi")
+        pick_button = self._pick_button(updated_view)
 
         pick_interaction = FakeInteraction(user=self._member(1))
         await pick_button.callback(interaction=pick_interaction)
@@ -844,13 +935,9 @@ class GenreFilterTests(RandomWatchCommandTestCase):
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, genres=("Horror",))
         self._add("Untagged", database_id)  # no genres
-        filter_view = await self._reach_filter_screen(database_id)
-        genre_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_genre_filter")
-        genre_select._values = ["Horror"]
-        genre_interaction = FakeInteraction(user=self._member(1))
-        await genre_select.callback(interaction=genre_interaction)
-        updated_view = genre_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
+        menu_view = await self._reach_filter_menu(database_id)
+        updated_view = await self._set_genre_filter(menu_view, "Horror")
+        pick_button = self._pick_button(updated_view)
 
         for _ in range(10):
             pick_interaction = FakeInteraction(user=self._member(1))
@@ -861,8 +948,10 @@ class GenreFilterTests(RandomWatchCommandTestCase):
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, genres=("Horror",))
         self._add("The Thing", database_id, genres=("Horror",))
-        filter_view = await self._reach_filter_screen(database_id)
-        genre_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_genre_filter")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view.children[0]._values = [FILTER_CATEGORY_GENRE]
+        genre_edit_view = await self._open_category_edit(menu_view)
+        genre_select = genre_edit_view.children[0]
 
         horror_option = next(o for o in genre_select.options if o.value == "Horror")
         self.assertIn("2 eligible suggestions", horror_option.description)
@@ -872,8 +961,10 @@ class GenreFilterTests(RandomWatchCommandTestCase):
         self._add("Alien", database_id, genres=("Horror",))
         self._add("The Thing", database_id, genres=("Horror",))
         self._add("Comedy Movie", database_id, genres=("Comedy",))
-        filter_view = await self._reach_filter_screen(database_id)
-        genre_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_genre_filter")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view.children[0]._values = [FILTER_CATEGORY_GENRE]
+        genre_edit_view = await self._open_category_edit(menu_view)
+        genre_select = genre_edit_view.children[0]
 
         # Most-represented genre first (Horror: 2), then alphabetical.
         self.assertEqual([option.value for option in genre_select.options], ["Horror", "Comedy"])
@@ -882,8 +973,10 @@ class GenreFilterTests(RandomWatchCommandTestCase):
         database_id = self._create_database("Movies")
         for index in range(30):
             self._add(f"Movie {index}", database_id, genres=(f"Genre{index:02d}",))
-        filter_view = await self._reach_filter_screen(database_id)
-        genre_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_genre_filter")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view.children[0]._values = [FILTER_CATEGORY_GENRE]
+        genre_edit_view = await self._open_category_edit(menu_view)
+        genre_select = genre_edit_view.children[0]
 
         self.assertLessEqual(len(genre_select.options), 25)
 
@@ -891,60 +984,35 @@ class GenreFilterTests(RandomWatchCommandTestCase):
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, genres=("Horror",))
         self._add("The Matrix", database_id, genres=("Sci-Fi",))
-        filter_view = await self._reach_filter_screen(database_id)
-        genre_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_genre_filter")
-        genre_select._values = ["Horror"]
-        genre_interaction = FakeInteraction(user=self._member(1))
-        await genre_select.callback(interaction=genre_interaction)
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view = await self._set_genre_filter(menu_view, "Horror")
+        cleared_view = await self._clear_genre_filter(menu_view)
 
-        cleared_view = genre_interaction.response.edited_view
-        genre_select_again = next(c for c in cleared_view.children if c.custom_id == "wpm_random_watch_genre_filter")
-        genre_select_again._values = []
-        clear_interaction = FakeInteraction(user=self._member(1))
-        await genre_select_again.callback(interaction=clear_interaction)
-
-        self.assertIn("Member: Any Member", clear_interaction.response.edited_content)
-        self.assertIn("Genre: Any Genre", clear_interaction.response.edited_content)
+        category_select = cleared_view.children[0]
+        current_values = {option.value: option.label for option in category_select.options}
+        self.assertIn("Any Member", current_values["member"])
+        self.assertIn("Any Genre", current_values["genre"])
 
 
 # --- Combined filters -----------------------------------------------------------------------------
 
 
 class CombinedFilterTests(RandomWatchCommandTestCase):
-    async def _reach_filter_screen(self, database_id: int):
-        interaction = FakeInteraction(user=self._member(1))
-        await handle_random_watch(interaction, self.bot)
-        initial_view = interaction.response.sent_view
-        add_filters_button = next(c for c in initial_view.children if c.custom_id == "wpm_random_watch_add_filters")
-        filters_interaction = FakeInteraction(user=self._member(1))
-        await add_filters_button.callback(interaction=filters_interaction)
-        return filters_interaction.response.edited_view
-
     async def test_member_and_genre_combine_to_an_intersection(self) -> None:
         database_id = self._create_database("Movies")
-        kc_horror = self._add("Alien", database_id, original_suggester="111", genres=("Horror",))
+        self._add("Alien", database_id, original_suggester="111", genres=("Horror",))
         self._add("KC Comedy", database_id, original_suggester="111", genres=("Comedy",))
         self._add("Other Horror", database_id, original_suggester="222", genres=("Horror",))
-        filter_view = await self._reach_filter_screen(database_id)
-
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "KC"
             roles = [FakeRole(WATCH_PARTY_ROLE_ID)]
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
-        view_after_member = member_interaction.response.edited_view
-
-        genre_select = next(c for c in view_after_member.children if c.custom_id == "wpm_random_watch_genre_filter")
-        genre_select._values = ["Horror"]
-        genre_interaction = FakeInteraction(user=self._member(1))
-        await genre_select.callback(interaction=genre_interaction)
-        view_after_genre = genre_interaction.response.edited_view
-        pick_button = next(c for c in view_after_genre.children if c.custom_id == "wpm_random_watch_pick_filtered")
+        menu_view, _ = await self._set_member_filter(menu_view, FakeUser())
+        menu_view = await self._set_genre_filter(menu_view, "Horror")
+        pick_button = self._pick_button(menu_view)
 
         for _ in range(10):
             pick_interaction = FakeInteraction(user=self._member(1))
@@ -955,35 +1023,438 @@ class CombinedFilterTests(RandomWatchCommandTestCase):
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, original_suggester="111", genres=("Horror",))
         self._add("KC Comedy", database_id, original_suggester="111", genres=("Comedy",))
-        filter_view = await self._reach_filter_screen(database_id)
-
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "KC"
             roles = [FakeRole(WATCH_PARTY_ROLE_ID)]
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
-        view_after_member = member_interaction.response.edited_view
+        menu_view, _ = await self._set_member_filter(menu_view, FakeUser())
+        menu_view = await self._set_genre_filter(menu_view, "Sci-Fi")
+        pick_button = self._pick_button(menu_view)
 
-        genre_select = next(c for c in view_after_member.children if c.custom_id == "wpm_random_watch_genre_filter")
-        genre_select._values = ["Horror"]
-        genre_interaction = FakeInteraction(user=self._member(1))
-        await genre_select.callback(interaction=genre_interaction)
-        view_after_genre = genre_interaction.response.edited_view
-        pick_button = next(c for c in view_after_genre.children if c.custom_id == "wpm_random_watch_pick_filtered")
+        pick_interaction = FakeInteraction(user=self._member(1))
+        await pick_button.callback(interaction=pick_interaction)
 
-        # Now add a second member's genre-mismatched item so the genre
-        # option list includes "Comedy" from KC too, but filter to a
-        # genre KC has none of combined with a valid member -- simplest:
-        # directly test the message builder for the combined case.
-        message = build_random_watch_empty_pool_message("Movies", member_display="KC", genre="Sci-Fi")
+        message = pick_interaction.response.edited_content
         self.assertIn("KC", message)
         self.assertIn("Sci-Fi", message)
-        self.assertIn("Movies", message)
+
+
+# --- Section 6b: IMDb Rating filter --------------------------------------------------------------
+
+
+class ImdbRatingFilterTests(RandomWatchCommandTestCase):
+    async def test_minimum_only_matches_ratings_at_or_above_it(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Low", database_id, imdb_rating="5.5")
+        self._add("High", database_id, imdb_rating="8.2")
+        menu_view = await self._reach_filter_menu(database_id)
+        submit_interaction = await self._set_imdb_rating_filter(menu_view, minimum="7.0")
+        menu_view = submit_interaction.response.edited_view
+        pick_button = self._pick_button(menu_view)
+
+        for _ in range(10):
+            pick_interaction = FakeInteraction(user=self._member(1))
+            await pick_button.callback(interaction=pick_interaction)
+            self.assertEqual(pick_interaction.response.edited_embed.title, "High")
+
+    async def test_maximum_only_matches_ratings_at_or_below_it(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Low", database_id, imdb_rating="5.5")
+        self._add("High", database_id, imdb_rating="8.2")
+        menu_view = await self._reach_filter_menu(database_id)
+        submit_interaction = await self._set_imdb_rating_filter(menu_view, maximum="5.9")
+        menu_view = submit_interaction.response.edited_view
+        pick_button = self._pick_button(menu_view)
+
+        for _ in range(10):
+            pick_interaction = FakeInteraction(user=self._member(1))
+            await pick_button.callback(interaction=pick_interaction)
+            self.assertEqual(pick_interaction.response.edited_embed.title, "Low")
+
+    async def test_minimum_and_maximum_together_are_both_inclusive(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Below", database_id, imdb_rating="5.9")
+        self._add("AtMin", database_id, imdb_rating="6.0")
+        self._add("AtMax", database_id, imdb_rating="8.0")
+        self._add("Above", database_id, imdb_rating="8.1")
+        menu_view = await self._reach_filter_menu(database_id)
+        submit_interaction = await self._set_imdb_rating_filter(menu_view, minimum="6.0", maximum="8.0")
+        menu_view = submit_interaction.response.edited_view
+        pick_button = self._pick_button(menu_view)
+
+        seen = set()
+        for _ in range(30):
+            pick_interaction = FakeInteraction(user=self._member(1))
+            await pick_button.callback(interaction=pick_interaction)
+            seen.add(pick_interaction.response.edited_embed.title)
+        self.assertEqual(seen, {"AtMin", "AtMax"})
+
+    async def test_missing_rating_never_matches_an_active_filter(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Rated", database_id, imdb_rating="7.5")
+        self._add("Unrated", database_id)
+        menu_view = await self._reach_filter_menu(database_id)
+        submit_interaction = await self._set_imdb_rating_filter(menu_view, minimum="0.0")
+        menu_view = submit_interaction.response.edited_view
+        pick_button = self._pick_button(menu_view)
+
+        for _ in range(10):
+            pick_interaction = FakeInteraction(user=self._member(1))
+            await pick_button.callback(interaction=pick_interaction)
+            self.assertEqual(pick_interaction.response.edited_embed.title, "Rated")
+
+    async def test_invalid_number_shows_a_clear_error_and_stays_on_the_edit_screen(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, imdb_rating="7.5")
+        menu_view = await self._reach_filter_menu(database_id)
+
+        submit_interaction = await self._set_imdb_rating_filter(menu_view, minimum="not-a-number")
+
+        self.assertIn("Minimum rating", submit_interaction.response.edited_content)
+        set_button = next(
+            c for c in submit_interaction.response.edited_view.children
+            if c.custom_id == "wpm_filter_menu_imdb_rating_set"
+        )
+        self.assertIsNotNone(set_button)
+
+    async def test_minimum_greater_than_maximum_is_rejected(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, imdb_rating="7.5")
+        menu_view = await self._reach_filter_menu(database_id)
+
+        submit_interaction = await self._set_imdb_rating_filter(menu_view, minimum="9.0", maximum="3.0")
+
+        self.assertIn("cannot be greater than", submit_interaction.response.edited_content)
+
+    async def test_out_of_range_value_is_rejected(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, imdb_rating="7.5")
+        menu_view = await self._reach_filter_menu(database_id)
+
+        submit_interaction = await self._set_imdb_rating_filter(menu_view, minimum="10.5")
+
+        self.assertIn("Minimum rating", submit_interaction.response.edited_content)
+
+    async def test_any_imdb_rating_clears_the_filter(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Low", database_id, imdb_rating="5.5")
+        self._add("High", database_id, imdb_rating="8.2")
+        menu_view = await self._reach_filter_menu(database_id)
+        submit_interaction = await self._set_imdb_rating_filter(menu_view, minimum="7.0")
+        menu_view = submit_interaction.response.edited_view
+
+        menu_view = await self._clear_imdb_rating_filter(menu_view)
+
+        category_select = menu_view.children[0]
+        current_values = {option.value: option.label for option in category_select.options}
+        self.assertIn("Any IMDb Rating", current_values["imdb_rating"])
+
+    async def test_current_filters_summary_shows_the_active_range(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, imdb_rating="7.5")
+        menu_view = await self._reach_filter_menu(database_id)
+
+        submit_interaction = await self._set_imdb_rating_filter(menu_view, minimum="6.0", maximum="8.0")
+
+        self.assertIn("IMDb Rating: 6.0–8.0", submit_interaction.response.edited_content)
+
+
+# --- Section 7b: MPAA Rating filter --------------------------------------------------------------
+
+
+class MpaaRatingFilterTests(RandomWatchCommandTestCase):
+    async def test_options_are_derived_from_stored_metadata(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, content_rating="R")
+        self._add("Sitcom", database_id, content_rating="PG-13")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view.children[0]._values = [FILTER_CATEGORY_MPAA_RATING]
+        mpaa_edit_view = await self._open_category_edit(menu_view)
+        mpaa_select = mpaa_edit_view.children[0]
+
+        values = {option.value for option in mpaa_select.options}
+        self.assertEqual(values, {ANY_MPAA_RATING_VALUE, "R", "PG-13"})
+
+    async def test_any_mpaa_rating_is_always_the_first_option(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, content_rating="R")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view.children[0]._values = [FILTER_CATEGORY_MPAA_RATING]
+        mpaa_edit_view = await self._open_category_edit(menu_view)
+        mpaa_select = mpaa_edit_view.children[0]
+
+        self.assertEqual(mpaa_select.options[0].value, ANY_MPAA_RATING_VALUE)
+
+    async def test_matching_is_case_insensitive(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, content_rating="R")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view = await self._set_mpaa_rating_filter(menu_view, "r")
+        pick_button = self._pick_button(menu_view)
+
+        pick_interaction = FakeInteraction(user=self._member(1))
+        await pick_button.callback(interaction=pick_interaction)
+
+        self.assertEqual(pick_interaction.response.edited_embed.title, "Alien")
+
+    async def test_not_rated_and_unrated_stay_distinct(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("NotRatedMovie", database_id, content_rating="Not Rated")
+        self._add("UnratedMovie", database_id, content_rating="Unrated")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view = await self._set_mpaa_rating_filter(menu_view, "Not Rated")
+        pick_button = self._pick_button(menu_view)
+
+        for _ in range(10):
+            pick_interaction = FakeInteraction(user=self._member(1))
+            await pick_button.callback(interaction=pick_interaction)
+            self.assertEqual(pick_interaction.response.edited_embed.title, "NotRatedMovie")
+
+    async def test_missing_rating_never_matches_an_active_filter(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Rated", database_id, content_rating="PG")
+        self._add("Unrated", database_id)
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view = await self._set_mpaa_rating_filter(menu_view, "PG")
+        pick_button = self._pick_button(menu_view)
+
+        for _ in range(10):
+            pick_interaction = FakeInteraction(user=self._member(1))
+            await pick_button.callback(interaction=pick_interaction)
+            self.assertEqual(pick_interaction.response.edited_embed.title, "Rated")
+
+    async def test_any_mpaa_rating_restores_the_full_pool(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, content_rating="R")
+        self._add("Sitcom", database_id, content_rating="PG-13")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view = await self._set_mpaa_rating_filter(menu_view, "R")
+
+        menu_view = await self._clear_mpaa_rating_filter(menu_view)
+
+        category_select = menu_view.children[0]
+        current_values = {option.value: option.label for option in category_select.options}
+        self.assertIn("Any MPAA Rating", current_values["mpaa_rating"])
+
+    async def test_more_than_twenty_five_ratings_are_capped_safely(self) -> None:
+        database_id = self._create_database("Movies")
+        for index in range(30):
+            self._add(f"Movie {index}", database_id, content_rating=f"Rating{index:02d}")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view.children[0]._values = [FILTER_CATEGORY_MPAA_RATING]
+        mpaa_edit_view = await self._open_category_edit(menu_view)
+        mpaa_select = mpaa_edit_view.children[0]
+
+        self.assertLessEqual(len(mpaa_select.options), 25)
+
+
+# --- Section 8b: Actor filter -----------------------------------------------------------------
+
+
+class ActorFilterTests(RandomWatchCommandTestCase):
+    async def test_exact_match_selects_the_actor(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Ace Ventura", database_id, cast=("Jim Carrey", "Courteney Cox"))
+        self._add("Unrelated", database_id, cast=("Someone Else",))
+        menu_view = await self._reach_filter_menu(database_id)
+        submit_interaction = await self._search_actor_filter(menu_view, "Jim Carrey")
+        menu_view = submit_interaction.response.edited_view
+        pick_button = self._pick_button(menu_view)
+
+        pick_interaction = FakeInteraction(user=self._member(1))
+        await pick_button.callback(interaction=pick_interaction)
+
+        self.assertEqual(pick_interaction.response.edited_embed.title, "Ace Ventura")
+
+    async def test_partial_case_insensitive_search_with_one_match_auto_applies(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Ace Ventura", database_id, cast=("Jim Carrey",))
+        self._add("Unrelated", database_id, cast=("Someone Else",))
+        menu_view = await self._reach_filter_menu(database_id)
+        submit_interaction = await self._search_actor_filter(menu_view, "carrey")
+        menu_view = submit_interaction.response.edited_view
+        pick_button = self._pick_button(menu_view)
+
+        pick_interaction = FakeInteraction(user=self._member(1))
+        await pick_button.callback(interaction=pick_interaction)
+
+        self.assertEqual(pick_interaction.response.edited_embed.title, "Ace Ventura")
+
+    async def test_multiple_matches_show_a_disambiguation_picker(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Movie A", database_id, cast=("Jim Carrey",))
+        self._add("Movie B", database_id, cast=("Jimmy Fallon",))
+        menu_view = await self._reach_filter_menu(database_id)
+
+        submit_interaction = await self._search_actor_filter(menu_view, "jim")
+
+        match_select = submit_interaction.response.edited_view.children[0]
+        values = {option.value for option in match_select.options}
+        self.assertEqual(values, {"Jim Carrey", "Jimmy Fallon"})
+
+    async def test_selecting_from_the_disambiguation_picker_applies_that_actor(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Movie A", database_id, cast=("Jim Carrey",))
+        self._add("Movie B", database_id, cast=("Jimmy Fallon",))
+        menu_view = await self._reach_filter_menu(database_id)
+        submit_interaction = await self._search_actor_filter(menu_view, "jim")
+        match_view = submit_interaction.response.edited_view
+        match_select = match_view.children[0]
+        match_select._values = ["Jim Carrey"]
+
+        select_interaction = FakeInteraction(user=self._member(1))
+        await match_select.callback(interaction=select_interaction)
+
+        menu_view = select_interaction.response.edited_view
+        pick_button = self._pick_button(menu_view)
+        pick_interaction = FakeInteraction(user=self._member(1))
+        await pick_button.callback(interaction=pick_interaction)
+        self.assertEqual(pick_interaction.response.edited_embed.title, "Movie A")
+
+    async def test_no_matches_shows_a_warning_and_stays_in_the_filter_flow(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Movie A", database_id, cast=("Jim Carrey",))
+        menu_view = await self._reach_filter_menu(database_id)
+
+        submit_interaction = await self._search_actor_filter(menu_view, "Nobody Real")
+
+        self.assertIn("No actors matching", submit_interaction.response.edited_content)
+        search_button = next(
+            c for c in submit_interaction.response.edited_view.children
+            if c.custom_id == "wpm_filter_menu_actor_search"
+        )
+        self.assertIsNotNone(search_button)
+
+    async def test_more_than_twenty_five_matches_are_capped_with_a_refine_note(self) -> None:
+        database_id = self._create_database("Movies")
+        for index in range(30):
+            self._add(f"Movie {index}", database_id, cast=(f"Actor Match {index:02d}",))
+        menu_view = await self._reach_filter_menu(database_id)
+
+        submit_interaction = await self._search_actor_filter(menu_view, "Actor Match")
+
+        match_view = submit_interaction.response.edited_view
+        match_select = match_view.children[0]
+        self.assertLessEqual(len(match_select.options), 25)
+        self.assertIn("Refine your search", submit_interaction.response.edited_content)
+
+    async def test_missing_cast_metadata_never_matches_an_active_filter(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("HasCast", database_id, cast=("Jim Carrey",))
+        self._add("NoCast", database_id)
+        menu_view = await self._reach_filter_menu(database_id)
+        submit_interaction = await self._search_actor_filter(menu_view, "Jim Carrey")
+        menu_view = submit_interaction.response.edited_view
+        pick_button = self._pick_button(menu_view)
+
+        for _ in range(10):
+            pick_interaction = FakeInteraction(user=self._member(1))
+            await pick_button.callback(interaction=pick_interaction)
+            self.assertEqual(pick_interaction.response.edited_embed.title, "HasCast")
+
+    async def test_any_actor_clears_the_filter(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Ace Ventura", database_id, cast=("Jim Carrey",))
+        self._add("Unrelated", database_id, cast=("Someone Else",))
+        menu_view = await self._reach_filter_menu(database_id)
+        submit_interaction = await self._search_actor_filter(menu_view, "Jim Carrey")
+        menu_view = submit_interaction.response.edited_view
+
+        menu_view = await self._clear_actor_filter(menu_view)
+
+        category_select = menu_view.children[0]
+        current_values = {option.value: option.label for option in category_select.options}
+        self.assertIn("Any Actor", current_values["actor"])
+
+
+# --- Section 10/12: fixed filter order and all-five-combined -------------------------------------
+
+
+class AllFiveFiltersTests(RandomWatchCommandTestCase):
+    async def test_category_select_and_summary_list_all_five_in_the_fixed_order(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id)
+        menu_view = await self._reach_filter_menu(database_id)
+
+        category_select = menu_view.children[0]
+        self.assertEqual(
+            [option.value for option in category_select.options],
+            [
+                FILTER_CATEGORY_GENRE,
+                FILTER_CATEGORY_IMDB_RATING,
+                FILTER_CATEGORY_MPAA_RATING,
+                FILTER_CATEGORY_ACTOR,
+                FILTER_CATEGORY_MEMBER,
+            ],
+        )
+
+        add_filters_button_interaction = FakeInteraction(user=self._member(1))
+        await handle_random_watch(add_filters_button_interaction, self.bot)
+        initial_view = add_filters_button_interaction.response.sent_view
+        add_filters_button = next(c for c in initial_view.children if c.custom_id == "wpm_random_watch_add_filters")
+        filters_interaction = FakeInteraction(user=self._member(1))
+        await add_filters_button.callback(interaction=filters_interaction)
+        body = filters_interaction.response.edited_content
+
+        genre_index = body.index("Genre:")
+        imdb_index = body.index("IMDb Rating:")
+        mpaa_index = body.index("MPAA Rating:")
+        actor_index = body.index("Actor:")
+        member_index = body.index("Member:")
+        self.assertTrue(genre_index < imdb_index < mpaa_index < actor_index < member_index)
+
+    async def test_all_five_filters_combine_to_a_single_intersection(self) -> None:
+        database_id = self._create_database("Movies")
+        match = self._add(
+            "Perfect Match",
+            database_id,
+            original_suggester="111",
+            genres=("Comedy",),
+            imdb_rating="7.5",
+            content_rating="PG-13",
+            cast=("Jim Carrey",),
+        )
+        self._add(
+            "Wrong Genre",
+            database_id,
+            original_suggester="111",
+            genres=("Horror",),
+            imdb_rating="7.5",
+            content_rating="PG-13",
+            cast=("Jim Carrey",),
+        )
+        self._add(
+            "Wrong Member",
+            database_id,
+            original_suggester="222",
+            genres=("Comedy",),
+            imdb_rating="7.5",
+            content_rating="PG-13",
+            cast=("Jim Carrey",),
+        )
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view = await self._set_genre_filter(menu_view, "Comedy")
+        submit_interaction = await self._set_imdb_rating_filter(menu_view, minimum="7.0", maximum="8.0")
+        menu_view = submit_interaction.response.edited_view
+        menu_view = await self._set_mpaa_rating_filter(menu_view, "PG-13")
+        search_interaction = await self._search_actor_filter(menu_view, "Jim Carrey")
+        menu_view = search_interaction.response.edited_view
+
+        class FakeUser:
+            id = 111
+            display_name = "KC"
+            roles = [FakeRole(WATCH_PARTY_ROLE_ID)]
+
+        menu_view, _ = await self._set_member_filter(menu_view, FakeUser())
+        pick_button = self._pick_button(menu_view)
+
+        for _ in range(10):
+            pick_interaction = FakeInteraction(user=self._member(1))
+            await pick_button.callback(interaction=pick_interaction)
+            self.assertEqual(pick_interaction.response.edited_embed.title, "Perfect Match")
 
 
 # --- UI/session behavior ---------------------------------------------------------------------------
@@ -1021,26 +1492,15 @@ class SessionBehaviorTests(RandomWatchCommandTestCase):
     async def test_pick_again_preserves_the_active_filters(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, original_suggester="111")
-        interaction = FakeInteraction(user=self._member(1))
-        await handle_random_watch(interaction, self.bot)
-        initial_view = interaction.response.sent_view
-        add_filters_button = next(c for c in initial_view.children if c.custom_id == "wpm_random_watch_add_filters")
-        filters_interaction = FakeInteraction(user=self._member(1))
-        await add_filters_button.callback(interaction=filters_interaction)
-        filter_view = filters_interaction.response.edited_view
-
-        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+        menu_view = await self._reach_filter_menu(database_id)
 
         class FakeUser:
             id = 111
             display_name = "KC"
             roles = [FakeRole(WATCH_PARTY_ROLE_ID)]
 
-        member_select._values = [FakeUser()]
-        member_interaction = FakeInteraction(user=self._member(1))
-        await member_select.callback(interaction=member_interaction)
-        updated_view = member_interaction.response.edited_view
-        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
+        menu_view, _ = await self._set_member_filter(menu_view, FakeUser())
+        pick_button = self._pick_button(menu_view)
 
         pick_interaction = FakeInteraction(user=self._member(1))
         await pick_button.callback(interaction=pick_interaction)
@@ -1071,7 +1531,7 @@ class SessionBehaviorTests(RandomWatchCommandTestCase):
         # Change Filters, clicked from the now-public result, opens a
         # fresh *ephemeral* message rather than editing the public one --
         # the filter UI must stay private (Section 4).
-        self.assertIsInstance(change_interaction.response.sent_view, RandomWatchFilterView)
+        self.assertIsInstance(change_interaction.response.sent_view, FilterMenuView)
         self.assertIn("Movies", change_interaction.response.sent_message)
         self.assertTrue(change_interaction.response.sent_ephemeral)
 
@@ -1097,8 +1557,10 @@ class SessionBehaviorTests(RandomWatchCommandTestCase):
         add_filters_button = next(c for c in session_view.children if c.custom_id == "wpm_random_watch_add_filters")
         filters_interaction = FakeInteraction(user=self._member(1))
         await add_filters_button.callback(interaction=filters_interaction)
-        filter_view = filters_interaction.response.edited_view
-        genre_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_genre_filter")
+        menu_view = filters_interaction.response.edited_view
+        menu_view.children[0]._values = [FILTER_CATEGORY_GENRE]
+        genre_edit_view = await self._open_category_edit(menu_view)
+        genre_select = genre_edit_view.children[0]
 
         self.assertEqual([option.value for option in genre_select.options], ["Comedy"])
 

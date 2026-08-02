@@ -105,6 +105,20 @@ class SuggestionServiceTests(unittest.TestCase):
         self.assertIn(MetadataProvider.IMDB, suggestions[0].metadata_ids)
         self.assertEqual(suggestions[0].metadata_ids[MetadataProvider.IMDB], "tt0133093")
 
+    def test_suggest_stores_cast(self) -> None:
+        result = self.service.suggest("The Mask", cast=("Jim Carrey", "Cameron Diaz"))
+        self.assertTrue(result.success)
+
+        suggestions = self.service.get_suggestions()
+        self.assertEqual(suggestions[0].cast, ("Jim Carrey", "Cameron Diaz"))
+
+    def test_suggest_defaults_cast_to_empty(self) -> None:
+        result = self.service.suggest("The Matrix")
+        self.assertTrue(result.success)
+
+        suggestions = self.service.get_suggestions()
+        self.assertEqual(suggestions[0].cast, ())
+
     def test_suggest_handles_imdb_url_with_whitespace(self) -> None:
         result = self.service.suggest("The Matrix", "  tt0133093  ")
         self.assertTrue(result.success)

@@ -132,6 +132,10 @@ class VoteService:
         candidate_selection_mode: Optional[CandidateSelectionMode] = None,
         filter_member_discord_user_id: Optional[int] = None,
         filter_genre: Optional[str] = None,
+        filter_imdb_rating_min: Optional[float] = None,
+        filter_imdb_rating_max: Optional[float] = None,
+        filter_mpaa_rating: Optional[str] = None,
+        filter_actor: Optional[str] = None,
     ) -> VoteRoundResult:
         """Open a new voting round.
 
@@ -218,6 +222,10 @@ class VoteService:
             candidate_selection_mode=candidate_selection_mode,
             filter_member_discord_user_id=filter_member_discord_user_id,
             filter_genre=filter_genre,
+            filter_imdb_rating_min=filter_imdb_rating_min,
+            filter_imdb_rating_max=filter_imdb_rating_max,
+            filter_mpaa_rating=filter_mpaa_rating,
+            filter_actor=filter_actor,
         )
         self._next_round_id += 1
         self._rounds[new_round.id] = new_round

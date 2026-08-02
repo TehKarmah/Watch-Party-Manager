@@ -31,6 +31,7 @@ from watch_party_manager.domain.suggestion_database_configuration import (
     SuggestionRulesConfig,
 )
 from watch_party_manager.domain.vote import VoteVisibility
+from watch_party_manager.filter_menu_view import FILTER_CATEGORY_GENRE, FILTER_CATEGORY_MEMBER
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
@@ -1466,10 +1467,25 @@ class FakeMembershipServiceForFilters:
 
 class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     """Sections 3-8: the real /vote start -> Customize This Vote screen's
-    Member and Genre filter selects, exercised end-to-end through the
-    actual VotingGroup wiring (bot.py's on_customize closure) -- not just
-    the underlying filter/service logic (see test_nominee_pool_filter.py
-    for that).
+    shared FilterMenuView (Genre and Member here; IMDb Rating/MPAA
+    Rating/Actor get their own coverage elsewhere), exercised end-to-end
+    through the actual VotingGroup wiring (bot.py's on_customize closure)
+    -- not just the underlying filter/service logic (see
+    test_nominee_pool_filter.py for that) and not just the shared view
+    components in isolation (see test_filter_menu_view.py for that).
+
+    The overrides screen (CustomizeVoteOverridesView) no longer hosts the
+    Member/Genre selects directly -- an "Edit Filters" button opens the
+    shared filter_menu_view.FilterMenuView (identical to /random watch's,
+    see bot.py's create_filter_menu_session). Editing a filter still
+    lives on that filter's own small edit screen; Member's edit screen
+    shows inline validation feedback and needs an explicit "Back to
+    Filters" step, while Genre returns directly to a refreshed menu.
+    "Back to Vote Settings" (the filter menu's secondary action) returns
+    to the original overrides screen, re-syncing its own Continue
+    button's disabled state (see bot.py's on_back_to_overrides) -- the
+    filter menu's own primary button and overrides_view.continue_button
+    are two different Button objects that must be independently checked.
     """
 
     WATCH_PARTY_FILTER_ROLE_ID = 777
@@ -1494,45 +1510,135 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     def _kc_member(self) -> FakeMember:
         return FakeMember(user_id=111, roles=[FakeRole(self.WATCH_PARTY_FILTER_ROLE_ID)], display_name="KC")
 
-    def _member_select(self, overrides_view):
+    # --- Shared FilterMenuView navigation helpers ---------------------
+
+    def _edit_filters_button(self, overrides_view):
         return next(
-            child for child in overrides_view.children if getattr(child, "custom_id", None)
-            == "wpm_start_vote_customize_member_filter"
+            child for child in overrides_view.children
+            if getattr(child, "custom_id", None) == "wpm_start_vote_customize_edit_filters"
         )
 
-    def _genre_select(self, overrides_view):
+    async def _open_filter_menu(self, overrides_view):
+        interaction = self._interaction()
+        await self._edit_filters_button(overrides_view).callback(interaction=interaction)
+        return interaction.response.edited_view
+
+    def _category_select(self, menu_view):
         return next(
-            child for child in overrides_view.children if getattr(child, "custom_id", None)
-            == "wpm_start_vote_customize_genre_filter"
+            child for child in menu_view.children
+            if getattr(child, "custom_id", None) == "wpm_filter_menu_category"
         )
+
+    async def _open_category_edit(self, menu_view, category: str):
+        self._category_select(menu_view)._values = [category]
+        interaction = self._interaction()
+        await self._category_select(menu_view).callback(interaction=interaction)
+        return interaction.response.edited_view
+
+    def _member_select(self, member_edit_view):
+        return next(
+            child for child in member_edit_view.children
+            if getattr(child, "custom_id", None) == "wpm_filter_menu_member"
+        )
+
+    def _genre_select(self, genre_edit_view):
+        return next(
+            child for child in genre_edit_view.children
+            if getattr(child, "custom_id", None) == "wpm_filter_menu_genre"
+        )
+
+    def _back_to_menu_button(self, edit_view):
+        return next(
+            child for child in edit_view.children
+            if getattr(child, "custom_id", None) == "wpm_filter_menu_back"
+        )
+
+    async def _back_to_menu(self, edit_view):
+        interaction = self._interaction()
+        await self._back_to_menu_button(edit_view).callback(interaction=interaction)
+        return interaction.response.edited_view
+
+    def _menu_continue_button(self, menu_view):
+        return next(
+            child for child in menu_view.children
+            if getattr(child, "custom_id", None) == "wpm_start_vote_customize_filter_menu_continue"
+        )
+
+    def _menu_back_to_overrides_button(self, menu_view):
+        return next(
+            child for child in menu_view.children
+            if getattr(child, "custom_id", None) == "wpm_filter_menu_secondary"
+        )
+
+    async def _back_to_overrides(self, menu_view):
+        interaction = self._interaction()
+        await self._menu_back_to_overrides_button(menu_view).callback(interaction=interaction)
+        return interaction
+
+    async def _select_member(self, menu_view, fake_member, *, guild=None):
+        """Navigate Filters -> Member -> select fake_member. Returns the
+        interaction so the caller can inspect edited_content (the inline
+        validation status line) and edited_view (the still-open Member
+        edit screen, one Back click away from a refreshed menu)."""
+        member_edit_view = await self._open_category_edit(menu_view, FILTER_CATEGORY_MEMBER)
+        self._member_select(member_edit_view)._values = [fake_member]
+        interaction = self._interaction()
+        if guild is not None:
+            interaction.guild = guild
+        await self._member_select(member_edit_view).callback(interaction=interaction)
+        return interaction
+
+    async def _clear_member(self, menu_view):
+        member_edit_view = await self._open_category_edit(menu_view, FILTER_CATEGORY_MEMBER)
+        self._member_select(member_edit_view)._values = []
+        interaction = self._interaction()
+        await self._member_select(member_edit_view).callback(interaction=interaction)
+        return interaction
+
+    async def _set_member_and_return_to_menu(self, menu_view, fake_member, *, guild=None):
+        interaction = await self._select_member(menu_view, fake_member, guild=guild)
+        return await self._back_to_menu(interaction.response.edited_view)
+
+    async def _clear_member_and_return_to_menu(self, menu_view):
+        interaction = await self._clear_member(menu_view)
+        return await self._back_to_menu(interaction.response.edited_view)
+
+    async def _select_genre(self, menu_view, genre: str):
+        """Navigate Filters -> Genre -> select genre. Genre selection
+        returns directly to a refreshed FilterMenuView (no Back step
+        needed, unlike Member's inline validation feedback screen)."""
+        genre_edit_view = await self._open_category_edit(menu_view, FILTER_CATEGORY_GENRE)
+        self._genre_select(genre_edit_view)._values = [genre]
+        interaction = self._interaction()
+        await self._genre_select(genre_edit_view).callback(interaction=interaction)
+        return interaction.response.edited_view
 
     async def test_screen_includes_member_and_genre_filter_selects(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
+        self._edit_filters_button(overrides_view)  # raises StopIteration if missing
 
-        self._member_select(overrides_view)  # raises StopIteration if missing
-        self._genre_select(overrides_view)
+        menu_view = await self._open_filter_menu(overrides_view)
+        category_values = {option.value for option in self._category_select(menu_view).options}
+        self.assertIn(FILTER_CATEGORY_MEMBER, category_values)
+        self.assertIn(FILTER_CATEGORY_GENRE, category_values)
 
     async def test_selecting_a_valid_member_shows_their_eligible_count(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [self._kc_member()]
+        menu_view = await self._open_filter_menu(overrides_view)
 
-        select_interaction = self._interaction()
-        await member_select.callback(interaction=select_interaction)
+        select_interaction = await self._select_member(menu_view, self._kc_member())
 
         self.assertIn("KC has 2 eligible suggestions", select_interaction.response.edited_content)
 
     async def test_selecting_a_non_watch_party_member_is_rejected(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
+        menu_view = await self._open_filter_menu(overrides_view)
         non_member = FakeMember(user_id=333, roles=[], display_name="Stranger")
-        member_select._values = [non_member]
 
-        select_interaction = self._interaction()
-        await member_select.callback(interaction=select_interaction)
+        select_interaction = await self._select_member(menu_view, non_member)
 
         self.assertIn(
             "is not the server owner, a WASH Crew member, or a current Watch Party member",
@@ -1542,21 +1648,21 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_selecting_a_member_with_no_eligible_suggestions_is_rejected(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
+        menu_view = await self._open_filter_menu(overrides_view)
         idle_member = FakeMember(
             user_id=999, roles=[FakeRole(self.WATCH_PARTY_FILTER_ROLE_ID)], display_name="Idle"
         )
-        member_select._values = [idle_member]
 
-        select_interaction = self._interaction()
-        await member_select.callback(interaction=select_interaction)
+        select_interaction = await self._select_member(menu_view, idle_member)
 
         self.assertIn("has no eligible suggestions", select_interaction.response.edited_content)
 
     async def test_genre_select_options_show_eligible_counts(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        genre_select = self._genre_select(overrides_view)
+        menu_view = await self._open_filter_menu(overrides_view)
+        genre_edit_view = await self._open_category_edit(menu_view, FILTER_CATEGORY_GENRE)
+        genre_select = self._genre_select(genre_edit_view)
 
         options_by_label = {option.label: option for option in genre_select.options}
         self.assertIn("Comedy", options_by_label)
@@ -1587,9 +1693,9 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_member_filter_narrows_the_created_rounds_candidates(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [self._kc_member()]
-        await member_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(menu_view, self._kc_member())
+        await self._back_to_overrides(menu_view)
 
         confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
 
@@ -1605,9 +1711,9 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_genre_filter_narrows_the_created_rounds_candidates(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        genre_select = self._genre_select(overrides_view)
-        genre_select._values = ["Comedy"]
-        await genre_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._select_genre(menu_view, "Comedy")
+        await self._back_to_overrides(menu_view)
 
         confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
 
@@ -1623,12 +1729,10 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_combined_member_and_genre_filters_narrow_together(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [self._kc_member()]
-        await member_select.callback(interaction=self._interaction())
-        genre_select = self._genre_select(overrides_view)
-        genre_select._values = ["Comedy"]
-        await genre_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(menu_view, self._kc_member())
+        menu_view = await self._select_genre(menu_view, "Comedy")
+        await self._back_to_overrides(menu_view)
 
         confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
 
@@ -1640,9 +1744,9 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_member_filter_insufficient_pool_blocks_round_creation(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [self._kc_member()]
-        await member_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(menu_view, self._kc_member())
+        await self._back_to_overrides(menu_view)
 
         confirm_interaction = await self._complete_customize_vote(
             overrides_view, self._interaction(), nominee_count_text="3"
@@ -1657,9 +1761,9 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_genre_filter_insufficient_pool_blocks_round_creation(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        genre_select = self._genre_select(overrides_view)
-        genre_select._values = ["Horror"]
-        await genre_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._select_genre(menu_view, "Horror")
+        await self._back_to_overrides(menu_view)
 
         confirm_interaction = await self._complete_customize_vote(
             overrides_view, self._interaction(), nominee_count_text="3"
@@ -1674,9 +1778,9 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_filters_never_persist_to_the_collections_own_configuration(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [self._kc_member()]
-        await member_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(menu_view, self._kc_member())
+        await self._back_to_overrides(menu_view)
 
         await self._complete_customize_vote(overrides_view, self._interaction())
 
@@ -1684,7 +1788,7 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         self.assertIsNone(configuration)  # never created/touched by a per-vote filter
 
     async def test_unfiltered_customize_vote_still_works_unchanged(self) -> None:
-        # Regression: Any Member / Any Genre (both selects left untouched)
+        # Regression: Any Member / Any Genre (filter menu never opened)
         # must behave exactly like before this feature existed.
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
@@ -1716,32 +1820,37 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_non_member_selection_disables_continue(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(
+            menu_view, FakeMember(user_id=333, roles=[], display_name="Stranger")
+        )
 
-        await member_select.callback(interaction=self._interaction())
+        self.assertTrue(self._menu_continue_button(menu_view).disabled)
 
+        await self._back_to_overrides(menu_view)
         self.assertTrue(overrides_view.continue_button.disabled)
 
     async def test_zero_eligible_suggestions_selection_disables_continue(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
+        menu_view = await self._open_filter_menu(overrides_view)
         idle_member = FakeMember(user_id=999, roles=[FakeRole(self.WATCH_PARTY_FILTER_ROLE_ID)], display_name="Idle")
-        member_select._values = [idle_member]
+        menu_view = await self._set_member_and_return_to_menu(menu_view, idle_member)
 
-        await member_select.callback(interaction=self._interaction())
+        self.assertTrue(self._menu_continue_button(menu_view).disabled)
 
+        await self._back_to_overrides(menu_view)
         self.assertTrue(overrides_view.continue_button.disabled)
 
     async def test_valid_member_selection_keeps_continue_enabled(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [self._kc_member()]
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(menu_view, self._kc_member())
 
-        await member_select.callback(interaction=self._interaction())
+        self.assertFalse(self._menu_continue_button(menu_view).disabled)
 
+        await self._back_to_overrides(menu_view)
         self.assertFalse(overrides_view.continue_button.disabled)
 
     async def test_valid_bot_member_with_eligible_suggestions_is_accepted(self) -> None:
@@ -1750,24 +1859,24 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         )
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [self._bot_member()]
+        menu_view = await self._open_filter_menu(overrides_view)
 
-        select_interaction = self._interaction()
-        await member_select.callback(interaction=select_interaction)
+        select_interaction = await self._select_member(menu_view, self._bot_member())
 
         self.assertIn("Midjourney Bot has 1 eligible suggestion", select_interaction.response.edited_content)
-        self.assertFalse(overrides_view.continue_button.disabled)
+        menu_view = await self._back_to_menu(select_interaction.response.edited_view)
+        self.assertFalse(self._menu_continue_button(menu_view).disabled)
 
     async def test_clicking_continue_while_a_non_member_is_selected_is_blocked(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
-        await member_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(
+            menu_view, FakeMember(user_id=333, roles=[], display_name="Stranger")
+        )
 
         continue_interaction = self._interaction()
-        await self._continue_button(overrides_view).callback(interaction=continue_interaction)
+        await self._menu_continue_button(menu_view).callback(interaction=continue_interaction)
 
         self.assertIsNone(continue_interaction.response.sent_modal)
         self.assertIn(
@@ -1779,13 +1888,12 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_clicking_continue_while_a_zero_eligible_member_is_selected_is_blocked(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
+        menu_view = await self._open_filter_menu(overrides_view)
         idle_member = FakeMember(user_id=999, roles=[FakeRole(self.WATCH_PARTY_FILTER_ROLE_ID)], display_name="Idle")
-        member_select._values = [idle_member]
-        await member_select.callback(interaction=self._interaction())
+        menu_view = await self._set_member_and_return_to_menu(menu_view, idle_member)
 
         continue_interaction = self._interaction()
-        await self._continue_button(overrides_view).callback(interaction=continue_interaction)
+        await self._menu_continue_button(menu_view).callback(interaction=continue_interaction)
 
         self.assertIsNone(continue_interaction.response.sent_modal)
         self.assertIn("has no eligible suggestions", continue_interaction.response.edited_content)
@@ -1794,33 +1902,33 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_clearing_an_invalid_selection_restores_any_member_and_reenables_continue(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
-        await member_select.callback(interaction=self._interaction())
-        self.assertTrue(overrides_view.continue_button.disabled)
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(
+            menu_view, FakeMember(user_id=333, roles=[], display_name="Stranger")
+        )
+        self.assertTrue(self._menu_continue_button(menu_view).disabled)
 
-        member_select._values = []
-        clear_interaction = self._interaction()
-        await member_select.callback(interaction=clear_interaction)
+        menu_view = await self._clear_member_and_return_to_menu(menu_view)
 
-        self.assertFalse(overrides_view.continue_button.disabled)
-        self.assertNotIn("Stranger", clear_interaction.response.edited_content)
+        self.assertFalse(self._menu_continue_button(menu_view).disabled)
+        member_option = next(
+            option for option in self._category_select(menu_view).options if option.value == FILTER_CATEGORY_MEMBER
+        )
+        self.assertNotIn("Stranger", member_option.label)
 
     async def test_invalid_member_is_not_shown_in_review_this_vote(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
-        await member_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(
+            menu_view, FakeMember(user_id=333, roles=[], display_name="Stranger")
+        )
         # Explicitly clear back to Any Member -- the only way to unblock.
-        member_select._values = []
-        await member_select.callback(interaction=self._interaction())
-        genre_select = self._genre_select(overrides_view)
-        genre_select._values = ["Comedy"]
-        await genre_select.callback(interaction=self._interaction())
+        menu_view = await self._clear_member_and_return_to_menu(menu_view)
+        menu_view = await self._select_genre(menu_view, "Comedy")
 
         continue_interaction = self._interaction()
-        await self._continue_button(overrides_view).callback(interaction=continue_interaction)
+        await self._menu_continue_button(menu_view).callback(interaction=continue_interaction)
         modal = continue_interaction.response.sent_modal
         self.assertIsNotNone(modal)
         modal.nominee_count_input._value = "2"
@@ -1834,11 +1942,12 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_invalid_member_is_never_persisted_to_the_vote_round(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
-        await member_select.callback(interaction=self._interaction())
-        member_select._values = []
-        await member_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(
+            menu_view, FakeMember(user_id=333, roles=[], display_name="Stranger")
+        )
+        menu_view = await self._clear_member_and_return_to_menu(menu_view)
+        await self._back_to_overrides(menu_view)
 
         confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
 
@@ -1849,14 +1958,11 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_genre_only_vote_still_works_after_member_filter_explicitly_cleared(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [self._kc_member()]
-        await member_select.callback(interaction=self._interaction())
-        member_select._values = []
-        await member_select.callback(interaction=self._interaction())
-        genre_select = self._genre_select(overrides_view)
-        genre_select._values = ["Comedy"]
-        await genre_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(menu_view, self._kc_member())
+        menu_view = await self._clear_member_and_return_to_menu(menu_view)
+        menu_view = await self._select_genre(menu_view, "Comedy")
+        await self._back_to_overrides(menu_view)
 
         confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
 
@@ -1868,11 +1974,12 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_recovering_from_an_invalid_selection_with_a_valid_member_persists_only_the_valid_one(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [FakeMember(user_id=333, roles=[], display_name="Stranger")]
-        await member_select.callback(interaction=self._interaction())
-        member_select._values = [self._kc_member()]
-        await member_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(
+            menu_view, FakeMember(user_id=333, roles=[], display_name="Stranger")
+        )
+        menu_view = await self._set_member_and_return_to_menu(menu_view, self._kc_member())
+        await self._back_to_overrides(menu_view)
 
         confirm_interaction = await self._complete_customize_vote(overrides_view, self._interaction())
 
@@ -1890,16 +1997,14 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         )
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
+        menu_view = await self._open_filter_menu(overrides_view)
         owner = FakeMember(user_id=555, roles=[], display_name="HeidiTheGreat")
-        member_select._values = [owner]
 
-        select_interaction = self._interaction()
-        select_interaction.guild = SimpleNamespace(owner_id=555)
-        await member_select.callback(interaction=select_interaction)
+        select_interaction = await self._select_member(menu_view, owner, guild=SimpleNamespace(owner_id=555))
 
         self.assertIn("HeidiTheGreat has 1 eligible suggestion", select_interaction.response.edited_content)
-        self.assertFalse(overrides_view.continue_button.disabled)
+        menu_view = await self._back_to_menu(select_interaction.response.edited_view)
+        self.assertFalse(self._menu_continue_button(menu_view).disabled)
 
     async def test_wash_crew_member_is_a_valid_member_even_without_the_watch_party_role(self) -> None:
         from types import SimpleNamespace
@@ -1909,32 +2014,28 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         )
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
+        menu_view = await self._open_filter_menu(overrides_view)
         crew_member = FakeMember(user_id=666, roles=[FakeRole(WASH_CREW_ROLE_ID)], display_name="Crew")
-        member_select._values = [crew_member]
 
-        select_interaction = self._interaction()
-        select_interaction.guild = SimpleNamespace(owner_id=1)
-        await member_select.callback(interaction=select_interaction)
+        select_interaction = await self._select_member(menu_view, crew_member, guild=SimpleNamespace(owner_id=1))
 
         self.assertIn("Crew has 1 eligible suggestion", select_interaction.response.edited_content)
-        self.assertFalse(overrides_view.continue_button.disabled)
+        menu_view = await self._back_to_menu(select_interaction.response.edited_view)
+        self.assertFalse(self._menu_continue_button(menu_view).disabled)
 
     async def test_owner_with_zero_eligible_suggestions_is_still_invalid(self) -> None:
         from types import SimpleNamespace
 
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
+        menu_view = await self._open_filter_menu(overrides_view)
         owner = FakeMember(user_id=555, roles=[], display_name="HeidiTheGreat")
-        member_select._values = [owner]
 
-        select_interaction = self._interaction()
-        select_interaction.guild = SimpleNamespace(owner_id=555)
-        await member_select.callback(interaction=select_interaction)
+        select_interaction = await self._select_member(menu_view, owner, guild=SimpleNamespace(owner_id=555))
 
         self.assertIn("HeidiTheGreat has no eligible suggestions", select_interaction.response.edited_content)
-        self.assertTrue(overrides_view.continue_button.disabled)
+        menu_view = await self._back_to_menu(select_interaction.response.edited_view)
+        self.assertTrue(self._menu_continue_button(menu_view).disabled)
 
     # --- Filter summary: scalable "Current Filters" block ------------------------
 
@@ -1949,39 +2050,37 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
     async def test_filter_summary_shows_the_active_member(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [self._kc_member()]
+        menu_view = await self._open_filter_menu(overrides_view)
+        select_interaction = await self._select_member(menu_view, self._kc_member())
 
-        select_interaction = self._interaction()
-        await member_select.callback(interaction=select_interaction)
+        back_interaction = self._interaction()
+        await self._back_to_menu_button(select_interaction.response.edited_view).callback(interaction=back_interaction)
 
-        self.assertIn("Member: KC", select_interaction.response.edited_content)
-        self.assertIn("Genre: Any Genre", select_interaction.response.edited_content)
+        self.assertIn("Member: KC", back_interaction.response.edited_content)
+        self.assertIn("Genre: Any Genre", back_interaction.response.edited_content)
 
     async def test_filter_summary_reverts_to_any_member_once_cleared(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [self._kc_member()]
-        await member_select.callback(interaction=self._interaction())
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(menu_view, self._kc_member())
 
-        member_select._values = []
-        clear_interaction = self._interaction()
-        await member_select.callback(interaction=clear_interaction)
+        clear_interaction = await self._clear_member(menu_view)
+        back_interaction = self._interaction()
+        await self._back_to_menu_button(clear_interaction.response.edited_view).callback(interaction=back_interaction)
 
-        self.assertIn("Member: Any Member", clear_interaction.response.edited_content)
+        self.assertIn("Member: Any Member", back_interaction.response.edited_content)
 
     async def test_filter_summary_shows_both_active_filters_together(self) -> None:
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
-        member_select = self._member_select(overrides_view)
-        member_select._values = [self._kc_member()]
-        await member_select.callback(interaction=self._interaction())
-        genre_select = self._genre_select(overrides_view)
-        genre_select._values = ["Comedy"]
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._set_member_and_return_to_menu(menu_view, self._kc_member())
 
+        genre_edit_view = await self._open_category_edit(menu_view, FILTER_CATEGORY_GENRE)
+        self._genre_select(genre_edit_view)._values = ["Comedy"]
         genre_interaction = self._interaction()
-        await genre_select.callback(interaction=genre_interaction)
+        await self._genre_select(genre_edit_view).callback(interaction=genre_interaction)
 
         self.assertIn("Member: KC", genre_interaction.response.edited_content)
         self.assertIn("Genre: Comedy", genre_interaction.response.edited_content)

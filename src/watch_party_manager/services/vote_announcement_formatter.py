@@ -82,29 +82,46 @@ def build_vote_round_line(vote_round: VoteRound) -> str:
     return f"Round: {vote_round.id}"
 
 
+def _describe_imdb_rating_bounds(minimum: Optional[float], maximum: Optional[float]) -> str:
+    if minimum is not None and maximum is not None:
+        return f"{minimum:.1f}–{maximum:.1f}"
+    if minimum is not None:
+        return f"{minimum:.1f}+"
+    return f"{maximum:.1f} or lower"
+
+
 def build_active_filter_lines(vote_round: VoteRound) -> List[str]:
     """Build Custom Vote Summary & Announcement's active-filter lines,
     shared by /vote_status, the voting-opened post, and the completion
     announcement so all three always agree.
 
-    Shows Nominee Selection (when this round tracked which mode it
+    Shows Nominee Selection first (when this round tracked which mode it
     actually used -- see VoteService.create_round's candidate_selection_mode),
-    Suggestion Source (a Discord mention -- auto-resolves to the
-    member's current display name/nickname client-side, so this is
-    never stale, unlike a stored display-name snapshot would be), and
-    Genre, each on its own line, in that order. Every field is omitted
-    individually when inactive ("Any Member"/"Any Genre" are never
-    shown) -- returns an empty list when the round has no active filter
-    and no recorded Nominee Selection mode at all (e.g. a legacy round
-    that predates these fields, or a round with no database context).
+    then each active filter in the shared Genre/IMDb Rating/MPAA Rating/
+    Actor/Member order (Section 2/12) -- Suggestion Source is rendered as
+    a live Discord mention (auto-resolves to the member's current display
+    name/nickname client-side, so this is never stale, unlike a stored
+    display-name snapshot would be). Every field is omitted individually
+    when inactive ("Any ...” is never shown) -- returns an empty list
+    when the round has no active filter and no recorded Nominee
+    Selection mode at all (e.g. a legacy round that predates these
+    fields, or a round with no database context).
     """
     lines: List[str] = []
     if vote_round.candidate_selection_mode is not None:
         lines.append(f"Nominee Selection: {CANDIDATE_SELECTION_DISPLAY_LABELS[vote_round.candidate_selection_mode]}")
-    if vote_round.filter_member_discord_user_id is not None:
-        lines.append(f"Suggestion Source: <@{vote_round.filter_member_discord_user_id}>")
     if vote_round.filter_genre is not None:
         lines.append(f"Genre: {vote_round.filter_genre}")
+    if vote_round.filter_imdb_rating_min is not None or vote_round.filter_imdb_rating_max is not None:
+        lines.append(
+            f"IMDb Rating: {_describe_imdb_rating_bounds(vote_round.filter_imdb_rating_min, vote_round.filter_imdb_rating_max)}"
+        )
+    if vote_round.filter_mpaa_rating is not None:
+        lines.append(f"MPAA Rating: {vote_round.filter_mpaa_rating}")
+    if vote_round.filter_actor is not None:
+        lines.append(f"Actor: {vote_round.filter_actor}")
+    if vote_round.filter_member_discord_user_id is not None:
+        lines.append(f"Suggestion Source: <@{vote_round.filter_member_discord_user_id}>")
     return lines
 
 

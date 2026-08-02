@@ -127,6 +127,10 @@ class VoteRound:
     candidate_selection_mode: Optional[CandidateSelectionMode] = None
     filter_member_discord_user_id: Optional[int] = None
     filter_genre: Optional[str] = None
+    filter_imdb_rating_min: Optional[float] = None
+    filter_imdb_rating_max: Optional[float] = None
+    filter_mpaa_rating: Optional[str] = None
+    filter_actor: Optional[str] = None
 
     def __post_init__(self) -> None:
         self._validate_id()
@@ -142,6 +146,9 @@ class VoteRound:
         self._validate_reminder_sent_at()
         self._validate_filter_member_discord_user_id()
         self._validate_filter_genre()
+        self._validate_filter_imdb_rating_bounds()
+        self._validate_filter_mpaa_rating()
+        self._validate_filter_actor()
 
     def _validate_id(self) -> None:
         if self.id <= 0:
@@ -215,3 +222,34 @@ class VoteRound:
             if not trimmed:
                 raise ValueError("filter_genre must not be empty when provided")
             self.filter_genre = trimmed
+
+    def _validate_filter_imdb_rating_bounds(self) -> None:
+        # Range validity (0.0-10.0, minimum <= maximum) is enforced once
+        # at the command layer when the filter is set (see bot.py's
+        # services/nominee_pool_filter.parse_imdb_rating_bounds) -- this
+        # is just a final sanity check against a directly-constructed
+        # VoteRound (e.g. a test, or a future caller).
+        if self.filter_imdb_rating_min is not None and not (0.0 <= self.filter_imdb_rating_min <= 10.0):
+            raise ValueError("filter_imdb_rating_min must be between 0.0 and 10.0 when provided")
+        if self.filter_imdb_rating_max is not None and not (0.0 <= self.filter_imdb_rating_max <= 10.0):
+            raise ValueError("filter_imdb_rating_max must be between 0.0 and 10.0 when provided")
+        if (
+            self.filter_imdb_rating_min is not None
+            and self.filter_imdb_rating_max is not None
+            and self.filter_imdb_rating_min > self.filter_imdb_rating_max
+        ):
+            raise ValueError("filter_imdb_rating_min must not be greater than filter_imdb_rating_max")
+
+    def _validate_filter_mpaa_rating(self) -> None:
+        if self.filter_mpaa_rating is not None:
+            trimmed = self.filter_mpaa_rating.strip()
+            if not trimmed:
+                raise ValueError("filter_mpaa_rating must not be empty when provided")
+            self.filter_mpaa_rating = trimmed
+
+    def _validate_filter_actor(self) -> None:
+        if self.filter_actor is not None:
+            trimmed = self.filter_actor.strip()
+            if not trimmed:
+                raise ValueError("filter_actor must not be empty when provided")
+            self.filter_actor = trimmed

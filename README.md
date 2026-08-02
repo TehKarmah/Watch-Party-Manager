@@ -64,7 +64,7 @@ WASH's in-Discord `/help` command always reflects the exact command set availabl
 
 ### Watch Party members (WASH Crew inherit these too)
 
-- `/add`, `/list`, `/random_watch`, `/stats`, `/reject`, `/unreject`
+- `/add`, `/list`, `/random watch`, `/stats`, `/reject`, `/unreject`
 
 ### WASH Crew
 

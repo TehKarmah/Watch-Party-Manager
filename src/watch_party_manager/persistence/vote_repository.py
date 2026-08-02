@@ -121,6 +121,10 @@ class JsonVoteRepository:
             ),
             "filter_member_discord_user_id": vote_round.filter_member_discord_user_id,
             "filter_genre": vote_round.filter_genre,
+            "filter_imdb_rating_min": vote_round.filter_imdb_rating_min,
+            "filter_imdb_rating_max": vote_round.filter_imdb_rating_max,
+            "filter_mpaa_rating": vote_round.filter_mpaa_rating,
+            "filter_actor": vote_round.filter_actor,
             "votes": [
                 JsonVoteRepository._serialize_vote(vote_record)
                 for vote_record in vote_round.votes.values()
@@ -170,6 +174,10 @@ class JsonVoteRepository:
             ),
             filter_member_discord_user_id=entry.get("filter_member_discord_user_id"),
             filter_genre=entry.get("filter_genre"),
+            filter_imdb_rating_min=entry.get("filter_imdb_rating_min"),
+            filter_imdb_rating_max=entry.get("filter_imdb_rating_max"),
+            filter_mpaa_rating=entry.get("filter_mpaa_rating"),
+            filter_actor=entry.get("filter_actor"),
         )
 
     @staticmethod

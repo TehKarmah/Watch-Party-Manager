@@ -369,3 +369,41 @@ class VoteRoundCustomVoteFilterFieldsTests(unittest.TestCase):
     def test_rejects_an_empty_filter_genre(self) -> None:
         with self.assertRaises(ValueError):
             VoteRound(id=1, filter_genre="   ")
+
+    def test_new_filter_fields_default_to_none(self) -> None:
+        vote_round = VoteRound(id=1)
+        self.assertIsNone(vote_round.filter_imdb_rating_min)
+        self.assertIsNone(vote_round.filter_imdb_rating_max)
+        self.assertIsNone(vote_round.filter_mpaa_rating)
+        self.assertIsNone(vote_round.filter_actor)
+
+    def test_accepts_imdb_rating_bounds(self) -> None:
+        vote_round = VoteRound(id=1, filter_imdb_rating_min=6.0, filter_imdb_rating_max=8.0)
+        self.assertEqual(vote_round.filter_imdb_rating_min, 6.0)
+        self.assertEqual(vote_round.filter_imdb_rating_max, 8.0)
+
+    def test_rejects_an_imdb_rating_bound_outside_zero_to_ten(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, filter_imdb_rating_min=-0.1)
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, filter_imdb_rating_max=10.1)
+
+    def test_rejects_imdb_rating_minimum_greater_than_maximum(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, filter_imdb_rating_min=8.0, filter_imdb_rating_max=6.0)
+
+    def test_accepts_and_trims_a_filter_mpaa_rating(self) -> None:
+        vote_round = VoteRound(id=1, filter_mpaa_rating="  PG-13  ")
+        self.assertEqual(vote_round.filter_mpaa_rating, "PG-13")
+
+    def test_rejects_an_empty_filter_mpaa_rating(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, filter_mpaa_rating="   ")
+
+    def test_accepts_and_trims_a_filter_actor(self) -> None:
+        vote_round = VoteRound(id=1, filter_actor="  Jim Carrey  ")
+        self.assertEqual(vote_round.filter_actor, "Jim Carrey")
+
+    def test_rejects_an_empty_filter_actor(self) -> None:
+        with self.assertRaises(ValueError):
+            VoteRound(id=1, filter_actor="   ")

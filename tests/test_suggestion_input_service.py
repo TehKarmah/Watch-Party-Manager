@@ -37,6 +37,45 @@ class SuggestionInputServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.title, "The Matrix (1999)")
         self.assertEqual(result.imdb_url, "https://www.imdb.com/title/tt0133093/")
 
+    async def test_resolves_cast_via_imdb_url_entered_as_title(self) -> None:
+        metadata_service = ImdbMetadataService(
+            api_key="test-key",
+            fetch_json=lambda _: {
+                "Title": "The Mask",
+                "Year": "1994",
+                "Response": "True",
+                "Actors": "Jim Carrey, Cameron Diaz",
+            },
+        )
+        service = SuggestionInputService(metadata_service)
+
+        result = await service.resolve("https://www.imdb.com/title/tt0110475/")
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.cast, ("Jim Carrey", "Cameron Diaz"))
+
+    async def test_resolves_cast_via_separate_imdb_url(self) -> None:
+        metadata_service = ImdbMetadataService(
+            api_key="test-key",
+            fetch_json=lambda _: {
+                "Title": "The Mask",
+                "Year": "1994",
+                "Response": "True",
+                "Actors": "Jim Carrey, Cameron Diaz",
+            },
+        )
+        service = SuggestionInputService(metadata_service)
+
+        result = await service.resolve("The Mask", "imdb.com/title/tt0110475")
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.cast, ("Jim Carrey", "Cameron Diaz"))
+
+    async def test_plain_title_with_no_imdb_url_has_no_cast(self) -> None:
+        result = await self.service.resolve("The Matrix")
+
+        self.assertEqual(result.cast, ())
+
     async def test_rejects_empty_input(self) -> None:
         result = await self.service.resolve("   ")
 

@@ -22,6 +22,7 @@ class ResolvedSuggestionInput:
     director: Optional[str] = None
     imdb_rating: Optional[str] = None
     poster_url: Optional[str] = None
+    cast: tuple[str, ...] = ()
     error_message: Optional[str] = None
 
 
@@ -81,6 +82,7 @@ class SuggestionInputService:
                 director=resolved.director,
                 imdb_rating=resolved.imdb_rating,
                 poster_url=resolved.poster_url,
+                cast=resolved.cast,
             )
 
         if cleaned_imdb_url is not None and cleaned_imdb_url != cleaned_title:
@@ -110,4 +112,5 @@ class SuggestionInputService:
             director=resolved.director,
             imdb_rating=resolved.imdb_rating,
             poster_url=resolved.poster_url,
+            cast=resolved.cast,
         )

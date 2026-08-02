@@ -146,7 +146,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
   2. Type `/vote`; confirm autocomplete offers exactly `start`, `status`, `edit`, and that `/start_vote`, `/vote_status`, `/edit_vote`, and the pre-release `/voting` group no longer exist.
   3. Type `/watch-party`; confirm autocomplete offers exactly `schedule`, `status`, `reschedule`, `cancel`, and that `/schedule_watch_party`, `/reschedule_watch_party`, `/cancel_watch_party`, `/watch_party_status` no longer exist.
   4. Type `/watch_party` (underscore); confirm it still exists, separately from `/watch-party` (hyphen), and still offers `members`, `pending`, `approved`, `denied`, `add`, `remove`, `search` -- membership administration is unaffected by this cleanup.
-  5. Confirm every other command named in [Command Reference](10-Command-Reference.md) (e.g. `/about`, `/add`, `/backup`, `/config`, `/help`, `/list`, `/random_watch`, `/restore`, `/setup`, `/stats`, `/remove`, `/edit_suggestion`, `/reject`, `/unreject`, `/repair_suggestions`, `/factory_reset`, `/import`, `/join_watch_party`) still appears as a plain top-level command, unchanged.
+  5. Confirm every other command named in [Command Reference](10-Command-Reference.md) (e.g. `/about`, `/add`, `/backup`, `/config`, `/help`, `/list`, `/random watch`, `/restore`, `/setup`, `/stats`, `/remove`, `/edit_suggestion`, `/reject`, `/unreject`, `/repair_suggestions`, `/factory_reset`, `/import`, `/join_watch_party`) still appears as a plain top-level command, unchanged.
 - **Expected Result:** The live Discord command tree matches [Command Reference](10-Command-Reference.md) exactly -- no obsolete command remains reachable under its old name, no command was accidentally duplicated under both an old and new name, and `/watch_party`/`/watch-party` coexist as the two distinct, valid command names documented there.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
@@ -752,43 +752,60 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.8b `/random_watch` -- true-random discovery, filters, and session behavior
+### 4.8b `/random watch` -- true-random discovery, filters, and session behavior
 
-- **Objective:** Confirm `/random_watch` chooses uniformly at random from the collection's eligible pool, its optional member/genre filters combine correctly and reuse the same architecture as `/vote start`'s Custom Vote Filters, and it never changes any suggestion or vote state.
-- **Preconditions:** A collection with several `Available` suggestions across at least two members and two genres, plus at least one suggestion each in In an Active Vote, Pending Crew Review, Vote Winner, Watched, and Retired.
+- **Objective:** Confirm `/random watch` chooses uniformly at random from the collection's eligible pool, its optional filters (Genre, IMDb Rating, MPAA Rating, Actor, Member) combine correctly and reuse the same shared filter-menu architecture as `/vote start`'s Custom Vote Filters, and it never changes any suggestion or vote state.
+- **Preconditions:** A collection with several `Available` suggestions across at least two members, two genres, varied IMDb ratings, varied MPAA ratings, and varied cast lists, plus at least one suggestion each in In an Active Vote, Pending Crew Review, Vote Winner, Watched, and Retired.
 - **Steps:**
-  1. With no collections configured in the guild, run `/random_watch`; confirm a clear "create a collection first" message, not a generic error.
-  2. With exactly one collection, run `/random_watch`; confirm it's used automatically and named on screen, with no picker.
-  3. With more than one collection and no unambiguous channel context, run `/random_watch`; confirm a picker is shown, consistent with `/list`'s own picker.
+  1. With no collections configured in the guild, run `/random watch`; confirm a clear "create a collection first" message, not a generic error.
+  2. With exactly one collection, run `/random watch`; confirm it's used automatically and named on screen, with no picker.
+  3. With more than one collection and no unambiguous channel context, run `/random watch`; confirm a picker is shown, consistent with `/list`'s own picker.
   4. Press **Pick Random Item** repeatedly (at least ~15 times); confirm only `Available` suggestions are ever returned -- never one currently In an Active Vote, Pending Crew Review, a Vote Winner, Watched, or Retired.
   5. Press **Pick Again** several times in a row; confirm each press performs a new draw and that picking the same item twice in a row is not blocked (no hidden no-repeat state).
-  6. Press **Add Filters**, choose a specific member via the member select, and confirm only that member's eligible suggestions are ever returned by **Pick Random Item**; clear the member filter (native "clear" on the select) and confirm the full pool returns.
-  7. Choose a specific genre via the genre select; confirm only suggestions tagged with that genre are ever returned, and that the genre options show eligible counts. Combine the member and genre filters together and confirm the result satisfies both.
+  6. Press **Add Filters**; confirm the filter menu's category dropdown lists Genre, IMDb Rating, MPAA Rating, Actor, and Member, always in that fixed order, each labeled with its current value. Open Member, choose a specific member, and confirm only that member's eligible suggestions are ever returned by **Pick Random Item**; return to the menu and reset it to **Any Member** and confirm the full pool returns.
+  7. Open Genre, choose a specific genre, and confirm only suggestions tagged with that genre are ever returned, and that the genre options show eligible counts. Combine the member and genre filters together and confirm the result satisfies both.
   8. Narrow the filters until no suggestion matches; confirm a clear message naming the collection and the active filter(s), with a way to change or clear filters or the collection -- not a generic error.
-  9. From a result, press **Change Filters**; confirm the collection stays the same and the current filters are shown. Press **Change Collection**; confirm it returns to the collection picker and that filters from the previous collection do not carry over (including genre options, which should rebuild for the new collection).
+  9. From a result, press **Change Filters**; confirm the collection stays the same and the current filters are shown. Press **Change Collection**; confirm it returns to the collection picker and that filters from the previous collection do not carry over (including genre and MPAA rating options, which should rebuild for the new collection).
   10. Confirm the result names the collection, states the pick was random, shows the item's usual details (title, year, poster, genre, IMDb link, original suggester) without duplicating the IMDb URL as a separate line, and includes a working **View Original Suggestion** link when the suggestion has a linkable original post (omitted when it doesn't).
   11. After several picks, confirm via `/list` and `/database health` that no suggestion's status changed and no voting round was created.
 - **Expected Result:** Selection is always uniformly random over the eligible pool with no Favor New/Older Additions weighting; filters narrow correctly, combine correctly, and never persist beyond the session; collection/filter selection and result presentation match the behavior described above; the command never mutates any suggestion or vote state.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
-### 4.8c `/random_watch` -- public result, private setup, member validation, and requester-only controls
+### 4.8c `/random watch` -- public result, private setup, member validation, and requester-only controls
 
-- **Objective:** Confirm the setup/filter screens stay private (ephemeral), the actual result is posted publicly once found, only the member who ran `/random_watch` can use its buttons, and the expanded member-filter validation rules (server owner/WASH Crew/Watch Party member, all requiring at least one eligible suggestion) behave correctly with a clearly visible warning that never silently falls back to Any Member.
+- **Objective:** Confirm the setup/filter screens stay private (ephemeral), the actual result is posted publicly once found, only the member who ran `/random watch` can use its buttons, and the expanded member-filter validation rules (server owner/WASH Crew/Watch Party member, all requiring at least one eligible suggestion) behave correctly with a clearly visible warning that never silently falls back to Any Member.
 - **Preconditions:** A collection with eligible suggestions; a test member who is none of server owner/WASH Crew/Watch Party member; a test member who holds only the WASH Crew role (not Watch Party); the server owner account, or an account with `Manage Server`-equivalent visibility into who the owner is; a second, unrelated Discord account to test requester-only enforcement.
 - **Steps:**
-  1. Run `/random_watch` and confirm every screen up through pressing **Pick Random Item** (including **Add Filters** and any collection picker) is only visible to you (ephemeral) -- no other member in the channel can see it.
+  1. Run `/random watch` and confirm every screen up through pressing **Pick Random Item** (including **Add Filters** and any collection picker) is only visible to you (ephemeral) -- no other member in the channel can see it.
   2. Press **Pick Random Item** until an item is found; confirm the result posts as a normal, publicly visible message in the channel (not ephemeral), and that the private screen that triggered it is replaced by a brief "picked ... see the public post below" note visible only to you.
   3. As a second, different member, attempt to press **Pick Again**, **Change Filters**, or **Change Collection** on that public result; confirm each is rejected with "Only the person who ran this command can use these controls." and nothing changes.
   4. As the original requester, confirm all three buttons work normally on that same public result.
   5. Press **Change Filters** on the public result; confirm it opens a brand-new *private* message (not an edit of the public one) and that the public result message is untouched. Do the same for **Change Collection**.
   6. From that private follow-up, press **Pick Random Item** again; confirm a new public result is posted (a second public message, not an edit of the first).
-  7. In **Add Filters**, select a member who is on none of server owner/WASH Crew/Watch Party -- confirm a highly visible warning appears (leading ⚠️, the member's name, and the specific reason) and that **Pick Random Item** becomes disabled/unusable until resolved.
+  7. In **Add Filters**, open Member and select someone who is on none of server owner/WASH Crew/Watch Party -- confirm a highly visible warning appears (leading ⚠️, the member's name, and the specific reason) and that **Pick Random Item** becomes disabled/unusable until resolved.
   8. Select a valid member (any of server owner/WASH Crew/Watch Party) who has zero eligible suggestions in the collection -- confirm a distinct warning naming the collection (e.g. "has no eligible suggestions in \"Movie Suggestions\"") and that **Pick Random Item** stays disabled.
   9. Select a member who is only WASH Crew (not Watch Party) with at least one eligible suggestion -- confirm they're accepted and the eligible count is shown. Repeat for a member who is only the server owner, and again for a bot account that holds the Watch Party role and has an eligible suggestion -- confirm all three are accepted, and that a bot with none of the three roles is rejected exactly like a non-member human.
   10. After an invalid selection, clear the member filter (native "clear" on the select); confirm the warning disappears immediately and **Pick Random Item** re-enables.
-  11. Confirm the **Current Filters** block always lists Member and Genre (showing "Any Member"/"Any Genre" when inactive), matching `/vote start`'s Customize This Vote screen's own layout and wording.
+  11. Confirm the **Current Filters** block always lists Genre, IMDb Rating, MPAA Rating, Actor, and Member in that fixed order (showing "Any X" for each when inactive), matching `/vote start`'s Customize This Vote screen's own layout and wording exactly.
 - **Expected Result:** Setup/filter screens are always private; a found result is always public; Pick Again/Change Filters/Change Collection work only for the original requester and are cleanly rejected for anyone else; Change Filters/Change Collection from a public result always open a new private message rather than editing the public one; the expanded member validation (owner/WASH Crew/Watch Party, each requiring an eligible suggestion) is enforced with a clear, immediately-appearing-and-clearing warning that blocks progress the whole time it's shown; bots are judged by the same rules as anyone else.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 4.8d `/random watch` and `/vote start` -- shared IMDb Rating, MPAA Rating, and Actor filters
+
+- **Objective:** Confirm the three newer shared filters (IMDb Rating, MPAA Rating, Actor) work identically through both `/random watch`'s Add Filters and `/vote start`'s Customize This Vote -> Edit Filters, including validation, resets, and missing-metadata handling.
+- **Preconditions:** A collection with suggestions covering a spread of IMDb ratings (including some with no rating recorded), several different MPAA/content ratings (including one "Not Rated" and one "Unrated" title, and some with no rating recorded), and overlapping/distinct cast lists (including some suggestions with no cast recorded and at least one actor appearing in more than one suggestion).
+- **Steps:**
+  1. Open the filter menu (either flow) and select **IMDb Rating**; enter only a minimum (e.g. 7.0) and confirm only suggestions rated 7.0 or higher are returned/counted; reset to only a maximum (e.g. 5.9) and confirm only suggestions rated 5.9 or lower are returned; set both a minimum and maximum (e.g. 6.0-8.0) and confirm both boundary values themselves match (inclusive).
+  2. Enter a non-numeric value, a value outside 0.0-10.0, or a minimum greater than the maximum; confirm each is rejected with a clear, specific message and the modal/screen stays open to correct it, without silently clearing or accepting the bad value.
+  3. Click **Any IMDb Rating**; confirm the filter clears immediately and the full pool (including suggestions with no recorded rating) is eligible again.
+  4. Select **MPAA Rating**; confirm the dropdown's first option is **Any MPAA Rating**, that it only lists ratings actually present in the collection's eligible pool (each showing an eligible count), and that "Not Rated" and "Unrated" appear as two distinct options when both are present. Choose one rating and confirm only matching suggestions (case-insensitive) are returned; confirm a suggestion with no recorded rating never matches while a rating is selected.
+  5. Select **Actor**; search part of a name that matches exactly one cast member and confirm it applies immediately without an extra confirmation step. Search a fragment matching more than one actor and confirm a picker lists every match (with counts) for you to choose from; select one and confirm it applies. Search something matching no one and confirm a clear "no actors found" message is shown without leaving the filter flow. Click **Any Actor** and confirm the filter clears.
+  6. Combine all five filters (Genre, IMDb Rating, MPAA Rating, Actor, Member) at once; confirm the result satisfies every active filter simultaneously (an intersection, not a union).
+  7. In `/vote start`'s Customize This Vote, repeat steps 1-6 through **Edit Filters**; confirm identical wording, validation, and behavior to `/random watch`, and that active filters are shown in **Review This Vote**, the voting post, `/vote status`, and the results announcement after the round completes.
+  8. Restart the bot with an active filtered voting round in progress; confirm `/vote status` and the restored voting post still show the correct active filters.
+- **Expected Result:** IMDb Rating, MPAA Rating, and Actor behave identically through both flows; validation errors are specific and non-destructive; "Any" resets each filter immediately and independently; a suggestion missing the relevant metadata never matches an active filter but is fully eligible when that filter is Any; all five filters combine as a strict intersection; filter state survives a bot restart for Custom Vote.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -1414,7 +1431,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm the participant command set is available to Watch Party members (and WASH Crew, who inherit it).
 - **Preconditions:** A member with only the Watch Party role.
 - **Steps:**
-  1. Run `/add`, `/list`, `/random_watch`, and `/stats` as this member.
+  1. Run `/add`, `/list`, `/random watch`, and `/stats` as this member.
   2. Run `/help` and confirm the shown command list matches what's actually usable.
 - **Expected Result:** All four commands work; `/help` accurately reflects this member's permission tier.
 - **Result:** [ ] Pass [ ] Fail
@@ -1426,7 +1443,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** A member with the WASH Crew role.
 - **Steps:**
   1. Run a representative sample: `/vote start`, `/vote status`, `/database add`, `/config`, `/backup`.
-  2. Confirm the same member can also run `/add`/`/list`/`/random_watch`/`/stats` (inherited member access).
+  2. Confirm the same member can also run `/add`/`/list`/`/random watch`/`/stats` (inherited member access).
 - **Expected Result:** All succeed; `/help` shows the full WASH Crew command list.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________

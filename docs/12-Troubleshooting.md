@@ -100,13 +100,17 @@ A command replies "WASH Crew permissions have not been configured," "Run `/setup
 
 ### Nominee filters produce too few candidates
 
-Customize This Vote's optional **Suggestion Source** (one member) and/or **Genre** filters narrow the eligible pool *before* Nominee Selection runs, for that one round only. If the filtered pool can't support the requested candidate count, the round is not created and the error names the active filter(s), the remaining count, and how to resolve it, e.g.:
+Customize This Vote's optional Genre, IMDb Rating, MPAA Rating, Actor, and Suggestion Source (one member) filters narrow the eligible pool *before* Nominee Selection runs, for that one round only. If the filtered pool can't support the requested candidate count, the round is not created and the error names the active filter(s), the remaining count, and how to resolve it, e.g.:
 
 > KC has 2 eligible suggestions, but this vote requires 3 nominees. Reduce the candidate count or choose another member.
 >
 > The Horror filter leaves 2 eligible suggestions, but this vote requires 3 nominees. Reduce the candidate count or choose another genre.
 
-Reduce the candidate count, choose a different member/genre, or clear the filter back to **Any Member**/**Any Genre**. See [Administration: Custom Vote Filters](05-Administration.md#custom-vote-filters) for the full behavior, including how combined filters intersect.
+Reduce the candidate count, change or combine fewer filters, or reset the relevant filter(s) back to Any. See [Administration: Custom Vote Filters](05-Administration.md#custom-vote-filters) for the full behavior, including how combined filters intersect.
+
+### IMDb Rating, MPAA Rating, or Actor filter has no options / never matches
+
+All three of these filters (and Genre) only ever read metadata already stored on a suggestion at the time it was added -- they never make a live IMDb lookup when the filter menu opens or a vote starts. A suggestion added before its collection had reliable metadata (or added by direct title with no matching IMDb result) may simply have no IMDb rating, no content rating, and/or no cast recorded; it will never match an active filter for that field, but remains fully eligible whenever that filter is set to Any. MPAA Rating's dropdown and Actor's search results are both built only from suggestions that *do* have that metadata in the current eligible pool, so a field that's empty for every suggestion in a collection will show no MPAA Rating options (beyond Any) or no Actor search results at all. There is currently no bulk "refresh metadata for existing suggestions" tool -- re-adding an item via `/add` with the same or a corrected IMDb URL re-resolves and re-stores its metadata (including cast), which is the current workaround for a specific item; a project-wide backfill for every pre-existing suggestion is a known gap, not something this release attempts automatically (see the project's CHANGELOG for the specific milestone that introduced cast metadata).
 
 ---
 

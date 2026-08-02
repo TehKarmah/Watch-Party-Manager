@@ -11,11 +11,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from watch_party_manager.bot import DatabaseGroup, VotingGroup, WatchPartyBot, WatchPartyEventGroup
+from watch_party_manager.bot import DatabaseGroup, RandomGroup, VotingGroup, WatchPartyBot, WatchPartyEventGroup
 from watch_party_manager.persistence.suggestion_database_configuration_repository import (
     SuggestionDatabaseConfigurationRepository,
 )
@@ -124,6 +124,28 @@ class VotingGroupRegistrationTests(unittest.TestCase):
         self.assertEqual({command.name for command in group.commands}, {"start", "status", "edit"})
 
 
+class RandomGroupRegistrationTests(unittest.TestCase):
+    def test_group_name_is_random(self) -> None:
+        group = RandomGroup(MinimalFakeBot())
+        self.assertEqual(group.name, "random")
+
+    def test_exposes_exactly_the_watch_subcommand(self) -> None:
+        # Command Rename: /random_watch (underscore) is gone -- the only
+        # way to reach it now is the grouped /random watch.
+        group = RandomGroup(MinimalFakeBot())
+        self.assertEqual({command.name for command in group.commands}, {"watch"})
+
+    async def test_watch_delegates_to_handle_random_watch(self) -> None:
+        bot = MinimalFakeBot()
+        group = RandomGroup(bot)
+        interaction = FakeInteraction()
+
+        with patch("watch_party_manager.bot.handle_random_watch", new=AsyncMock()) as mock_handler:
+            await group.watch.callback(group, interaction)
+
+        mock_handler.assert_awaited_once_with(interaction, bot)
+
+
 class WatchPartyEventGroupRegistrationTests(unittest.TestCase):
     def test_group_name_is_hyphenated_and_distinct_from_the_membership_group(self) -> None:
         group = WatchPartyEventGroup(MinimalFakeBot())
@@ -161,6 +183,13 @@ class WatchPartySchedulingHiddenFromV1Tests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("database", top_level_names)
         self.assertIn("vote", top_level_names)
         self.assertIn("join_watch_party", top_level_names)
+        # Command Rename: /random_watch (underscore, standalone) is gone;
+        # /random (a group with one "watch" subcommand) replaces it, with
+        # no compatibility alias left on the tree.
+        self.assertIn("random", top_level_names)
+        self.assertNotIn("random_watch", top_level_names)
+        random_group = next(command for command in bot.tree.get_commands() if command.name == "random")
+        self.assertEqual({subcommand.name for subcommand in random_group.commands}, {"watch"})
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@ class ImdbTitleResult:
     director: Optional[str] = None
     imdb_rating: Optional[str] = None
     poster_url: Optional[str] = None
+    cast: tuple[str, ...] = ()
     error_message: Optional[str] = None
 
 
@@ -151,6 +152,7 @@ class ImdbMetadataService:
             director=self._clean_optional(parsed.get("Director")),
             imdb_rating=self._clean_optional(parsed.get("imdbRating")),
             poster_url=self._clean_poster(parsed.get("Poster")),
+            cast=self._parse_cast(parsed.get("Actors")),
         )
 
     def _build_request_url(self, imdb_id: str) -> str:
@@ -206,6 +208,13 @@ class ImdbMetadataService:
         if cleaned is None:
             return ()
         return tuple(part.strip() for part in cleaned.split(",") if part.strip())
+
+    @classmethod
+    def _parse_cast(cls, value: Any) -> tuple[str, ...]:
+        # OMDb's "Actors" field is the same comma-separated shape as
+        # "Genre" -- reuses the identical split/trim/N-A handling rather
+        # than a second parallel parser.
+        return cls._parse_genres(value)
 
     @classmethod
     def _clean_poster(cls, value: Any) -> Optional[str]:

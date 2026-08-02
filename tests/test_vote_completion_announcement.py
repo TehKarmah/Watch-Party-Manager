@@ -487,7 +487,10 @@ class BuildActiveFilterLinesTests(unittest.TestCase):
         vote_round = VoteRound(id=1, candidate_selection_mode=CandidateSelectionMode.INFINITE_POOL)
         self.assertEqual(build_active_filter_lines(vote_round), ["Nominee Selection: Pure Random"])
 
-    def test_order_is_mode_then_member_then_genre(self) -> None:
+    def test_order_is_mode_then_genre_then_member(self) -> None:
+        # Shared Filter Order (Section 2): Genre, IMDb Rating, MPAA
+        # Rating, Actor, Member -- Member always last among the five
+        # filters, with Nominee Selection (not one of the five) first.
         from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
         from watch_party_manager.services.vote_announcement_formatter import build_active_filter_lines
 
@@ -499,7 +502,33 @@ class BuildActiveFilterLinesTests(unittest.TestCase):
         )
         self.assertEqual(
             build_active_filter_lines(vote_round),
-            ["Nominee Selection: Favor New Additions", "Suggestion Source: <@555>", "Genre: Comedy"],
+            ["Nominee Selection: Favor New Additions", "Genre: Comedy", "Suggestion Source: <@555>"],
+        )
+
+    def test_order_includes_all_five_filters_in_the_shared_order(self) -> None:
+        from watch_party_manager.domain.suggestion_database_configuration import CandidateSelectionMode
+        from watch_party_manager.services.vote_announcement_formatter import build_active_filter_lines
+
+        vote_round = VoteRound(
+            id=1,
+            candidate_selection_mode=CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
+            filter_genre="Comedy",
+            filter_imdb_rating_min=6.0,
+            filter_imdb_rating_max=8.0,
+            filter_mpaa_rating="PG-13",
+            filter_actor="Jim Carrey",
+            filter_member_discord_user_id=555,
+        )
+        self.assertEqual(
+            build_active_filter_lines(vote_round),
+            [
+                "Nominee Selection: Favor New Additions",
+                "Genre: Comedy",
+                "IMDb Rating: 6.0–8.0",
+                "MPAA Rating: PG-13",
+                "Actor: Jim Carrey",
+                "Suggestion Source: <@555>",
+            ],
         )
 
 

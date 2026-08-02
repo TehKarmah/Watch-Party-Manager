@@ -155,15 +155,37 @@ from watch_party_manager.services.candidate_selection_strategy import (
     build_candidate_selection_strategy,
 )
 from watch_party_manager.services.nominee_pool_filter import (
+    ActorFilter,
     FilteredCandidateSelectionStrategy,
     GenreFilter,
+    ImdbRatingFilter,
     MemberSuggestionFilter,
+    MpaaRatingFilter,
     NomineePoolFilter,
     apply_nominee_pool_filters,
     genre_eligibility_counts,
+    mpaa_rating_eligibility_counts,
+    parse_imdb_rating_bounds,
+    search_cast_names,
 )
 from watch_party_manager.services.random_watch_service import choose_random_watch_item
 from watch_party_manager.services.member_filter_validation import validate_member_filter_selection
+from watch_party_manager.filter_menu_view import (
+    FILTER_CATEGORY_ACTOR,
+    FILTER_CATEGORY_GENRE,
+    FILTER_CATEGORY_IMDB_RATING,
+    FILTER_CATEGORY_MEMBER,
+    FILTER_CATEGORY_MPAA_RATING,
+    ActorEditView,
+    ActorMatchEditView,
+    ActorSearchModal,
+    FilterMenuView,
+    GenreEditView,
+    ImdbRatingEditView,
+    ImdbRatingModal,
+    MemberEditView,
+    MpaaRatingEditView,
+)
 from watch_party_manager.services.collection_eligibility_service import (
     CollectionEligibility,
     CollectionEligibilityService,
@@ -186,6 +208,7 @@ from watch_party_manager.services.setup_wizard_service import (
     SetupWizardService,
 )
 from watch_party_manager.services.discord_ui_limits import (
+    SELECT_MAX_OPTIONS,
     build_safe_select_option,
     cap_select_options,
     find_oversized_view_component_fields,
@@ -323,7 +346,6 @@ from watch_party_manager.start_vote_view import (
     StartVoteChoiceView,
 )
 from watch_party_manager.random_watch_view import (
-    RandomWatchFilterView,
     RandomWatchInitialView,
     RandomWatchResultView,
 )
@@ -558,12 +580,6 @@ class WatchPartyBot(commands.Bot):
             await handle_list_suggestions(interaction, self, status, public)
 
         @self.tree.command(
-            name="random_watch", description="Pick one random eligible watch item from a collection."
-        )
-        async def random_watch(interaction: discord.Interaction) -> None:
-            await handle_random_watch(interaction, self)
-
-        @self.tree.command(
             name="repair_suggestions", description="Repair suggestions with malformed or legacy data (WASH Crew only)."
         )
         async def repair_suggestions(interaction: discord.Interaction) -> None:
@@ -726,6 +742,7 @@ class WatchPartyBot(commands.Bot):
         self.tree.add_command(WatchPartyAdminGroup(self))
         self.tree.add_command(DatabaseGroup(self))
         self.tree.add_command(VotingGroup(self))
+        self.tree.add_command(RandomGroup(self))
         # v1 Final Polish: /watch-party schedule/reschedule/cancel/status
         # are intentionally not registered for v1 -- the scheduled watch
         # party workflow is being held back from this release, not
@@ -1295,6 +1312,10 @@ def build_customize_vote_summary_text(
     duration_minutes: int,
     filter_member_display: Optional[str] = None,
     filter_genre: Optional[str] = None,
+    filter_imdb_rating_min: Optional[float] = None,
+    filter_imdb_rating_max: Optional[float] = None,
+    filter_mpaa_rating: Optional[str] = None,
+    filter_actor: Optional[str] = None,
 ) -> str:
     """Build Custom Vote Summary & Announcement's pre-creation review
     screen, shown after Customize This Vote's modal is submitted and
@@ -1302,10 +1323,11 @@ def build_customize_vote_summary_text(
     round, persistent view, or announcement exists yet at this point).
 
     Summarizes Collection, Nominee Selection, Vote Visibility, candidate
-    count, vote duration, and -- only when active -- Suggestion Source
-    and Genre. "Any Member"/"Any Genre" are never shown: an inactive
-    filter is omitted from this summary entirely, exactly as it will be
-    from the eventual announcement/vote status text.
+    count, vote duration, and -- only when active -- each filter in the
+    shared Genre/IMDb Rating/MPAA Rating/Actor/Member order (Section 2/12).
+    An inactive filter ("Any ...") is never shown here, exactly as it
+    will be omitted from the eventual announcement/vote status text (see
+    services/vote_announcement_formatter.build_active_filter_lines).
     """
     lines = ["**Review This Vote**", ""]
     if collection_name:
@@ -1315,10 +1337,18 @@ def build_customize_vote_summary_text(
     lines.append(f"Vote Visibility: {visibility.value.capitalize()}")
     lines.append(f"Candidate count: {candidate_count}")
     lines.append(f"Vote duration: {format_duration_minutes(duration_minutes)}")
-    if filter_member_display:
-        lines.append(f"Suggestion Source: {filter_member_display}")
     if filter_genre:
         lines.append(f"Genre: {filter_genre}")
+    if filter_imdb_rating_min is not None or filter_imdb_rating_max is not None:
+        lines.append(
+            f"IMDb Rating: {ImdbRatingFilter(minimum=filter_imdb_rating_min, maximum=filter_imdb_rating_max).describe()}"
+        )
+    if filter_mpaa_rating:
+        lines.append(f"MPAA Rating: {filter_mpaa_rating}")
+    if filter_actor:
+        lines.append(f"Actor: {filter_actor}")
+    if filter_member_display:
+        lines.append(f"Suggestion Source: {filter_member_display}")
     lines.append("")
     lines.append("Press **Start Vote** to open this round, or **Cancel** to discard these settings.")
     return "\n".join(lines)
@@ -1415,6 +1445,10 @@ def build_insufficient_filtered_pool_message(
     *,
     member_display: Optional[str] = None,
     genre: Optional[str] = None,
+    imdb_rating_min: Optional[float] = None,
+    imdb_rating_max: Optional[float] = None,
+    mpaa_rating: Optional[str] = None,
+    actor: Optional[str] = None,
 ) -> str:
     """Build the "not enough eligible suggestions" message for a
     Custom Vote Filters-narrowed pool (Filtered-Pool Validation).
@@ -1439,26 +1473,55 @@ def build_insufficient_filtered_pool_message(
     """
     nominee_word = "nominee" if requested_count == 1 else "nominees"
     suggestion_word = "suggestion" if eligible_count == 1 else "suggestions"
+    has_new_filters = imdb_rating_min is not None or imdb_rating_max is not None or bool(mpaa_rating) or bool(actor)
 
-    if member_display and genre:
+    if not has_new_filters:
+        # Exact legacy wording, unchanged, for the original two filters.
+        if member_display and genre:
+            return (
+                f"{member_display}'s {genre} suggestions leave {eligible_count} eligible {suggestion_word}, "
+                f"but this vote requires {requested_count} {nominee_word}. Reduce the candidate count, "
+                "choose another member, or choose another genre."
+            )
+        if member_display:
+            return (
+                f"{member_display} has {eligible_count} eligible {suggestion_word}, but this vote requires "
+                f"{requested_count} {nominee_word}. Reduce the candidate count or choose another member."
+            )
+        if genre:
+            return (
+                f"The {genre} filter leaves {eligible_count} eligible {suggestion_word}, but this vote requires "
+                f"{requested_count} {nominee_word}. Reduce the candidate count or choose another genre."
+            )
         return (
-            f"{member_display}'s {genre} suggestions leave {eligible_count} eligible {suggestion_word}, "
-            f"but this vote requires {requested_count} {nominee_word}. Reduce the candidate count, "
-            "choose another member, or choose another genre."
+            f"Not enough eligible suggestions to start this vote. This vote requires {requested_count} "
+            f"{nominee_word}, but only {eligible_count} {'is' if eligible_count == 1 else 'are'} currently available."
         )
-    if member_display:
-        return (
-            f"{member_display} has {eligible_count} eligible {suggestion_word}, but this vote requires "
-            f"{requested_count} {nominee_word}. Reduce the candidate count or choose another member."
-        )
+
+    # Generic path once any of IMDb Rating/MPAA Rating/Actor is also
+    # active -- scales to however many of the five filters are on,
+    # rather than needing one hand-written branch per combination.
+    active_descriptions: List[str] = []
     if genre:
-        return (
-            f"The {genre} filter leaves {eligible_count} eligible {suggestion_word}, but this vote requires "
-            f"{requested_count} {nominee_word}. Reduce the candidate count or choose another genre."
+        active_descriptions.append(f"the {genre} genre")
+    if imdb_rating_min is not None or imdb_rating_max is not None:
+        active_descriptions.append(
+            f"an IMDb Rating of {ImdbRatingFilter(minimum=imdb_rating_min, maximum=imdb_rating_max).describe()}"
         )
+    if mpaa_rating:
+        active_descriptions.append(f"an MPAA Rating of {mpaa_rating}")
+    if actor:
+        active_descriptions.append(f"{actor} in the cast")
+    if member_display:
+        active_descriptions.append(f"{member_display}'s suggestions")
+    joined = (
+        active_descriptions[0]
+        if len(active_descriptions) == 1
+        else ", ".join(active_descriptions[:-1]) + f", and {active_descriptions[-1]}"
+    )
     return (
-        f"Not enough eligible suggestions to start this vote. This vote requires {requested_count} "
-        f"{nominee_word}, but only {eligible_count} {'is' if eligible_count == 1 else 'are'} currently available."
+        f"Filtering to {joined} leaves {eligible_count} eligible {suggestion_word}, but this vote requires "
+        f"{requested_count} {nominee_word}. Reduce the candidate count or change a filter."
     )
 
 
@@ -1488,6 +1551,314 @@ def build_genre_filter_select_options(pool: List[WatchItem]) -> List[discord.Sel
     return cap_select_options(options)
 
 
+def build_mpaa_rating_filter_select_options(pool: List[WatchItem]) -> List[discord.SelectOption]:
+    """Build MPAA Rating Filter's select options from a collection's
+    eligible pool -- one option per rating actually represented, each
+    showing its own eligible-suggestion count, built through
+    build_safe_select_option/cap_select_options exactly like Genre's own
+    options (see build_genre_filter_select_options). "Any MPAA Rating"
+    is added separately by MpaaRatingEditSelectComponent itself, not
+    here -- this only ever returns the actually-represented ratings,
+    capped one below Discord's 25-option hard limit so that prepended
+    "Any MPAA Rating" option never pushes the select over it.
+    """
+    counts = mpaa_rating_eligibility_counts(pool)
+    ordered_ratings = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0].lower()))
+    options = [
+        build_safe_select_option(
+            rating, rating, description=f"{count} eligible suggestion{'s' if count != 1 else ''}"
+        )
+        for rating, count in ordered_ratings
+    ]
+    return cap_select_options(options, max_options=SELECT_MAX_OPTIONS - 1)
+
+
+def build_actor_match_select_options(matches: List[tuple[str, int]]) -> List[discord.SelectOption]:
+    """Build Actor Filter's disambiguation options from search_cast_names'
+    already-sorted (name, count) matches, through the same safe builders
+    as every other option list in this project.
+    """
+    options = [
+        build_safe_select_option(name, name, description=f"{count} eligible suggestion{'s' if count != 1 else ''}")
+        for name, count in matches
+    ]
+    return cap_select_options(options)
+
+
+def describe_imdb_rating_filter_state(filter_state: dict) -> str:
+    """The Current Filters summary's IMDb Rating value -- "Any IMDb
+    Rating" when both bounds are unset, otherwise ImdbRatingFilter's own
+    describe() (e.g. "7.0+", "5.9 or lower", "6.0-8.0").
+    """
+    minimum = filter_state.get("imdb_rating_min")
+    maximum = filter_state.get("imdb_rating_max")
+    if minimum is None and maximum is None:
+        return "Any IMDb Rating"
+    return ImdbRatingFilter(minimum=minimum, maximum=maximum).describe()
+
+
+def build_current_filters_summary(filter_state: dict) -> str:
+    """Render the shared, scalable "Current Filters" block used by both
+    Custom Vote Filters and /random watch's Add Filters screen -- one
+    bullet per filter, in the fixed Genre/IMDb Rating/MPAA Rating/Actor/
+    Member order (Section 2/12), always shown (an inactive filter's
+    "Any ..." value is never omitted), so the layout naturally grows as
+    future filters are added: each is just one more bullet line, never
+    a restructuring of this function's shape.
+    """
+    return "\n".join(
+        [
+            "**Current Filters**",
+            "",
+            f"• Genre: {filter_state.get('genre') or 'Any Genre'}",
+            f"• IMDb Rating: {describe_imdb_rating_filter_state(filter_state)}",
+            f"• MPAA Rating: {filter_state.get('mpaa_rating') or 'Any MPAA Rating'}",
+            f"• Actor: {filter_state.get('actor') or 'Any Actor'}",
+            f"• Member: {filter_state.get('member_display') or 'Any Member'}",
+        ]
+    )
+
+
+def build_filter_category_current_values(filter_state: dict) -> dict:
+    """The per-category "current value" strings FilterCategorySelectComponent
+    shows in its own option labels (e.g. "Genre: Comedy") -- kept
+    consistent with build_current_filters_summary's own wording.
+    """
+    return {
+        FILTER_CATEGORY_GENRE: filter_state.get("genre") or "Any Genre",
+        FILTER_CATEGORY_IMDB_RATING: describe_imdb_rating_filter_state(filter_state),
+        FILTER_CATEGORY_MPAA_RATING: filter_state.get("mpaa_rating") or "Any MPAA Rating",
+        FILTER_CATEGORY_ACTOR: filter_state.get("actor") or "Any Actor",
+        FILTER_CATEGORY_MEMBER: filter_state.get("member_display") or "Any Member",
+    }
+
+
+def resolve_active_filters_from_state(filter_state: dict) -> List[NomineePoolFilter]:
+    """Build the active NomineePoolFilter list from a filter session's
+    state dict, in the shared Genre/IMDb Rating/MPAA Rating/Actor/Member
+    order (Section 10's expected conceptual order) -- each filter is a
+    pure set intersection, so the order filters are applied in never
+    changes the result; this order is purely for consistency with the
+    order they're presented and described in.
+    """
+    filters: List[NomineePoolFilter] = []
+    if filter_state.get("genre"):
+        filters.append(GenreFilter(genre=filter_state["genre"]))
+    if filter_state.get("imdb_rating_min") is not None or filter_state.get("imdb_rating_max") is not None:
+        filters.append(
+            ImdbRatingFilter(minimum=filter_state.get("imdb_rating_min"), maximum=filter_state.get("imdb_rating_max"))
+        )
+    if filter_state.get("mpaa_rating"):
+        filters.append(MpaaRatingFilter(rating=filter_state["mpaa_rating"]))
+    if filter_state.get("actor"):
+        filters.append(ActorFilter(actor=filter_state["actor"]))
+    if filter_state.get("member_id") is not None:
+        filters.append(
+            MemberSuggestionFilter(
+                discord_user_id=filter_state["member_id"], member_display=filter_state["member_display"]
+            )
+        )
+    return filters
+
+
+def new_filter_session_state() -> dict:
+    return {
+        "genre": None,
+        "imdb_rating_min": None,
+        "imdb_rating_max": None,
+        "mpaa_rating": None,
+        "actor": None,
+        "member_id": None,
+        "member_display": None,
+        "member_filter_invalid": False,
+        "member_filter_status_line": "",
+    }
+
+
+def create_filter_menu_session(
+    *,
+    bot: "WatchPartyBot",
+    eligible_pool: List[WatchItem],
+    collection_display_name: str,
+    body_header: str,
+    on_primary_action: Callable[[discord.Interaction, dict], Awaitable[None]],
+    primary_action_label: str,
+    primary_action_custom_id: str,
+    on_secondary_action: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
+    secondary_action_label: Optional[str] = None,
+):
+    """Build one filter-editing session shared by Custom Vote Filters and
+    /random watch -- a fresh filter_state dict plus a fully wired
+    show_menu(interaction, ...) renderer covering every filter's own
+    edit screen (Genre/MPAA Rating: select; Member: UserSelect with the
+    existing validate_member_filter_selection warning behavior; IMDb
+    Rating/Actor: button-triggered modal, each with its own explicit
+    Any-reset button). Returns (filter_state, show_menu) -- the caller
+    supplies on_primary_action (Pick Random Item / Continue to Vote
+    Settings) and reads filter_state itself once that fires.
+
+    This is the one place the whole filter-editing experience is
+    defined, so the two flows can never diverge on order, wording,
+    validation, or button behavior (Section 6/10).
+    """
+    filter_state = new_filter_session_state()
+    genre_options = build_genre_filter_select_options(eligible_pool)
+    mpaa_options = build_mpaa_rating_filter_select_options(eligible_pool)
+
+    async def show_menu(target: discord.Interaction, *, edit: bool = True, status_line: str = "") -> None:
+        body = "\n\n".join(
+            part for part in (body_header, status_line, build_current_filters_summary(filter_state)) if part
+        )
+        view = FilterMenuView(
+            on_category_selected,
+            on_primary_action_clicked,
+            current_values=build_filter_category_current_values(filter_state),
+            primary_action_label=primary_action_label,
+            primary_action_custom_id=primary_action_custom_id,
+            primary_action_disabled=filter_state["member_filter_invalid"],
+            on_secondary_action=on_secondary_action,
+            secondary_action_label=secondary_action_label,
+        )
+        if edit:
+            await target.response.edit_message(content=body, view=view)
+        else:
+            await target.response.send_message(content=body, view=view, ephemeral=True)
+
+    async def on_primary_action_clicked(interaction: discord.Interaction) -> None:
+        await on_primary_action(interaction, filter_state)
+
+    async def on_category_selected(interaction: discord.Interaction, category: str) -> None:
+        if category == FILTER_CATEGORY_GENRE:
+            await show_genre_edit(interaction)
+        elif category == FILTER_CATEGORY_IMDB_RATING:
+            await show_imdb_rating_edit(interaction)
+        elif category == FILTER_CATEGORY_MPAA_RATING:
+            await show_mpaa_rating_edit(interaction)
+        elif category == FILTER_CATEGORY_ACTOR:
+            await show_actor_edit(interaction)
+        elif category == FILTER_CATEGORY_MEMBER:
+            await show_member_edit(interaction)
+
+    async def on_back_to_menu(interaction: discord.Interaction) -> None:
+        await show_menu(interaction)
+
+    async def show_genre_edit(interaction: discord.Interaction) -> None:
+        view = GenreEditView(on_genre_changed, on_back_to_menu, options=genre_options)
+        await interaction.response.edit_message(content=body_header, view=view)
+
+    async def on_genre_changed(interaction: discord.Interaction, genre: Optional[str]) -> None:
+        filter_state["genre"] = genre
+        await show_menu(interaction)
+
+    async def show_mpaa_rating_edit(interaction: discord.Interaction) -> None:
+        view = MpaaRatingEditView(on_mpaa_rating_changed, on_back_to_menu, options=mpaa_options)
+        await interaction.response.edit_message(content=body_header, view=view)
+
+    async def on_mpaa_rating_changed(interaction: discord.Interaction, rating: Optional[str]) -> None:
+        filter_state["mpaa_rating"] = rating
+        await show_menu(interaction)
+
+    async def show_member_edit(interaction: discord.Interaction, *, status_line: str = "") -> None:
+        content = f"{body_header}\n\n{status_line}" if status_line else body_header
+        view = MemberEditView(on_member_changed, on_back_to_menu)
+        await interaction.response.edit_message(content=content, view=view)
+
+    async def on_member_changed(member_interaction: discord.Interaction, member: Optional[discord.Member]) -> None:
+        role_config = bot.membership_service.get_role_config(member_interaction.guild_id)
+        watch_party_role_id = role_config.role_id if role_config is not None else None
+        guild_owner_id = member_interaction.guild.owner_id if member_interaction.guild is not None else None
+        result = validate_member_filter_selection(
+            member,
+            watch_party_role_id=watch_party_role_id,
+            wash_crew_role_id=bot.wash_crew_role_id,
+            guild_owner_id=guild_owner_id,
+            eligible_pool=eligible_pool,
+            collection_display_name=collection_display_name,
+        )
+        filter_state["member_id"] = result.discord_user_id
+        filter_state["member_display"] = result.member_display
+        filter_state["member_filter_invalid"] = not result.valid
+        filter_state["member_filter_status_line"] = result.status_line
+        await show_member_edit(member_interaction, status_line=result.status_line)
+
+    async def show_imdb_rating_edit(interaction: discord.Interaction) -> None:
+        view = ImdbRatingEditView(on_imdb_rating_set_clicked, on_imdb_rating_any_clicked, on_back_to_menu)
+        await interaction.response.edit_message(content=body_header, view=view)
+
+    async def on_imdb_rating_set_clicked(interaction: discord.Interaction) -> None:
+        default_minimum = (
+            f"{filter_state['imdb_rating_min']:.1f}" if filter_state["imdb_rating_min"] is not None else ""
+        )
+        default_maximum = (
+            f"{filter_state['imdb_rating_max']:.1f}" if filter_state["imdb_rating_max"] is not None else ""
+        )
+        await interaction.response.send_modal(
+            ImdbRatingModal(on_imdb_rating_submitted, default_minimum=default_minimum, default_maximum=default_maximum)
+        )
+
+    async def on_imdb_rating_submitted(
+        modal_interaction: discord.Interaction, minimum_text: Optional[str], maximum_text: Optional[str]
+    ) -> None:
+        try:
+            minimum, maximum = parse_imdb_rating_bounds(minimum_text, maximum_text)
+        except ValueError as exc:
+            view = ImdbRatingEditView(on_imdb_rating_set_clicked, on_imdb_rating_any_clicked, on_back_to_menu)
+            await modal_interaction.response.edit_message(content=f"{body_header}\n\n⚠️ {exc}", view=view)
+            return
+        filter_state["imdb_rating_min"] = minimum
+        filter_state["imdb_rating_max"] = maximum
+        await show_menu(modal_interaction)
+
+    async def on_imdb_rating_any_clicked(interaction: discord.Interaction) -> None:
+        filter_state["imdb_rating_min"] = None
+        filter_state["imdb_rating_max"] = None
+        await show_menu(interaction)
+
+    async def show_actor_edit(interaction: discord.Interaction, *, status_line: str = "") -> None:
+        content = f"{body_header}\n\n{status_line}" if status_line else body_header
+        view = ActorEditView(on_actor_search_clicked, on_actor_any_clicked, on_back_to_menu)
+        await interaction.response.edit_message(content=content, view=view)
+
+    async def on_actor_search_clicked(interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(ActorSearchModal(on_actor_search_submitted))
+
+    async def on_actor_search_submitted(modal_interaction: discord.Interaction, query: Optional[str]) -> None:
+        if not query:
+            filter_state["actor"] = None
+            await show_menu(modal_interaction)
+            return
+        matches = search_cast_names(eligible_pool, query)
+        if not matches:
+            await show_actor_edit(
+                modal_interaction, status_line=f'⚠️ No actors matching "{query}" were found. Try a different search.'
+            )
+            return
+        if len(matches) == 1:
+            filter_state["actor"] = matches[0][0]
+            await show_menu(modal_interaction)
+            return
+        capped = matches[:25]
+        note = ""
+        if len(matches) > 25:
+            note = (
+                f"\n\nMore than 25 actors match \"{query}\" -- showing the top 25 by eligible suggestions. "
+                "Refine your search for a full list."
+            )
+        options = build_actor_match_select_options(capped)
+        view = ActorMatchEditView(on_actor_match_selected, on_back_to_menu, options=options)
+        await modal_interaction.response.edit_message(content=f"{body_header}{note}", view=view)
+
+    async def on_actor_match_selected(interaction: discord.Interaction, actor: str) -> None:
+        filter_state["actor"] = actor
+        await show_menu(interaction)
+
+    async def on_actor_any_clicked(interaction: discord.Interaction) -> None:
+        filter_state["actor"] = None
+        await show_menu(interaction)
+
+    return filter_state, show_menu
+
+
 def perform_start_vote(
     vote_service: VoteService,
     suggestion_service: SuggestionService,
@@ -1509,6 +1880,10 @@ def perform_start_vote(
     filter_member_discord_user_id: Optional[int] = None,
     filter_member_display: Optional[str] = None,
     filter_genre: Optional[str] = None,
+    filter_imdb_rating_min: Optional[float] = None,
+    filter_imdb_rating_max: Optional[float] = None,
+    filter_mpaa_rating: Optional[str] = None,
+    filter_actor: Optional[str] = None,
 ) -> tuple[str, bool]:
     """Core logic for /start_vote, kept free of Discord objects except `user`.
 
@@ -1693,6 +2068,14 @@ def perform_start_vote(
         # repository-resolved strategy exists yet (e.g. a test caller
         # with no repository configured), so filtering still works.
         filters: List[NomineePoolFilter] = []
+        if filter_genre is not None:
+            filters.append(GenreFilter(genre=filter_genre))
+        if filter_imdb_rating_min is not None or filter_imdb_rating_max is not None:
+            filters.append(ImdbRatingFilter(minimum=filter_imdb_rating_min, maximum=filter_imdb_rating_max))
+        if filter_mpaa_rating is not None:
+            filters.append(MpaaRatingFilter(rating=filter_mpaa_rating))
+        if filter_actor is not None:
+            filters.append(ActorFilter(actor=filter_actor))
         if filter_member_discord_user_id is not None:
             filters.append(
                 MemberSuggestionFilter(
@@ -1700,8 +2083,6 @@ def perform_start_vote(
                     member_display=filter_member_display or f"<@{filter_member_discord_user_id}>",
                 )
             )
-        if filter_genre is not None:
-            filters.append(GenreFilter(genre=filter_genre))
 
         effective_strategy = strategy
         if filters:
@@ -1730,6 +2111,10 @@ def perform_start_vote(
                     count,
                     member_display=filter_member_display if filter_member_discord_user_id is not None else None,
                     genre=filter_genre,
+                    imdb_rating_min=filter_imdb_rating_min,
+                    imdb_rating_max=filter_imdb_rating_max,
+                    mpaa_rating=filter_mpaa_rating,
+                    actor=filter_actor,
                 )
             else:
                 collection_display_name = format_collection_display(resolution.database.name)
@@ -1760,6 +2145,10 @@ def perform_start_vote(
         candidate_selection_mode=(mode if resolution is not None else None),
         filter_member_discord_user_id=(filter_member_discord_user_id if resolution is not None else None),
         filter_genre=(filter_genre if resolution is not None else None),
+        filter_imdb_rating_min=(filter_imdb_rating_min if resolution is not None else None),
+        filter_imdb_rating_max=(filter_imdb_rating_max if resolution is not None else None),
+        filter_mpaa_rating=(filter_mpaa_rating if resolution is not None else None),
+        filter_actor=(filter_actor if resolution is not None else None),
     )
     if not result.success:
         return result.message, True
@@ -4533,6 +4922,30 @@ class DatabaseGroup(discord.app_commands.Group):
         await handle_database_restore(interaction, self.bot, mode, backup_filename, backup_file)
 
 
+class RandomGroup(discord.app_commands.Group):
+    """/random command group -- currently one subcommand, /random watch.
+
+    Replaces the former top-level /random_watch (underscore) command
+    outright, with no compatibility alias -- the visible command name
+    now contains no underscore. This is a standalone, deliberately
+    narrow rename; it does not imply or start a project-wide underscore-
+    command cleanup (see /watch_party, which stays exactly as-is).
+    Permissions and behavior are unchanged from the former /random_watch:
+    handle_random_watch performs its own Watch Party member check
+    internally, so no group-level interaction_check is needed here.
+    """
+
+    def __init__(self, bot: "WatchPartyBot") -> None:
+        super().__init__(name="random", description="Random-selection discovery tools.")
+        self.bot = bot
+
+    @discord.app_commands.command(
+        name="watch", description="Pick one random eligible watch item from a collection."
+    )
+    async def watch(self, interaction: discord.Interaction) -> None:
+        await handle_random_watch(interaction, self.bot)
+
+
 class VotingGroup(discord.app_commands.Group):
     """WASH Crew-only /vote command group (Command Structure Cleanup, pre-v1).
 
@@ -4576,24 +4989,16 @@ class VotingGroup(discord.app_commands.Group):
                 select_interaction: discord.Interaction, database_id: Optional[int]
             ) -> None:
                 # Custom Vote Filter Architecture: the collection must be
-                # known before the Member/Genre filter selects can be
-                # built (their eligible pool and eligible-count preview
-                # both depend on it) -- unlike "Use Defaults", whose
-                # collection resolution can safely stay late (see
-                # handle_start_vote_completion's own ambiguity check).
-                filter_state: dict[str, object] = {
-                    "member_id": None,
-                    "member_display": None,
-                    "genre": None,
-                    "member_filter_invalid": False,
-                    "member_filter_status_line": "",
-                }
+                # known before the filter menu can be built (its eligible
+                # pool and eligible-count previews both depend on it) --
+                # unlike "Use Defaults", whose collection resolution can
+                # safely stay late (see handle_start_vote_completion's
+                # own ambiguity check).
                 eligible_pool: List[WatchItem] = (
                     InfinitePoolStrategy(suggestion_source=bot.suggestion_service).candidate_pool(database_id)
                     if database_id is not None
                     else []
                 )
-                genre_options = build_genre_filter_select_options(eligible_pool)
                 collection_display_name = "this collection"
                 if database_id is not None:
                     resolved_database = bot.suggestion_service.get_database(database_id)
@@ -4607,7 +5012,7 @@ class VotingGroup(discord.app_commands.Group):
                             )
                         )
 
-                async def on_overrides_continue(
+                async def continue_with_overrides(
                     continue_interaction: discord.Interaction,
                     candidate_selection_override: CandidateSelectionMode,
                     visibility_override: GuildVoteVisibility,
@@ -4653,6 +5058,10 @@ class VotingGroup(discord.app_commands.Group):
                             filter_member_discord_user_id=filter_state["member_id"],
                             filter_member_display=filter_state["member_display"],
                             filter_genre=filter_state["genre"],
+                            filter_imdb_rating_min=filter_state["imdb_rating_min"],
+                            filter_imdb_rating_max=filter_state["imdb_rating_max"],
+                            filter_mpaa_rating=filter_state["mpaa_rating"],
+                            filter_actor=filter_state["actor"],
                         )
 
                     modal_defaults = build_customize_vote_modal_defaults(
@@ -4670,10 +5079,9 @@ class VotingGroup(discord.app_commands.Group):
                     ]
                     if database_id is not None:
                         paragraphs.append(
-                            "Filters narrow the eligible pool first: optionally restrict it to one "
-                            "member's eligible suggestions and/or one genre, and Nominee Selection then "
-                            "chooses this round's nominees from that narrowed pool. Clear a selection "
-                            "(or leave it untouched) for Any Member / Any Genre."
+                            "Use Edit Filters to optionally narrow the eligible pool first (Genre, "
+                            "IMDb Rating, MPAA Rating, Actor, Member) -- Nominee Selection then chooses "
+                            "this round's nominees from that narrowed pool."
                         )
                         paragraphs.append(build_current_filters_summary(filter_state))
                     if status_line:
@@ -4681,38 +5089,41 @@ class VotingGroup(discord.app_commands.Group):
                     paragraphs.append("Then continue to the rest of this vote's settings (candidate count and duration).")
                     return "\n\n".join(paragraphs)
 
-                async def on_member_filter_changed(
-                    member_interaction: discord.Interaction, member: Optional[discord.Member]
-                ) -> None:
-                    role_config = bot.membership_service.get_role_config(member_interaction.guild_id)
-                    watch_party_role_id = role_config.role_id if role_config is not None else None
-                    guild_owner_id = (
-                        member_interaction.guild.owner_id if member_interaction.guild is not None else None
-                    )
-                    result = validate_member_filter_selection(
-                        member,
-                        watch_party_role_id=watch_party_role_id,
-                        wash_crew_role_id=bot.wash_crew_role_id,
-                        guild_owner_id=guild_owner_id,
-                        eligible_pool=eligible_pool,
-                        collection_display_name=collection_display_name,
-                    )
-                    filter_state["member_id"] = result.discord_user_id
-                    filter_state["member_display"] = result.member_display
-                    filter_state["member_filter_invalid"] = not result.valid
-                    filter_state["member_filter_status_line"] = result.status_line
-                    overrides_view.continue_button.disabled = not result.valid
-                    await member_interaction.response.edit_message(
-                        content=build_overrides_body(result.status_line), view=overrides_view
+                async def on_filter_menu_continue(menu_interaction: discord.Interaction, _filter_state: dict) -> None:
+                    # Reachable directly from the filter menu screen too,
+                    # so WASH Crew never has to go Back just to finish --
+                    # reads whichever Nominee Selection/Visibility choices
+                    # are still selected on the (unmodified, still-alive)
+                    # overrides_view.
+                    await continue_with_overrides(
+                        menu_interaction, overrides_view.candidate_selection_select.selected, overrides_view.visibility_select.selected
                     )
 
-                async def on_genre_filter_changed(
-                    genre_interaction: discord.Interaction, genre: Optional[str]
-                ) -> None:
-                    filter_state["genre"] = genre
-                    await genre_interaction.response.edit_message(
-                        content=build_overrides_body(), view=overrides_view
-                    )
+                async def on_back_to_overrides(interaction: discord.Interaction) -> None:
+                    # Keep the two screens' Continue buttons in sync: an
+                    # invalid member filter set from within the filter
+                    # menu must also disable this screen's own Continue,
+                    # not just the filter menu's.
+                    overrides_view.continue_button.disabled = filter_state["member_filter_invalid"]
+                    await interaction.response.edit_message(content=build_overrides_body(), view=overrides_view)
+
+                filter_state, show_filter_menu = create_filter_menu_session(
+                    bot=bot,
+                    eligible_pool=eligible_pool,
+                    collection_display_name=collection_display_name,
+                    body_header=(
+                        f'**Customize This Vote -- "{collection_display_name}"**\n\n'
+                        "Optionally narrow the eligible pool below, then continue to this vote's settings."
+                    ),
+                    on_primary_action=on_filter_menu_continue,
+                    primary_action_label="Continue to Vote Settings",
+                    primary_action_custom_id="wpm_start_vote_customize_filter_menu_continue",
+                    on_secondary_action=on_back_to_overrides,
+                    secondary_action_label="Back to Vote Settings",
+                )
+
+                async def on_edit_filters(edit_filters_interaction: discord.Interaction) -> None:
+                    await show_filter_menu(edit_filters_interaction)
 
                 default_candidate_selection = (
                     resolve_candidate_selection_mode(bot, select_interaction.guild_id, database_id)
@@ -4723,12 +5134,10 @@ class VotingGroup(discord.app_commands.Group):
                     select_interaction.guild_id, bot.guild_configuration_repository
                 )
                 overrides_view = CustomizeVoteOverridesView(
-                    on_overrides_continue,
+                    continue_with_overrides,
                     default_candidate_selection=default_candidate_selection,
                     default_visibility=default_visibility,
-                    on_member_filter_changed=on_member_filter_changed if database_id is not None else None,
-                    on_genre_filter_changed=on_genre_filter_changed if genre_options else None,
-                    genre_filter_options=genre_options,
+                    on_edit_filters=on_edit_filters if database_id is not None else None,
                 )
                 await select_interaction.response.send_message(
                     build_overrides_body(), view=overrides_view, ephemeral=True
@@ -5153,6 +5562,10 @@ async def handle_start_vote_completion(
     filter_member_discord_user_id: Optional[int] = None,
     filter_member_display: Optional[str] = None,
     filter_genre: Optional[str] = None,
+    filter_imdb_rating_min: Optional[float] = None,
+    filter_imdb_rating_max: Optional[float] = None,
+    filter_mpaa_rating: Optional[str] = None,
+    filter_actor: Optional[str] = None,
 ) -> None:
     """Create a round and publish its interactive voting post.
 
@@ -5208,6 +5621,10 @@ async def handle_start_vote_completion(
                     filter_member_discord_user_id=filter_member_discord_user_id,
                     filter_member_display=filter_member_display,
                     filter_genre=filter_genre,
+                    filter_imdb_rating_min=filter_imdb_rating_min,
+                    filter_imdb_rating_max=filter_imdb_rating_max,
+                    filter_mpaa_rating=filter_mpaa_rating,
+                    filter_actor=filter_actor,
                 )
 
             options = [
@@ -5250,6 +5667,10 @@ async def handle_start_vote_completion(
         filter_member_discord_user_id=filter_member_discord_user_id,
         filter_member_display=filter_member_display,
         filter_genre=filter_genre,
+        filter_imdb_rating_min=filter_imdb_rating_min,
+        filter_imdb_rating_max=filter_imdb_rating_max,
+        filter_mpaa_rating=filter_mpaa_rating,
+        filter_actor=filter_actor,
     )
 
     # Rotation & Collection Health goal 2/6: a successful vote start is
@@ -5382,6 +5803,10 @@ async def handle_customize_vote_submit(
     filter_member_discord_user_id: Optional[int] = None,
     filter_member_display: Optional[str] = None,
     filter_genre: Optional[str] = None,
+    filter_imdb_rating_min: Optional[float] = None,
+    filter_imdb_rating_max: Optional[float] = None,
+    filter_mpaa_rating: Optional[str] = None,
+    filter_actor: Optional[str] = None,
 ) -> None:
     """Show Custom Vote Summary & Announcement's pre-creation review
     screen for optional one-time modal overrides; the round itself is
@@ -5505,6 +5930,10 @@ async def handle_customize_vote_submit(
         duration_minutes=effective_duration_minutes,
         filter_member_display=filter_member_display,
         filter_genre=filter_genre,
+        filter_imdb_rating_min=filter_imdb_rating_min,
+        filter_imdb_rating_max=filter_imdb_rating_max,
+        filter_mpaa_rating=filter_mpaa_rating,
+        filter_actor=filter_actor,
     )
 
     async def on_confirm(confirm_interaction: discord.Interaction) -> None:
@@ -5529,6 +5958,10 @@ async def handle_customize_vote_submit(
             filter_member_discord_user_id=filter_member_discord_user_id,
             filter_member_display=filter_member_display,
             filter_genre=filter_genre,
+            filter_imdb_rating_min=filter_imdb_rating_min,
+            filter_imdb_rating_max=filter_imdb_rating_max,
+            filter_mpaa_rating=filter_mpaa_rating,
+            filter_actor=filter_actor,
         )
 
     async def on_abort(abort_interaction: discord.Interaction) -> None:
@@ -6990,6 +7423,7 @@ async def perform_add_suggestion_from_input(
         director=resolved.director,
         imdb_rating=resolved.imdb_rating,
         poster_url=resolved.poster_url,
+        cast=resolved.cast,
     )
 
 
@@ -7552,6 +7986,7 @@ async def handle_add_suggestion(
                 director=resolved.director,
                 imdb_rating=resolved.imdb_rating,
                 poster_url=resolved.poster_url,
+                cast=resolved.cast,
                 original_suggester=str(create_interaction.user.id),
             )
             if not result.success or result.watch_item is None:
@@ -8462,6 +8897,7 @@ def perform_add_suggestion(
     director: Optional[str] = None,
     imdb_rating: Optional[str] = None,
     poster_url: Optional[str] = None,
+    cast: tuple[str, ...] = (),
 ) -> tuple[str, bool, Optional[WatchItem]]:
     """Core logic for /add, kept free of Discord objects except raw IDs.
 
@@ -8508,6 +8944,7 @@ def perform_add_suggestion(
         director=director,
         imdb_rating=imdb_rating,
         poster_url=poster_url,
+        cast=cast,
     )
     if not result.success:
         return result.message, False, None
@@ -9015,85 +9452,73 @@ async def handle_database_health(interaction: discord.Interaction, bot: "WatchPa
 # pool. No existing eligibility or filtering logic is duplicated.
 
 
-def build_current_filters_summary(filter_state: dict) -> str:
-    """Render the shared, scalable "Current Filters" block used by both
-    Custom Vote Filters and /random_watch's Add Filters screen -- one
-    bullet per filter, always shown (Any Member/Any Genre included, not
-    omitted), so the layout naturally grows as future filters (IMDb
-    Rating, MPAA Rating, Actor, etc.) are added: each is just one more
-    bullet line, never a restructuring of this function's shape.
+def build_random_watch_filters_intro(collection_display_name: str) -> str:
+    """The fixed header/instructions shown above the filter menu and
+    every one of its filter-editing sub-screens -- never includes the
+    Current Filters block itself (show_menu appends that separately, but
+    a filter's own edit screen intentionally omits it to save space).
     """
-    member_display = filter_state.get("member_display") or "Any Member"
-    genre = filter_state.get("genre") or "Any Genre"
-    return "\n".join(
-        [
-            "**Current Filters**",
-            "",
-            f"• Member: {member_display}",
-            f"• Genre: {genre}",
-        ]
+    return (
+        f'**Random Watch -- "{collection_display_name}"**\n\n'
+        "Optionally narrow the random pool using the filters below, then press **Pick Random Item**. "
+        "These filters apply only to this session -- they never change the collection's or guild's own "
+        "configuration, and never affect a future `/random watch` session."
     )
-
-
-def build_random_watch_filters_body(
-    collection_display_name: str, filter_state: dict, *, status_line: str = ""
-) -> str:
-    lines = [
-        f'**Random Watch -- "{collection_display_name}"**',
-        "",
-        "Optionally narrow the random pool to one member's eligible suggestions and/or one genre, "
-        "then press **Pick Random Item**. These filters apply only to this session -- they never "
-        "change the collection's or guild's own configuration, and never affect a future "
-        "`/random_watch` session.",
-        "",
-        build_current_filters_summary(filter_state),
-    ]
-    if status_line:
-        lines.extend(["", status_line])
-    return "\n".join(lines)
 
 
 def build_random_watch_result_header(collection_display_name: str, filter_state: dict) -> str:
     """The plain-text line shown above the result embed -- names the
-    collection and any active filter(s), and makes clear this was a
-    random pick. An inactive filter (Any Member/Any Genre) is never shown.
+    collection and any active filter(s), in the shared Genre/IMDb
+    Rating/MPAA Rating/Actor/Member order, and makes clear this was a
+    random pick. An inactive filter (Any ...) is never shown.
     """
     lines = [f'🎲 Random pick from "{collection_display_name}"']
-    member_display = filter_state.get("member_display")
-    genre = filter_state.get("genre")
-    if member_display:
-        lines.append(f"Suggestion Source: {member_display}")
-    if genre:
-        lines.append(f"Genre: {genre}")
+    if filter_state.get("genre"):
+        lines.append(f"Genre: {filter_state['genre']}")
+    if filter_state.get("imdb_rating_min") is not None or filter_state.get("imdb_rating_max") is not None:
+        lines.append(f"IMDb Rating: {describe_imdb_rating_filter_state(filter_state)}")
+    if filter_state.get("mpaa_rating"):
+        lines.append(f"MPAA Rating: {filter_state['mpaa_rating']}")
+    if filter_state.get("actor"):
+        lines.append(f"Actor: {filter_state['actor']}")
+    if filter_state.get("member_display"):
+        lines.append(f"Suggestion Source: {filter_state['member_display']}")
     return "\n".join(lines)
 
 
-def build_random_watch_empty_pool_message(
-    collection_display_name: str, *, member_display: Optional[str] = None, genre: Optional[str] = None
-) -> str:
+def build_random_watch_empty_pool_message(collection_display_name: str, filter_state: dict) -> str:
     """The "nothing to pick from" message for an empty (possibly
-    filtered) pool -- always names the collection and, when active, the
-    filter(s) responsible, and always offers a way forward (Filtered-
-    Pool Feedback).
+    filtered) pool -- always names the collection and, when any filters
+    are active, which ones are responsible, and always offers a way
+    forward (Filtered-Pool Feedback). Built from however many of the
+    five filters happen to be active, rather than a fixed set of
+    combinations, so this scales the same way build_current_filters_summary
+    does as filters are added.
     """
-    if member_display and genre:
+    active_descriptions: List[str] = []
+    if filter_state.get("genre"):
+        active_descriptions.append(f"the {filter_state['genre']} genre")
+    if filter_state.get("imdb_rating_min") is not None or filter_state.get("imdb_rating_max") is not None:
+        active_descriptions.append(f"an IMDb Rating of {describe_imdb_rating_filter_state(filter_state)}")
+    if filter_state.get("mpaa_rating"):
+        active_descriptions.append(f"an MPAA Rating of {filter_state['mpaa_rating']}")
+    if filter_state.get("actor"):
+        active_descriptions.append(f"{filter_state['actor']} in the cast")
+    if filter_state.get("member_display"):
+        active_descriptions.append(f"{filter_state['member_display']}'s suggestions")
+
+    if not active_descriptions:
         return (
-            f"{member_display}'s {genre} suggestions leave no eligible watch items in "
-            f'"{collection_display_name}" to pick from. Clear or change a filter, or choose another collection.'
+            f'"{collection_display_name}" has no eligible watch items to pick from right now. '
+            "Add more suggestions, or choose another collection."
         )
-    if member_display:
-        return (
-            f'{member_display} has no eligible suggestions in "{collection_display_name}" to pick from. '
-            "Choose another member, clear the filter, or choose another collection."
-        )
-    if genre:
-        return (
-            f'The {genre} filter leaves no eligible watch items in "{collection_display_name}" to pick from. '
-            "Choose another genre, clear the filter, or choose another collection."
-        )
+    if len(active_descriptions) == 1:
+        joined = active_descriptions[0]
+    else:
+        joined = ", ".join(active_descriptions[:-1]) + f", and {active_descriptions[-1]}"
     return (
-        f'"{collection_display_name}" has no eligible watch items to pick from right now. '
-        "Add more suggestions, or choose another collection."
+        f'No eligible watch items in "{collection_display_name}" match {joined}. '
+        "Change or clear a filter, or choose another collection."
     )
 
 
@@ -9144,7 +9569,7 @@ def build_random_watch_result_embed(watch_item: WatchItem, *, database_name: str
     embed.add_field(name="Reference", value=watch_item.reference, inline=True)
     if watch_item.poster_url:
         embed.set_thumbnail(url=watch_item.poster_url)
-    embed.set_footer(text="Selected randomly by /random_watch")
+    embed.set_footer(text="Selected randomly by /random watch")
     return embed
 
 
@@ -9227,11 +9652,18 @@ async def show_random_watch_collection_picker(
 async def send_random_watch_session(
     interaction: discord.Interaction, bot: "WatchPartyBot", database: SuggestionDatabase, *, edit: bool
 ) -> None:
-    """Show /random_watch's initial Pick Random Item / Add Filters screen
+    """Show /random watch's initial Pick Random Item / Add Filters screen
     for one resolved collection, starting a fresh filter session (no
-    member/genre filter carried over from a previous collection -- see
+    filter carried over from a previous collection -- see
     on_change_collection below). Also the render target Change Collection
     calls back into once a (possibly different) collection is chosen.
+
+    Add Filters opens the shared FilterMenuView session (see
+    create_filter_menu_session) -- Genre, IMDb Rating, MPAA Rating,
+    Actor, and Member all narrow the same eligible_pool before a plain
+    Pick Random Item click draws from whatever's left, entirely bypassing
+    NomineeSelectionService's weighted CandidateSelectionStrategy pipeline
+    (see services/random_watch_service.choose_random_watch_item).
     """
     guild_id = database.guild_id
     collection_display_name = format_collection_display(
@@ -9241,95 +9673,13 @@ async def send_random_watch_session(
     )
     eligibility = bot.collection_eligibility_service.get_eligibility(database.database_id)
     eligible_pool: List[WatchItem] = list(eligibility.available)
-    genre_options = build_genre_filter_select_options(eligible_pool)
-    filter_state: dict = {
-        "member_id": None,
-        "member_display": None,
-        "genre": None,
-        "member_filter_invalid": False,
-        "member_filter_status_line": "",
-    }
-
-    def resolve_filters() -> List[NomineePoolFilter]:
-        filters: List[NomineePoolFilter] = []
-        if filter_state["member_id"] is not None:
-            filters.append(
-                MemberSuggestionFilter(
-                    discord_user_id=filter_state["member_id"], member_display=filter_state["member_display"]
-                )
-            )
-        if filter_state["genre"] is not None:
-            filters.append(GenreFilter(genre=filter_state["genre"]))
-        return filters
-
-    async def show_filters(filters_interaction: discord.Interaction, *, status_line: str = "", edit: bool = True) -> None:
-        body = build_random_watch_filters_body(collection_display_name, filter_state, status_line=status_line)
-        view = RandomWatchFilterView(
-            on_member_filter_changed,
-            on_genre_filter_changed,
-            do_pick,
-            on_change_collection,
-            genre_filter_options=genre_options,
-            member_filter_invalid=filter_state["member_filter_invalid"],
-        )
-        if edit:
-            await filters_interaction.response.edit_message(content=body, view=view)
-        else:
-            # Reached from the public result's Change Filters -- the
-            # filter UI must stay private, and a public message can never
-            # be edited into an ephemeral one, so this opens a brand-new
-            # ephemeral message instead of touching the public result.
-            await filters_interaction.response.send_message(content=body, view=view, ephemeral=True)
-
-    async def on_member_filter_changed(
-        member_interaction: discord.Interaction, member: Optional[discord.Member]
-    ) -> None:
-        role_config = bot.membership_service.get_role_config(member_interaction.guild_id)
-        watch_party_role_id = role_config.role_id if role_config is not None else None
-        guild_owner_id = member_interaction.guild.owner_id if member_interaction.guild is not None else None
-        result = validate_member_filter_selection(
-            member,
-            watch_party_role_id=watch_party_role_id,
-            wash_crew_role_id=bot.wash_crew_role_id,
-            guild_owner_id=guild_owner_id,
-            eligible_pool=eligible_pool,
-            collection_display_name=collection_display_name,
-        )
-        filter_state["member_id"] = result.discord_user_id
-        filter_state["member_display"] = result.member_display
-        filter_state["member_filter_invalid"] = not result.valid
-        filter_state["member_filter_status_line"] = result.status_line
-        await show_filters(member_interaction, status_line=result.status_line)
-
-    async def on_genre_filter_changed(genre_interaction: discord.Interaction, genre: Optional[str]) -> None:
-        filter_state["genre"] = genre
-        await show_filters(genre_interaction)
-
-    async def send_empty_pool_screen(interaction_to_answer: discord.Interaction, *, edit: bool) -> None:
-        message = build_random_watch_empty_pool_message(
-            collection_display_name,
-            member_display=filter_state["member_display"],
-            genre=filter_state["genre"],
-        )
-        view = RandomWatchFilterView(
-            on_member_filter_changed,
-            on_genre_filter_changed,
-            do_pick,
-            on_change_collection,
-            genre_filter_options=genre_options,
-            member_filter_invalid=filter_state["member_filter_invalid"],
-        )
-        if edit:
-            await interaction_to_answer.response.edit_message(content=message, view=view)
-        else:
-            await interaction_to_answer.response.send_message(content=message, view=view, ephemeral=True)
 
     async def perform_pick(pick_interaction: discord.Interaction, *, from_public: bool) -> None:
         """Draw a random item and show the result.
 
         from_public=False (Pick Random Item, from the private setup/
         filter screens): a found item is announced as a brand-new PUBLIC
-        message -- /random_watch's setup stays private, but the actual
+        message -- /random watch's setup stays private, but the actual
         result is a public event for the whole channel (Section 4). The
         private message that triggered this is closed out with a short
         hand-off note rather than left showing stale controls.
@@ -9346,13 +9696,17 @@ async def send_random_watch_session(
             # guard is what actually guarantees an invalid member can
             # never produce a result -- not merely Discord's client-side
             # disabled-button behavior.
-            await show_filters(pick_interaction, status_line=filter_state["member_filter_status_line"])
+            await show_menu(pick_interaction, status_line=filter_state["member_filter_status_line"])
             return
 
-        filtered_pool = apply_nominee_pool_filters(eligible_pool, resolve_filters())
+        filtered_pool = apply_nominee_pool_filters(eligible_pool, resolve_active_filters_from_state(filter_state))
         item = choose_random_watch_item(filtered_pool)
         if item is None:
-            await send_empty_pool_screen(pick_interaction, edit=not from_public)
+            message = build_random_watch_empty_pool_message(collection_display_name, filter_state)
+            if from_public:
+                await pick_interaction.response.send_message(content=message, ephemeral=True)
+            else:
+                await show_menu(pick_interaction, status_line=message)
             return
 
         suggested_by = f"<@{item.journey.original_suggester}>" if item.journey.original_suggester else "Unknown"
@@ -9374,17 +9728,14 @@ async def send_random_watch_session(
             )
             await pick_interaction.followup.send(content=content, embed=embed, view=view)
 
-    async def do_pick(pick_interaction: discord.Interaction) -> None:
+    async def do_pick_unfiltered(pick_interaction: discord.Interaction) -> None:
         await perform_pick(pick_interaction, from_public=False)
 
     async def do_pick_again(pick_interaction: discord.Interaction) -> None:
         await perform_pick(pick_interaction, from_public=True)
 
-    async def on_change_filters_from_public(change_filters_interaction: discord.Interaction) -> None:
-        await show_filters(change_filters_interaction, edit=False)
-
-    async def on_add_filters(filters_interaction: discord.Interaction) -> None:
-        await show_filters(filters_interaction)
+    async def on_menu_primary_action(pick_interaction: discord.Interaction, _filter_state: dict) -> None:
+        await perform_pick(pick_interaction, from_public=False)
 
     async def on_change_collection(change_interaction: discord.Interaction) -> None:
         await show_random_watch_collection_picker(change_interaction, bot, guild_id, edit=True)
@@ -9392,12 +9743,30 @@ async def send_random_watch_session(
     async def on_change_collection_from_public(change_interaction: discord.Interaction) -> None:
         await show_random_watch_collection_picker(change_interaction, bot, guild_id, edit=False)
 
-    body = (
-        f'**Random Watch -- "{collection_display_name}"**\n\n'
-        "Pick a random eligible watch item, or add filters first (one member's suggestions "
-        "and/or one genre)."
+    filter_state, show_menu = create_filter_menu_session(
+        bot=bot,
+        eligible_pool=eligible_pool,
+        collection_display_name=collection_display_name,
+        body_header=build_random_watch_filters_intro(collection_display_name),
+        on_primary_action=on_menu_primary_action,
+        primary_action_label="Pick Random Item",
+        primary_action_custom_id="wpm_random_watch_pick_filtered",
+        on_secondary_action=on_change_collection,
+        secondary_action_label="Change Collection",
     )
-    view = RandomWatchInitialView(do_pick, on_add_filters)
+
+    async def on_change_filters_from_public(change_filters_interaction: discord.Interaction) -> None:
+        # Reached from the public result's Change Filters -- the filter
+        # UI must stay private, and a public message can never be edited
+        # into an ephemeral one, so this opens a brand-new ephemeral
+        # message instead of touching the public result.
+        await show_menu(change_filters_interaction, edit=False)
+
+    async def on_add_filters(filters_interaction: discord.Interaction) -> None:
+        await show_menu(filters_interaction)
+
+    body = f'**Random Watch -- "{collection_display_name}"**\n\nPick a random eligible watch item, or add filters first.'
+    view = RandomWatchInitialView(do_pick_unfiltered, on_add_filters)
     if edit:
         await interaction.response.edit_message(content=body, view=view)
     else:

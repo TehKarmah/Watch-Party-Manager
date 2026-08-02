@@ -59,6 +59,33 @@ class JsonSuggestionRepositoryTests(unittest.TestCase):
         result = self.repository.load()
         self.assertEqual(result.watch_items[0].metadata_ids[MetadataProvider.IMDB], "tt0133093")
 
+    def test_save_then_load_round_trips_cast(self) -> None:
+        watch_item = WatchItem(
+            title="The Mask",
+            media_type=MediaType.MOVIE,
+            cast=("Jim Carrey", "Cameron Diaz"),
+            id=1,
+        )
+        self.repository.save([watch_item], next_id=2)
+
+        result = self.repository.load()
+        self.assertEqual(result.watch_items[0].cast, ("Jim Carrey", "Cameron Diaz"))
+
+    def test_loading_a_file_without_a_cast_field_defaults_to_empty(self) -> None:
+        legacy_json = """
+        {
+            "next_id": 2,
+            "suggestions": [
+                {"id": 1, "title": "The Matrix", "media_type": "movie"}
+            ]
+        }
+        """
+        self.file_path.write_text(legacy_json, encoding="utf-8")
+
+        result = self.repository.load()
+
+        self.assertEqual(result.watch_items[0].cast, ())
+
     def test_save_then_load_preserves_insertion_order(self) -> None:
         watch_items = [
             WatchItem(title="Interstellar", media_type=MediaType.MOVIE, id=1),

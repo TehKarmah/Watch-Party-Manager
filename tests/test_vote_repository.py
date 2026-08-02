@@ -587,3 +587,25 @@ class VoteRepositoryCustomVoteFilterFieldsTests(unittest.TestCase):
         self.assertIsNone(loaded.candidate_selection_mode)
         self.assertIsNone(loaded.filter_member_discord_user_id)
         self.assertIsNone(loaded.filter_genre)
+        self.assertIsNone(loaded.filter_imdb_rating_min)
+        self.assertIsNone(loaded.filter_imdb_rating_max)
+        self.assertIsNone(loaded.filter_mpaa_rating)
+        self.assertIsNone(loaded.filter_actor)
+
+    def test_filter_imdb_rating_bounds_round_trip(self) -> None:
+        self.repository.save(
+            [VoteRound(id=1, filter_imdb_rating_min=6.0, filter_imdb_rating_max=8.0)], next_round_id=2
+        )
+        loaded = self.repository.load().rounds[0]
+        self.assertEqual(loaded.filter_imdb_rating_min, 6.0)
+        self.assertEqual(loaded.filter_imdb_rating_max, 8.0)
+
+    def test_filter_mpaa_rating_round_trips(self) -> None:
+        self.repository.save([VoteRound(id=1, filter_mpaa_rating="PG-13")], next_round_id=2)
+        loaded = self.repository.load().rounds[0]
+        self.assertEqual(loaded.filter_mpaa_rating, "PG-13")
+
+    def test_filter_actor_round_trips(self) -> None:
+        self.repository.save([VoteRound(id=1, filter_actor="Jim Carrey")], next_round_id=2)
+        loaded = self.repository.load().rounds[0]
+        self.assertEqual(loaded.filter_actor, "Jim Carrey")

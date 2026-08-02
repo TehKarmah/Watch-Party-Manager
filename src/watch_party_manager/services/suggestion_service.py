@@ -169,6 +169,7 @@ class SuggestionService:
         poster_url: Optional[str] = None,
         release_year: Optional[int] = None,
         original_suggester: Optional[str] = None,
+        cast: tuple[str, ...] = (),
     ) -> SuggestionResult:
         """Add a suggestion to the list.
 
@@ -238,6 +239,7 @@ class SuggestionService:
             imdb_rating=imdb_rating,
             poster_url=poster_url,
             release_year=release_year,
+            cast=cast,
             journey=WatchItemJourney(
                 original_suggester=original_suggester,
                 suggestion_date=datetime.now(timezone.utc).date(),
