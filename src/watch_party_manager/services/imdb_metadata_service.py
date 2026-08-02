@@ -19,6 +19,39 @@ _OMDB_API_URL = "https://www.omdbapi.com/"
 
 
 @dataclass(frozen=True)
+class ImdbSearchMatch:
+    """One candidate from an OMDb title search (IMDb Metadata Recovery) --
+    deliberately lighter than ImdbTitleResult, since a search result only
+    carries enough to let a person distinguish candidates (title, year,
+    type); the full metadata is only fetched via resolve_title() once a
+    specific candidate is actually accepted.
+    """
+
+    imdb_id: str
+    imdb_url: str
+    title: str
+    year: Optional[str] = None
+    media_type: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ImdbSearchResult:
+    """Result of an OMDb title search. ``success`` reflects whether the
+    search request itself completed (network reachable, API key
+    configured, response readable) -- NOT whether anything was found.
+    Zero matches from a technically successful search is a normal,
+    expected outcome (``success=True, matches=()``), distinct from a
+    technical failure (``success=False``) -- callers (IMDb Metadata
+    Recovery) treat the two differently: zero matches offers Skip/Search
+    Again, a technical failure is worth surfacing as a retryable error.
+    """
+
+    success: bool
+    matches: tuple[ImdbSearchMatch, ...] = ()
+    error_message: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class ImdbTitleResult:
     """Result of resolving a title from an IMDb title URL."""
 
@@ -155,9 +188,73 @@ class ImdbMetadataService:
             cast=self._parse_cast(parsed.get("Actors")),
         )
 
+    async def search_titles(self, title: str, *, year: Optional[str] = None) -> ImdbSearchResult:
+        """Search OMDb by title (IMDb Metadata Recovery), optionally
+        narrowed by year, returning lightweight candidates for a person
+        to choose from -- never auto-selects a result itself.
+        """
+        clean_title = title.strip() if title else ""
+        if not clean_title:
+            return ImdbSearchResult(success=False, error_message="Enter a title to search for.")
+        if not self._api_key:
+            return ImdbSearchResult(
+                success=False,
+                error_message="IMDb lookup is not configured. Add OMDB_API_KEY to the .env file and restart WASH.",
+            )
+
+        request_url = self._build_search_request_url(clean_title, year=year)
+        try:
+            payload = await asyncio.to_thread(self._fetch_json, request_url)
+        except Exception:
+            return ImdbSearchResult(
+                success=False, error_message="I could not search OMDb for that title. Try again."
+            )
+
+        parsed = self._coerce_payload(payload)
+        if parsed is None:
+            return ImdbSearchResult(success=False, error_message="OMDb returned an unreadable search response.")
+
+        if str(parsed.get("Response", "True")).lower() == "false":
+            # OMDb's normal "nothing matched" shape -- a successful search
+            # that simply found no candidates, not a technical failure.
+            return ImdbSearchResult(success=True, matches=())
+
+        raw_results = parsed.get("Search")
+        if not isinstance(raw_results, list):
+            return ImdbSearchResult(success=False, error_message="OMDb returned an unreadable search response.")
+
+        matches: list[ImdbSearchMatch] = []
+        for entry in raw_results:
+            if not isinstance(entry, dict):
+                continue
+            imdb_id = entry.get("imdbID")
+            match_title = self._clean_optional(entry.get("Title"))
+            if not isinstance(imdb_id, str) or not imdb_id or match_title is None:
+                continue
+            matches.append(
+                ImdbSearchMatch(
+                    imdb_id=imdb_id,
+                    imdb_url=f"https://www.imdb.com/title/{imdb_id.lower()}/",
+                    title=match_title,
+                    year=self._clean_optional(entry.get("Year")),
+                    media_type=self._clean_optional(entry.get("Type")),
+                )
+            )
+        return ImdbSearchResult(success=True, matches=tuple(matches))
+
     def _build_request_url(self, imdb_id: str) -> str:
         query = urlencode({"apikey": self._api_key, "i": imdb_id, "plot": "short", "r": "json"})
         return f"{_OMDB_API_URL}?{query}"
+
+    def _build_search_request_url(self, title: str, *, year: Optional[str]) -> str:
+        # No `type` filter -- OMDb's search endpoint only accepts one
+        # single type value, and a suggestion could be a movie or a
+        # series, so leaving it unset returns both (the media_type field
+        # on each match lets a person tell them apart, see Section 4).
+        params = {"apikey": self._api_key, "s": title, "r": "json"}
+        if year:
+            params["y"] = year
+        return f"{_OMDB_API_URL}?{urlencode(params)}"
 
     @staticmethod
     def _coerce_payload(payload: Any) -> Optional[dict[str, Any]]:

@@ -257,24 +257,30 @@ class CollectionManagementMenuView(discord.ui.View):
     slash commands at all (see DatabaseGroup's docstring in bot.py), so
     this menu is now their only Discord-native entry point, not just a
     guided alternative to a shortcut. Buttons are ordered administrative
-    actions first (Edit, Backup, Move, Restore, Refresh IMDb Metadata --
-    roughly most- to least-frequently used), then destructive actions
-    last (Reset, Remove), kept visually distinct with Discord's
-    danger/red button style so a WASH Crew member can never mistake one
-    for a routine action. Refresh IMDb Metadata (IMDb Metadata Refresh)
-    is deliberately styled like the other administrative actions, not as
-    destructive -- it never deletes or recreates a suggestion, only
-    updates already-persisted IMDb-derived fields. There is no separate
-    "general information" action here -- /database health and /database
-    list already own that role as their own top-level commands, so this
-    menu focuses entirely on actions.
+    actions first (Edit, Backup, Move, Restore, Refresh IMDb Metadata,
+    Recover Missing IMDb Links -- roughly most- to least-frequently
+    used), then destructive actions last (Reset, Remove), kept visually
+    distinct with Discord's danger/red button style so a WASH Crew
+    member can never mistake one for a routine action. Refresh IMDb
+    Metadata (IMDb Metadata Refresh) and Recover Missing IMDb Links
+    (IMDb Metadata Recovery) are both deliberately styled like the other
+    administrative actions, not as destructive -- neither ever deletes
+    or recreates a suggestion; they only add/update IMDb-derived data.
+    There is no separate "general information" action here -- /database
+    health and /database list already own that role as their own
+    top-level commands, so this menu focuses entirely on actions.
 
     Every action reuses the exact logic its former direct /database
     subcommand used (see bot.py's start_database_move/backup/reset/
     remove and send_config_database_settings_menu for Edit) -- this view
     only presents the choice. Refresh IMDb Metadata instead opens
     imdb_refresh_view.ImdbRefreshScopeSelectionView (see bot.py's
-    show_imdb_refresh_scope_selection).
+    show_imdb_refresh_scope_selection), and Recover Missing IMDb Links
+    opens imdb_recovery_view.ImdbRecoveryScopeSelectionView (see bot.py's
+    show_imdb_recovery_scope_selection) -- a separate workflow that finds
+    suggestions with no usable IMDb identifier at all, matches them
+    through Crew-approved OMDb search, and then reuses Refresh IMDb
+    Metadata's own logic once a match is saved.
     """
 
     def __init__(self, on_action_chosen: OnManagementActionChosen, on_cancel: OnCancel) -> None:
@@ -305,6 +311,14 @@ class CollectionManagementMenuView(discord.ui.View):
                 on_action_chosen,
                 label="Refresh IMDb Metadata",
                 custom_id="wpm_database_manage_refresh_imdb",
+            )
+        )
+        self.add_item(
+            ManagementActionButton(
+                "recover_imdb",
+                on_action_chosen,
+                label="Recover Missing IMDb Links",
+                custom_id="wpm_database_manage_recover_imdb",
             )
         )
         self.add_item(

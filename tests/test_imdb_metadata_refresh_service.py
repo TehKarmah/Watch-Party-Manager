@@ -593,7 +593,7 @@ class MultiCollectionAndIdempotencyTests(ImdbMetadataRefreshServiceTestCase):
             ),
         )
         # First "run" only ever reaches Alien (simulating an interruption).
-        await service._refresh_one(self.suggestion_service.get_suggestions_for_database(self.database.database_id)[0], {}, None)
+        await service.refresh_one(self.suggestion_service.get_suggestions_for_database(self.database.database_id)[0], {}, None)
 
         summary = await service.refresh_databases([self.database])
 

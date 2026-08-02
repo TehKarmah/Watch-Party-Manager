@@ -176,6 +176,7 @@ class CollectionManagementMenuViewTests(unittest.IsolatedAsyncioTestCase):
                 ("Move Collection", "wpm_database_manage_move"),
                 ("Restore Collection", "wpm_database_manage_restore"),
                 ("Refresh IMDb Metadata", "wpm_database_manage_refresh_imdb"),
+                ("Recover Missing IMDb Links", "wpm_database_manage_recover_imdb"),
                 ("Reset Collection", "wpm_database_manage_reset"),
                 ("Remove Collection", "wpm_database_manage_remove"),
                 ("Cancel", "wpm_database_manage_cancel"),
@@ -206,6 +207,7 @@ class CollectionManagementMenuViewTests(unittest.IsolatedAsyncioTestCase):
             "wpm_database_manage_backup",
             "wpm_database_manage_restore",
             "wpm_database_manage_refresh_imdb",
+            "wpm_database_manage_recover_imdb",
         ):
             button = next(button for button in view.children if button.custom_id == custom_id)
             self.assertEqual(button.style, discord.ButtonStyle.secondary)

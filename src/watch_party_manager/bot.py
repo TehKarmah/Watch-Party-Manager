@@ -136,13 +136,32 @@ from watch_party_manager.imdb_refresh_view import (
     ImdbRefreshConfirmationView,
     ImdbRefreshScopeSelectionView,
 )
+from watch_party_manager.imdb_recovery_view import (
+    RECOVERY_SCOPE_ALL_COLLECTIONS,
+    RECOVERY_SCOPE_THIS_COLLECTION,
+    ImdbRecoveryConfirmationView,
+    ImdbRecoveryConfirmMatchView,
+    ImdbRecoveryMatchSelectionView,
+    ImdbRecoveryNoMatchView,
+    ImdbRecoveryScopeSelectionView,
+    ImdbRecoverySearchAgainModal,
+)
 from watch_party_manager.services.imdb_metadata_refresh_service import (
     ImdbMetadataRefreshService,
     ImdbMetadataRefreshSummary,
     RefreshProgress,
     resolve_refreshable_databases,
 )
-from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService
+from watch_party_manager.services.imdb_metadata_recovery_service import (
+    CandidateSearch,
+    CollectionRecoverySummary,
+    ImdbMetadataRecoveryService,
+    ImdbMetadataRecoverySummary,
+    RecoveryResult,
+    RecoverySuggestionOutcome,
+    resolve_recoverable_databases,
+)
+from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService, ImdbSearchMatch, ImdbTitleResult
 from watch_party_manager.services.discord_timestamp_formatter import (
     format_datetime_for_display,
 )
@@ -223,6 +242,7 @@ from watch_party_manager.services.setup_wizard_service import (
     SetupWizardService,
 )
 from watch_party_manager.services.discord_ui_limits import (
+    SELECT_MAX_OPTIONS,
     build_safe_select_option,
     cap_select_options,
     find_oversized_view_component_fields,
@@ -11579,8 +11599,9 @@ async def show_database_management_menu(
     interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, database_id: int
 ) -> None:
     """/database manage's per-collection action menu: Move Collection,
-    Edit Collection, Backup Collection, Restore Collection, Reset
-    Collection, Remove Collection, or Cancel.
+    Edit Collection, Backup Collection, Restore Collection, Refresh IMDb
+    Metadata, Recover Missing IMDb Links, Reset Collection, Remove
+    Collection, or Cancel.
 
     Every action reuses the exact same logic its direct /database
     subcommand uses -- Move/Backup/Reset/Remove call the same
@@ -11627,6 +11648,8 @@ async def show_database_management_menu(
             )
         elif action == "refresh_imdb":
             await show_imdb_refresh_scope_selection(action_interaction, bot, guild_id, database_id)
+        elif action == "recover_imdb":
+            await show_imdb_recovery_scope_selection(action_interaction, bot, guild_id, database_id)
         elif action == "reset":
             await start_database_reset(action_interaction, bot, guild_id, database_id)
         else:
@@ -12028,6 +12051,477 @@ async def perform_imdb_metadata_refresh(
             await interaction.edit_original_response(content=content)
     except discord.HTTPException:
         logger.warning("Could not post the final IMDb metadata refresh summary", exc_info=True)
+
+
+# IMDb Metadata Recovery: matches "The Thing 1982" or "The Thing (1982)"
+# in Search Again's manual query -- a trailing 4-digit year (optionally
+# parenthesized), split from the title text before it. No year is
+# assumed if the text doesn't end that way.
+_RECOVERY_QUERY_YEAR_PATTERN = re.compile(r"^(.*?)\s*\(?\s*((?:19|20)\d{2})\)?\s*$")
+
+
+def parse_recovery_search_query(text: str) -> tuple[str, Optional[int]]:
+    """Split a Search Again query into (title, year) -- Section 5's
+    example: "The Thing 1982" and "The Thing (1982)" both split into
+    ("The Thing", 1982). No trailing year at all leaves it unset.
+    """
+    cleaned = (text or "").strip()
+    match = _RECOVERY_QUERY_YEAR_PATTERN.match(cleaned)
+    if match and match.group(1).strip():
+        return match.group(1).strip(), int(match.group(2))
+    return cleaned, None
+
+
+def build_imdb_recovery_match_select_options(matches: list[ImdbSearchMatch]) -> List[discord.SelectOption]:
+    """Build the multi-candidate selection list's options (Section 4) --
+    through the same safe builders as every other option list in this
+    project, so a long title or more than 25 candidates can never
+    produce an invalid payload.
+    """
+    options = [
+        build_safe_select_option(
+            f"{match.title} ({match.year})" if match.year else match.title,
+            match.imdb_id,
+            description=match.media_type.title() if match.media_type else None,
+        )
+        for match in matches
+    ]
+    return cap_select_options(options)
+
+
+def build_imdb_recovery_progress_header(*, processed: int, total: int) -> str:
+    """Section 9's "Recovering 3 / 12" line -- shown atop every per-
+    suggestion screen. Recovery is inherently interactive (every match
+    needs an explicit decision), so there is no separate throttled
+    progress-edit mechanism the way Refresh IMDb Metadata needs one --
+    each screen IS the progress update, and screens only ever appear one
+    at a time, paced naturally by how quickly a person can review them.
+    """
+    if total == 0:
+        return "**Recover Missing IMDb Links**"
+    current = min(processed + 1, total)
+    return f"**Recover Missing IMDb Links**\n\nRecovering {current} / {total}"
+
+
+def build_imdb_recovery_candidate_screen_text(
+    *, header: str, watch_item: WatchItem, collection_name: str, search: CandidateSearch
+) -> str:
+    """Section 4/5's Crew Review screen body -- branches on whether the
+    search technically failed, found nothing, found one high-confidence
+    match, or found several plausible ones.
+    """
+    year_text = str(watch_item.release_year) if watch_item.release_year else "year unknown"
+    suggestion_line = f'Suggestion: "{watch_item.title}" ({year_text}) -- {collection_name}'
+
+    if search.technical_failure:
+        return "\n\n".join(
+            [
+                header,
+                suggestion_line,
+                f"⚠️ Search failed: {search.error_message or 'an unexpected error occurred.'}",
+                "Use Search Again to retry, Skip to leave this suggestion unmatched, or Cancel Recovery to stop.",
+            ]
+        )
+
+    if not search.matches:
+        return "\n\n".join(
+            [
+                header,
+                suggestion_line,
+                "No IMDb matches were found for this title.",
+                (
+                    "Use Search Again to try a different title/year, Skip to leave this suggestion unmatched "
+                    "(it will still appear in a future recovery scan), or Cancel Recovery to stop."
+                ),
+            ]
+        )
+
+    note = f"⚠️ {search.year_mismatch_note}" if search.year_mismatch_note else None
+
+    if len(search.matches) == 1:
+        match = search.matches[0]
+        match_line = f"**{match.title}**" + (f" ({match.year})" if match.year else "")
+        if match.media_type:
+            match_line += f" -- {match.media_type.title()}"
+        parts = [header, suggestion_line, "Proposed match:", match_line]
+        if note:
+            parts.append(note)
+        parts.append(
+            "Accept to save this IMDb link and refresh this suggestion's metadata immediately, Skip to leave "
+            "it unmatched, Search Again to try a different title/year, or Cancel Recovery to stop."
+        )
+        return "\n\n".join(parts)
+
+    shown = min(len(search.matches), SELECT_MAX_OPTIONS)
+    if shown == len(search.matches):
+        match_count_line = f"{shown} possible matches were found."
+    else:
+        match_count_line = f"{len(search.matches)} possible matches were found -- showing the top {shown}."
+    parts = [header, suggestion_line, match_count_line]
+    if note:
+        parts.append(note)
+    parts.append("Choose one below, or use Skip, Search Again, or Cancel Recovery.")
+    return "\n\n".join(parts)
+
+
+def _build_imdb_recovery_totals_lines(summary: ImdbMetadataRecoverySummary) -> List[str]:
+    return [
+        "**Recover Missing IMDb Links Complete**",
+        "",
+        f"Collections processed: {summary.collections_processed}",
+        f"Suggestions processed: {summary.processed}",
+        f"Matched: {summary.matched}",
+        f"Skipped: {summary.skipped}",
+        f"Failed: {summary.failed}",
+        f"Cancelled: {summary.cancelled}",
+        f"Suggestion posts updated: {summary.posts_updated}",
+        f"Suggestion post sync failures: {summary.post_sync_failures}",
+    ]
+
+
+def _build_imdb_recovery_breakdown_lines(summary: ImdbMetadataRecoverySummary) -> List[str]:
+    lines = ["", "**Per-Collection Breakdown**"]
+    for collection in summary.collections:
+        lines.append(
+            f"• {collection.database_name}: {collection.processed} processed, {collection.matched} matched, "
+            f"{collection.skipped} skipped, {collection.failed} failed, {collection.cancelled} cancelled, "
+            f"{collection.posts_updated} posts updated, {collection.post_sync_failures} post sync failures"
+        )
+    return lines
+
+
+def build_imdb_recovery_summary_message(
+    summary: ImdbMetadataRecoverySummary, *, multi_collection: bool
+) -> tuple[str, Optional[str]]:
+    """Section 9's final ephemeral completion summary -- mirrors IMDb
+    Metadata Refresh's own build_imdb_refresh_summary_message exactly
+    (totals inline; for Recover All Collections, a per-collection
+    breakdown too, moved to an attached text file instead of shown
+    inline if it would push the message over Discord's length limit).
+
+    Returns:
+        (content, attachment_text) -- attachment_text is None unless the
+        full breakdown had to be moved out of the message body.
+    """
+    totals_lines = _build_imdb_recovery_totals_lines(summary)
+    if not multi_collection or not summary.collections:
+        return "\n".join(totals_lines), None
+
+    breakdown_lines = _build_imdb_recovery_breakdown_lines(summary)
+    full_text = "\n".join(totals_lines + breakdown_lines)
+    if len(full_text) <= IMDB_REFRESH_SUMMARY_MAX_CONTENT_LENGTH:
+        return full_text, None
+
+    attachment_text = "\n".join(breakdown_lines[2:])  # drop the leading blank line + header; the file stands alone.
+    content = "\n".join(
+        totals_lines
+        + [
+            "",
+            f"Per-collection breakdown attached ({len(summary.collections)} collections) -- too long to show inline.",
+        ]
+    )
+    return content, attachment_text
+
+
+async def show_imdb_recovery_scope_selection(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, database_id: int
+) -> None:
+    """IMDb Metadata Recovery, Section 2: choose Recover This Collection,
+    Recover All Collections (active collections in this guild only), or
+    go back to this collection's management menu.
+    """
+    database = bot.suggestion_service.get_database(database_id)
+    if database is None or database.guild_id != guild_id:
+        await interaction.response.edit_message(content="That collection no longer exists.", view=None)
+        return
+
+    collection_name = format_collection_display(
+        _resolve_collection_name(
+            bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+        )
+    )
+
+    async def on_back(back_interaction: discord.Interaction) -> None:
+        await show_database_management_menu(back_interaction, bot, guild_id, database_id)
+
+    async def on_scope_chosen(scope_interaction: discord.Interaction, scope: str) -> None:
+        if scope == RECOVERY_SCOPE_THIS_COLLECTION:
+            scope_databases = [database]
+        else:
+            scope_databases = resolve_recoverable_databases(
+                bot.suggestion_service.list_databases(guild_id), guild_id=guild_id
+            )
+        await show_imdb_recovery_confirmation(
+            scope_interaction, bot, guild_id, database_id, scope_databases, scope=scope
+        )
+
+    view = ImdbRecoveryScopeSelectionView(on_scope_chosen, on_back)
+    await interaction.response.edit_message(
+        content=(
+            f'**Recover Missing IMDb Links -- "{collection_name}"**\n\n'
+            "Find suggestions that don't have a usable IMDb link yet, search OMDb for the correct match, and -- "
+            "only once you approve a match -- save it and immediately refresh that suggestion's metadata. "
+            "Existing WASH history and statuses are never changed. Choose a scope:"
+        ),
+        view=view,
+    )
+
+
+def build_imdb_recovery_confirmation_text(
+    *, scope: str, database_names: List[str], missing_count: int, suggestion_count: int
+) -> str:
+    """Section 3-equivalent confirmation screen's body for Recovery --
+    scope, collection count, and how many suggestions are actually
+    missing a usable IMDb link out of how many were considered, plus the
+    required disclosures before any external request is made.
+    """
+    if scope == RECOVERY_SCOPE_THIS_COLLECTION:
+        collection_name = database_names[0] if database_names else "this collection"
+        scope_line = f'Scope: Recover This Collection -- "{collection_name}"'
+    else:
+        scope_line = (
+            "Scope: Recover All Collections -- every active collection in this server "
+            f"({len(database_names)} collection{'s' if len(database_names) != 1 else ''})"
+        )
+    return "\n\n".join(
+        [
+            "**Recover Missing IMDb Links -- Confirm**",
+            scope_line,
+            f"Collections: {len(database_names)}",
+            f"Suggestions missing a usable IMDb link: {missing_count} (of {suggestion_count} total considered)",
+            (
+                "This will search OMDb for each of those suggestions. Every proposed match must be explicitly "
+                "approved before anything is saved -- nothing is linked automatically, and an existing IMDb "
+                "identifier is never overwritten. Existing WASH history, statuses, votes, and Discord post "
+                "references are never changed."
+            ),
+            "This requires your attention throughout -- each proposed match needs a decision.",
+        ]
+    )
+
+
+async def show_imdb_recovery_confirmation(
+    interaction: discord.Interaction,
+    bot: "WatchPartyBot",
+    guild_id: int,
+    origin_database_id: int,
+    databases: List[SuggestionDatabase],
+    *,
+    scope: str,
+) -> None:
+    """IMDb Metadata Recovery's confirmation screen: require confirmation,
+    showing counts computed with zero external requests (count_missing
+    only ever reads already-persisted metadata), before Start Recovery
+    can make a single OMDb search.
+    """
+    recovery_service = ImdbMetadataRecoveryService(bot.suggestion_service, _imdb_metadata_service_for(bot))
+    missing_total = 0
+    suggestion_total = 0
+    database_names: List[str] = []
+    for database in databases:
+        missing, total = recovery_service.count_missing(database.database_id)
+        missing_total += missing
+        suggestion_total += total
+        database_names.append(
+            format_collection_display(
+                _resolve_collection_name(
+                    bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
+                )
+            )
+        )
+
+    async def on_back(back_interaction: discord.Interaction) -> None:
+        await show_imdb_recovery_scope_selection(back_interaction, bot, guild_id, origin_database_id)
+
+    async def on_cancel(cancel_interaction: discord.Interaction) -> None:
+        await cancel_interaction.response.edit_message(
+            content="IMDb link recovery cancelled. No changes were made.", view=None
+        )
+
+    async def on_start(start_interaction: discord.Interaction) -> None:
+        await start_imdb_recovery_session(start_interaction, bot, guild_id, databases)
+
+    view = ImdbRecoveryConfirmationView(on_start, on_back, on_cancel)
+    text = build_imdb_recovery_confirmation_text(
+        scope=scope, database_names=database_names, missing_count=missing_total, suggestion_count=suggestion_total
+    )
+    await interaction.response.edit_message(content=text, view=view)
+
+
+async def start_imdb_recovery_session(
+    interaction: discord.Interaction, bot: "WatchPartyBot", guild_id: int, databases: List[SuggestionDatabase]
+) -> None:
+    """IMDb Metadata Recovery, Sections 4-9: walk through every
+    suggestion missing a usable IMDb identifier, one at a time, only ever
+    saving a match once WASH Crew explicitly approves it.
+
+    Unlike perform_imdb_metadata_refresh's fully automated batch loop,
+    every step here is its own separate Discord interaction (a button
+    click, a select, or a modal submit) -- so there is no long-running
+    loop or progress-edit throttling to manage here; each screen IS the
+    progress update, naturally paced by how quickly a person can review
+    it. Only this function's own first transition (Start Recovery's
+    click acknowledging immediately, then rendering the first real
+    screen within that same interaction) needs edit_original_response
+    instead of response.edit_message, exactly like
+    perform_imdb_metadata_refresh's own initial "Starting..." ack --
+    every other screen here is a fresh interaction and uses
+    response.edit_message directly, only once, as normal.
+    """
+    await interaction.response.edit_message(
+        content="**Recovering Missing IMDb Links...**\n\nLooking for suggestions to recover.", view=None
+    )
+
+    recovery_service = ImdbMetadataRecoveryService(bot.suggestion_service, _imdb_metadata_service_for(bot))
+    collections: List[CollectionRecoverySummary] = []
+    collections_by_id: dict[int, CollectionRecoverySummary] = {}
+    queue: List[WatchItem] = []
+    for database in databases:
+        collection_summary = CollectionRecoverySummary(database_id=database.database_id, database_name=database.name)
+        collections.append(collection_summary)
+        collections_by_id[database.database_id] = collection_summary
+        queue.extend(recovery_service.missing_suggestions(database.database_id))
+
+    summary = ImdbMetadataRecoverySummary(collections=collections)
+    suggestions_total = len(queue)
+    fetch_cache: dict[str, ImdbTitleResult] = {}
+    state: dict[str, object] = {"queue": queue, "processed": 0, "current_search": None}
+
+    async def post_sync(watch_item: WatchItem) -> Optional[bool]:
+        result = await sync_suggestion_status_embed(bot, watch_item)
+        if result is SuggestionPostSyncResult.NO_POST:
+            return None
+        return result is SuggestionPostSyncResult.SYNCED
+
+    async def render_screen(
+        target_interaction: discord.Interaction,
+        *,
+        content: str,
+        view: Optional[discord.ui.View],
+        first_render: bool,
+        attachments: Optional[List[discord.File]] = None,
+    ) -> None:
+        try:
+            if first_render:
+                if attachments is not None:
+                    await target_interaction.edit_original_response(content=content, view=view, attachments=attachments)
+                else:
+                    await target_interaction.edit_original_response(content=content, view=view)
+            elif attachments is not None:
+                await target_interaction.response.edit_message(content=content, view=view, attachments=attachments)
+            else:
+                await target_interaction.response.edit_message(content=content, view=view)
+        except discord.HTTPException:
+            logger.warning("Could not update IMDb metadata recovery screen", exc_info=True)
+
+    async def show_final_summary(target_interaction: discord.Interaction, *, first_render: bool) -> None:
+        content, attachment_text = build_imdb_recovery_summary_message(summary, multi_collection=len(databases) > 1)
+        attachments = None
+        if attachment_text is not None:
+            attachments = [discord.File(io.BytesIO(attachment_text.encode("utf-8")), filename="imdb_recovery_report.txt")]
+        await render_screen(target_interaction, content=content, view=None, first_render=first_render, attachments=attachments)
+
+    async def render_candidate_screen(
+        target_interaction: discord.Interaction, watch_item: WatchItem, search: CandidateSearch, *, first_render: bool
+    ) -> None:
+        state["current_search"] = search
+        header = build_imdb_recovery_progress_header(processed=state["processed"], total=suggestions_total)
+        collection_name = collections_by_id[watch_item.database_id].database_name
+        text = build_imdb_recovery_candidate_screen_text(
+            header=header, watch_item=watch_item, collection_name=collection_name, search=search
+        )
+
+        if search.technical_failure or not search.matches:
+            view = ImdbRecoveryNoMatchView(on_search_again_clicked, on_skip, on_cancel_recovery)
+        elif len(search.matches) == 1:
+            view = ImdbRecoveryConfirmMatchView(on_accept, on_skip, on_search_again_clicked, on_cancel_recovery)
+        else:
+            options = build_imdb_recovery_match_select_options(list(search.matches))
+            view = ImdbRecoveryMatchSelectionView(
+                on_match_selected, on_skip, on_search_again_clicked, on_cancel_recovery, options=options
+            )
+
+        await render_screen(target_interaction, content=text, view=view, first_render=first_render)
+
+    async def show_next_or_finish(target_interaction: discord.Interaction, *, first_render: bool) -> None:
+        if not state["queue"]:
+            await show_final_summary(target_interaction, first_render=first_render)
+            return
+        watch_item = state["queue"][0]
+        search = await recovery_service.find_candidates(watch_item.title, watch_item.release_year)
+        await render_candidate_screen(target_interaction, watch_item, search, first_render=first_render)
+
+    async def on_accept(target_interaction: discord.Interaction) -> None:
+        watch_item = state["queue"][0]
+        search: CandidateSearch = state["current_search"]
+        match = search.matches[0]
+        outcome = await recovery_service.accept_match(watch_item, match, fetch_cache=fetch_cache, post_sync=post_sync)
+        collections_by_id[watch_item.database_id].record(outcome)
+        state["queue"].pop(0)
+        state["processed"] += 1
+        await show_next_or_finish(target_interaction, first_render=False)
+
+    async def on_skip(target_interaction: discord.Interaction) -> None:
+        watch_item = state["queue"][0]
+        search: Optional[CandidateSearch] = state["current_search"]
+        if search is not None and search.technical_failure:
+            outcome = RecoverySuggestionOutcome(
+                watch_item.id,
+                watch_item.database_id,
+                RecoveryResult.FAILED,
+                detail=search.error_message or "The search failed.",
+            )
+        else:
+            outcome = RecoverySuggestionOutcome(
+                watch_item.id, watch_item.database_id, RecoveryResult.SKIPPED, detail="Skipped by WASH Crew."
+            )
+        collections_by_id[watch_item.database_id].record(outcome)
+        state["queue"].pop(0)
+        state["processed"] += 1
+        await show_next_or_finish(target_interaction, first_render=False)
+
+    async def on_search_again_clicked(target_interaction: discord.Interaction) -> None:
+        watch_item = state["queue"][0]
+        default_query = (
+            watch_item.title
+            if watch_item.release_year is None
+            else f"{watch_item.title} ({watch_item.release_year})"
+        )
+        await target_interaction.response.send_modal(
+            ImdbRecoverySearchAgainModal(on_search_again_submitted, default_query=default_query)
+        )
+
+    async def on_search_again_submitted(target_interaction: discord.Interaction, raw_query: Optional[str]) -> None:
+        watch_item = state["queue"][0]
+        query_title, query_year = parse_recovery_search_query(raw_query or watch_item.title)
+        search = await recovery_service.find_candidates(query_title, query_year)
+        await render_candidate_screen(target_interaction, watch_item, search, first_render=False)
+
+    async def on_match_selected(target_interaction: discord.Interaction, imdb_id: str) -> None:
+        watch_item = state["queue"][0]
+        search: CandidateSearch = state["current_search"]
+        chosen = next((match for match in search.matches if match.imdb_id == imdb_id), None)
+        if chosen is None:
+            await render_candidate_screen(target_interaction, watch_item, search, first_render=False)
+            return
+        narrowed = CandidateSearch(
+            matches=(chosen,),
+            year_mismatch_note=search.year_mismatch_note,
+            searched_title=search.searched_title,
+            searched_year=search.searched_year,
+        )
+        await render_candidate_screen(target_interaction, watch_item, narrowed, first_render=False)
+
+    async def on_cancel_recovery(target_interaction: discord.Interaction) -> None:
+        for watch_item in state["queue"]:
+            outcome = RecoverySuggestionOutcome(
+                watch_item.id, watch_item.database_id, RecoveryResult.CANCELLED, detail="Recovery was cancelled."
+            )
+            collections_by_id[watch_item.database_id].record(outcome)
+        state["queue"] = []
+        await show_final_summary(target_interaction, first_render=False)
+
+    await show_next_or_finish(interaction, first_render=True)
 
 
 def parse_watch_party_schedule_time(value: str) -> datetime:

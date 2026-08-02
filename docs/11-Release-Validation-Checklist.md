@@ -560,7 +560,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** At least one collection already exists.
 - **Steps:**
   1. Run `/database manage`; confirm the same collection picker used elsewhere in `/database` appears.
-  2. Choose a collection; confirm a management menu appears offering exactly, in this order: **Edit Collection**, **Backup Collection**, **Move Collection**, **Restore Collection**, **Refresh IMDb Metadata**, **Reset Collection**, **Remove Collection**, **Cancel** -- with Reset Collection and Remove Collection visually distinct (red/danger-styled) from the five actions above them, and Refresh IMDb Metadata styled like the other administrative (non-destructive) actions.
+  2. Choose a collection; confirm a management menu appears offering exactly, in this order: **Edit Collection**, **Backup Collection**, **Move Collection**, **Restore Collection**, **Refresh IMDb Metadata**, **Recover Missing IMDb Links**, **Reset Collection**, **Remove Collection**, **Cancel** -- with Reset Collection and Remove Collection visually distinct (red/danger-styled) from the six actions above them, and Refresh IMDb Metadata/Recover Missing IMDb Links both styled like the other administrative (non-destructive) actions.
   3. Choose **Move Collection**; confirm it launches the destination-choice screen (three thread-only options, same order as `/database add`) and completes the move.
   4. Return to `/database manage` and choose **Edit Collection**; confirm it shows the same settings menu `/config` -> Collections shows for that database, and that its **Back** button returns to the `/database manage` management menu (not to `/config`'s picker).
   5. Choose **Backup Collection**; confirm a backup file is produced.
@@ -597,6 +597,30 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 3.4c-2 IMDb Metadata Recovery (`/database manage`)
+
+- **Objective:** Confirm the IMDb Metadata Recovery workflow's scope selection, confirmation, discovery, OMDb search/matching (single match, multiple matches, no match, year-mismatch fallback), Crew Review (Accept/Skip/Search Again/Cancel Recovery), save-then-refresh hand-off, post-sync, progress, final summary, cross-guild isolation, and idempotency all work as documented -- and that it stays entirely separate from IMDb Metadata Refresh.
+- **Preconditions:** WASH Crew role; a server with at least one active collection containing: a suggestion with no IMDb link at all whose title/year has exactly one clear OMDb match, a suggestion with no IMDb link whose title matches multiple OMDb results, a suggestion with no IMDb link whose title matches nothing, a suggestion with no IMDb link whose stored year doesn't match any OMDb result for that title (but the title alone does), and a suggestion that already has a valid IMDb link. A second Discord server this same WASH process also serves, with its own collection and at least one suggestion missing an IMDb link.
+- **Steps:**
+  1. Run `/database manage`, choose a collection, choose **Recover Missing IMDb Links**; confirm a screen offering **Recover This Collection**, **Recover All Collections**, and **Back**, and that it reads as a distinct workflow from Refresh IMDb Metadata (different heading/description).
+  2. Choose **Recover This Collection**; confirm a confirmation screen naming the scope, collection count, how many suggestions are missing a usable IMDb link vs. the total considered, a statement that OMDb searches will be made, a statement that every match requires explicit approval and an existing identifier is never overwritten, and that WASH history/statuses are never changed. Confirm no OMDb request has been made yet.
+  3. Click **Back**; confirm it returns to the scope-choice screen. Click **Cancel** from the confirmation screen; confirm a "cancelled, no changes were made" message.
+  4. Choose **Recover All Collections**; confirm the confirmation screen's collection count matches only this server's *active* collections, and no collection from the second Discord server appears anywhere on this screen. Confirm the already-linked suggestion is never counted as missing.
+  5. Click **Start Recovery**; confirm an immediate acknowledgment, then the first suggestion's search screen appears showing a "Recovering N / M" progress line.
+  6. For the suggestion with exactly one clear match: confirm it's shown as a single proposed match (title, year, type) with **Accept**, **Skip**, **Search Again**, and **Cancel Recovery**. Click **Accept**; confirm the IMDb identifier is saved, the suggestion's metadata (cast, IMDb rating, MPAA rating, runtime, genres, poster, plot) is populated immediately, and its existing public post is updated in place (not a new post).
+  7. For the suggestion with multiple matches: confirm a selection list appears with enough per-option detail (title, year, type) to distinguish them, plus Skip/Search Again/Cancel Recovery. Select one; confirm it lands on the same single-match confirmation screen (Accept still required, nothing saved yet), then Accept it.
+  8. For the suggestion with no matches at all: confirm a "no matches found" screen with only Search Again/Skip/Cancel Recovery (no Accept). Use **Search Again**, type a different title (with and without a parenthesized year, e.g. both `Title 1999` and `Title (1999)`), and confirm it re-searches and shows results for the new query. Skip it.
+  9. For the suggestion whose stored year doesn't match any result: confirm WASH automatically falls back to a title-only search and visibly flags that the year didn't match rather than silently picking a result.
+  10. Confirm the already-linked suggestion from setup was never shown during this run at all.
+  11. Re-run Recover Missing IMDb Links on the same collection; confirm the Skipped suggestion is offered again, the Accepted suggestions are correctly excluded (no longer missing a link), and nothing is duplicated.
+  12. Start another recovery run and click **Cancel Recovery** partway through; confirm the final summary reports every suggestion not yet reached as Cancelled (not Skipped), and that running recovery again afterward picks up exactly those suggestions.
+  13. Temporarily make an accepted suggestion's channel inaccessible to WASH (or delete its post) before accepting a match for it; confirm the identifier and metadata are still saved and reported as Matched, with the post-sync failure counted separately in the summary -- the metadata change is not rolled back.
+  14. Confirm the final ephemeral summary shows correct overall totals (Matched/Skipped/Failed/Cancelled/posts updated/post-sync failures), plus a per-collection breakdown for the All Collections run.
+  15. As a non-WASH-Crew member, confirm `/database manage` (and therefore this whole workflow) is unreachable.
+- **Expected Result:** Both scopes work as documented; Recover All Collections never includes another guild's collections or an inactive collection; nothing external happens before Start Recovery; a suggestion with an existing IMDb link is never offered and never overwritten; every proposed match requires explicit Crew approval before anything is saved; Search Again supports a manually typed title and/or year; a year mismatch is flagged, never silently resolved; Skip never permanently suppresses a suggestion; Cancel Recovery stops the run and marks the remainder Cancelled; accepting a match immediately reuses Refresh IMDb Metadata's own save-and-post-sync logic; every WASH-owned field is preserved; the operation is safely rerunnable and fully idempotent.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 3.4d `/help`'s simplified Collections section
 
 - **Objective:** Confirm `/help`'s Collections section reflects the actual, simplified command surface -- not just a curated subset of a larger set of commands that still exist.
@@ -604,7 +628,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Run `/help` as WASH Crew; find the Collections section.
   2. Confirm it lists exactly `/database add`, `/database list`, `/database health`, and `/database manage` -- not `/database move`, `/database backup`, `/database restore`, `/database reset`, or `/database remove` individually.
-  3. Confirm `/database manage`'s summary mentions move, edit, back up, restore, refresh IMDb metadata, reset, and remove.
+  3. Confirm `/database manage`'s summary mentions move, edit, back up, restore, refresh IMDb metadata, recover missing IMDb links, reset, and remove.
   4. Confirm a note appears pointing at additional shortcuts (i.e. `/database restore`) under `/database` and the Command Reference.
   5. Confirm `/database add`, `/database list`, `/database health`, `/database manage`, and `/database restore` all still run correctly, and that no other `/database` subcommand exists to run (see 3.4/3.4b/3.4c above).
 - **Expected Result:** `/help` accurately reflects the real, simplified command surface -- it is not merely hiding commands that still exist elsewhere.

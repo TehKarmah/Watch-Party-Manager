@@ -1040,6 +1040,47 @@ class SuggestionService:
             success=True, message=f'Refreshed IMDb metadata for "{new_title}".', watch_item=updated
         )
 
+    def set_imdb_identifier(self, suggestion_id: int, imdb_url: str) -> SuggestionResult:
+        """Attach a resolved IMDb identifier to a suggestion that didn't
+        already have one (IMDb Metadata Recovery), touching nothing else.
+
+        Deliberately narrower than edit_suggestion()/apply_imdb_metadata_
+        refresh(): title never changes here, so the suggestion never
+        needs re-keying in self._suggestions, and every other field
+        (status, journey, channel_id/message_id, crew_review_*, votes,
+        watch history, etc.) is preserved automatically via
+        dataclasses.replace(). Refuses to overwrite an already-set IMDb
+        identifier (Section 10: "Never overwrite an existing IMDb
+        identifier") rather than silently replacing it -- a suggestion
+        with one already belongs to Refresh IMDb Metadata, not Recovery.
+
+        Args:
+            suggestion_id: The suggestion to attach an identifier to.
+            imdb_url: The canonical IMDb title URL to store.
+
+        Returns:
+            SuggestionResult with the updated WatchItem on success.
+        """
+        watch_item = self.get_suggestion(suggestion_id)
+        if watch_item is None:
+            return SuggestionResult(success=False, message="That suggestion doesn't exist.")
+
+        if watch_item.metadata_ids.get(MetadataProvider.IMDB):
+            return SuggestionResult(success=False, message="This suggestion already has an IMDb identifier.")
+
+        normalized = imdb_url.strip() if imdb_url else ""
+        if not normalized:
+            return SuggestionResult(success=False, message="A valid IMDb identifier is required.")
+
+        metadata_ids = dict(watch_item.metadata_ids)
+        metadata_ids[MetadataProvider.IMDB] = normalized
+
+        updated = replace(watch_item, metadata_ids=metadata_ids, updated_at=datetime.now(timezone.utc))
+        key = (watch_item.database_id, watch_item.title.casefold())
+        self._suggestions[key] = updated
+        self._save()
+        return SuggestionResult(success=True, message="IMDb identifier saved.", watch_item=updated)
+
     def _save(self) -> None:
         """Persist the current suggestion list via the repository."""
         self._repository.save(self.get_suggestions(), self._next_id)

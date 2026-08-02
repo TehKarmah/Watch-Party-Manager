@@ -80,11 +80,11 @@ A command replies "WASH Crew permissions have not been configured," "Run `/setup
 - **A collection doesn't appear where expected**: collections default to threads created under the configured Home Channel -- check `/database list` for its Active/Inactive status and current destination.
 - **Can't tell which collection a command will use**: most commands resolve the collection automatically from the thread they're run in; use the **Switch Collection** button (offered whenever more than one collection exists) rather than guessing.
 - **A setting doesn't seem to apply**: several settings are per-collection (Nominee Selection, "I Won't Watch" Enable/threshold, Suggestion Destination) while others are guild-wide (Vote Visibility, candidate count, vote duration) -- see [Administration, Section 4](05-Administration.md#4-starting-a-vote) and the "I Won't Watch" section below for exactly which is which.
-- **Need to change a collection's destination, back it up, refresh its IMDb metadata, reset it, or remove it**: all of these live under `/database manage` -- pick the collection, then choose the action. See [Command Reference](10-Command-Reference.md) for the full `/database` command list.
+- **Need to change a collection's destination, back it up, refresh its IMDb metadata, recover missing IMDb links, reset it, or remove it**: all of these live under `/database manage` -- pick the collection, then choose the action. See [Command Reference](10-Command-Reference.md) for the full `/database` command list.
 
 ### IMDb Metadata Refresh: suggestion(s) reported as Skipped
 
-A suggestion is Skipped, never attempted, whenever it has no usable persisted IMDb link (added by plain title with no IMDb URL, or an unresolvable one). This is deliberate -- the refresh never guesses a title's IMDb match, so a Skipped suggestion needs a usable IMDb link added first (e.g. via `/edit_suggestion`, or by re-adding it with `/add` and a correct IMDb URL/link) before a future refresh can pick it up.
+A suggestion is Skipped, never attempted, whenever it has no usable persisted IMDb link (added by plain title with no IMDb URL, or an unresolvable one). This is deliberate -- the refresh never guesses a title's IMDb match, so a Skipped suggestion needs a usable IMDb link added first before a future refresh can pick it up. **Recover Missing IMDb Links** (also under `/database manage`) is the easiest way to do that -- it searches OMDb by the suggestion's stored title/year and only saves a link once you explicitly approve it; `/edit_suggestion` or re-adding it with `/add` and a correct IMDb URL/link both still work too.
 
 ### IMDb Metadata Refresh: some suggestions reported as Failed
 
@@ -97,6 +97,18 @@ Nothing is lost. Every suggestion that had already been successfully refreshed a
 ### IMDb Metadata Refresh: it's taking a while / the bot's log still shows an occasional 429
 
 A refresh deliberately paces suggestion-post edits landing in the same Discord channel to avoid tripping Discord's message-edit rate limit, so a collection with many refreshed suggestions in one channel will visibly take longer than the lookups alone would. This is expected and does not affect the final results -- metadata is saved as soon as each lookup succeeds, independent of whether or when its post gets resynced. An occasional 429 in the log with a short automatic retry is still normal (Discord's own client-side retry handling, not a failure); it should simply be rarer than before. A post-sync failure (not the same as a metadata Failed) is reported separately and never rolls back an already-saved metadata update -- see "some suggestions reported as Failed" above for the distinct metadata-lookup failure case.
+
+### IMDb Metadata Recovery: no matches are found for a suggestion
+
+WASH searches OMDb using the suggestion's stored title and (when known) release year -- an unusual title spelling, a title that differs from IMDb's official one, or a stored year that doesn't match anything all commonly produce zero results. Use **Search Again** to try a different title and/or year (e.g. drop the year, fix a typo, or use the title's more common alternate name); if nothing plausible turns up, **Skip** leaves the suggestion unmatched and it will appear again in a future recovery scan -- nothing is permanently suppressed.
+
+### IMDb Metadata Recovery: a suggestion never appears in a recovery scan
+
+Recovery only ever offers suggestions with no usable, already-persisted IMDb identifier -- a suggestion that already has one (even one that later turned out to be wrong) belongs to **Refresh IMDb Metadata** instead, and Recovery never overwrites an existing identifier. If a suggestion's IMDb link is simply wrong, correct it via `/edit_suggestion` first, then let a normal Refresh IMDb Metadata run pick up the corrected metadata.
+
+### IMDb Metadata Recovery: the bot restarted (or Cancel Recovery was clicked) partway through
+
+Nothing already matched and saved is lost -- each suggestion's IMDb identifier and refreshed metadata are persisted the moment a match is accepted, with no separate "in-progress" state to corrupt. Suggestions not yet reached (whether because of a restart or an explicit Cancel Recovery) are reported as Cancelled for that run, but they're never permanently suppressed -- running Recover Missing IMDb Links again picks them right back up, and any suggestion already matched along the way is correctly excluded from being offered a second time.
 
 ---
 

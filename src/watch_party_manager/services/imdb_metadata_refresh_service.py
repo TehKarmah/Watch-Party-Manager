@@ -316,7 +316,7 @@ class ImdbMetadataRefreshService:
             summary.collections.append(collection_summary)
 
             for watch_item in per_database_items[database.database_id]:
-                outcome = await self._refresh_one(watch_item, fetch_cache, post_sync)
+                outcome = await self.refresh_one(watch_item, fetch_cache, post_sync)
                 collection_summary.record(outcome)
                 suggestions_processed += 1
                 await report(collection_boundary=False)
@@ -326,12 +326,21 @@ class ImdbMetadataRefreshService:
 
         return summary
 
-    async def _refresh_one(
+    async def refresh_one(
         self,
         watch_item: WatchItem,
         fetch_cache: Dict[str, ImdbTitleResult],
         post_sync: Optional[OnPostSync],
     ) -> SuggestionRefreshOutcome:
+        """Refresh exactly one suggestion's IMDb-derived metadata --
+        public so IMDb Metadata Recovery (services/imdb_metadata_recovery_
+        service.py) can reuse this exact logic immediately after it saves
+        a newly-matched IMDb identifier, rather than duplicating any
+        fetch/merge/persist/post-sync logic (Section 6: "reuse the
+        existing refresh architecture"). `fetch_cache` may be shared
+        across an entire recovery run too, so a title matched to more
+        than one recovered suggestion is still only fetched once.
+        """
         canonical_url = self.has_usable_imdb_identifier(watch_item)
         if canonical_url is None:
             return SuggestionRefreshOutcome(
