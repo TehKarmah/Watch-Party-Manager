@@ -73,6 +73,7 @@ class FakeResponse:
         self.edited_content = None
         self.edited_embed = "not-edited"
         self.edited_view = "not-edited"
+        self.edit_calls = []
 
     async def send_message(self, content=None, ephemeral=False, view=None, embed=None) -> None:
         self.sent_message = content
@@ -84,6 +85,36 @@ class FakeResponse:
         self.edited_content = content
         self.edited_view = view
         self.edited_embed = embed
+        self.edit_calls.append((content, embed, view))
+
+
+class FakeFollowup:
+    """/random_watch's public result is posted via interaction.followup.send
+    once the private setup screen has been closed out with a hand-off
+    edit (see bot.py's perform_pick). Mirroring the sent content/embed/
+    view back onto the same FakeResponse's edited_* fields keeps every
+    pre-existing "final result" assertion working unchanged (they read
+    the end state, not the intermediate hand-off edit) while still
+    letting dedicated tests inspect the followup's own fields --
+    including `sent_ephemeral`, which must be falsy -- to verify the
+    result really was posted publicly and separately from the hand-off.
+    """
+
+    def __init__(self, response: FakeResponse) -> None:
+        self._response = response
+        self.sent_content = None
+        self.sent_embed = None
+        self.sent_view = None
+        self.sent_ephemeral = None
+
+    async def send(self, content=None, embed=None, view=None, ephemeral=False) -> None:
+        self.sent_content = content
+        self.sent_embed = embed
+        self.sent_view = view
+        self.sent_ephemeral = ephemeral
+        self._response.edited_content = content
+        self._response.edited_embed = embed
+        self._response.edited_view = view
 
 
 class FakeInteraction:
@@ -93,6 +124,7 @@ class FakeInteraction:
         self.channel_id = channel_id
         self.guild = guild
         self.response = FakeResponse()
+        self.followup = FakeFollowup(self.response)
 
 
 class FakeMembershipService:
@@ -517,7 +549,10 @@ class MemberFilterTests(RandomWatchCommandTestCase):
         member_interaction = FakeInteraction(user=self._member(1))
         await member_select.callback(interaction=member_interaction)
 
-        self.assertIn("not a current Watch Party member", member_interaction.response.edited_content)
+        self.assertIn(
+            "is not the server owner, a WASH Crew member, or a current Watch Party member",
+            member_interaction.response.edited_content,
+        )
 
     async def test_only_the_selected_members_suggestions_remain_in_the_pool(self) -> None:
         database_id = self._create_database("Movies")
@@ -564,7 +599,8 @@ class MemberFilterTests(RandomWatchCommandTestCase):
         clear_interaction = FakeInteraction(user=self._member(1))
         await member_select_again.callback(interaction=clear_interaction)
 
-        self.assertIn("none (Any Member, Any Genre)", clear_interaction.response.edited_content)
+        self.assertIn("Member: Any Member", clear_interaction.response.edited_content)
+        self.assertIn("Genre: Any Genre", clear_interaction.response.edited_content)
 
     # --- Regression coverage for the live bug (shared with /vote start's
     # Custom Vote Filters -- see services/member_filter_validation.py): an
@@ -649,6 +685,48 @@ class MemberFilterTests(RandomWatchCommandTestCase):
         pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
         self.assertFalse(pick_button.disabled)
 
+    async def test_server_owner_is_a_valid_member_even_without_any_configured_role(self) -> None:
+        from types import SimpleNamespace
+
+        database_id = self._create_database("Movies")
+        self._add("Owner's Pick", database_id, original_suggester="555")
+        filter_view = await self._reach_filter_screen(database_id)
+        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+
+        class FakeOwner:
+            id = 555
+            display_name = "HeidiTheGreat"
+            roles = []
+
+        member_select._values = [FakeOwner()]
+        member_interaction = FakeInteraction(user=self._member(1), guild=SimpleNamespace(owner_id=555))
+        await member_select.callback(interaction=member_interaction)
+
+        self.assertIn("HeidiTheGreat has 1 eligible suggestion", member_interaction.response.edited_content)
+        updated_view = member_interaction.response.edited_view
+        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
+        self.assertFalse(pick_button.disabled)
+
+    async def test_wash_crew_member_is_a_valid_member_even_without_the_watch_party_role(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Crew's Pick", database_id, original_suggester="666")
+        filter_view = await self._reach_filter_screen(database_id)
+        member_select = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_member_filter")
+
+        class FakeCrewMember:
+            id = 666
+            display_name = "Crew"
+            roles = [FakeRole(WASH_CREW_ROLE_ID)]
+
+        member_select._values = [FakeCrewMember()]
+        member_interaction = FakeInteraction(user=self._member(1))
+        await member_select.callback(interaction=member_interaction)
+
+        self.assertIn("Crew has 1 eligible suggestion", member_interaction.response.edited_content)
+        updated_view = member_interaction.response.edited_view
+        pick_button = next(c for c in updated_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
+        self.assertFalse(pick_button.disabled)
+
     async def test_clicking_pick_random_item_while_invalid_produces_no_result(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, original_suggester="111")
@@ -670,7 +748,10 @@ class MemberFilterTests(RandomWatchCommandTestCase):
         await pick_button.callback(interaction=pick_interaction)
 
         self.assertIsNone(pick_interaction.response.edited_embed)
-        self.assertIn("not a current Watch Party member", pick_interaction.response.edited_content)
+        self.assertIn(
+            "is not the server owner, a WASH Crew member, or a current Watch Party member",
+            pick_interaction.response.edited_content,
+        )
 
     async def test_clearing_an_invalid_selection_restores_any_member_and_reenables_pick(self) -> None:
         database_id = self._create_database("Movies")
@@ -822,7 +903,8 @@ class GenreFilterTests(RandomWatchCommandTestCase):
         clear_interaction = FakeInteraction(user=self._member(1))
         await genre_select_again.callback(interaction=clear_interaction)
 
-        self.assertIn("none (Any Member, Any Genre)", clear_interaction.response.edited_content)
+        self.assertIn("Member: Any Member", clear_interaction.response.edited_content)
+        self.assertIn("Genre: Any Genre", clear_interaction.response.edited_content)
 
 
 # --- Combined filters -----------------------------------------------------------------------------
@@ -986,8 +1068,12 @@ class SessionBehaviorTests(RandomWatchCommandTestCase):
         change_interaction = FakeInteraction(user=self._member(1))
         await change_filters_button.callback(interaction=change_interaction)
 
-        self.assertIsInstance(change_interaction.response.edited_view, RandomWatchFilterView)
-        self.assertIn("Movies", change_interaction.response.edited_content)
+        # Change Filters, clicked from the now-public result, opens a
+        # fresh *ephemeral* message rather than editing the public one --
+        # the filter UI must stay private (Section 4).
+        self.assertIsInstance(change_interaction.response.sent_view, RandomWatchFilterView)
+        self.assertIn("Movies", change_interaction.response.sent_message)
+        self.assertTrue(change_interaction.response.sent_ephemeral)
 
     async def test_change_collection_rebuilds_genre_options_for_the_new_collection(self) -> None:
         first_id = self._create_database("Movies", channel_id=201)
@@ -1045,6 +1131,171 @@ class RegressionTests(RandomWatchCommandTestCase):
         await pick_button.callback(interaction=pick_interaction)
 
         self.assertEqual(self.bot.suggestion_service.get_suggestion(item.id).status, WatchItemStatus.SUGGESTED)
+
+
+# --- Section 4/8: Public result, ephemeral setup, requester-only interaction ----------------------
+
+
+class PublicResultTests(RandomWatchCommandTestCase):
+    async def _pick_from_initial_screen(self, database_id: int):
+        interaction = FakeInteraction(user=self._member(1))
+        await handle_random_watch(interaction, self.bot)
+        pick_button = interaction.response.sent_view.children[0]
+
+        pick_interaction = FakeInteraction(user=self._member(1))
+        await pick_button.callback(interaction=pick_interaction)
+        return pick_interaction
+
+    async def test_result_is_posted_publicly_via_followup_not_ephemeral(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id)
+
+        pick_interaction = await self._pick_from_initial_screen(database_id)
+
+        self.assertFalse(pick_interaction.followup.sent_ephemeral)
+        self.assertEqual(pick_interaction.followup.sent_embed.title, "Alien")
+        self.assertIsInstance(pick_interaction.followup.sent_view, RandomWatchResultView)
+
+    async def test_setup_screen_is_closed_with_a_private_handoff_not_the_result(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id)
+
+        pick_interaction = await self._pick_from_initial_screen(database_id)
+
+        # The interaction's own (ephemeral) response is the hand-off --
+        # never the embed/result view itself; those only ever go through
+        # the public followup.
+        first_edit_content, first_edit_embed, first_edit_view = pick_interaction.response.edit_calls[0]
+        self.assertIn("Alien", first_edit_content)
+        self.assertIsNone(first_edit_embed)
+        self.assertIsNone(first_edit_view)
+
+    async def test_filter_ui_remains_ephemeral(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id)
+        interaction = FakeInteraction(user=self._member(1))
+        await handle_random_watch(interaction, self.bot)
+        initial_view = interaction.response.sent_view
+        add_filters_button = next(c for c in initial_view.children if c.custom_id == "wpm_random_watch_add_filters")
+
+        filters_interaction = FakeInteraction(user=self._member(1))
+        await add_filters_button.callback(interaction=filters_interaction)
+
+        # /random_watch's own top-level response (interaction.response) is
+        # always ephemeral for the setup/filter screens -- only a
+        # successfully-found result is ever posted through followup.
+        self.assertTrue(interaction.response.sent_ephemeral)
+
+    async def test_requester_can_use_the_public_result_buttons(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id)
+        pick_interaction = await self._pick_from_initial_screen(database_id)
+        result_view = pick_interaction.followup.sent_view
+
+        allowed = await result_view.interaction_check(pick_interaction)
+
+        self.assertTrue(allowed)
+
+    async def test_other_users_cannot_use_the_public_result_buttons(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id)
+        pick_interaction = await self._pick_from_initial_screen(database_id)
+        result_view = pick_interaction.followup.sent_view
+        other_interaction = FakeInteraction(user=self._member(2))
+
+        allowed = await result_view.interaction_check(other_interaction)
+
+        self.assertFalse(allowed)
+        self.assertIn("Only the person who ran this command", other_interaction.response.sent_message)
+        self.assertTrue(other_interaction.response.sent_ephemeral)
+
+    async def test_requester_id_is_the_member_who_actually_clicked_pick_random_item(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id)
+        pick_interaction = await self._pick_from_initial_screen(database_id)
+        result_view = pick_interaction.followup.sent_view
+
+        same_user_again = FakeInteraction(user=self._member(1))
+        allowed = await result_view.interaction_check(same_user_again)
+
+        self.assertTrue(allowed)
+
+    async def test_pick_again_rerolls_the_public_message_in_place(self) -> None:
+        database_id = self._create_database("Movies")
+        item_a = self._add("Alien", database_id)
+        item_b = self._add("The Matrix", database_id)
+        pick_interaction = await self._pick_from_initial_screen(database_id)
+        result_view = pick_interaction.followup.sent_view
+        pick_again_button = next(c for c in result_view.children if c.custom_id == "wpm_random_watch_pick_again")
+
+        with patch("watch_party_manager.bot.choose_random_watch_item") as mock_choose:
+            mock_choose.return_value = item_b
+            again_interaction = FakeInteraction(user=self._member(1))
+            await pick_again_button.callback(interaction=again_interaction)
+
+        # A reroll from the already-public result edits in place -- no
+        # second public message/followup is created for it.
+        self.assertEqual(again_interaction.response.edited_embed.title, "The Matrix")
+        self.assertIsNone(again_interaction.followup.sent_embed)
+
+    async def test_change_filters_from_public_opens_a_fresh_ephemeral_message(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id)
+        pick_interaction = await self._pick_from_initial_screen(database_id)
+        result_view = pick_interaction.followup.sent_view
+        change_filters_button = next(c for c in result_view.children if c.custom_id == "wpm_random_watch_change_filters")
+
+        change_interaction = FakeInteraction(user=self._member(1))
+        await change_filters_button.callback(interaction=change_interaction)
+
+        self.assertTrue(change_interaction.response.sent_ephemeral)
+        self.assertIsNone(change_interaction.followup.sent_view)
+
+    async def test_change_collection_from_public_opens_a_fresh_ephemeral_message(self) -> None:
+        first_id = self._create_database("Movies")
+        self._create_database("TV Shows", channel_id=202)
+        self._add("Alien", first_id)
+        pick_interaction = await self._pick_from_initial_screen(first_id)
+        result_view = pick_interaction.followup.sent_view
+        change_collection_button = next(
+            c for c in result_view.children if c.custom_id == "wpm_random_watch_result_change_collection"
+        )
+
+        change_interaction = FakeInteraction(user=self._member(1))
+        await change_collection_button.callback(interaction=change_interaction)
+
+        self.assertTrue(change_interaction.response.sent_ephemeral)
+
+    async def test_a_new_pick_reached_via_change_filters_is_also_posted_publicly(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, original_suggester="111")
+        self._add("The Matrix", database_id, original_suggester="222")
+        pick_interaction = await self._pick_from_initial_screen(database_id)
+        result_view = pick_interaction.followup.sent_view
+        change_filters_button = next(c for c in result_view.children if c.custom_id == "wpm_random_watch_change_filters")
+        change_interaction = FakeInteraction(user=self._member(1))
+        await change_filters_button.callback(interaction=change_interaction)
+        filter_view = change_interaction.response.sent_view
+        pick_button = next(c for c in filter_view.children if c.custom_id == "wpm_random_watch_pick_filtered")
+
+        second_pick_interaction = FakeInteraction(user=self._member(1))
+        await pick_button.callback(interaction=second_pick_interaction)
+
+        self.assertFalse(second_pick_interaction.followup.sent_ephemeral)
+        self.assertIsInstance(second_pick_interaction.followup.sent_view, RandomWatchResultView)
+
+    async def test_public_result_never_creates_a_vote_or_changes_suggestion_state(self) -> None:
+        database_id = self._create_database("Movies")
+        item = self._add("Alien", database_id)
+
+        pick_interaction = await self._pick_from_initial_screen(database_id)
+        result_view = pick_interaction.followup.sent_view
+        pick_again_button = next(c for c in result_view.children if c.custom_id == "wpm_random_watch_pick_again")
+        await pick_again_button.callback(interaction=FakeInteraction(user=self._member(1)))
+
+        self.assertIsNone(self.bot.vote_service.get_open_round(database_id))
+        self.assertEqual(self.bot.suggestion_service.get_suggestion(item.id).status, WatchItemStatus.SUGGESTED)
+        self.assertIsNone(self.bot.suggestion_database_configuration_repository.get(GUILD_ID, database_id))
 
 
 if __name__ == "__main__":

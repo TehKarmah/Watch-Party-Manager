@@ -25,7 +25,7 @@ The current command list and short descriptions remain available through `/help`
 
 - `/add`
 - `/list`
-- `/random_watch` -- Pick one random eligible watch item from a collection, for when the group can't decide. Default selection is true random (no Favor New/Older Additions weighting); optional, combinable filters (one member's suggestions, one genre) narrow the random pool for this session only. Pick Again keeps the active collection and filters and draws again -- immediate repeats are allowed. A discovery tool only: it never starts a vote or changes a suggestion's status.
+- `/random_watch` -- Pick one random eligible watch item from a collection, for when the group can't decide. Default selection is true random (no Favor New/Older Additions weighting); optional, combinable filters (one eligible member's suggestions, one genre) narrow the random pool for this session only -- the setup/filter screen stays private, but once an item is found the result is posted publicly for the whole group, with Pick Again/Change Filters/Change Collection restricted to whoever ran the command. Pick Again keeps the active collection and filters and draws again -- immediate repeats are allowed. A discovery tool only: it never starts a vote or changes a suggestion's status.
 - `/remove`
 - `/edit_suggestion`
 - `/reject` / `/unreject` -- Command-line equivalents of a suggestion post's "I Won't Watch" button (see [Administration](05-Administration.md#rejecting-suggestions-i-wont-watch)). Configured per collection, with its own dedicated Setup Wizard step and `/config` section; it can also be disabled entirely.

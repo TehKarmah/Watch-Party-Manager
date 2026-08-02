@@ -1534,7 +1534,10 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         select_interaction = self._interaction()
         await member_select.callback(interaction=select_interaction)
 
-        self.assertIn("not a current Watch Party member", select_interaction.response.edited_content)
+        self.assertIn(
+            "is not the server owner, a WASH Crew member, or a current Watch Party member",
+            select_interaction.response.edited_content,
+        )
 
     async def test_selecting_a_member_with_no_eligible_suggestions_is_rejected(self) -> None:
         interaction = await self._open_customize_screen()
@@ -1767,7 +1770,10 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         await self._continue_button(overrides_view).callback(interaction=continue_interaction)
 
         self.assertIsNone(continue_interaction.response.sent_modal)
-        self.assertIn("not a current Watch Party member", continue_interaction.response.edited_content)
+        self.assertIn(
+            "is not the server owner, a WASH Crew member, or a current Watch Party member",
+            continue_interaction.response.edited_content,
+        )
         self.assertIsNone(self.vote_service.get_open_round())
 
     async def test_clicking_continue_while_a_zero_eligible_member_is_selected_is_blocked(self) -> None:
@@ -1873,6 +1879,112 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         vote_round = self.vote_service.get_open_round()
         self.assertIsNotNone(vote_round, confirm_interaction.response.sent_message)
         self.assertEqual(vote_round.filter_member_discord_user_id, 111)
+
+    # --- Expanded member validation: server owner / WASH Crew / Watch Party ------
+
+    async def test_server_owner_is_a_valid_member_even_without_any_configured_role(self) -> None:
+        from types import SimpleNamespace
+
+        self.suggestion_service.suggest(
+            "Owner's Pick", database_id=self.database_id, original_suggester="555", genres=("Comedy",)
+        )
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        owner = FakeMember(user_id=555, roles=[], display_name="HeidiTheGreat")
+        member_select._values = [owner]
+
+        select_interaction = self._interaction()
+        select_interaction.guild = SimpleNamespace(owner_id=555)
+        await member_select.callback(interaction=select_interaction)
+
+        self.assertIn("HeidiTheGreat has 1 eligible suggestion", select_interaction.response.edited_content)
+        self.assertFalse(overrides_view.continue_button.disabled)
+
+    async def test_wash_crew_member_is_a_valid_member_even_without_the_watch_party_role(self) -> None:
+        from types import SimpleNamespace
+
+        self.suggestion_service.suggest(
+            "Crew's Pick", database_id=self.database_id, original_suggester="666", genres=("Comedy",)
+        )
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        crew_member = FakeMember(user_id=666, roles=[FakeRole(WASH_CREW_ROLE_ID)], display_name="Crew")
+        member_select._values = [crew_member]
+
+        select_interaction = self._interaction()
+        select_interaction.guild = SimpleNamespace(owner_id=1)
+        await member_select.callback(interaction=select_interaction)
+
+        self.assertIn("Crew has 1 eligible suggestion", select_interaction.response.edited_content)
+        self.assertFalse(overrides_view.continue_button.disabled)
+
+    async def test_owner_with_zero_eligible_suggestions_is_still_invalid(self) -> None:
+        from types import SimpleNamespace
+
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        owner = FakeMember(user_id=555, roles=[], display_name="HeidiTheGreat")
+        member_select._values = [owner]
+
+        select_interaction = self._interaction()
+        select_interaction.guild = SimpleNamespace(owner_id=555)
+        await member_select.callback(interaction=select_interaction)
+
+        self.assertIn("HeidiTheGreat has no eligible suggestions", select_interaction.response.edited_content)
+        self.assertTrue(overrides_view.continue_button.disabled)
+
+    # --- Filter summary: scalable "Current Filters" block ------------------------
+
+    async def test_filter_summary_shows_any_member_and_any_genre_by_default(self) -> None:
+        interaction = await self._open_customize_screen()
+
+        message = interaction.response.sent_message
+        self.assertIn("Current Filters", message)
+        self.assertIn("Member: Any Member", message)
+        self.assertIn("Genre: Any Genre", message)
+
+    async def test_filter_summary_shows_the_active_member(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [self._kc_member()]
+
+        select_interaction = self._interaction()
+        await member_select.callback(interaction=select_interaction)
+
+        self.assertIn("Member: KC", select_interaction.response.edited_content)
+        self.assertIn("Genre: Any Genre", select_interaction.response.edited_content)
+
+    async def test_filter_summary_reverts_to_any_member_once_cleared(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [self._kc_member()]
+        await member_select.callback(interaction=self._interaction())
+
+        member_select._values = []
+        clear_interaction = self._interaction()
+        await member_select.callback(interaction=clear_interaction)
+
+        self.assertIn("Member: Any Member", clear_interaction.response.edited_content)
+
+    async def test_filter_summary_shows_both_active_filters_together(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        member_select = self._member_select(overrides_view)
+        member_select._values = [self._kc_member()]
+        await member_select.callback(interaction=self._interaction())
+        genre_select = self._genre_select(overrides_view)
+        genre_select._values = ["Comedy"]
+
+        genre_interaction = self._interaction()
+        await genre_select.callback(interaction=genre_interaction)
+
+        self.assertIn("Member: KC", genre_interaction.response.edited_content)
+        self.assertIn("Genre: Comedy", genre_interaction.response.edited_content)
 
 
 if __name__ == "__main__":

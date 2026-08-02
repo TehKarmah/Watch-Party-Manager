@@ -21,6 +21,27 @@ async def _noop(*args, **kwargs):
     return None
 
 
+class FakeResultResponse:
+    def __init__(self) -> None:
+        self.sent_message = None
+        self.sent_ephemeral = None
+
+    async def send_message(self, content, ephemeral=False) -> None:
+        self.sent_message = content
+        self.sent_ephemeral = ephemeral
+
+
+class FakeUser:
+    def __init__(self, user_id: int) -> None:
+        self.id = user_id
+
+
+class FakeResultInteraction:
+    def __init__(self, user_id: int) -> None:
+        self.user = FakeUser(user_id)
+        self.response = FakeResultResponse()
+
+
 class RandomWatchInitialViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_has_pick_random_and_add_filters_buttons(self) -> None:
         view = RandomWatchInitialView(_noop, _noop)
@@ -226,6 +247,34 @@ class RandomWatchResultViewTests(unittest.IsolatedAsyncioTestCase):
     def test_row_count_stays_within_discord_limits_with_link_button(self) -> None:
         view = RandomWatchResultView(_noop, _noop, _noop, original_suggestion_url="https://discord.com/channels/1/2/3")
         self.assertLessEqual(len(view.children), 5)
+
+    # --- Public result: requester-only interaction (Section 4/8) -----------------
+
+    async def test_only_the_requester_can_use_the_public_result_buttons(self) -> None:
+        view = RandomWatchResultView(_noop, _noop, _noop, requester_id=42)
+        interaction = FakeResultInteraction(user_id=99)
+
+        allowed = await view.interaction_check(interaction)
+
+        self.assertFalse(allowed)
+        self.assertIn("Only the person who ran this command", interaction.response.sent_message)
+        self.assertTrue(interaction.response.sent_ephemeral)
+
+    async def test_requester_is_allowed_to_use_the_public_result_buttons(self) -> None:
+        view = RandomWatchResultView(_noop, _noop, _noop, requester_id=42)
+        interaction = FakeResultInteraction(user_id=42)
+
+        allowed = await view.interaction_check(interaction)
+
+        self.assertTrue(allowed)
+
+    async def test_no_requester_restriction_when_unset(self) -> None:
+        view = RandomWatchResultView(_noop, _noop, _noop)
+        interaction = FakeResultInteraction(user_id=99)
+
+        allowed = await view.interaction_check(interaction)
+
+        self.assertTrue(allowed)
 
 
 if __name__ == "__main__":

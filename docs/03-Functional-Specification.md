@@ -118,7 +118,7 @@ Any Watch Party member may indicate they won't watch a suggestion using its "I W
 
 While disabled, a suggestion's post never displays the "I Won't Watch" button and no new rejection is ever recorded, but any rejection history recorded while it was previously enabled remains stored for historical purposes. Re-enabling only resumes accepting new rejections going forward -- it never retroactively re-evaluates a suggestion's existing rejection count against the threshold.
 
-Any Watch Party member may also draw a random Watch Item from a collection's Eligible Pool as a discovery aid, without starting a vote. Selection is uniformly random -- it does not use a collection's configured Nominee Selection mode or any other weighting -- and may optionally be narrowed for that one session, to one member's suggestions and/or one genre, without changing the collection's own configuration. Drawing again is always permitted, including an immediate repeat of the same item.
+Any Watch Party member may also draw a random Watch Item from a collection's Eligible Pool as a discovery aid, without starting a vote. Selection is uniformly random -- it does not use a collection's configured Nominee Selection mode or any other weighting -- and may optionally be narrowed for that one session, to one eligible member's suggestions and/or one genre, without changing the collection's own configuration. The collection/filter setup stays private to the member running it, but once a Watch Item is actually chosen, it is shared publicly with the group; drawing again is always permitted, including an immediate repeat of the same item.
 
 ---
 

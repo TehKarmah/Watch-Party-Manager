@@ -174,6 +174,15 @@ class RandomWatchResultView(discord.ui.View):
     collection/filters), Change Filters (same collection), Change
     Collection (back to the picker), and -- only when the chosen item
     has a linkable original post -- View Original Suggestion.
+
+    Unlike the rest of /random_watch's screens, this one is posted
+    publicly in the channel (see bot.py's send_random_watch_session) --
+    so, matching the project's established requester-scoping convention
+    (pagination_view.PaginatedListView, setup_wizard_view.SetupWizardStepView),
+    requester_id restricts Pick Again/Change Filters/Change Collection to
+    whoever ran /random_watch. This is the only enforcement for those
+    buttons -- there is no ephemeral visibility to fall back on once the
+    message is public.
     """
 
     def __init__(
@@ -183,13 +192,23 @@ class RandomWatchResultView(discord.ui.View):
         on_change_collection: OnRandomWatchAction,
         *,
         original_suggestion_url: Optional[str] = None,
+        requester_id: Optional[int] = None,
     ) -> None:
         super().__init__(timeout=RANDOM_WATCH_VIEW_TIMEOUT_SECONDS)
+        self._requester_id = requester_id
         self.add_item(PickAgainButton(on_pick_again))
         self.add_item(ChangeFiltersButton(on_change_filters))
         self.add_item(ChangeCollectionButton(on_change_collection, custom_id="wpm_random_watch_result_change_collection"))
         if original_suggestion_url:
             self.add_item(ViewOriginalSuggestionButton(original_suggestion_url))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self._requester_id is not None and interaction.user.id != self._requester_id:
+            await interaction.response.send_message(
+                "Only the person who ran this command can use these controls.", ephemeral=True
+            )
+            return False
+        return True
 
 
 __all__ = [

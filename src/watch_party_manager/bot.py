@@ -4675,6 +4675,7 @@ class VotingGroup(discord.app_commands.Group):
                             "chooses this round's nominees from that narrowed pool. Clear a selection "
                             "(or leave it untouched) for Any Member / Any Genre."
                         )
+                        paragraphs.append(build_current_filters_summary(filter_state))
                     if status_line:
                         paragraphs.append(status_line)
                     paragraphs.append("Then continue to the rest of this vote's settings (candidate count and duration).")
@@ -4685,9 +4686,14 @@ class VotingGroup(discord.app_commands.Group):
                 ) -> None:
                     role_config = bot.membership_service.get_role_config(member_interaction.guild_id)
                     watch_party_role_id = role_config.role_id if role_config is not None else None
+                    guild_owner_id = (
+                        member_interaction.guild.owner_id if member_interaction.guild is not None else None
+                    )
                     result = validate_member_filter_selection(
                         member,
                         watch_party_role_id=watch_party_role_id,
+                        wash_crew_role_id=bot.wash_crew_role_id,
+                        guild_owner_id=guild_owner_id,
                         eligible_pool=eligible_pool,
                         collection_display_name=collection_display_name,
                     )
@@ -4704,9 +4710,8 @@ class VotingGroup(discord.app_commands.Group):
                     genre_interaction: discord.Interaction, genre: Optional[str]
                 ) -> None:
                     filter_state["genre"] = genre
-                    status_line = f"Genre filter: {genre}." if genre else ""
                     await genre_interaction.response.edit_message(
-                        content=build_overrides_body(status_line), view=overrides_view
+                        content=build_overrides_body(), view=overrides_view
                     )
 
                 default_candidate_selection = (
@@ -9010,20 +9015,24 @@ async def handle_database_health(interaction: discord.Interaction, bot: "WatchPa
 # pool. No existing eligibility or filtering logic is duplicated.
 
 
-def build_random_watch_filter_status_line(filter_state: dict) -> str:
-    """Describe the currently active filters, or their absence, for the
-    Add Filters screen -- never says "Any Member"/"Any Genre" (Custom
-    Vote Filters' own convention), just omits an inactive filter.
+def build_current_filters_summary(filter_state: dict) -> str:
+    """Render the shared, scalable "Current Filters" block used by both
+    Custom Vote Filters and /random_watch's Add Filters screen -- one
+    bullet per filter, always shown (Any Member/Any Genre included, not
+    omitted), so the layout naturally grows as future filters (IMDb
+    Rating, MPAA Rating, Actor, etc.) are added: each is just one more
+    bullet line, never a restructuring of this function's shape.
     """
-    member_display = filter_state.get("member_display")
-    genre = filter_state.get("genre")
-    if member_display and genre:
-        return f"Current filters -- Suggestion Source: {member_display} | Genre: {genre}"
-    if member_display:
-        return f"Current filters -- Suggestion Source: {member_display}"
-    if genre:
-        return f"Current filters -- Genre: {genre}"
-    return "Current filters -- none (Any Member, Any Genre)"
+    member_display = filter_state.get("member_display") or "Any Member"
+    genre = filter_state.get("genre") or "Any Genre"
+    return "\n".join(
+        [
+            "**Current Filters**",
+            "",
+            f"• Member: {member_display}",
+            f"• Genre: {genre}",
+        ]
+    )
 
 
 def build_random_watch_filters_body(
@@ -9037,10 +9046,10 @@ def build_random_watch_filters_body(
         "change the collection's or guild's own configuration, and never affect a future "
         "`/random_watch` session.",
         "",
-        build_random_watch_filter_status_line(filter_state),
+        build_current_filters_summary(filter_state),
     ]
     if status_line:
-        lines.append(status_line)
+        lines.extend(["", status_line])
     return "\n".join(lines)
 
 
@@ -9086,6 +9095,15 @@ def build_random_watch_empty_pool_message(
         f'"{collection_display_name}" has no eligible watch items to pick from right now. '
         "Add more suggestions, or choose another collection."
     )
+
+
+def build_random_watch_public_handoff_message(item_title: str) -> str:
+    """Close out the private setup/filter screen once a public result is
+    on its way -- shown in place of the filter controls so nothing stale
+    or reusable is left behind on the ephemeral message (Section 4: the
+    setup UI stays private, only the result itself is posted publicly).
+    """
+    return f'🎲 Picked "{item_title}" -- see the public post below.'
 
 
 def build_random_watch_result_embed(watch_item: WatchItem, *, database_name: str, suggested_by: str) -> discord.Embed:
@@ -9244,7 +9262,7 @@ async def send_random_watch_session(
             filters.append(GenreFilter(genre=filter_state["genre"]))
         return filters
 
-    async def show_filters(filters_interaction: discord.Interaction, *, status_line: str = "") -> None:
+    async def show_filters(filters_interaction: discord.Interaction, *, status_line: str = "", edit: bool = True) -> None:
         body = build_random_watch_filters_body(collection_display_name, filter_state, status_line=status_line)
         view = RandomWatchFilterView(
             on_member_filter_changed,
@@ -9254,16 +9272,26 @@ async def send_random_watch_session(
             genre_filter_options=genre_options,
             member_filter_invalid=filter_state["member_filter_invalid"],
         )
-        await filters_interaction.response.edit_message(content=body, view=view)
+        if edit:
+            await filters_interaction.response.edit_message(content=body, view=view)
+        else:
+            # Reached from the public result's Change Filters -- the
+            # filter UI must stay private, and a public message can never
+            # be edited into an ephemeral one, so this opens a brand-new
+            # ephemeral message instead of touching the public result.
+            await filters_interaction.response.send_message(content=body, view=view, ephemeral=True)
 
     async def on_member_filter_changed(
         member_interaction: discord.Interaction, member: Optional[discord.Member]
     ) -> None:
         role_config = bot.membership_service.get_role_config(member_interaction.guild_id)
         watch_party_role_id = role_config.role_id if role_config is not None else None
+        guild_owner_id = member_interaction.guild.owner_id if member_interaction.guild is not None else None
         result = validate_member_filter_selection(
             member,
             watch_party_role_id=watch_party_role_id,
+            wash_crew_role_id=bot.wash_crew_role_id,
+            guild_owner_id=guild_owner_id,
             eligible_pool=eligible_pool,
             collection_display_name=collection_display_name,
         )
@@ -9277,8 +9305,42 @@ async def send_random_watch_session(
         filter_state["genre"] = genre
         await show_filters(genre_interaction)
 
-    async def do_pick(pick_interaction: discord.Interaction) -> None:
-        if filter_state["member_filter_invalid"]:
+    async def send_empty_pool_screen(interaction_to_answer: discord.Interaction, *, edit: bool) -> None:
+        message = build_random_watch_empty_pool_message(
+            collection_display_name,
+            member_display=filter_state["member_display"],
+            genre=filter_state["genre"],
+        )
+        view = RandomWatchFilterView(
+            on_member_filter_changed,
+            on_genre_filter_changed,
+            do_pick,
+            on_change_collection,
+            genre_filter_options=genre_options,
+            member_filter_invalid=filter_state["member_filter_invalid"],
+        )
+        if edit:
+            await interaction_to_answer.response.edit_message(content=message, view=view)
+        else:
+            await interaction_to_answer.response.send_message(content=message, view=view, ephemeral=True)
+
+    async def perform_pick(pick_interaction: discord.Interaction, *, from_public: bool) -> None:
+        """Draw a random item and show the result.
+
+        from_public=False (Pick Random Item, from the private setup/
+        filter screens): a found item is announced as a brand-new PUBLIC
+        message -- /random_watch's setup stays private, but the actual
+        result is a public event for the whole channel (Section 4). The
+        private message that triggered this is closed out with a short
+        hand-off note rather than left showing stale controls.
+
+        from_public=True (Pick Again, from the already-public result):
+        a found item rerolls in place on that same public message --
+        it's already public, so there is no new message to create. An
+        empty pool always answers privately (ephemeral) to the clicking
+        member only, since there is nothing new to announce publicly.
+        """
+        if not from_public and filter_state["member_filter_invalid"]:
             # Defense in depth: the filtered Pick Random Item button is
             # already disabled while a selection is invalid, but this
             # guard is what actually guarantees an invalid member can
@@ -9290,20 +9352,7 @@ async def send_random_watch_session(
         filtered_pool = apply_nominee_pool_filters(eligible_pool, resolve_filters())
         item = choose_random_watch_item(filtered_pool)
         if item is None:
-            message = build_random_watch_empty_pool_message(
-                collection_display_name,
-                member_display=filter_state["member_display"],
-                genre=filter_state["genre"],
-            )
-            view = RandomWatchFilterView(
-                on_member_filter_changed,
-                on_genre_filter_changed,
-                do_pick,
-                on_change_collection,
-                genre_filter_options=genre_options,
-                member_filter_invalid=filter_state["member_filter_invalid"],
-            )
-            await pick_interaction.response.edit_message(content=message, view=view)
+            await send_empty_pool_screen(pick_interaction, edit=not from_public)
             return
 
         suggested_by = f"<@{item.journey.original_suggester}>" if item.journey.original_suggester else "Unknown"
@@ -9311,18 +9360,37 @@ async def send_random_watch_session(
         original_url = build_suggestion_message_link(item)
         content = build_random_watch_result_header(collection_display_name, filter_state)
         view = RandomWatchResultView(
-            do_pick, on_change_filters, on_change_collection, original_suggestion_url=original_url
+            do_pick_again,
+            on_change_filters_from_public,
+            on_change_collection_from_public,
+            original_suggestion_url=original_url,
+            requester_id=pick_interaction.user.id,
         )
-        await pick_interaction.response.edit_message(content=content, embed=embed, view=view)
+        if from_public:
+            await pick_interaction.response.edit_message(content=content, embed=embed, view=view)
+        else:
+            await pick_interaction.response.edit_message(
+                content=build_random_watch_public_handoff_message(item.title), embed=None, view=None
+            )
+            await pick_interaction.followup.send(content=content, embed=embed, view=view)
 
-    async def on_change_filters(change_filters_interaction: discord.Interaction) -> None:
-        await show_filters(change_filters_interaction)
+    async def do_pick(pick_interaction: discord.Interaction) -> None:
+        await perform_pick(pick_interaction, from_public=False)
+
+    async def do_pick_again(pick_interaction: discord.Interaction) -> None:
+        await perform_pick(pick_interaction, from_public=True)
+
+    async def on_change_filters_from_public(change_filters_interaction: discord.Interaction) -> None:
+        await show_filters(change_filters_interaction, edit=False)
 
     async def on_add_filters(filters_interaction: discord.Interaction) -> None:
         await show_filters(filters_interaction)
 
     async def on_change_collection(change_interaction: discord.Interaction) -> None:
         await show_random_watch_collection_picker(change_interaction, bot, guild_id, edit=True)
+
+    async def on_change_collection_from_public(change_interaction: discord.Interaction) -> None:
+        await show_random_watch_collection_picker(change_interaction, bot, guild_id, edit=False)
 
     body = (
         f'**Random Watch -- "{collection_display_name}"**\n\n'
