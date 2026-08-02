@@ -37,7 +37,6 @@ from watch_party_manager.persistence.suggestion_database_repository import JsonS
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
 from watch_party_manager.filter_menu_view import (
-    ANY_MPAA_RATING_VALUE,
     FILTER_CATEGORY_ACTOR,
     FILTER_CATEGORY_GENRE,
     FILTER_CATEGORY_IMDB_RATING,
@@ -295,9 +294,9 @@ class RandomWatchCommandTestCase(unittest.IsolatedAsyncioTestCase):
     async def _clear_imdb_rating_filter(self, menu_view):
         menu_view.children[0]._values = [FILTER_CATEGORY_IMDB_RATING]
         imdb_edit_view = await self._open_category_edit(menu_view)
-        any_button = next(c for c in imdb_edit_view.children if c.custom_id == "wpm_filter_menu_imdb_rating_any")
+        clear_button = next(c for c in imdb_edit_view.children if c.custom_id == "wpm_filter_menu_imdb_rating_clear")
         interaction = FakeInteraction(user=self._member(1))
-        await any_button.callback(interaction=interaction)
+        await clear_button.callback(interaction=interaction)
         return interaction.response.edited_view
 
     async def _set_mpaa_rating_filter(self, menu_view, rating: str):
@@ -312,10 +311,9 @@ class RandomWatchCommandTestCase(unittest.IsolatedAsyncioTestCase):
     async def _clear_mpaa_rating_filter(self, menu_view):
         menu_view.children[0]._values = [FILTER_CATEGORY_MPAA_RATING]
         mpaa_edit_view = await self._open_category_edit(menu_view)
-        mpaa_select = mpaa_edit_view.children[0]
-        mpaa_select._values = [ANY_MPAA_RATING_VALUE]
+        clear_button = next(c for c in mpaa_edit_view.children if c.custom_id == "wpm_filter_menu_mpaa_rating_clear")
         interaction = FakeInteraction(user=self._member(1))
-        await mpaa_select.callback(interaction=interaction)
+        await clear_button.callback(interaction=interaction)
         return interaction.response.edited_view
 
     async def _search_actor_filter(self, menu_view, query):
@@ -339,9 +337,9 @@ class RandomWatchCommandTestCase(unittest.IsolatedAsyncioTestCase):
     async def _clear_actor_filter(self, menu_view):
         menu_view.children[0]._values = [FILTER_CATEGORY_ACTOR]
         actor_edit_view = await self._open_category_edit(menu_view)
-        any_button = next(c for c in actor_edit_view.children if c.custom_id == "wpm_filter_menu_actor_any")
+        clear_button = next(c for c in actor_edit_view.children if c.custom_id == "wpm_filter_menu_actor_clear")
         interaction = FakeInteraction(user=self._member(1))
-        await any_button.callback(interaction=interaction)
+        await clear_button.callback(interaction=interaction)
         return interaction.response.edited_view
 
 
@@ -1159,7 +1157,7 @@ class ImdbRatingFilterTests(RandomWatchCommandTestCase):
 
         submit_interaction = await self._set_imdb_rating_filter(menu_view, minimum="6.0", maximum="8.0")
 
-        self.assertIn("IMDb Rating: 6.0–8.0", submit_interaction.response.edited_content)
+        self.assertIn("IMDb Rating .... 6.0–8.0", submit_interaction.response.edited_content)
 
 
 # --- Section 7b: MPAA Rating filter --------------------------------------------------------------
@@ -1176,9 +1174,9 @@ class MpaaRatingFilterTests(RandomWatchCommandTestCase):
         mpaa_select = mpaa_edit_view.children[0]
 
         values = {option.value for option in mpaa_select.options}
-        self.assertEqual(values, {ANY_MPAA_RATING_VALUE, "R", "PG-13"})
+        self.assertEqual(values, {"R", "PG-13"})
 
-    async def test_any_mpaa_rating_is_always_the_first_option(self) -> None:
+    async def test_select_allows_clearing_and_offers_a_clear_filter_button(self) -> None:
         database_id = self._create_database("Movies")
         self._add("Alien", database_id, content_rating="R")
         menu_view = await self._reach_filter_menu(database_id)
@@ -1186,7 +1184,9 @@ class MpaaRatingFilterTests(RandomWatchCommandTestCase):
         mpaa_edit_view = await self._open_category_edit(menu_view)
         mpaa_select = mpaa_edit_view.children[0]
 
-        self.assertEqual(mpaa_select.options[0].value, ANY_MPAA_RATING_VALUE)
+        self.assertEqual(mpaa_select.min_values, 0)
+        clear_button = next(c for c in mpaa_edit_view.children if c.custom_id == "wpm_filter_menu_mpaa_rating_clear")
+        self.assertEqual(clear_button.label, "Clear Filter")
 
     async def test_matching_is_case_insensitive(self) -> None:
         database_id = self._create_database("Movies")
@@ -1399,11 +1399,11 @@ class AllFiveFiltersTests(RandomWatchCommandTestCase):
         await add_filters_button.callback(interaction=filters_interaction)
         body = filters_interaction.response.edited_content
 
-        genre_index = body.index("Genre:")
-        imdb_index = body.index("IMDb Rating:")
-        mpaa_index = body.index("MPAA Rating:")
-        actor_index = body.index("Actor:")
-        member_index = body.index("Member:")
+        genre_index = body.index("Genre ")
+        imdb_index = body.index("IMDb Rating ")
+        mpaa_index = body.index("MPAA Rating ")
+        actor_index = body.index("Actor ")
+        member_index = body.index("Member ")
         self.assertTrue(genre_index < imdb_index < mpaa_index < actor_index < member_index)
 
     async def test_all_five_filters_combine_to_a_single_intersection(self) -> None:
@@ -1455,6 +1455,114 @@ class AllFiveFiltersTests(RandomWatchCommandTestCase):
             pick_interaction = FakeInteraction(user=self._member(1))
             await pick_button.callback(interaction=pick_interaction)
             self.assertEqual(pick_interaction.response.edited_embed.title, "Perfect Match")
+
+
+# --- UX polish: Clear Filter, dot-leader summary, renamed labels -----------------------------------
+
+
+class FilterEditorUxConsistencyTests(RandomWatchCommandTestCase):
+    """Reused-by-Custom-Vote-too UX polish pass: every filter editor now
+    offers the exact same "Clear Filter" reset action (replacing five
+    differently-worded resets), and the Current Filters summary is a
+    dot-leader-aligned block instead of a bulleted "Label: value" list.
+    Component-level coverage for every editor lives in
+    test_filter_menu_view.py; this class only confirms the real
+    /random watch command wiring reaches the same, unchanged components.
+    """
+
+    async def test_every_editor_offers_a_consistently_labeled_clear_filter_button(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id)
+        menu_view = await self._reach_filter_menu(database_id)
+
+        for category in (
+            FILTER_CATEGORY_GENRE,
+            FILTER_CATEGORY_IMDB_RATING,
+            FILTER_CATEGORY_MPAA_RATING,
+            FILTER_CATEGORY_ACTOR,
+            FILTER_CATEGORY_MEMBER,
+        ):
+            menu_view.children[0]._values = [category]
+            edit_view = await self._open_category_edit(menu_view)
+            clear_buttons = [c for c in edit_view.children if getattr(c, "label", None) == "Clear Filter"]
+            self.assertEqual(len(clear_buttons), 1, f"expected exactly one Clear Filter button for {category}")
+            self.assertEqual(clear_buttons[0].style, discord.ButtonStyle.secondary)
+            menu_view = await self._reach_filter_menu(database_id)
+
+    async def test_clearing_a_filter_updates_the_summary_immediately_and_returns_to_the_menu(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, genres=("Horror",))
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view = await self._set_genre_filter(menu_view, "Horror")
+
+        menu_view.children[0]._values = [FILTER_CATEGORY_GENRE]
+        genre_edit_view = await self._open_category_edit(menu_view)
+        clear_button = next(c for c in genre_edit_view.children if c.custom_id == "wpm_filter_menu_genre_clear")
+        clear_interaction = FakeInteraction(user=self._member(1))
+        await clear_button.callback(interaction=clear_interaction)
+
+        self.assertIsInstance(clear_interaction.response.edited_view, FilterMenuView)
+        self.assertIn("Genre .......... Any Genre", clear_interaction.response.edited_content)
+
+    async def test_imdb_rating_set_button_uses_the_renamed_label(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, imdb_rating="7.5")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view.children[0]._values = [FILTER_CATEGORY_IMDB_RATING]
+        imdb_edit_view = await self._open_category_edit(menu_view)
+
+        labels = [child.label for child in imdb_edit_view.children]
+        self.assertEqual(labels, ["Set Rating Range", "Clear Filter", "Back to Filters"])
+
+    async def test_actor_search_button_uses_the_renamed_label(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, cast=("Jim Carrey",))
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view.children[0]._values = [FILTER_CATEGORY_ACTOR]
+        actor_edit_view = await self._open_category_edit(menu_view)
+
+        labels = [child.label for child in actor_edit_view.children]
+        self.assertEqual(labels, ["Search Actor", "Clear Filter", "Back to Filters"])
+
+    async def test_mpaa_rating_editor_matches_the_other_editors_shape(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id, content_rating="R")
+        menu_view = await self._reach_filter_menu(database_id)
+        menu_view.children[0]._values = [FILTER_CATEGORY_MPAA_RATING]
+        mpaa_edit_view = await self._open_category_edit(menu_view)
+
+        # Select, Clear Filter, Back -- the same 3-row shape as Genre/Member.
+        self.assertEqual(len(mpaa_edit_view.children), 3)
+        self.assertEqual(mpaa_edit_view.children[1].label, "Clear Filter")
+        self.assertEqual(mpaa_edit_view.children[2].label, "Back to Filters")
+
+    async def test_current_filters_summary_is_dot_leader_aligned_not_bulleted(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id)
+
+        interaction = FakeInteraction(user=self._member(1))
+        await handle_random_watch(interaction, self.bot)
+        initial_view = interaction.response.sent_view
+        add_filters_button = next(c for c in initial_view.children if c.custom_id == "wpm_random_watch_add_filters")
+        filters_interaction = FakeInteraction(user=self._member(1))
+        await add_filters_button.callback(interaction=filters_interaction)
+        body = filters_interaction.response.edited_content
+
+        self.assertIn("Genre .......... Any Genre", body)
+        self.assertNotIn("• Genre", body)
+
+    async def test_result_footer_credits_random_watch_naturally(self) -> None:
+        database_id = self._create_database("Movies")
+        self._add("Alien", database_id)
+        interaction = FakeInteraction(user=self._member(1))
+        await handle_random_watch(interaction, self.bot)
+        pick_button = interaction.response.sent_view.children[0]
+
+        pick_interaction = FakeInteraction(user=self._member(1))
+        await pick_button.callback(interaction=pick_interaction)
+
+        footer_text = pick_interaction.response.edited_embed.footer.text
+        self.assertIn("/random watch", footer_text)
 
 
 # --- UI/session behavior ---------------------------------------------------------------------------

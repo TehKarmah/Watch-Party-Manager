@@ -13,8 +13,20 @@ Genre/IMDb Rating/MPAA Rating/Actor/Member order, Member always last),
 and editing happens on that filter's own small, focused screen (or
 directly in a modal for the two free-text filters -- IMDb Rating and
 Actor), always returning to a refreshed FilterMenuView afterward. This
-also means a future filter is just one more category option and one
+also means a future filter -- or an entirely new consumer, like the
+planned /browse command -- is just one more category option and one
 more small edit screen, never a redesign of this module's shape.
+
+Every editor screen follows the same standardized layout: the filter's
+own picker (a Select/UserSelect, or a button that opens a modal for the
+two free-text filters), a single ClearFilterButton labeled "Clear
+Filter" (replacing what used to be five differently-worded resets --
+"Any Genre"/"Any IMDb Rating"/"Any MPAA Rating"/"Any Actor"/"Any
+Member"), then Back. Clearing always resets only the filter currently
+being edited and returns immediately to a refreshed FilterMenuView,
+whose category select and the shared Current Filters summary
+(bot.py's build_current_filters_summary) both update to show "Any ..."
+for that filter right away.
 
 Like start_vote_view.py/random_watch_view.py, this module has no
 dependency on bot.py: every view/component here only knows how to
@@ -65,7 +77,44 @@ FILTER_CATEGORY_LABELS = {
     FILTER_CATEGORY_MEMBER: "Member",
 }
 
-ANY_MPAA_RATING_VALUE = "__any_mpaa_rating__"
+# How much breathing room the dot leader gets past the longest category
+# label ("IMDb Rating"/"MPAA Rating", both 11 characters) -- chosen so a
+# short label like "Genre" still gets a visually substantial leader
+# rather than just one or two dots.
+_CURRENT_FILTERS_LABEL_PADDING = 5
+
+
+def format_current_filters_block(current_values: dict, *, header: str = "Current Filters") -> str:
+    """Render a Discord-friendly, dot-leader-aligned summary of each
+    filter category's current value, always in FILTER_CATEGORY_ORDER --
+    e.g.:
+
+        **Current Filters**
+
+        Genre .......... Sci-Fi
+        IMDb Rating .... 7.0+
+        MPAA Rating .... Any MPAA Rating
+        Actor .......... Any Actor
+        Member ......... KC
+
+    `current_values` maps each FILTER_CATEGORY_* constant to its current
+    display value (an inactive filter's own "Any ..." wording, never
+    omitted) -- see bot.py's build_filter_category_current_values, the
+    one place that dict is actually built from a filter_state. This
+    function only knows how to lay values out, not where they come
+    from, so it's reusable as-is by any future consumer of this shared
+    filter menu (e.g. the planned /browse command) without any changes
+    here.
+    """
+    label_width = max(len(FILTER_CATEGORY_LABELS[category]) for category in FILTER_CATEGORY_ORDER)
+    leader_width = label_width + _CURRENT_FILTERS_LABEL_PADDING
+    lines = [f"**{header}**", ""]
+    for category in FILTER_CATEGORY_ORDER:
+        label = FILTER_CATEGORY_LABELS[category]
+        value = current_values.get(category) or "Any"
+        dots = "." * max(leader_width - len(label) - 1, 3)
+        lines.append(f"{label} {dots} {value}")
+    return "\n".join(lines)
 
 
 class FilterCategorySelectComponent(discord.ui.Select):
@@ -106,6 +155,26 @@ class FilterMenuActionButton(discord.ui.Button):
         disabled: bool = False,
     ) -> None:
         super().__init__(label=label, style=style, custom_id=custom_id, disabled=disabled)
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class ClearFilterButton(discord.ui.Button):
+    """The one, consistently-worded reset action every filter editor
+    offers -- "Clear Filter", always styled and labeled identically,
+    replacing what used to be five differently-worded reset affordances
+    ("Any Genre"/"Any IMDb Rating"/"Any MPAA Rating"/"Any Actor"/
+    "Any Member") across the five editors. Clears only the filter
+    currently being edited and returns immediately to the refreshed
+    FilterMenuView -- on_click is each editor's own on_change callback
+    invoked with None, so clearing here behaves identically to a native
+    Select "clear selection" gesture where one is also available.
+    """
+
+    def __init__(self, on_click: OnFilterAction, *, custom_id: str) -> None:
+        super().__init__(label="Clear Filter", style=discord.ButtonStyle.secondary, custom_id=custom_id)
         self._on_click = on_click
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -163,16 +232,15 @@ class BackToFilterMenuButton(discord.ui.Button):
 
 
 class GenreEditSelectComponent(discord.ui.Select):
-    """min_values=0 so Discord's own "clear this selection" affordance is
-    how a member returns to Any Genre -- no separate button is needed.
+    """min_values=0 so Discord's own "clear this selection" affordance
+    also works, but every editor's primary, always-visible reset path is
+    now the standalone Clear Filter button on GenreEditView below.
     """
 
     def __init__(
         self, on_change: OnGenreChanged, *, options: List[discord.SelectOption], custom_id: str = "wpm_filter_menu_genre"
     ) -> None:
-        super().__init__(
-            placeholder="Genre: Any Genre (optional)", min_values=0, max_values=1, options=options, custom_id=custom_id
-        )
+        super().__init__(placeholder="Change Genre...", min_values=0, max_values=1, options=options, custom_id=custom_id)
         self._on_change = on_change
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -180,19 +248,29 @@ class GenreEditSelectComponent(discord.ui.Select):
 
 
 class GenreEditView(discord.ui.View):
+    """The standardized editor shape every filter now shares: the
+    filter's own picker control, a Clear Filter button, then Back.
+    """
+
     def __init__(
-        self, on_change: OnGenreChanged, on_back: OnFilterAction, *, options: List[discord.SelectOption]
+        self,
+        on_change: OnGenreChanged,
+        on_back: OnFilterAction,
+        *,
+        options: List[discord.SelectOption],
+        clear_custom_id: str = "wpm_filter_menu_genre_clear",
     ) -> None:
         super().__init__(timeout=FILTER_MENU_VIEW_TIMEOUT_SECONDS)
         self.add_item(GenreEditSelectComponent(on_change, options=options))
+        self.add_item(ClearFilterButton(lambda interaction: on_change(interaction, None), custom_id=clear_custom_id))
         self.add_item(BackToFilterMenuButton(on_back))
 
 
 class MpaaRatingEditSelectComponent(discord.ui.Select):
-    """Section 7: Any MPAA Rating is always the first, explicit option --
-    unlike Genre/Member, this select always has exactly one value
-    selected (min_values=1); "Any" is a real option, not a native-clear
-    affordance.
+    """min_values=0, matching Genre/Member's own select shape -- MPAA
+    Rating no longer carries its own inline "Any MPAA Rating" option;
+    resetting it now goes through the same standalone Clear Filter
+    button every other editor uses (see MpaaRatingEditView below).
     """
 
     def __init__(
@@ -202,37 +280,8 @@ class MpaaRatingEditSelectComponent(discord.ui.Select):
         options: List[discord.SelectOption],
         custom_id: str = "wpm_filter_menu_mpaa_rating",
     ) -> None:
-        all_options = [discord.SelectOption(label="Any MPAA Rating", value=ANY_MPAA_RATING_VALUE)] + list(options)
         super().__init__(
-            placeholder="Choose an MPAA rating...", min_values=1, max_values=1, options=all_options, custom_id=custom_id
-        )
-        self._on_change = on_change
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0]
-        await self._on_change(interaction, None if selected == ANY_MPAA_RATING_VALUE else selected)
-
-
-class MpaaRatingEditView(discord.ui.View):
-    def __init__(
-        self, on_change: OnMpaaRatingChanged, on_back: OnFilterAction, *, options: List[discord.SelectOption]
-    ) -> None:
-        super().__init__(timeout=FILTER_MENU_VIEW_TIMEOUT_SECONDS)
-        self.add_item(MpaaRatingEditSelectComponent(on_change, options=options))
-        self.add_item(BackToFilterMenuButton(on_back))
-
-
-class MemberEditSelectComponent(discord.ui.UserSelect):
-    """A discord.ui.UserSelect, not a plain Select, so it never fails on
-    servers with more than 25 members -- Discord resolves member options
-    dynamically rather than needing a fixed option list. min_values=0 so
-    Discord's own "clear this selection" affordance is how a member
-    returns to Any Member.
-    """
-
-    def __init__(self, on_change: OnMemberChanged, *, custom_id: str = "wpm_filter_menu_member") -> None:
-        super().__init__(
-            placeholder="Suggestion Source: Any Member (optional)", min_values=0, max_values=1, custom_id=custom_id
+            placeholder="Choose MPAA Rating...", min_values=0, max_values=1, options=options, custom_id=custom_id
         )
         self._on_change = on_change
 
@@ -240,30 +289,72 @@ class MemberEditSelectComponent(discord.ui.UserSelect):
         await self._on_change(interaction, self.values[0] if self.values else None)
 
 
+class MpaaRatingEditView(discord.ui.View):
+    def __init__(
+        self,
+        on_change: OnMpaaRatingChanged,
+        on_back: OnFilterAction,
+        *,
+        options: List[discord.SelectOption],
+        clear_custom_id: str = "wpm_filter_menu_mpaa_rating_clear",
+    ) -> None:
+        super().__init__(timeout=FILTER_MENU_VIEW_TIMEOUT_SECONDS)
+        self.add_item(MpaaRatingEditSelectComponent(on_change, options=options))
+        self.add_item(ClearFilterButton(lambda interaction: on_change(interaction, None), custom_id=clear_custom_id))
+        self.add_item(BackToFilterMenuButton(on_back))
+
+
+class MemberEditSelectComponent(discord.ui.UserSelect):
+    """A discord.ui.UserSelect, not a plain Select, so it never fails on
+    servers with more than 25 members -- Discord resolves member options
+    dynamically rather than needing a fixed option list. min_values=0 so
+    Discord's own "clear this selection" affordance also works, on top
+    of MemberEditView's own standalone Clear Filter button.
+    """
+
+    def __init__(self, on_change: OnMemberChanged, *, custom_id: str = "wpm_filter_menu_member") -> None:
+        super().__init__(placeholder="Choose Member...", min_values=0, max_values=1, custom_id=custom_id)
+        self._on_change = on_change
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_change(interaction, self.values[0] if self.values else None)
+
+
 class MemberEditView(discord.ui.View):
-    def __init__(self, on_change: OnMemberChanged, on_back: OnFilterAction) -> None:
+    def __init__(
+        self,
+        on_change: OnMemberChanged,
+        on_back: OnFilterAction,
+        *,
+        clear_custom_id: str = "wpm_filter_menu_member_clear",
+    ) -> None:
         super().__init__(timeout=FILTER_MENU_VIEW_TIMEOUT_SECONDS)
         self.add_item(MemberEditSelectComponent(on_change))
+        self.add_item(ClearFilterButton(lambda interaction: on_change(interaction, None), custom_id=clear_custom_id))
         self.add_item(BackToFilterMenuButton(on_back))
 
 
 class ImdbRatingEditView(discord.ui.View):
-    """Section 6: a modal collects the actual minimum/maximum (Discord
-    selects can't do free-text numeric ranges); "Any IMDb Rating" is its
-    own explicit, separately clickable reset action rather than only a
-    blank-modal-submission convention.
+    """A modal collects the actual minimum/maximum (Discord selects
+    can't do free-text numeric ranges); Clear Filter is its own
+    explicit, separately clickable reset action rather than only a
+    blank-modal-submission convention -- the same standalone-button
+    shape every other editor uses.
     """
 
-    def __init__(self, on_set: OnFilterAction, on_any: OnFilterAction, on_back: OnFilterAction) -> None:
+    def __init__(
+        self,
+        on_set: OnFilterAction,
+        on_clear: OnFilterAction,
+        on_back: OnFilterAction,
+        *,
+        clear_custom_id: str = "wpm_filter_menu_imdb_rating_clear",
+    ) -> None:
         super().__init__(timeout=FILTER_MENU_VIEW_TIMEOUT_SECONDS)
         self.add_item(
-            FilterMenuActionButton(
-                on_set, label="Set Minimum/Maximum...", custom_id="wpm_filter_menu_imdb_rating_set"
-            )
+            FilterMenuActionButton(on_set, label="Set Rating Range", custom_id="wpm_filter_menu_imdb_rating_set")
         )
-        self.add_item(
-            FilterMenuActionButton(on_any, label="Any IMDb Rating", custom_id="wpm_filter_menu_imdb_rating_any")
-        )
+        self.add_item(ClearFilterButton(on_clear, custom_id=clear_custom_id))
         self.add_item(BackToFilterMenuButton(on_back))
 
 
@@ -278,13 +369,13 @@ class ImdbRatingModal(discord.ui.Modal):
         super().__init__(title="Set IMDb Rating")
         self._submit_callback = on_submit
         self.minimum_input = discord.ui.TextInput(
-            label="Minimum rating (0.0-10.0)",
+            label="Minimum IMDb Rating (0.0-10.0)",
             required=False,
             default=default_minimum or None,
             placeholder="e.g. 7.0 -- leave blank for no minimum",
         )
         self.maximum_input = discord.ui.TextInput(
-            label="Maximum rating (0.0-10.0)",
+            label="Maximum IMDb Rating (0.0-10.0)",
             required=False,
             default=default_maximum or None,
             placeholder="e.g. 8.5 -- leave blank for no maximum",
@@ -297,24 +388,31 @@ class ImdbRatingModal(discord.ui.Modal):
 
 
 class ActorEditView(discord.ui.View):
-    """Section 8: a modal collects the free-text actor search (Discord
-    selects can't do free-text entry); "Any Actor" is its own explicit,
+    """A modal collects the free-text actor search (Discord selects
+    can't do free-text entry); Clear Filter is its own explicit,
     separately clickable reset action, matching ImdbRatingEditView's
-    same shape.
+    same standalone-button shape.
     """
 
-    def __init__(self, on_search: OnFilterAction, on_any: OnFilterAction, on_back: OnFilterAction) -> None:
+    def __init__(
+        self,
+        on_search: OnFilterAction,
+        on_clear: OnFilterAction,
+        on_back: OnFilterAction,
+        *,
+        clear_custom_id: str = "wpm_filter_menu_actor_clear",
+    ) -> None:
         super().__init__(timeout=FILTER_MENU_VIEW_TIMEOUT_SECONDS)
         self.add_item(
-            FilterMenuActionButton(on_search, label="Search for an Actor...", custom_id="wpm_filter_menu_actor_search")
+            FilterMenuActionButton(on_search, label="Search Actor", custom_id="wpm_filter_menu_actor_search")
         )
-        self.add_item(FilterMenuActionButton(on_any, label="Any Actor", custom_id="wpm_filter_menu_actor_any"))
+        self.add_item(ClearFilterButton(on_clear, custom_id=clear_custom_id))
         self.add_item(BackToFilterMenuButton(on_back))
 
 
 class ActorSearchModal(discord.ui.Modal):
     def __init__(self, on_submit: OnActorSearchSubmitted) -> None:
-        super().__init__(title="Search for an Actor")
+        super().__init__(title="Search Actor")
         self._submit_callback = on_submit
         self.query_input = discord.ui.TextInput(
             label="Actor name (part or all)",
@@ -368,10 +466,11 @@ __all__ = [
     "FILTER_CATEGORY_MEMBER",
     "FILTER_CATEGORY_ORDER",
     "FILTER_CATEGORY_LABELS",
-    "ANY_MPAA_RATING_VALUE",
+    "format_current_filters_block",
     "FilterCategorySelectComponent",
     "FilterMenuView",
     "BackToFilterMenuButton",
+    "ClearFilterButton",
     "GenreEditSelectComponent",
     "GenreEditView",
     "MpaaRatingEditSelectComponent",

@@ -2044,8 +2044,8 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
 
         message = interaction.response.sent_message
         self.assertIn("Current Filters", message)
-        self.assertIn("Member: Any Member", message)
-        self.assertIn("Genre: Any Genre", message)
+        self.assertIn("Member ......... Any Member", message)
+        self.assertIn("Genre .......... Any Genre", message)
 
     async def test_filter_summary_shows_the_active_member(self) -> None:
         interaction = await self._open_customize_screen()
@@ -2056,8 +2056,8 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         back_interaction = self._interaction()
         await self._back_to_menu_button(select_interaction.response.edited_view).callback(interaction=back_interaction)
 
-        self.assertIn("Member: KC", back_interaction.response.edited_content)
-        self.assertIn("Genre: Any Genre", back_interaction.response.edited_content)
+        self.assertIn("Member ......... KC", back_interaction.response.edited_content)
+        self.assertIn("Genre .......... Any Genre", back_interaction.response.edited_content)
 
     async def test_filter_summary_reverts_to_any_member_once_cleared(self) -> None:
         interaction = await self._open_customize_screen()
@@ -2069,7 +2069,7 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         back_interaction = self._interaction()
         await self._back_to_menu_button(clear_interaction.response.edited_view).callback(interaction=back_interaction)
 
-        self.assertIn("Member: Any Member", back_interaction.response.edited_content)
+        self.assertIn("Member ......... Any Member", back_interaction.response.edited_content)
 
     async def test_filter_summary_shows_both_active_filters_together(self) -> None:
         interaction = await self._open_customize_screen()
@@ -2082,8 +2082,8 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         genre_interaction = self._interaction()
         await self._genre_select(genre_edit_view).callback(interaction=genre_interaction)
 
-        self.assertIn("Member: KC", genre_interaction.response.edited_content)
-        self.assertIn("Genre: Comedy", genre_interaction.response.edited_content)
+        self.assertIn("Member ......... KC", genre_interaction.response.edited_content)
+        self.assertIn("Genre .......... Comedy", genre_interaction.response.edited_content)
 
 
 if __name__ == "__main__":

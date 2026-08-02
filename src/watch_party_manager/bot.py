@@ -185,6 +185,7 @@ from watch_party_manager.filter_menu_view import (
     ImdbRatingModal,
     MemberEditView,
     MpaaRatingEditView,
+    format_current_filters_block,
 )
 from watch_party_manager.services.collection_eligibility_service import (
     CollectionEligibility,
@@ -208,7 +209,6 @@ from watch_party_manager.services.setup_wizard_service import (
     SetupWizardService,
 )
 from watch_party_manager.services.discord_ui_limits import (
-    SELECT_MAX_OPTIONS,
     build_safe_select_option,
     cap_select_options,
     find_oversized_view_component_fields,
@@ -1556,11 +1556,13 @@ def build_mpaa_rating_filter_select_options(pool: List[WatchItem]) -> List[disco
     eligible pool -- one option per rating actually represented, each
     showing its own eligible-suggestion count, built through
     build_safe_select_option/cap_select_options exactly like Genre's own
-    options (see build_genre_filter_select_options). "Any MPAA Rating"
-    is added separately by MpaaRatingEditSelectComponent itself, not
-    here -- this only ever returns the actually-represented ratings,
-    capped one below Discord's 25-option hard limit so that prepended
-    "Any MPAA Rating" option never pushes the select over it.
+    options (see build_genre_filter_select_options). This select is
+    min_values=0 (Section 6 UX polish, matching Genre/Member's own
+    shape) with resetting handled entirely by MpaaRatingEditView's
+    standalone Clear Filter button, so -- unlike the previous design,
+    which prepended an inline "Any MPAA Rating" option and had to cap
+    one short of Discord's 25-option limit to leave it room -- this can
+    now return the full 25.
     """
     counts = mpaa_rating_eligibility_counts(pool)
     ordered_ratings = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0].lower()))
@@ -1570,7 +1572,7 @@ def build_mpaa_rating_filter_select_options(pool: List[WatchItem]) -> List[disco
         )
         for rating, count in ordered_ratings
     ]
-    return cap_select_options(options, max_options=SELECT_MAX_OPTIONS - 1)
+    return cap_select_options(options)
 
 
 def build_actor_match_select_options(matches: List[tuple[str, int]]) -> List[discord.SelectOption]:
@@ -1599,24 +1601,27 @@ def describe_imdb_rating_filter_state(filter_state: dict) -> str:
 
 def build_current_filters_summary(filter_state: dict) -> str:
     """Render the shared, scalable "Current Filters" block used by both
-    Custom Vote Filters and /random watch's Add Filters screen -- one
-    bullet per filter, in the fixed Genre/IMDb Rating/MPAA Rating/Actor/
-    Member order (Section 2/12), always shown (an inactive filter's
-    "Any ..." value is never omitted), so the layout naturally grows as
-    future filters are added: each is just one more bullet line, never
-    a restructuring of this function's shape.
+    Custom Vote Filters and /random watch's Add Filters screen -- a
+    dot-leader-aligned line per filter, in the fixed Genre/IMDb Rating/
+    MPAA Rating/Actor/Member order (Section 2/12), always shown (an
+    inactive filter's "Any ..." value is never omitted), e.g.:
+
+        **Current Filters**
+
+        Genre .......... Sci-Fi
+        IMDb Rating .... 7.0+
+        MPAA Rating .... Any MPAA Rating
+        Actor .......... Any Actor
+        Member ......... KC
+
+    The actual layout lives in filter_menu_view.format_current_filters_block
+    (reusable as-is by any future consumer of the shared filter menu,
+    e.g. /browse) -- this function's only job is supplying the current
+    per-category values, via the same build_filter_category_current_values
+    both this and FilterCategorySelectComponent's own option labels read
+    from, so the two can never drift out of sync.
     """
-    return "\n".join(
-        [
-            "**Current Filters**",
-            "",
-            f"• Genre: {filter_state.get('genre') or 'Any Genre'}",
-            f"• IMDb Rating: {describe_imdb_rating_filter_state(filter_state)}",
-            f"• MPAA Rating: {filter_state.get('mpaa_rating') or 'Any MPAA Rating'}",
-            f"• Actor: {filter_state.get('actor') or 'Any Actor'}",
-            f"• Member: {filter_state.get('member_display') or 'Any Member'}",
-        ]
-    )
+    return format_current_filters_block(build_filter_category_current_values(filter_state))
 
 
 def build_filter_category_current_values(filter_state: dict) -> dict:
@@ -1782,7 +1787,7 @@ def create_filter_menu_session(
         await show_member_edit(member_interaction, status_line=result.status_line)
 
     async def show_imdb_rating_edit(interaction: discord.Interaction) -> None:
-        view = ImdbRatingEditView(on_imdb_rating_set_clicked, on_imdb_rating_any_clicked, on_back_to_menu)
+        view = ImdbRatingEditView(on_imdb_rating_set_clicked, on_imdb_rating_cleared, on_back_to_menu)
         await interaction.response.edit_message(content=body_header, view=view)
 
     async def on_imdb_rating_set_clicked(interaction: discord.Interaction) -> None:
@@ -1802,21 +1807,21 @@ def create_filter_menu_session(
         try:
             minimum, maximum = parse_imdb_rating_bounds(minimum_text, maximum_text)
         except ValueError as exc:
-            view = ImdbRatingEditView(on_imdb_rating_set_clicked, on_imdb_rating_any_clicked, on_back_to_menu)
+            view = ImdbRatingEditView(on_imdb_rating_set_clicked, on_imdb_rating_cleared, on_back_to_menu)
             await modal_interaction.response.edit_message(content=f"{body_header}\n\n⚠️ {exc}", view=view)
             return
         filter_state["imdb_rating_min"] = minimum
         filter_state["imdb_rating_max"] = maximum
         await show_menu(modal_interaction)
 
-    async def on_imdb_rating_any_clicked(interaction: discord.Interaction) -> None:
+    async def on_imdb_rating_cleared(interaction: discord.Interaction) -> None:
         filter_state["imdb_rating_min"] = None
         filter_state["imdb_rating_max"] = None
         await show_menu(interaction)
 
     async def show_actor_edit(interaction: discord.Interaction, *, status_line: str = "") -> None:
         content = f"{body_header}\n\n{status_line}" if status_line else body_header
-        view = ActorEditView(on_actor_search_clicked, on_actor_any_clicked, on_back_to_menu)
+        view = ActorEditView(on_actor_search_clicked, on_actor_cleared, on_back_to_menu)
         await interaction.response.edit_message(content=content, view=view)
 
     async def on_actor_search_clicked(interaction: discord.Interaction) -> None:
@@ -1852,7 +1857,7 @@ def create_filter_menu_session(
         filter_state["actor"] = actor
         await show_menu(interaction)
 
-    async def on_actor_any_clicked(interaction: discord.Interaction) -> None:
+    async def on_actor_cleared(interaction: discord.Interaction) -> None:
         filter_state["actor"] = None
         await show_menu(interaction)
 
@@ -9569,7 +9574,7 @@ def build_random_watch_result_embed(watch_item: WatchItem, *, database_name: str
     embed.add_field(name="Reference", value=watch_item.reference, inline=True)
     if watch_item.poster_url:
         embed.set_thumbnail(url=watch_item.poster_url)
-    embed.set_footer(text="Selected randomly by /random watch")
+    embed.set_footer(text="🎲 Picked at random with /random watch")
     return embed
 
 
