@@ -16,9 +16,9 @@
 
 ## 1. Current Administrative Model
 
-WASH uses two configured Discord roles: **WASH Crew** for restricted administrative operations, and **Watch Party member** for participant commands (WASH Crew automatically inherit member permissions). Both can be set via `WASH_CREW_ROLE_ID`/`WATCH_PARTY_MEMBER_ROLE_ID` in `.env`, or interactively through the guided `/setup` wizard.
+WASH uses two configured Discord roles: 🛠️ **WASH Crew** for restricted administrative operations, and 🍿 **Watch Party** member for participant commands (WASH Crew automatically inherit member permissions). Both can be set via `WASH_CREW_ROLE_ID`/`WATCH_PARTY_MEMBER_ROLE_ID` in `.env`, or interactively through the guided `/setup` wizard.
 
-Restricted commands fail closed. When a required role isn't configured, no user can run the commands that depend on it -- including server administrators, unless they also happen to hold the configured role.
+Restricted commands fail closed. When a required role isn't configured, no user can run the commands that depend on it -- including server administrators, unless they also happen to hold the configured role. The one exception is the Discord server owner, who always has Watch Party member-level access (adding suggestions, browsing, voting, Random Watch, and every other participant command) without needing the configured role -- WASH Crew-only commands are unaffected by this and still require the configured WASH Crew role, even for the owner.
 
 For the exact, current, permission-scoped command list, run `/help` in Discord -- it always reflects exactly what the requesting user can do. See the [README](../README.md) for a grouped summary, or [Expanded Help](08-Expanded-Help.md) for the same reference `/help` links to.
 

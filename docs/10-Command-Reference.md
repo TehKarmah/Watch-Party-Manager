@@ -16,8 +16,10 @@ For explanations of WASH concepts (Blind Vote, Nominee Selection, watch item sta
 Required Role reflects WASH's three-tier permission model:
 
 - **Everyone** -- any server member, no configured role required.
-- **Watch Party Member** -- the server's configured Watch Party role (or WASH Crew, which always inherits Watch Party Member capability).
-- **WASH Crew** -- the server's configured WASH Crew role.
+- **Watch Party Member** -- the server's configured 🍿 Watch Party role (or WASH Crew, which always inherits Watch Party Member capability).
+- **WASH Crew** -- the server's configured 🛠️ WASH Crew role.
+
+These are the same two roles the Setup Wizard and `/config` refer to as 🛠️ **WASH Crew** and 🍿 **Watch Party**.
 
 ## General
 

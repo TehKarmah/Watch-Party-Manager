@@ -106,8 +106,8 @@ class HelpRegistryTests(unittest.TestCase):
             [name for name, _ in sections],
             [
                 "General",
-                "WASH Crew: Membership",
                 "WASH Crew: Configuration",
+                "WASH Crew: Membership",
                 "Watch Items",
                 "WASH Crew: Suggestions",
                 "WASH Crew: Voting",

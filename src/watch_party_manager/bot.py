@@ -2632,12 +2632,16 @@ def build_setup_preparation_text() -> str:
     return (
         "**WASH Setup**\n\n"
         "Before you begin, we recommend creating the following Discord roles:\n\n"
-        "**Watch Party**\n"
-        "Members who participate in watch parties and use WASH's member commands "
-        "(`/add`, `/list`, `/stats`, and more).\n\n"
-        "**WASH Crew**\n"
+        "🛠️ **WASH Crew**\n"
         "Administrators who configure and manage WASH.\n\n"
-        "You can create these roles now or later, but having them ready will make setup faster.\n\n"
+        "🍿 **Watch Party**\n"
+        "Members who participate in watch parties and use WASH's member commands "
+        "(`/add`, `/list`, `/stats`, and more). The server owner always has these abilities "
+        "too, regardless of role.\n\n"
+        "You can create these roles now or later, but having them ready will make setup faster -- "
+        "see Discord's own "
+        "[Roles and Permissions guide](https://support.discord.com/hc/articles/214836687-Discord-Roles-and-Permissions) "
+        "if you've never created one.\n\n"
         "Setup can be resumed later using **Save & Finish Later**, and any existing channels or "
         "threads you already have can be reused wherever WASH asks you to choose a destination."
     )
@@ -2779,16 +2783,14 @@ async def send_setup_wizard_step(
 
         view = WashCrewRoleStepView(on_confirm, on_save_for_later, on_cancel, requester_id=requester_id)
         body += (
-            "\n\nSelect the Discord role that should control administrative access to WASH, then press "
-            "**Save & Continue**.\n\n"
+            "\n\nSelect the WASH Crew role, then press **Save & Continue**.\n\n"
             "🛠️ **WASH Crew** can:\n"
             "- Configure WASH\n"
             "- Manage collections\n"
             "- Review suggestions\n"
             "- Start votes\n"
             "- Perform administrative actions\n\n"
-            "Before running this step, create this role in Discord's Server Settings if it doesn't "
-            "already exist -- see Discord's own "
+            "Create this role in Server Settings → Roles if it doesn't exist yet -- see Discord's own "
             "[Roles and Permissions guide](https://support.discord.com/hc/articles/214836687-Discord-Roles-and-Permissions)."
         )
 
@@ -2802,17 +2804,15 @@ async def send_setup_wizard_step(
 
         view = WatchPartyRoleStepView(on_confirm, on_back, on_save_for_later, on_cancel, requester_id=requester_id)
         body += (
-            "\n\nSelect the Watch Party role -- every member who should participate in watch "
-            "parties and use WASH's member commands needs this role; until it's configured, "
-            "only WASH Crew can use them. Then choose the join mode and press Continue.\n\n"
+            "\n\nSelect the Watch Party role, choose a join mode, then press Continue. Until this role "
+            "is configured, only WASH Crew can use WASH's member commands.\n\n"
             "🍿 **Watch Party** members can:\n"
             "- Submit suggestions\n"
             "- Browse collections\n"
             "- Vote\n"
             "- Participate in movie nights\n\n"
-            "(The server owner always has these abilities too, regardless of role.) Before running "
-            "this step, create this role in Discord's Server Settings if it doesn't already exist -- "
-            "see Discord's own "
+            "(The server owner always has these abilities too, regardless of role.) Create this role "
+            "in Server Settings → Roles if it doesn't exist yet -- see Discord's own "
             "[Roles and Permissions guide](https://support.discord.com/hc/articles/214836687-Discord-Roles-and-Permissions)."
         )
 
@@ -4947,7 +4947,7 @@ class MaintenanceGroup(discord.app_commands.Group):
         super().__init__(name="maintenance", description="Back up, restore, import, reset, or repair WASH's data (WASH Crew only).")
         self.bot = bot
 
-    @discord.app_commands.command(name="backup", description="Back up all of WASH's data (WASH Crew only).")
+    @discord.app_commands.command(name="backup", description="Back up all of WASH's data.")
     async def backup(self, interaction: discord.Interaction) -> None:
         message, ephemeral, archive_path, display_filename = perform_backup(
             backup_service=self.bot.backup_service,
@@ -4961,7 +4961,7 @@ class MaintenanceGroup(discord.app_commands.Group):
         file = discord.File(archive_path, filename=display_filename)
         await interaction.response.send_message(message, file=file, ephemeral=ephemeral)
 
-    @discord.app_commands.command(name="restore", description="Restore WASH's data from a backup (WASH Crew only).")
+    @discord.app_commands.command(name="restore", description="Restore WASH's data from a backup.")
     @discord.app_commands.describe(
         backup_filename="An existing local backup's filename (see /maintenance backup's response).",
         backup_file="Upload a backup .zip to restore from instead of selecting a local one.",
@@ -4974,27 +4974,22 @@ class MaintenanceGroup(discord.app_commands.Group):
     ) -> None:
         await handle_restore(interaction, self.bot, backup_filename, backup_file)
 
-    @discord.app_commands.command(name="import", description="Import another WASH instance's backup (WASH Crew only).")
+    @discord.app_commands.command(name="import", description="Import another WASH instance's backup.")
     @discord.app_commands.describe(
         backup_file="Upload a full backup .zip created by another WASH instance's /maintenance backup."
     )
     async def import_(self, interaction: discord.Interaction, backup_file: discord.Attachment) -> None:
         await handle_import(interaction, self.bot, backup_file)
 
-    @discord.app_commands.command(name="reset", description="Erase all of WASH's data and start over (WASH Crew only).")
+    @discord.app_commands.command(name="reset", description="Erase all of WASH's data and start over.")
     async def reset(self, interaction: discord.Interaction) -> None:
         await handle_factory_reset(interaction, self.bot)
 
     @discord.app_commands.command(
-        name="repair", description="Repair suggestions with malformed or legacy data (WASH Crew only)."
+        name="repair", description="Repair suggestions with malformed or legacy data."
     )
     async def repair(self, interaction: discord.Interaction) -> None:
-        message, ephemeral = await perform_repair_suggestions(
-            repair_service=self.bot.suggestion_repair_service,
-            user=interaction.user,
-            wash_crew_role_id=self.bot.wash_crew_role_id,
-        )
-        await interaction.response.send_message(message, ephemeral=ephemeral)
+        await show_repair_confirmation(interaction, self.bot)
 
 
 class SuggestionGroup(discord.app_commands.Group):
@@ -5019,14 +5014,14 @@ class SuggestionGroup(discord.app_commands.Group):
         super().__init__(name="suggestion", description="Edit or remove a suggestion (WASH Crew only).")
         self.bot = bot
 
-    @discord.app_commands.command(name="edit", description="Change a suggestion's status or collection (WASH Crew only).")
+    @discord.app_commands.command(name="edit", description="Change a suggestion's status or collection.")
     @discord.app_commands.describe(
         reference="The suggestion's reference number (e.g. #0007) or its current exact title.",
     )
     async def edit(self, interaction: discord.Interaction, reference: str) -> None:
         await handle_edit_suggestion(interaction, self.bot, reference)
 
-    @discord.app_commands.command(name="remove", description="Archive a suggestion (WASH Crew only).")
+    @discord.app_commands.command(name="remove", description="Archive a suggestion.")
     @discord.app_commands.describe(
         query="A reference number (e.g. #0007), exact title, or title without its year."
     )
@@ -5073,7 +5068,7 @@ class DatabaseGroup(discord.app_commands.Group):
         super().__init__(name="database", description="Manage suggestion collections (WASH Crew only).")
         self.bot = bot
 
-    @discord.app_commands.command(name="add", description="Create a new suggestion collection.")
+    @discord.app_commands.command(name="add", description="Create a new collection.")
     async def add(self, interaction: discord.Interaction) -> None:
         await handle_database_add(interaction, self.bot)
 
@@ -9362,12 +9357,75 @@ def perform_add_suggestion(
     return result.message, False, result.watch_item
 
 
+async def show_repair_confirmation(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
+    """`/maintenance repair`'s confirmation screen (First-Time UX Polish),
+    shown before anything is scanned or changed.
+
+    Permission-gated up front, matching handle_factory_reset's and every
+    other Crew-only confirmation screen's own convention -- an
+    unauthorized member is rejected before ever seeing the confirmation
+    text, not after clicking Start Repair.
+    """
+    if bot.wash_crew_role_id is None:
+        await interaction.response.send_message(
+            "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+            ephemeral=True,
+        )
+        return
+    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        await interaction.response.send_message("You need the WASH Crew role to repair suggestions.", ephemeral=True)
+        return
+
+    async def on_confirm(confirm_interaction: discord.Interaction) -> None:
+        await confirm_interaction.response.edit_message(
+            content="**Repairing suggestions...** This may take a few minutes -- WASH will post a full summary when it's done.",
+            view=None,
+        )
+        message, _ = await perform_repair_suggestions(
+            repair_service=bot.suggestion_repair_service,
+            user=confirm_interaction.user,
+            wash_crew_role_id=bot.wash_crew_role_id,
+            bot=bot,
+        )
+        await confirm_interaction.edit_original_response(content=message)
+
+    async def on_abort(abort_interaction: discord.Interaction) -> None:
+        await abort_interaction.response.edit_message(content="Suggestion repair cancelled. No changes were made.", view=None)
+
+    view = EditVoteConfirmationView(
+        confirm_label="Start Repair", on_confirm=on_confirm, on_abort=on_abort, confirm_style=discord.ButtonStyle.primary
+    )
+    text = (
+        "**Suggestion Repair -- Confirm**\n\n"
+        "Scans every suggestion for malformed or legacy IMDb-link titles and known bad titles, "
+        "repairing what it can and removing what it can't.\n\n"
+        "- This may take several minutes on larger collections, since each malformed suggestion is "
+        "re-resolved against IMDb one at a time.\n"
+        "- IMDb lookups and Discord's own rate limits may both slow progress if many suggestions need repair.\n"
+        "- Existing suggestion posts for repaired suggestions will be located and synchronized to show "
+        "the corrected title.\n"
+        "- WASH continues processing every suggestion even if some individually fail.\n"
+        "- Progress is shown when the repair starts, and a full summary is posted once it finishes."
+    )
+    await interaction.response.send_message(text, view=view, ephemeral=True)
+
+
 async def perform_repair_suggestions(
     repair_service: SuggestionRepairService,
     user: object,
     wash_crew_role_id: Optional[int],
+    bot: Optional["WatchPartyBot"] = None,
 ) -> tuple[str, bool]:
-    """Run the WASH Crew-only suggestion repair workflow."""
+    """Run the WASH Crew-only suggestion repair workflow.
+
+    bot: when supplied (the real `/maintenance repair` command always
+    passes it), each successfully repaired suggestion's existing public
+    post is located and resynced via sync_suggestion_status_embed, so a
+    corrected title/IMDb link never leaves a stale post behind -- the
+    same established mechanism Refresh IMDb Metadata already uses. None
+    (every existing test double) skips post-sync entirely, preserving
+    the exact previous behavior.
+    """
     if wash_crew_role_id is None:
         return (
             "WASH Crew permissions have not been configured. "
@@ -9376,7 +9434,17 @@ async def perform_repair_suggestions(
         )
     if not is_wash_crew_member(user, wash_crew_role_id):
         return "You need the WASH Crew role to repair suggestions.", True
-    report = await repair_service.repair_all()
+
+    post_sync = None
+    if bot is not None:
+
+        async def post_sync(watch_item: WatchItem) -> Optional[bool]:
+            result = await sync_suggestion_status_embed(bot, watch_item)
+            if result is SuggestionPostSyncResult.NO_POST:
+                return None
+            return result is SuggestionPostSyncResult.SYNCED
+
+    report = await repair_service.repair_all(post_sync=post_sync)
     return report.format_message(), True
 
 

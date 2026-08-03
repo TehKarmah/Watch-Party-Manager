@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Awaitable, Callable, Optional
 
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem
 from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService
@@ -10,6 +11,14 @@ from watch_party_manager.services.suggestion_input_service import SuggestionInpu
 from watch_party_manager.services.suggestion_service import SuggestionService
 
 _BAD_TITLES = {"javascript is disabled"}
+
+# Called once per successfully repaired suggestion (never for a removed
+# one -- there's no post left to sync) so bot.py can resync its existing
+# public post, the same optional-callback shape
+# ImdbMetadataRefreshService.refresh_databases() already uses. Returns
+# True/False once actually attempted, or None when the suggestion has no
+# existing post to sync at all.
+OnPostSync = Callable[[WatchItem], Awaitable[Optional[bool]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +28,8 @@ class SuggestionRepairReport:
     removed: int = 0
     failed: int = 0
     unchanged: int = 0
+    posts_updated: int = 0
+    post_sync_failures: int = 0
 
     def format_message(self) -> str:
         return (
@@ -27,7 +38,9 @@ class SuggestionRepairReport:
             f"Repaired: {self.repaired}\n"
             f"Removed: {self.removed}\n"
             f"Failed: {self.failed}\n"
-            f"Unchanged: {self.unchanged}"
+            f"Unchanged: {self.unchanged}\n"
+            f"Suggestion posts updated: {self.posts_updated}\n"
+            f"Suggestion post sync failures: {self.post_sync_failures}"
         )
 
 
@@ -42,8 +55,21 @@ class SuggestionRepairService:
         self._suggestion_service = suggestion_service
         self._input_service = input_service
 
-    async def repair_all(self) -> SuggestionRepairReport:
+    async def repair_all(self, *, post_sync: Optional[OnPostSync] = None) -> SuggestionRepairReport:
+        """Repair every malformed/legacy suggestion across every collection.
+
+        post_sync: First-Time UX Polish (`/maintenance repair` confirmation):
+            when supplied, called once per successfully repaired suggestion
+            (its title/IMDb link already updated in place) so its existing
+            public post -- if it has one -- can be resynced to show the
+            corrected data, the same optional-callback pattern
+            ImdbMetadataRefreshService already uses. None (every existing
+            caller/test) skips post-sync entirely, unchanged from before.
+            Never called for a removed suggestion -- there's no post left
+            to sync.
+        """
         scanned = repaired = removed = failed = unchanged = 0
+        posts_updated = post_sync_failures = 0
 
         for item in list(self._suggestion_service.get_suggestions()):
             scanned += 1
@@ -70,6 +96,12 @@ class SuggestionRepairService:
             )
             if update == "updated":
                 repaired += 1
+                if post_sync is not None:
+                    synced = await post_sync(item)
+                    if synced is True:
+                        posts_updated += 1
+                    elif synced is False:
+                        post_sync_failures += 1
             elif update == "removed_duplicate":
                 removed += 1
             else:
@@ -81,6 +113,8 @@ class SuggestionRepairService:
             removed=removed,
             failed=failed,
             unchanged=unchanged,
+            posts_updated=posts_updated,
+            post_sync_failures=post_sync_failures,
         )
 
     def _repair_source_url(self, item: WatchItem) -> str | None:

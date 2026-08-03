@@ -57,12 +57,6 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         HelpAudience.WATCH_PARTY_MEMBER,
     ),
     CommandHelp(
-        "/membership",
-        "Manage Watch Party membership.",
-        "WASH Crew: Membership",
-        HelpAudience.WASH_CREW,
-    ),
-    CommandHelp(
         "/setup",
         "Run the guided server setup wizard.",
         "WASH Crew: Configuration",
@@ -72,6 +66,12 @@ COMMAND_HELP: tuple[CommandHelp, ...] = (
         "/config",
         "View or change WASH's server configuration.",
         "WASH Crew: Configuration",
+        HelpAudience.WASH_CREW,
+    ),
+    CommandHelp(
+        "/membership",
+        "Manage Watch Party membership.",
+        "WASH Crew: Membership",
         HelpAudience.WASH_CREW,
     ),
     CommandHelp(

@@ -106,6 +106,65 @@ class SuggestionRepairServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Removed: 0", message)
         self.assertIn("Failed: 0", message)
         self.assertIn("Unchanged: 1", message)
+        self.assertIn("Suggestion posts updated: 0", message)
+        self.assertIn("Suggestion post sync failures: 0", message)
+
+    async def test_post_sync_is_never_called_when_not_supplied(self) -> None:
+        # Backward compatibility: every pre-existing caller omits post_sync.
+        self.service.suggest(
+            "https://www.imdb.com/title/tt0076759/", database_id=self.database.database_id
+        )
+        report = await self._repair_service(
+            {"Response": "True", "Title": "Star Wars", "Year": "1977"}
+        ).repair_all()
+        self.assertEqual(report.repaired, 1)
+        self.assertEqual(report.posts_updated, 0)
+        self.assertEqual(report.post_sync_failures, 0)
+
+    async def test_post_sync_is_called_once_per_repaired_suggestion_and_counted(self) -> None:
+        self.service.suggest(
+            "https://www.imdb.com/title/tt0076759/", database_id=self.database.database_id
+        )
+        synced_items = []
+
+        async def post_sync(watch_item):
+            synced_items.append(watch_item.id)
+            return True
+
+        report = await self._repair_service(
+            {"Response": "True", "Title": "Star Wars", "Year": "1977"}
+        ).repair_all(post_sync=post_sync)
+        self.assertEqual(report.repaired, 1)
+        self.assertEqual(report.posts_updated, 1)
+        self.assertEqual(report.post_sync_failures, 0)
+        self.assertEqual(len(synced_items), 1)
+
+    async def test_post_sync_failure_is_counted_separately_from_success(self) -> None:
+        self.service.suggest(
+            "https://www.imdb.com/title/tt0076759/", database_id=self.database.database_id
+        )
+
+        async def post_sync(watch_item):
+            return False
+
+        report = await self._repair_service(
+            {"Response": "True", "Title": "Star Wars", "Year": "1977"}
+        ).repair_all(post_sync=post_sync)
+        self.assertEqual(report.posts_updated, 0)
+        self.assertEqual(report.post_sync_failures, 1)
+
+    async def test_post_sync_is_never_called_for_a_removed_suggestion(self) -> None:
+        self.service.suggest("JavaScript is disabled", database_id=self.database.database_id)
+        calls = []
+
+        async def post_sync(watch_item):
+            calls.append(watch_item.id)
+            return True
+
+        report = await self._repair_service({}).repair_all(post_sync=post_sync)
+        self.assertEqual(report.removed, 1)
+        self.assertEqual(calls, [])
+        self.assertEqual(report.posts_updated, 0)
 
     async def test_changes_are_persisted(self) -> None:
         self.service.suggest(

@@ -16,6 +16,8 @@
 
 ## Before You Begin
 
+WASH is a **Guild Install only** bot -- it joins your Discord server as a member and is configured once, server-wide. It does not support Discord's User Install (a personal, per-account integration); every step below assumes you're adding WASH to a server you administer. The basic sequence is always: **add WASH to your server, run `/setup`, then finish configuration before inviting or announcing WASH to the rest of your members.**
+
 Create WASH's two Discord roles **before** you run the Setup Wizard, so they're ready to select the moment the wizard asks for them:
 
 - 🛠️ **WASH Crew** -- administrators who configure WASH, manage collections, review suggestions, and start votes.
@@ -140,7 +142,7 @@ If you intend to run the automated test suite (see the [Developer Guide](06-Deve
 WASH needs its own Discord Application and Bot User before it can connect to anything.
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and sign in.
-2. Click **New Application**, give it a name (e.g. "WASH"), and create it.
+2. Click **New Application**, give it a name (e.g. "WASH"), and create it. On the **Bot** tab's **About Me** field, a short, consistent description works well, e.g. "WASH is a Discord bot for managing recurring watch parties -- suggestions, voting, and scheduling. Run `/help` to get started, or `/setup` to configure this server." This keeps the bot's own profile in line with `/help` and this guide, so first-time members see the same two commands emphasized everywhere they look.
 3. Open the **Bot** tab and click **Add Bot** if it isn't already a bot.
 4. Under **Privileged Gateway Intents**, leave everything **disabled** for a standard installation. WASH does not need Message Content, and does not require Presence. The **Server Members Intent** is optional -- see the note below.
 5. Click **Reset Token** (or **Copy**, if this is the first time) to get your bot token. Treat this token like a password: never commit it, paste it publicly, or share it.

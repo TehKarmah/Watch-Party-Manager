@@ -2558,7 +2558,7 @@ class WatchPartyRoleWordingTests(SetupCommandTestCase):
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
         self.assertNotIn("(optional)", interaction.response.sent_message)
-        self.assertIn("only WASH Crew can use them", interaction.response.sent_message)
+        self.assertIn("only WASH Crew can use WASH's member commands", interaction.response.sent_message)
 
     async def test_role_select_placeholder_does_not_say_optional(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)

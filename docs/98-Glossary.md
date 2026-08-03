@@ -53,6 +53,18 @@ The complete history of a Watch Item, including suggestion, votes, scheduled eve
 
 ---
 
+### 🛠️ WASH Crew
+
+The configured Discord role for WASH administrators -- configures WASH, manages collections, reviews suggestions, and starts votes. Inherits every 🍿 Watch Party capability automatically. The Discord server owner always has Watch Party-level access without holding either role, but still needs the configured WASH Crew role for WASH Crew-only commands.
+
+---
+
+### 🍿 Watch Party
+
+The configured Discord role for participating members -- submits suggestions, browses collections, votes, and participates in movie nights. See also 🛠️ WASH Crew, which inherits this capability automatically.
+
+---
+
 ### Watch Party Backlot
 
 The functional/admin channel where Watch Party Manager posts status, logs, schedules, and operational information.

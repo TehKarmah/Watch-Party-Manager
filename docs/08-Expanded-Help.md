@@ -68,7 +68,8 @@ The complete definitions are maintained in [Terminology & Concepts](98-Glossary.
 
 - Watch Item
 - Collections (Suggestion Database)
-- WASH Crew
+- 🛠️ WASH Crew
+- 🍿 Watch Party
 - Blind Vote
 - Visible Vote
 - Journey
