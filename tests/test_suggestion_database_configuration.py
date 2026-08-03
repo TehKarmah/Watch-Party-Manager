@@ -249,7 +249,7 @@ class SuggestionRulesConfigTests(unittest.TestCase):
         self.assertTrue(rules.rejection_enabled)
         self.assertEqual(rules.rejection_threshold, 2)
         self.assertTrue(rules.allow_resuggestion)
-        self.assertEqual(rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+        self.assertEqual(rules.candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
     def test_rejection_enabled_can_be_turned_off(self) -> None:
         rules = SuggestionRulesConfig(rejection_enabled=False)
@@ -380,8 +380,8 @@ class NomineeSelectionModeOrderTests(unittest.TestCase):
         self.assertEqual(
             NOMINEE_SELECTION_MODE_ORDER,
             (
-                CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
                 CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
+                CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
                 CandidateSelectionMode.INFINITE_POOL,
             ),
         )

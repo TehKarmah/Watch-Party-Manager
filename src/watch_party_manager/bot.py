@@ -48,6 +48,7 @@ from watch_party_manager.domain.membership_request import MembershipRequest
 from watch_party_manager.domain.suggestion_database import SuggestionDatabase
 from watch_party_manager.domain.suggestion_database_configuration import (
     CANDIDATE_SELECTION_DISPLAY_LABELS,
+    DEFAULT_CANDIDATE_SELECTION_MODE,
     CandidateSelectionMode,
 )
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem, WatchItemStatus
@@ -93,6 +94,7 @@ from watch_party_manager.services.about_service import (
     build_about_content,
 )
 from watch_party_manager.services.backup_service import (
+    BACKUP_SCOPE_EXPLANATION,
     BackupError,
     BackupKind,
     BackupService,
@@ -173,6 +175,7 @@ from watch_party_manager.services.duration_parser import (
     DURATION_FORMAT_EXAMPLES,
     DURATION_FORMAT_HELP_TEXT,
     DURATION_SYNTAX_HELP,
+    VOTE_DURATION_CLARIFICATION,
     parse_duration_to_minutes,
 )
 from watch_party_manager.services.embed_factory import EmbedFactory
@@ -377,6 +380,7 @@ from watch_party_manager.setup_wizard_view import (
 from watch_party_manager.start_vote_view import (
     CustomizeVoteModal,
     CustomizeVoteOverridesView,
+    InsufficientFilteredPoolView,
     StartVoteChoiceView,
 )
 from watch_party_manager.random_watch_view import (
@@ -1341,6 +1345,7 @@ def build_vote_status_text(
     standings: Optional[List[StandingsEntry]],
     standings_error: Optional[str],
     candidates: Optional[List[WatchItem]] = None,
+    guild_round_number: Optional[int] = None,
 ) -> str:
     """Build the /vote_status message for a round.
 
@@ -1365,7 +1370,7 @@ def build_vote_status_text(
         build_vote_link); omitted entirely for legacy rounds that don't.
     """
     lines = [
-        f"Voting round {vote_round.id}",
+        f"Voting round {guild_round_number if guild_round_number is not None else vote_round.id}",
         f"Status: {vote_round.status.value.capitalize()}",
         f"Visibility: {vote_round.visibility.value.capitalize()}",
         f"Candidates: {candidate_count}",
@@ -1642,6 +1647,43 @@ def resolve_active_filters_from_state(filter_state: dict) -> List[NomineePoolFil
         filters.append(
             MemberSuggestionFilter(
                 discord_user_id=filter_state["member_id"], member_display=filter_state["member_display"]
+            )
+        )
+    return filters
+
+
+def build_nominee_pool_filters(
+    *,
+    filter_genre: Optional[str] = None,
+    filter_imdb_rating_min: Optional[float] = None,
+    filter_imdb_rating_max: Optional[float] = None,
+    filter_mpaa_rating: Optional[str] = None,
+    filter_actor: Optional[str] = None,
+    filter_member_discord_user_id: Optional[int] = None,
+    filter_member_display: Optional[str] = None,
+) -> List[NomineePoolFilter]:
+    """Build the active NomineePoolFilter list from individual scalar
+    filter values -- the same shape perform_start_vote/
+    handle_customize_vote_submit already receive their filter_* keyword
+    arguments in. Mirrors resolve_active_filters_from_state's own filter
+    order and construction exactly (that one instead takes a filter
+    session's dict, for the filter menu's own use), so the two can never
+    drift apart on what counts as "active."
+    """
+    filters: List[NomineePoolFilter] = []
+    if filter_genre is not None:
+        filters.append(GenreFilter(genre=filter_genre))
+    if filter_imdb_rating_min is not None or filter_imdb_rating_max is not None:
+        filters.append(ImdbRatingFilter(minimum=filter_imdb_rating_min, maximum=filter_imdb_rating_max))
+    if filter_mpaa_rating is not None:
+        filters.append(MpaaRatingFilter(rating=filter_mpaa_rating))
+    if filter_actor is not None:
+        filters.append(ActorFilter(actor=filter_actor))
+    if filter_member_discord_user_id is not None:
+        filters.append(
+            MemberSuggestionFilter(
+                discord_user_id=filter_member_discord_user_id,
+                member_display=filter_member_display or f"<@{filter_member_discord_user_id}>",
             )
         )
     return filters
@@ -2037,7 +2079,7 @@ def perform_start_vote(
             configured_mode = (
                 database_configuration.suggestion_rules.candidate_selection
                 if database_configuration is not None
-                else CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+                else DEFAULT_CANDIDATE_SELECTION_MODE
             )
             # A Customize This Vote override applies to this round's
             # nominee selection only -- the collection's own configured
@@ -2053,22 +2095,15 @@ def perform_start_vote(
         # exist. Wraps a default InfinitePoolStrategy when no
         # repository-resolved strategy exists yet (e.g. a test caller
         # with no repository configured), so filtering still works.
-        filters: List[NomineePoolFilter] = []
-        if filter_genre is not None:
-            filters.append(GenreFilter(genre=filter_genre))
-        if filter_imdb_rating_min is not None or filter_imdb_rating_max is not None:
-            filters.append(ImdbRatingFilter(minimum=filter_imdb_rating_min, maximum=filter_imdb_rating_max))
-        if filter_mpaa_rating is not None:
-            filters.append(MpaaRatingFilter(rating=filter_mpaa_rating))
-        if filter_actor is not None:
-            filters.append(ActorFilter(actor=filter_actor))
-        if filter_member_discord_user_id is not None:
-            filters.append(
-                MemberSuggestionFilter(
-                    discord_user_id=filter_member_discord_user_id,
-                    member_display=filter_member_display or f"<@{filter_member_discord_user_id}>",
-                )
-            )
+        filters = build_nominee_pool_filters(
+            filter_genre=filter_genre,
+            filter_imdb_rating_min=filter_imdb_rating_min,
+            filter_imdb_rating_max=filter_imdb_rating_max,
+            filter_mpaa_rating=filter_mpaa_rating,
+            filter_actor=filter_actor,
+            filter_member_discord_user_id=filter_member_discord_user_id,
+            filter_member_display=filter_member_display,
+        )
 
         effective_strategy = strategy
         if filters:
@@ -2269,8 +2304,8 @@ def perform_setup_redirect_check(guild_configuration: Optional[GuildConfiguratio
 
 
 SETUP_WIZARD_STEP_TITLES: dict[SetupWizardStep, str] = {
-    SetupWizardStep.WASH_CREW_ROLE: "WASH Crew Role",
-    SetupWizardStep.WATCH_PARTY_ROLE: "Watch Party Role",
+    SetupWizardStep.WASH_CREW_ROLE: "🛠️ WASH Crew Role",
+    SetupWizardStep.WATCH_PARTY_ROLE: "🍿 Watch Party Role",
     SetupWizardStep.ADMIN_CHANNEL: "Admin Channel",
     SetupWizardStep.HOME_CHANNEL: "Home Channel",
     SetupWizardStep.SUGGESTION_DATABASE: "Collections",
@@ -2398,12 +2433,12 @@ def parse_setup_backup_retention_count(value: str) -> int:
 def build_setup_completion_summary(configuration: GuildConfiguration, draft: SetupWizardDraft) -> str:
     """Build the final "setup complete" message, distinguishing skipped items."""
     lines = ["**WASH Setup Complete**", ""]
-    lines.append(f"WASH Crew Role: <@&{configuration.wash_crew_role_id}>")
+    lines.append(f"🛠️ WASH Crew Role: <@&{configuration.wash_crew_role_id}>")
     if configuration.watch_party_role.role_id is not None:
         join_mode_label = JOIN_MODE_DISPLAY_LABELS[configuration.watch_party_role.join_mode]
-        lines.append(f"Watch Party Role: <@&{configuration.watch_party_role.role_id}> (join mode: {join_mode_label})")
+        lines.append(f"🍿 Watch Party Role: <@&{configuration.watch_party_role.role_id}> (join mode: {join_mode_label})")
     else:
-        lines.append("Watch Party Role: Not set")
+        lines.append("🍿 Watch Party Role: Not set")
     if draft.admin_channel_skipped:
         lines.append("Admin Channel: Skipped")
     elif draft.admin_channel_id is not None:
@@ -2418,7 +2453,7 @@ def build_setup_completion_summary(configuration: GuildConfiguration, draft: Set
     candidate_selection_label = (
         CANDIDATE_SELECTION_DISPLAY_LABELS[draft.voting_candidate_selection]
         if draft.voting_candidate_selection is not None
-        else CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.FAVOR_NEW_ADDITIONS]
+        else CANDIDATE_SELECTION_DISPLAY_LABELS[DEFAULT_CANDIDATE_SELECTION_MODE]
     )
     lines.append(
         "Voting Defaults: "
@@ -2728,12 +2763,34 @@ async def send_setup_wizard_step(
 
     if step == SetupWizardStep.WASH_CREW_ROLE:
 
-        async def on_select(select_interaction: discord.Interaction, role_id: int) -> None:
+        async def on_confirm(confirm_interaction: discord.Interaction, role_id: Optional[int]) -> None:
+            if role_id is None:
+                await send_setup_wizard_step(
+                    confirm_interaction,
+                    bot,
+                    state,
+                    edit=True,
+                    error_message="Select a WASH Crew role before continuing.",
+                    requester_id=requester_id,
+                )
+                return
             updated = setup_wizard_service.set_wash_crew_role(state, role_id)
-            await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
+            await send_setup_wizard_step(confirm_interaction, bot, updated, edit=True, requester_id=requester_id)
 
-        view = WashCrewRoleStepView(on_select, on_save_for_later, on_cancel, requester_id=requester_id)
-        body += "\n\nSelect the Discord role that should control administrative access to WASH."
+        view = WashCrewRoleStepView(on_confirm, on_save_for_later, on_cancel, requester_id=requester_id)
+        body += (
+            "\n\nSelect the Discord role that should control administrative access to WASH, then press "
+            "**Save & Continue**.\n\n"
+            "🛠️ **WASH Crew** can:\n"
+            "- Configure WASH\n"
+            "- Manage collections\n"
+            "- Review suggestions\n"
+            "- Start votes\n"
+            "- Perform administrative actions\n\n"
+            "Before running this step, create this role in Discord's Server Settings if it doesn't "
+            "already exist -- see Discord's own "
+            "[Roles and Permissions guide](https://support.discord.com/hc/articles/214836687-Discord-Roles-and-Permissions)."
+        )
 
     elif step == SetupWizardStep.WATCH_PARTY_ROLE:
 
@@ -2746,9 +2803,17 @@ async def send_setup_wizard_step(
         view = WatchPartyRoleStepView(on_confirm, on_back, on_save_for_later, on_cancel, requester_id=requester_id)
         body += (
             "\n\nSelect the Watch Party role -- every member who should participate in watch "
-            "parties and use WASH's member commands (`/add`, `/list`, `/stats`, and more) needs "
-            "this role; until it's configured, only WASH Crew can use them. Then choose the "
-            "join mode and press Continue."
+            "parties and use WASH's member commands needs this role; until it's configured, "
+            "only WASH Crew can use them. Then choose the join mode and press Continue.\n\n"
+            "🍿 **Watch Party** members can:\n"
+            "- Submit suggestions\n"
+            "- Browse collections\n"
+            "- Vote\n"
+            "- Participate in movie nights\n\n"
+            "(The server owner always has these abilities too, regardless of role.) Before running "
+            "this step, create this role in Discord's Server Settings if it doesn't already exist -- "
+            "see Discord's own "
+            "[Roles and Permissions guide](https://support.discord.com/hc/articles/214836687-Discord-Roles-and-Permissions)."
         )
 
     elif step == SetupWizardStep.ADMIN_CHANNEL:
@@ -3153,7 +3218,7 @@ async def send_setup_wizard_step(
         default_candidate_selection = (
             state.draft.voting_candidate_selection
             if state.draft.voting_candidate_selection is not None
-            else CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+            else DEFAULT_CANDIDATE_SELECTION_MODE
         )
         default_visibility = (
             state.draft.voting_visibility
@@ -3210,7 +3275,7 @@ async def send_setup_wizard_step(
         body += (
             "\n\nChoose the server's default nominee selection mode and visibility below -- each option "
             "explains its own behavior when opened -- then press **Set Voting Defaults** to configure the "
-            f"default candidate count and vote duration. {DURATION_FORMAT_HELP_TEXT}"
+            f"default candidate count and vote duration. {VOTE_DURATION_CLARIFICATION} {DURATION_FORMAT_HELP_TEXT}"
         )
 
     elif step == SetupWizardStep.REJECTION_SETTINGS:
@@ -3347,7 +3412,7 @@ async def send_setup_wizard_step(
         body += (
             "\n\nAutomatic backups periodically save a snapshot of WASH's data on the schedule you "
             "configure. Manual `/maintenance backup` always remains available either way, and existing backups are "
-            "never deleted by disabling this."
+            f"never deleted by disabling this. {BACKUP_SCOPE_EXPLANATION}"
         )
 
     else:  # SetupWizardStep.REVIEW
@@ -4254,6 +4319,7 @@ async def send_config_voting_defaults_screen(
         + f"{VISIBILITY_HELP_TEXT_SHORT}\n\n"
         + nominee_selection_line
         + "**Set Voting Defaults** to configure the guild-wide default candidate count and vote duration. "
+        + f"{VOTE_DURATION_CLARIFICATION} "
         + DURATION_FORMAT_HELP_TEXT
     )
     if edit:
@@ -4532,7 +4598,10 @@ async def send_config_backup_defaults_modal(
         )
 
     await interaction.response.edit_message(
-        content="**WASH Configuration -- Backup Defaults**\n\nEnable or disable automatic backups.",
+        content=(
+            "**WASH Configuration -- Backup Defaults**\n\nEnable or disable automatic backups. "
+            f"{BACKUP_SCOPE_EXPLANATION}"
+        ),
         view=ConfigBackupDefaultsChoiceView(on_configure, on_disable, on_back),
     )
 
@@ -5707,12 +5776,18 @@ async def handle_start_vote_completion(
         ),
     )
     collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
+    guild_round_number = (
+        vote_service.get_guild_round_number(vote_round.id, interaction.guild_id)
+        if interaction.guild_id is not None
+        else None
+    )
     post_embed = build_voting_post_embed(
         vote_round,
         candidates,
         standings=None,
         standings_error=None,
         collection_name=collection_name,
+        guild_round_number=guild_round_number,
     )
     await interaction.response.send_message(embed=post_embed, view=view)
     sent_message = await interaction.original_response()
@@ -5789,12 +5864,30 @@ async def handle_customize_vote_submit(
     filter_imdb_rating_max: Optional[float] = None,
     filter_mpaa_rating: Optional[str] = None,
     filter_actor: Optional[str] = None,
+    on_change_filters: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
+    on_change_collection: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
+    on_back_to_overrides: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
 ) -> None:
     """Show Custom Vote Summary & Announcement's pre-creation review
     screen for optional one-time modal overrides; the round itself is
     only created once that screen's Start Vote button is pressed (see
     on_confirm below) -- Filtered-Pool Validation: nothing is persisted
     or announced before this function returns.
+
+    on_change_filters/on_change_collection/on_back_to_overrides: Custom
+    Vote UX Polish: when supplied (only show_customize_vote_overrides
+    supplies them -- every other caller leaves these None, keeping their
+    existing plain-message behavior unchanged), an eager filtered-pool
+    check runs before the Review This Vote screen is ever built. Too few
+    eligible suggestions shows InsufficientFilteredPoolView (Change
+    Filters/Change Collection/Back/Cancel) instead of a dead-end message,
+    with every current setting and filter preserved -- mirroring
+    /browse's own empty-results recovery. perform_start_vote's own
+    authoritative check (called later, from this screen's Start Vote)
+    is unchanged and still runs regardless -- this is purely an earlier,
+    friendlier catch of the exact same condition, the same "resolved
+    purely for display" idiom the duration/nominee-count checks just
+    below already use.
 
     candidate_selection_override: UI Polish (Voting Configuration
     Improvements): the mode chosen on Customize This Vote's own
@@ -5888,6 +5981,46 @@ async def handle_customize_vote_submit(
     effective_duration_minutes = duration_minutes
     effective_candidate_count = nominee_count
 
+    active_filters = build_nominee_pool_filters(
+        filter_genre=filter_genre,
+        filter_imdb_rating_min=filter_imdb_rating_min,
+        filter_imdb_rating_max=filter_imdb_rating_max,
+        filter_mpaa_rating=filter_mpaa_rating,
+        filter_actor=filter_actor,
+        filter_member_discord_user_id=filter_member_discord_user_id,
+        filter_member_display=filter_member_display,
+    )
+    if active_filters and resolved_database_id is not None and on_change_filters is not None:
+        filtered_pool = FilteredCandidateSelectionStrategy(
+            inner=InfinitePoolStrategy(suggestion_source=suggestion_service), filters=active_filters
+        ).candidate_pool(resolved_database_id)
+        if len(filtered_pool) < effective_candidate_count:
+            insufficient_message = build_insufficient_filtered_pool_message(
+                len(filtered_pool),
+                effective_candidate_count,
+                member_display=filter_member_display,
+                genre=filter_genre,
+                imdb_rating_min=filter_imdb_rating_min,
+                imdb_rating_max=filter_imdb_rating_max,
+                mpaa_rating=filter_mpaa_rating,
+                actor=filter_actor,
+            )
+
+            async def on_cancel_insufficient(cancel_interaction: discord.Interaction) -> None:
+                await cancel_interaction.response.edit_message(content="Vote creation cancelled.", view=None)
+
+            await interaction.response.send_message(
+                insufficient_message,
+                view=InsufficientFilteredPoolView(
+                    on_change_filters=on_change_filters,
+                    on_change_collection=on_change_collection or on_cancel_insufficient,
+                    on_back=on_back_to_overrides or on_cancel_insufficient,
+                    on_cancel=on_cancel_insufficient,
+                ),
+                ephemeral=True,
+            )
+            return
+
     effective_candidate_selection_mode = candidate_selection_override
     if (
         effective_candidate_selection_mode is None
@@ -5901,7 +6034,7 @@ async def handle_customize_vote_submit(
         effective_candidate_selection_mode = (
             database_configuration.suggestion_rules.candidate_selection
             if database_configuration is not None
-            else CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+            else DEFAULT_CANDIDATE_SELECTION_MODE
         )
 
     summary_text = build_customize_vote_summary_text(
@@ -6027,31 +6160,14 @@ async def show_customize_vote_overrides(
             reminder_enabled_text: Optional[str],
             reminder_minutes_text: Optional[str],
         ) -> None:
-            await handle_customize_vote_submit(
+            await submit_customize_vote(
                 modal_interaction,
-                vote_service=bot.vote_service,
-                suggestion_service=bot.suggestion_service,
-                nominee_selection_service=bot.nominee_selection_service,
-                wash_crew_role_id=bot.wash_crew_role_id,
-                default_nominee_count=bot.default_nominee_count,
-                nominee_count_text=nominee_count_text,
-                duration_text=duration_text,
-                reminder_enabled_text=reminder_enabled_text,
-                reminder_minutes_text=reminder_minutes_text,
-                scheduler_service=bot.scheduler_host.scheduler_service,
-                guild_configuration_repository=bot.guild_configuration_repository,
-                suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
-                bot=bot,
-                candidate_selection_override=candidate_selection_override,
-                visibility_override=visibility_override,
-                resolved_database_id=database_id,
-                filter_member_discord_user_id=filter_state["member_id"],
-                filter_member_display=filter_state["member_display"],
-                filter_genre=filter_state["genre"],
-                filter_imdb_rating_min=filter_state["imdb_rating_min"],
-                filter_imdb_rating_max=filter_state["imdb_rating_max"],
-                filter_mpaa_rating=filter_state["mpaa_rating"],
-                filter_actor=filter_state["actor"],
+                candidate_selection_override,
+                visibility_override,
+                nominee_count_text,
+                duration_text,
+                reminder_enabled_text,
+                reminder_minutes_text,
             )
 
         modal_defaults = build_customize_vote_modal_defaults(
@@ -6060,6 +6176,102 @@ async def show_customize_vote_overrides(
             guild_configuration_repository=bot.guild_configuration_repository,
         )
         await continue_interaction.response.send_modal(CustomizeVoteModal(on_modal_submit, **modal_defaults))
+
+    async def submit_customize_vote(
+        submit_interaction: discord.Interaction,
+        candidate_selection_override: CandidateSelectionMode,
+        visibility_override: GuildVoteVisibility,
+        nominee_count_text: Optional[str],
+        duration_text: Optional[str],
+        reminder_enabled_text: Optional[str],
+        reminder_minutes_text: Optional[str],
+    ) -> None:
+        await handle_customize_vote_submit(
+            submit_interaction,
+            vote_service=bot.vote_service,
+            suggestion_service=bot.suggestion_service,
+            nominee_selection_service=bot.nominee_selection_service,
+            wash_crew_role_id=bot.wash_crew_role_id,
+            default_nominee_count=bot.default_nominee_count,
+            nominee_count_text=nominee_count_text,
+            duration_text=duration_text,
+            reminder_enabled_text=reminder_enabled_text,
+            reminder_minutes_text=reminder_minutes_text,
+            scheduler_service=bot.scheduler_host.scheduler_service,
+            guild_configuration_repository=bot.guild_configuration_repository,
+            suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
+            bot=bot,
+            candidate_selection_override=candidate_selection_override,
+            visibility_override=visibility_override,
+            resolved_database_id=database_id,
+            filter_member_discord_user_id=filter_state["member_id"],
+            filter_member_display=filter_state["member_display"],
+            filter_genre=filter_state["genre"],
+            filter_imdb_rating_min=filter_state["imdb_rating_min"],
+            filter_imdb_rating_max=filter_state["imdb_rating_max"],
+            filter_mpaa_rating=filter_state["mpaa_rating"],
+            filter_actor=filter_state["actor"],
+            on_change_filters=on_change_filters_from_insufficient,
+            on_change_collection=on_change_collection_from_insufficient,
+            on_back_to_overrides=on_back_to_overrides,
+        )
+
+    async def start_vote_with_current_settings(
+        start_interaction: discord.Interaction,
+        candidate_selection_override: CandidateSelectionMode,
+        visibility_override: GuildVoteVisibility,
+    ) -> None:
+        # Custom Vote UX Polish: skips Vote Settings' modal entirely --
+        # every field blank means "use the configured default", exactly
+        # as an untouched modal submission already would.
+        if filter_state["member_filter_invalid"]:
+            await start_interaction.response.edit_message(
+                content=build_overrides_body(filter_state["member_filter_status_line"]),
+                view=overrides_view,
+            )
+            return
+        await submit_customize_vote(start_interaction, candidate_selection_override, visibility_override, None, None, None, None)
+
+    async def on_change_filters_from_insufficient(action_interaction: discord.Interaction) -> None:
+        await show_filter_menu(action_interaction)
+
+    async def on_change_collection_from_insufficient(action_interaction: discord.Interaction) -> None:
+        # Custom Vote UX Polish: mirrors /browse's own Change Collection --
+        # every other collection in this guild, current filters carried
+        # over (revalidated the same way a fresh session would be, since
+        # show_customize_vote_overrides is simply re-entered for the newly
+        # chosen collection).
+        recovery_guild_id = action_interaction.guild_id
+        databases = (
+            [database for database in bot.suggestion_service.list_databases(recovery_guild_id) if database.active]
+            if recovery_guild_id is not None
+            else []
+        )
+        if not databases:
+            await action_interaction.response.edit_message(content="No other collections are available.", view=None)
+            return
+
+        options = [
+            (
+                database.database_id,
+                format_collection_display(
+                    _resolve_collection_name(
+                        bot.suggestion_service, database, action_interaction.guild, bot.suggestion_database_configuration_repository
+                    )
+                ),
+            )
+            for database in databases
+        ]
+
+        async def on_database_chosen(select_interaction: discord.Interaction, chosen_database_id: int) -> None:
+            await show_customize_vote_overrides(
+                select_interaction, bot, chosen_database_id, initial_filter_state=dict(filter_state)
+            )
+
+        await action_interaction.response.edit_message(
+            content="Which collection would you like to use?",
+            view=ListDatabaseSelectView(options, on_database_chosen),
+        )
 
     def build_overrides_body(status_line: str = "") -> str:
         paragraphs = [
@@ -6076,7 +6288,11 @@ async def show_customize_vote_overrides(
             paragraphs.append(build_current_filters_summary(filter_state))
         if status_line:
             paragraphs.append(status_line)
-        paragraphs.append("Then continue to the rest of this vote's settings (candidate count and duration).")
+        paragraphs.append(
+            "Press **Start Vote** to create this round now, using the configured defaults for candidate "
+            "count and vote duration, or **Continue to Vote Settings** to override either one first. "
+            f"{VOTE_DURATION_CLARIFICATION}"
+        )
         return "\n\n".join(paragraphs)
 
     async def on_filter_menu_continue(menu_interaction: discord.Interaction, _filter_state: dict) -> None:
@@ -6119,7 +6335,7 @@ async def show_customize_vote_overrides(
     default_candidate_selection = (
         resolve_candidate_selection_mode(bot, interaction.guild_id, database_id)
         if database_id is not None
-        else CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+        else DEFAULT_CANDIDATE_SELECTION_MODE
     )
     default_visibility = resolve_customize_vote_default_visibility(interaction.guild_id, bot.guild_configuration_repository)
     overrides_view = CustomizeVoteOverridesView(
@@ -6127,6 +6343,7 @@ async def show_customize_vote_overrides(
         default_candidate_selection=default_candidate_selection,
         default_visibility=default_visibility,
         on_edit_filters=on_edit_filters if database_id is not None else None,
+        on_start_vote=start_vote_with_current_settings,
     )
     await interaction.response.send_message(build_overrides_body(), view=overrides_view, ephemeral=True)
 
@@ -6177,7 +6394,14 @@ def perform_vote_status(
         else suggestion_service.suggestion_count()
     )
     candidates = get_round_candidates(suggestion_service, vote_round)
-    return build_vote_status_text(vote_round, candidate_count, standings, standings_error, candidates)
+    guild_round_number = (
+        vote_service.get_guild_round_number(vote_round.id, vote_round.guild_id)
+        if vote_round.guild_id is not None
+        else None
+    )
+    return build_vote_status_text(
+        vote_round, candidate_count, standings, standings_error, candidates, guild_round_number
+    )
 
 
 async def handle_vote_status(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
@@ -6780,6 +7004,7 @@ def build_voting_post_embed(
     standings: Optional[List[StandingsEntry]],
     standings_error: Optional[str],
     collection_name: Optional[str] = None,
+    guild_round_number: Optional[int] = None,
 ) -> discord.Embed:
     """Build the public voting post's embed for a round (Release Polish
     Batch 2, Priority 5).
@@ -6815,7 +7040,7 @@ def build_voting_post_embed(
         visible round (never for blind, preserving that round's privacy).
     """
     description_lines = [
-        build_vote_round_line(vote_round),
+        build_vote_round_line(vote_round, guild_round_number),
         f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
         *build_active_filter_lines(vote_round),
         "",
@@ -6858,7 +7083,14 @@ def build_current_voting_post_embed(
     standings = standings_result.standings if standings_result.success else None
     standings_error = None if standings_result.success else standings_result.message
     collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
-    return build_voting_post_embed(vote_round, candidates, standings, standings_error, collection_name)
+    guild_round_number = (
+        vote_service.get_guild_round_number(vote_round.id, vote_round.guild_id)
+        if vote_round.guild_id is not None
+        else None
+    )
+    return build_voting_post_embed(
+        vote_round, candidates, standings, standings_error, collection_name, guild_round_number
+    )
 
 
 async def refresh_voting_post(
@@ -7353,7 +7585,12 @@ async def handle_reschedule_vote_completion(
 
     if vote_round.channel_id is not None:
         collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
-        notice = build_vote_deadline_change_notice(vote_round, collection_name)
+        guild_round_number = (
+            vote_service.get_guild_round_number(vote_round.id, vote_round.guild_id)
+            if vote_round.guild_id is not None
+            else None
+        )
+        notice = build_vote_deadline_change_notice(vote_round, collection_name, guild_round_number)
         channel = bot.get_channel(vote_round.channel_id)
         if channel is None:
             channel = await bot.fetch_channel(vote_round.channel_id)
@@ -7529,7 +7766,12 @@ async def handle_cancel_vote_now_completion(
             if suggestion_service is not None
             else None
         )
-        notice = build_vote_cancellation_notice(vote_round, collection_name)
+        guild_round_number = (
+            vote_service.get_guild_round_number(vote_round.id, vote_round.guild_id)
+            if vote_round.guild_id is not None
+            else None
+        )
+        notice = build_vote_cancellation_notice(vote_round, collection_name, guild_round_number)
         channel = bot.get_channel(vote_round.channel_id)
         if channel is None:
             channel = await bot.fetch_channel(vote_round.channel_id)
@@ -9272,7 +9514,7 @@ def resolve_candidate_selection_mode(
 ) -> CandidateSelectionMode:
     configuration = bot.suggestion_database_configuration_repository.get(guild_id, database_id)
     if configuration is None:
-        return CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+        return DEFAULT_CANDIDATE_SELECTION_MODE
     return configuration.suggestion_rules.candidate_selection
 
 
@@ -9285,18 +9527,18 @@ def resolve_customize_vote_default_candidate_selection(
     sensible starting point before the collection itself is finally
     resolved (and, if ambiguous, chosen) later in
     handle_start_vote_completion. Falls back to the recommended default
-    (Favor New Additions) whenever the channel context is unknown,
+    (Favor Older Additions) whenever the channel context is unknown,
     ambiguous, or matches no collection -- the dropdown's preselected
     value is only a convenience, never a decision that's actually acted
     on here.
     """
     if guild_id is None or channel_id is None:
-        return CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+        return DEFAULT_CANDIDATE_SELECTION_MODE
     resolution = bot.suggestion_service.resolve_database_for_channel(
         guild_id, channel_id, bot.suggestion_database_configuration_repository
     )
     if resolution.database is None:
-        return CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+        return DEFAULT_CANDIDATE_SELECTION_MODE
     return resolve_candidate_selection_mode(bot, guild_id, resolution.database.database_id)
 
 

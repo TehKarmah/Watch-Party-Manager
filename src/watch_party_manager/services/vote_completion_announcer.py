@@ -59,10 +59,13 @@ class SuggestionLookup(Protocol):
 
 class ResultsMessageRecorder(Protocol):
     """The subset of VoteService needed to persist the results
-    announcement's message reference.
+    announcement's message reference and resolve a round's guild-local
+    display number.
     """
 
     def attach_results_message_reference(self, round_id: int, message_id: int) -> bool: ...
+
+    def get_guild_round_number(self, round_id: int, guild_id: int) -> int: ...
 
 
 class DiscordChannelMessenger(Protocol):
@@ -177,6 +180,11 @@ async def finalize_vote_completion(
     candidates = _resolve_watch_items(suggestion_service, vote_round.candidate_suggestion_ids)
     winning_items = _resolve_watch_items(suggestion_service, result.winning_suggestion_ids)
     collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
+    guild_round_number = (
+        vote_service.get_guild_round_number(vote_round.id, vote_round.guild_id)
+        if vote_round.guild_id is not None
+        else None
+    )
 
     closed_text = build_closed_voting_post_text(
         vote_round,
@@ -185,6 +193,7 @@ async def finalize_vote_completion(
         result.standings,
         result.total_votes_cast,
         collection_name=collection_name,
+        guild_round_number=guild_round_number,
     )
     await _update_original_voting_post(messenger, vote_round, closed_text)
 
@@ -206,6 +215,7 @@ async def finalize_vote_completion(
         result.total_votes_cast,
         original_vote_link,
         collection_name,
+        guild_round_number=guild_round_number,
     )
     embeds = build_vote_results_embeds(winning_items, result.standings)
 
@@ -228,5 +238,6 @@ async def finalize_vote_completion(
             result.total_votes_cast,
             results_link,
             collection_name=collection_name,
+            guild_round_number=guild_round_number,
         )
         await _update_original_voting_post(messenger, vote_round, closed_text_with_link)

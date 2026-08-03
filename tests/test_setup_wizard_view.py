@@ -112,16 +112,68 @@ class SetupWizardResumeViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class WashCrewRoleStepViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_a_role_select_save_for_later_and_cancel_but_no_back(self) -> None:
+    async def test_has_a_role_select_confirm_save_for_later_and_cancel_but_no_back(self) -> None:
         # The first step never shows a Back button (Section 1 requirement).
+        # First-Time UX Polish: selecting a role no longer auto-advances --
+        # the select just records a choice, and a separate "Save & Continue"
+        # button (a fourth child, alongside Save & Finish Later and Cancel)
+        # lets the WASH Crew member review it first.
         view = WashCrewRoleStepView(_noop, _noop, _noop)
-        self.assertEqual(len(view.children), 3)
-        self.assertEqual(view.children[0].custom_id, "wpm_setup_wash_crew_role_select")
-        self.assertEqual(view.children[0].min_values, 1)
-        self.assertEqual(view.children[0].max_values, 1)
+        self.assertEqual(len(view.children), 4)
+        self.assertEqual(view.role_select.custom_id, "wpm_setup_wash_crew_role_select")
+        self.assertEqual(view.role_select.min_values, 0)
+        self.assertEqual(view.role_select.max_values, 1)
         self.assertFalse(any(isinstance(child, SetupBackButton) for child in view.children))
         self.assertTrue(any(isinstance(child, SetupSaveForLaterButton) for child in view.children))
         self.assertIsInstance(view.children[-1], SetupCancelButton)
+
+    async def test_confirm_button_is_labeled_save_and_continue(self) -> None:
+        view = WashCrewRoleStepView(_noop, _noop, _noop)
+        confirm_button = next(c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_wash_crew_role_confirm")
+        self.assertEqual(confirm_button.label, "Save & Continue")
+
+    async def test_role_select_defers_without_advancing(self) -> None:
+        class FakeResponse:
+            def __init__(self) -> None:
+                self.deferred = False
+
+            async def defer(self) -> None:
+                self.deferred = True
+
+        class FakeInteraction:
+            def __init__(self) -> None:
+                self.response = FakeResponse()
+
+        view = WashCrewRoleStepView(_noop, _noop, _noop)
+        interaction = FakeInteraction()
+        await view.role_select.callback(interaction=interaction)
+        self.assertTrue(interaction.response.deferred)
+
+    async def test_confirm_reads_the_selected_role(self) -> None:
+        calls = []
+
+        async def on_confirm(interaction, role_id) -> None:
+            calls.append(role_id)
+
+        class FakeRoleValue:
+            id = 999
+
+        view = WashCrewRoleStepView(on_confirm, _noop, _noop)
+        view.role_select._values = [FakeRoleValue()]
+        confirm_button = next(c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_wash_crew_role_confirm")
+        await confirm_button.callback(interaction=object())
+        self.assertEqual(calls, [999])
+
+    async def test_confirm_reports_none_when_nothing_was_ever_selected(self) -> None:
+        calls = []
+
+        async def on_confirm(interaction, role_id) -> None:
+            calls.append(role_id)
+
+        view = WashCrewRoleStepView(on_confirm, _noop, _noop)
+        confirm_button = next(c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_wash_crew_role_confirm")
+        await confirm_button.callback(interaction=object())
+        self.assertEqual(calls, [None])
 
     async def test_save_for_later_button_triggers_its_callback(self) -> None:
         calls = []
@@ -649,19 +701,19 @@ class VisibilitySelectComponentTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CandidateSelectionSelectComponentTests(unittest.IsolatedAsyncioTestCase):
-    async def test_displays_all_three_modes_with_favor_new_additions_recommended(self) -> None:
-        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+    async def test_displays_all_three_modes_with_favor_older_additions_recommended(self) -> None:
+        select = CandidateSelectionSelectComponent(default=CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
         self.assertEqual(
             [option.value for option in select.options],
             [
-                CandidateSelectionMode.FAVOR_NEW_ADDITIONS.value,
                 CandidateSelectionMode.FAVOR_OLDER_ADDITIONS.value,
+                CandidateSelectionMode.FAVOR_NEW_ADDITIONS.value,
                 CandidateSelectionMode.INFINITE_POOL.value,
             ],
         )
         self.assertEqual(
             [option.label for option in select.options],
-            ["Favor New Additions (Recommended)", "Favor Older Additions", "Pure Random"],
+            ["Favor Older Additions (Recommended)", "Favor New Additions", "Pure Random"],
         )
 
     async def test_default_option_matches_the_requested_default(self) -> None:

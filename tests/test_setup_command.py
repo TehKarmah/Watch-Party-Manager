@@ -171,6 +171,7 @@ class FakeResponse:
         self.edited_content = None
         self.edited_view = "not-edited"
         self.sent_modal = None
+        self.deferred = False
 
     async def send_message(self, content, ephemeral=False, view=None) -> None:
         self.sent_message = content
@@ -183,6 +184,9 @@ class FakeResponse:
 
     async def send_modal(self, modal) -> None:
         self.sent_modal = modal
+
+    async def defer(self) -> None:
+        self.deferred = True
 
 
 class FakeInteraction:
@@ -997,7 +1001,10 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         self.assertTrue(interaction.response.sent_ephemeral)
         self.assertIsInstance(interaction.response.sent_view, WashCrewRoleStepView)
 
-    async def test_selecting_the_wash_crew_role_advances_to_watch_party_role_step(self) -> None:
+    async def test_selecting_the_wash_crew_role_does_not_advance_until_confirmed(self) -> None:
+        # First-Time UX Polish: the role select alone must never advance
+        # the wizard -- only Save & Continue does, after the member has
+        # had a chance to review their selection.
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
@@ -1011,8 +1018,43 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         select_interaction = FakeInteraction()
         await role_select.callback(interaction=select_interaction)
 
-        self.assertIn("Step 2 of 11", select_interaction.response.edited_content)
-        self.assertIsInstance(select_interaction.response.edited_view, WatchPartyRoleStepView)
+        self.assertTrue(select_interaction.response.deferred)
+        self.assertIsNone(select_interaction.response.edited_content)
+        self.assertEqual(select_interaction.response.edited_view, "not-edited")
+
+    async def test_confirming_the_wash_crew_role_advances_to_watch_party_role_step(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: WashCrewRoleStepView = interaction.response.sent_view
+
+        class FakeRoleValue:
+            id = WASH_CREW_ROLE_ID
+
+        view.role_select._values = [FakeRoleValue()]
+        confirm_button = next(
+            c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_wash_crew_role_confirm"
+        )
+        confirm_interaction = FakeInteraction()
+        await confirm_button.callback(interaction=confirm_interaction)
+
+        self.assertIn("Step 2 of 11", confirm_interaction.response.edited_content)
+        self.assertIsInstance(confirm_interaction.response.edited_view, WatchPartyRoleStepView)
+
+    async def test_confirming_with_no_role_selected_shows_a_validation_message_and_does_not_advance(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view: WashCrewRoleStepView = interaction.response.sent_view
+
+        confirm_button = next(
+            c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_wash_crew_role_confirm"
+        )
+        confirm_interaction = FakeInteraction()
+        await confirm_button.callback(interaction=confirm_interaction)
+
+        self.assertIn("Select a WASH Crew role before continuing", confirm_interaction.response.edited_content)
+        self.assertIsInstance(confirm_interaction.response.edited_view, WashCrewRoleStepView)
 
     async def test_admin_channel_step_renders_and_advances_to_suggestion_database(self) -> None:
         from watch_party_manager.domain.setup_wizard import SetupWizardStep
@@ -1304,10 +1346,16 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         class FakeRoleValue:
             id = 999
 
-        role_select = edit_interaction.response.edited_view.children[0]
-        role_select._values = [FakeRoleValue()]
+        role_step_view = edit_interaction.response.edited_view
+        role_step_view.role_select._values = [FakeRoleValue()]
+        select_interaction = FakeInteraction()
+        await role_step_view.role_select.callback(interaction=select_interaction)
+
+        confirm_button = next(
+            c for c in role_step_view.children if getattr(c, "custom_id", None) == "wpm_setup_wash_crew_role_confirm"
+        )
         answer_interaction = FakeInteraction()
-        await role_select.callback(interaction=answer_interaction)
+        await confirm_button.callback(interaction=answer_interaction)
 
         # Back to Review -- not Watch Party Role (the next step after
         # WASH Crew Role in the normal walkthrough order) -- and every
@@ -1571,6 +1619,18 @@ class BackNavigationIntegrationTests(SetupCommandTestCase):
         await back_button.callback(interaction=back_interaction)
 
         self.assertIsInstance(back_interaction.response.edited_view, BackupDefaultsChoiceView)
+
+    async def test_backup_defaults_step_explains_what_is_and_is_not_backed_up(self) -> None:
+        # First-Time UX Polish: a live setup walkthrough found "backups"
+        # ambiguous -- must be unmistakably WASH's own data, not Discord.
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.BACKUP_DEFAULTS)
+        interaction = FakeInteraction()
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        self.assertIn("WASH's own data only", interaction.response.sent_message)
+        self.assertIn("never includes Discord itself", interaction.response.sent_message)
 
     async def test_admin_channel_step_shows_a_back_button_to_watch_party_role(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
@@ -1891,16 +1951,16 @@ class CandidateSelectionSetupIntegrationTests(SetupCommandTestCase):
     Voting Defaults, exercised end-to-end through the wizard.
     """
 
-    async def test_voting_defaults_dropdown_defaults_to_favor_new_additions(self) -> None:
+    async def test_voting_defaults_dropdown_defaults_to_favor_older_additions(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.VOTING_DEFAULTS)
         interaction = FakeInteraction()
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
         intro_view: VotingDefaultsIntroView = interaction.response.sent_view
-        self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+        self.assertEqual(intro_view.candidate_selection_select.selected, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
         self.assertEqual(
-            CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.FAVOR_NEW_ADDITIONS], "Favor New Additions"
+            CANDIDATE_SELECTION_DISPLAY_LABELS[CandidateSelectionMode.FAVOR_OLDER_ADDITIONS], "Favor Older Additions"
         )
 
     async def test_visibility_is_collected_on_the_setup_view_not_the_modal(self) -> None:
@@ -2822,7 +2882,7 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         # data.components.0.components.0.options.1.description
         components = view.to_components()
         offending_option = components[0]["components"][0]["options"][1]
-        self.assertEqual(offending_option["label"], "Favor Older Additions")
+        self.assertEqual(offending_option["label"], "Favor New Additions")
         offending_description = offending_option["description"]
         utf16_length = len(offending_description.encode("utf-16-le")) // 2
         self.assertLessEqual(

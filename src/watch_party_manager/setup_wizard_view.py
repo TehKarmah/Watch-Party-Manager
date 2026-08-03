@@ -31,6 +31,7 @@ from watch_party_manager.services.discord_ui_limits import build_safe_select_opt
 SETUP_WIZARD_STEP_TIMEOUT_SECONDS = 900
 
 OnRoleSelected = Callable[[discord.Interaction, int], Awaitable[None]]
+OnWashCrewRoleConfirmed = Callable[[discord.Interaction, Optional[int]], Awaitable[None]]
 OnWatchPartyRoleConfirmed = Callable[[discord.Interaction, Optional[int], JoinMode], Awaitable[None]]
 OnWizardCancel = Callable[[discord.Interaction], Awaitable[None]]
 OnDatabaseChoiceButton = Callable[[discord.Interaction], Awaitable[None]]
@@ -230,38 +231,70 @@ class SetupWizardResumeView(SetupWizardStepView):
 
 
 class WashCrewRoleSelect(discord.ui.RoleSelect):
-    def __init__(self, on_select: OnRoleSelected) -> None:
+    """Records a role choice without advancing the step -- see
+    WashCrewRoleConfirmButton. Mirrors WatchPartyRoleSelectComponent's own
+    select-then-confirm shape (First-Time UX Polish: selecting a role here
+    used to advance immediately, giving the WASH Crew member no chance to
+    review their choice before it was saved).
+    """
+
+    def __init__(self) -> None:
         super().__init__(
             placeholder="Choose the WASH Crew role",
-            min_values=1,
+            min_values=0,
             max_values=1,
             custom_id="wpm_setup_wash_crew_role_select",
         )
-        self._on_select = on_select
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await self._on_select(interaction, self.values[0].id)
+        await interaction.response.defer()
+
+
+class WashCrewRoleConfirmButton(discord.ui.Button):
+    def __init__(self, on_click: Callable[[discord.Interaction], Awaitable[None]]) -> None:
+        super().__init__(
+            label="Save & Continue", style=discord.ButtonStyle.primary, custom_id="wpm_setup_wash_crew_role_confirm"
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
 
 
 class WashCrewRoleStepView(SetupWizardStepView):
     """Step 1: choose the role that controls administrative access to WASH.
 
-    The first step -- never shows a Back button, since there is no
-    earlier step to return to.
+    First-Time UX Polish: choosing a role no longer advances immediately --
+    the role select just records the choice (like
+    WatchPartyRoleSelectComponent already did), and a separate "Save &
+    Continue" button lets the WASH Crew member review their selection
+    before it's saved. Save & Continue itself validates that a role was
+    actually chosen (required here, unlike the Watch Party role step,
+    where leaving it unset is a legitimate "configure later" choice) --
+    see WashCrewRoleConfirmedHandler in bot.py for the validation message
+    shown when it's missing. The first step -- never shows a Back button,
+    since there is no earlier step to return to.
     """
 
     def __init__(
         self,
-        on_select: OnRoleSelected,
+        on_confirm: OnWashCrewRoleConfirmed,
         on_save_for_later: OnSaveForLater,
         on_cancel: OnWizardCancel,
         *,
         requester_id: Optional[int] = None,
     ) -> None:
         super().__init__(requester_id=requester_id)
-        self.add_item(WashCrewRoleSelect(on_select))
+        self._on_confirm = on_confirm
+        self.role_select = WashCrewRoleSelect()
+        self.add_item(self.role_select)
+        self.add_item(WashCrewRoleConfirmButton(self._handle_confirm))
         self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
+
+    async def _handle_confirm(self, interaction: discord.Interaction) -> None:
+        role_id = self.role_select.values[0].id if self.role_select.values else None
+        await self._on_confirm(interaction, role_id)
 
 
 # --- Watch Party Role + join mode ---------------------------------------------------------

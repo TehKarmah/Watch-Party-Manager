@@ -158,6 +158,8 @@ A suggestion stuck at ⚠️ **Pending Crew Review** is expected once its collec
 
 Full command-by-command behavior, safety-backup guarantees, and a dedicated symptom table already live in [Administration, Section 9: Backup & Recovery](05-Administration.md#9-backup--recovery) -- see its own [Troubleshooting subsection](05-Administration.md#troubleshooting) for the complete list (corrupt/invalid backups, mismatched server IDs, confirmation-text mismatches, safety-backup failures, and more). Two points worth calling out specifically:
 
+A WASH backup includes only WASH's own data (suggestions, votes, collections, server configuration) -- it never includes Discord itself (messages, channels, roles, permissions). If you're looking for a way to back up your Discord server itself, WASH's backup/restore commands aren't it.
+
 ### Backup
 
 Run `/maintenance backup` (full server) or `/database backup` (one collection) before any release, dependency upgrade, manual data edit, or experiment with a collection's rules -- see [Administration: Recommended backup strategy](05-Administration.md#recommended-backup-strategy). `/database backup` is reachable directly or through `/database manage`'s Backup Collection action; both run the exact same logic.

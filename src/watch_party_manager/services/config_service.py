@@ -104,8 +104,8 @@ CONFIG_SECTION_ORDER: Tuple[ConfigSection, ...] = (
 )
 
 CONFIG_SECTION_TITLES: dict[ConfigSection, str] = {
-    ConfigSection.WASH_CREW_ROLE: "WASH Crew Role",
-    ConfigSection.WATCH_PARTY_ROLE: "Watch Party Role",
+    ConfigSection.WASH_CREW_ROLE: "🛠️ WASH Crew Role",
+    ConfigSection.WATCH_PARTY_ROLE: "🍿 Watch Party Role",
     ConfigSection.WATCH_PARTY_JOIN_MODE: "Watch Party Join Mode",
     ConfigSection.ADMIN_CHANNEL: "Admin Channel",
     ConfigSection.HOME_CHANNEL: "Watch Party Home Channel",
@@ -172,19 +172,19 @@ class ConfigService:
 
         wash_crew_role_id = configuration.wash_crew_role_id
         if wash_crew_role_id is None:
-            lines.append("WASH Crew Role: Not configured")
+            lines.append("🛠️ WASH Crew Role: Not configured")
         elif validate_role_exists(wash_crew_role_id, guild, resource_label="WASH Crew role"):
-            lines.append(f"WASH Crew Role: Invalid (<@&{wash_crew_role_id}> no longer exists)")
+            lines.append(f"🛠️ WASH Crew Role: Invalid (<@&{wash_crew_role_id}> no longer exists)")
         else:
-            lines.append(f"WASH Crew Role: Configured (<@&{wash_crew_role_id}>)")
+            lines.append(f"🛠️ WASH Crew Role: Configured (<@&{wash_crew_role_id}>)")
 
         watch_party_role_id = configuration.watch_party_role.role_id
         if watch_party_role_id is None:
-            lines.append("Watch Party Role: Not configured")
+            lines.append("🍿 Watch Party Role: Not configured")
         elif validate_role_exists(watch_party_role_id, guild, resource_label="Watch Party role"):
-            lines.append(f"Watch Party Role: Invalid (<@&{watch_party_role_id}> no longer exists)")
+            lines.append(f"🍿 Watch Party Role: Invalid (<@&{watch_party_role_id}> no longer exists)")
         else:
-            lines.append(f"Watch Party Role: Configured (<@&{watch_party_role_id}>)")
+            lines.append(f"🍿 Watch Party Role: Configured (<@&{watch_party_role_id}>)")
 
         lines.append(
             "Watch Party Join Mode: Configured "

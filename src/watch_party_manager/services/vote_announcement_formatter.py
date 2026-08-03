@@ -75,11 +75,18 @@ def format_vote_title(collection_name: Optional[str], suffix: str) -> str:
     return suffix
 
 
-def build_vote_round_line(vote_round: VoteRound) -> str:
+def build_vote_round_line(vote_round: VoteRound, guild_round_number: Optional[int] = None) -> str:
     """Build the round-number line shown as secondary information
     beneath every collection-centric vote title (Requirement 1).
+
+    guild_round_number: First-Time UX Polish: the guild-local round
+    number (see VoteService.get_guild_round_number) -- computed by the
+    caller, since this module stays free of any VoteService dependency.
+    None (the default, and every call site not yet updated to compute
+    one) falls back to vote_round.id, the previous global-counter
+    behavior.
     """
-    return f"Round: {vote_round.id}"
+    return f"Round: {guild_round_number if guild_round_number is not None else vote_round.id}"
 
 
 def _describe_imdb_rating_bounds(minimum: Optional[float], maximum: Optional[float]) -> str:
@@ -207,7 +214,9 @@ def build_suggestion_link(watch_item: WatchItem) -> Optional[str]:
     return build_discord_message_link(watch_item.guild_id, watch_item.channel_id, watch_item.message_id)
 
 
-def build_vote_deadline_change_notice(vote_round: VoteRound, collection_name: Optional[str] = None) -> str:
+def build_vote_deadline_change_notice(
+    vote_round: VoteRound, collection_name: Optional[str] = None, guild_round_number: Optional[int] = None
+) -> str:
     """Build the public notice announcing a round's deadline changed.
 
     Posted by /edit_vote's "Change End Time" action (including Shorten
@@ -219,13 +228,14 @@ def build_vote_deadline_change_notice(vote_round: VoteRound, collection_name: Op
         collection_name: The round's collection, if known (Requirement
             1) -- see resolve_vote_collection_name. None falls back to a
             generic, round-centric title.
+        guild_round_number: See build_vote_round_line.
 
     Returns:
         The notice text, including a link to the original post when available.
     """
     lines = [
         f"**{format_vote_title(collection_name, 'Voting — Updated')}**",
-        build_vote_round_line(vote_round),
+        build_vote_round_line(vote_round, guild_round_number),
         f"Voting now ends: {format_datetime_for_display(vote_round.closes_at)}",
     ]
     link = build_vote_link(vote_round)
@@ -234,7 +244,9 @@ def build_vote_deadline_change_notice(vote_round: VoteRound, collection_name: Op
     return "\n".join(lines)
 
 
-def build_vote_cancellation_notice(vote_round: VoteRound, collection_name: Optional[str] = None) -> str:
+def build_vote_cancellation_notice(
+    vote_round: VoteRound, collection_name: Optional[str] = None, guild_round_number: Optional[int] = None
+) -> str:
     """Build the public notice announcing a round was cancelled.
 
     Posted by /edit_vote's "Cancel Vote" action, after
@@ -246,13 +258,14 @@ def build_vote_cancellation_notice(vote_round: VoteRound, collection_name: Optio
         collection_name: The round's collection, if known (Requirement
             1) -- see resolve_vote_collection_name. None falls back to a
             generic, round-centric title.
+        guild_round_number: See build_vote_round_line.
 
     Returns:
         The notice text, including a link to the original post when available.
     """
     lines = [
         f"**{format_vote_title(collection_name, 'Voting — Cancelled')}**",
-        build_vote_round_line(vote_round),
+        build_vote_round_line(vote_round, guild_round_number),
         "Cancelled by WASH Crew.",
     ]
     link = build_vote_link(vote_round)
@@ -415,6 +428,7 @@ def build_vote_completion_announcement(
     total_votes_cast: int,
     original_vote_link: Optional[str] = None,
     collection_name: Optional[str] = None,
+    guild_round_number: Optional[int] = None,
 ) -> str:
     """Build the single canonical results announcement for a just-completed round.
 
@@ -455,7 +469,7 @@ def build_vote_completion_announcement(
     """
     lines = [
         f"**{format_vote_title(collection_name, 'Voting — Results')}**",
-        build_vote_round_line(vote_round),
+        build_vote_round_line(vote_round, guild_round_number),
         *build_active_filter_lines(vote_round),
     ]
     lines.append(_build_winner_summary_line(winning_items, total_votes_cast))
@@ -486,6 +500,7 @@ def build_closed_voting_post_text(
     total_votes_cast: int,
     results_link: Optional[str] = None,
     collection_name: Optional[str] = None,
+    guild_round_number: Optional[int] = None,
 ) -> str:
     """Build the original voting post's text once the round has completed.
 
@@ -516,7 +531,7 @@ def build_closed_voting_post_text(
     """
     lines = [
         f"**{format_vote_title(collection_name, 'Voting — Closed')}**",
-        build_vote_round_line(vote_round),
+        build_vote_round_line(vote_round, guild_round_number),
         *build_active_filter_lines(vote_round),
         _build_winner_summary_line(winning_items, total_votes_cast),
         f"Total votes cast: {total_votes_cast}",

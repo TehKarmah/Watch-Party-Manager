@@ -377,6 +377,31 @@ class VoteService:
         """
         return self._rounds.get(round_id)
 
+    def get_guild_round_number(self, round_id: int, guild_id: int) -> int:
+        """The 1-based position of `round_id` among every round ever
+        created in `guild_id`, ordered by creation (this service's own
+        globally-unique, monotonically increasing `id`) -- the
+        guild-local round number shown to users (First-Time UX Polish:
+        "Round 3" in one server must never be inflated by rounds another
+        server on the same WASH process created).
+
+        `id` itself stays a single global counter across every guild this
+        one WASH process might serve -- unchanged, still what persistence,
+        custom IDs, and every get_round()/attach_*() lookup use. This
+        method is purely a display-time computation over already-stored
+        rounds; it changes no state and is safe to call as often as a
+        round is shown.
+
+        `guild_id` is taken as a parameter rather than read from
+        round_id's own VoteRound.guild_id, since callers building a
+        round's very first post already know their own guild_id (the
+        interaction it came from) before attach_message_reference() has
+        had a chance to record it on the round itself.
+        """
+        guild_round_ids = {rid for rid, r in self._rounds.items() if r.guild_id == guild_id}
+        guild_round_ids.add(round_id)
+        return sorted(guild_round_ids).index(round_id) + 1
+
     def attach_message_reference(
         self, round_id: int, guild_id: int, channel_id: int, message_id: int
     ) -> bool:

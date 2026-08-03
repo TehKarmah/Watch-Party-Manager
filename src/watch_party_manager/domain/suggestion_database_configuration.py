@@ -49,13 +49,31 @@ class CandidateSelectionMode(str, Enum):
     INFINITE_POOL ("Pure Random"): every eligible suggestion, neutral
     weight. FAVOR_NEW_ADDITIONS ("Favor New Additions") and
     FAVOR_OLDER_ADDITIONS ("Favor Older Additions") weight by
-    WatchItemJourney.suggestion_date (permanent metadata). FAVOR_NEW_
-    ADDITIONS is the default for newly created collections.
+    WatchItemJourney.suggestion_date (permanent metadata). FAVOR_OLDER_
+    ADDITIONS is the default for newly created collections and the Setup
+    Wizard (First-Time UX Polish: a fresh collection has no "new"
+    suggestions yet to favor, so surfacing older ones first gives a
+    first-time server something to vote on immediately) -- see
+    DEFAULT_CANDIDATE_SELECTION_MODE below. A record saved before this
+    default changed keeps whatever it already has; this only affects
+    brand-new collections and never-yet-configured guilds.
     """
 
     INFINITE_POOL = "infinite_pool"
     FAVOR_NEW_ADDITIONS = "favor_new_additions"
     FAVOR_OLDER_ADDITIONS = "favor_older_additions"
+
+
+# The recommended default for a brand-new collection, the Setup Wizard's
+# preselected choice, and every other "nothing configured yet" fallback --
+# the single source of truth so a future default change never has to be
+# hunted down across bot.py's several duplicated fallback sites. Does NOT
+# apply to a collection that already has an explicit (or legacy, pre-dating
+# this field) saved value -- see persistence/suggestion_database_
+# configuration_repository.py's own load-time fallback, which intentionally
+# stays FAVOR_NEW_ADDITIONS so an existing collection's effective behavior
+# is never silently changed by this default moving.
+DEFAULT_CANDIDATE_SELECTION_MODE = CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
 
 
 # The single source of truth for how each mode is labeled in Discord UI
@@ -92,11 +110,13 @@ CANDIDATE_SELECTION_HELP_TEXT: dict[CandidateSelectionMode, str] = {
     ),
 }
 
-# The Nominee Selection choices in display order, FAVOR_NEW_ADDITIONS
-# first as the default.
+# The Nominee Selection choices in display order, DEFAULT_CANDIDATE_
+# SELECTION_MODE first -- setup_wizard_view.py tags whichever mode is
+# first here as "(Recommended)", so this order and the actual default
+# above can never drift apart.
 NOMINEE_SELECTION_MODE_ORDER: tuple[CandidateSelectionMode, ...] = (
-    CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
     CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
+    CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
     CandidateSelectionMode.INFINITE_POOL,
 )
 
@@ -188,7 +208,7 @@ class SuggestionRulesConfig:
     rejection_enabled: bool = True
     rejection_threshold: int = 2
     allow_resuggestion: bool = True
-    candidate_selection: CandidateSelectionMode = CandidateSelectionMode.FAVOR_NEW_ADDITIONS
+    candidate_selection: CandidateSelectionMode = DEFAULT_CANDIDATE_SELECTION_MODE
     extra_fields: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:

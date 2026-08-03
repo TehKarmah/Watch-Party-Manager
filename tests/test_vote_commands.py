@@ -311,6 +311,26 @@ class VoteCommandTests(unittest.TestCase):
 
         self.assertIn("no voting round", message.lower())
 
+    def test_vote_status_shows_the_guild_local_round_number_not_the_global_id(self) -> None:
+        # First-Time UX Polish: simulate another guild having already
+        # created (and attached) two rounds on this same VoteService,
+        # then confirm /vote_status still shows THIS guild's round as
+        # "Round 1", not the inflated global id 3.
+        other_guild_round_1 = self.vote_service.create_round(candidate_suggestion_ids=[1, 2])
+        self.vote_service.attach_message_reference(other_guild_round_1.vote_round.id, guild_id=500, channel_id=1, message_id=1)
+        self.vote_service.close_round(other_guild_round_1.vote_round.id)
+        other_guild_round_2 = self.vote_service.create_round(candidate_suggestion_ids=[1, 3])
+        self.vote_service.attach_message_reference(other_guild_round_2.vote_round.id, guild_id=500, channel_id=1, message_id=2)
+        self.vote_service.close_round(other_guild_round_2.vote_round.id)
+
+        created = self.vote_service.create_round(candidate_suggestion_ids=[1, 2])
+        self.vote_service.attach_message_reference(created.vote_round.id, guild_id=100, channel_id=1, message_id=3)
+
+        message = perform_vote_status(self.vote_service, self.suggestion_service)
+
+        self.assertIn("Voting round 1", message)
+        self.assertNotIn("Voting round 3", message)
+
     def test_vote_status_open_blind_round_hides_standings(self) -> None:
         self.vote_service.create_round(visibility=VoteVisibility.BLIND)
         self.vote_service.cast_vote(discord_user_id=1, suggestion_id=1)

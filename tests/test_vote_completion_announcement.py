@@ -317,6 +317,18 @@ class BuildVoteCompletionAnnouncementTests(unittest.TestCase):
         self.assertEqual(lines[0], "**🎬 Movie Suggestions Voting — Results**")
         self.assertEqual(lines[1], "Round: 1")
 
+    def test_guild_round_number_overrides_the_global_id_when_supplied(self) -> None:
+        # First-Time UX Polish: a round with a high global id (e.g. the
+        # 47th round ever created across every guild a WASH process
+        # hosts) must still show its own guild's local round number.
+        winner = make_watch_item("The Matrix", id=1)
+        text = build_vote_completion_announcement(
+            make_round(round_id=47), self._candidates(), [winner], [], 1, guild_round_number=3
+        )
+
+        self.assertIn("Round: 3", text)
+        self.assertNotIn("Round: 47", text)
+
     # --- Custom Vote Summary & Announcement: active filters ------------------------------
 
     def test_includes_active_filters_when_the_round_tracked_them(self) -> None:
@@ -440,6 +452,15 @@ class BuildClosedVotingPostTextTests(unittest.TestCase):
         text = build_closed_voting_post_text(make_round(), self._candidates(), [], [], 2)
 
         self.assertNotIn("No votes were cast", text)
+
+    def test_guild_round_number_overrides_the_global_id_when_supplied(self) -> None:
+        winner = make_watch_item("The Matrix", id=1)
+        text = build_closed_voting_post_text(
+            make_round(round_id=47), self._candidates(), [winner], [], 1, guild_round_number=3
+        )
+
+        self.assertIn("Round: 3", text)
+        self.assertNotIn("Round: 47", text)
 
     def test_omits_the_results_link_when_not_given(self) -> None:
         winner = make_watch_item("The Matrix", id=1)
@@ -712,6 +733,14 @@ class BuildVoteDeadlineChangeNoticeTests(unittest.TestCase):
 
         self.assertNotIn("discord.com", text)
 
+    def test_guild_round_number_overrides_the_global_id_when_supplied(self) -> None:
+        vote_round = VoteRound(id=47)
+
+        text = build_vote_deadline_change_notice(vote_round, guild_round_number=3)
+
+        self.assertIn("Round: 3", text)
+        self.assertNotIn("Round: 47", text)
+
 
 class BuildVoteCancellationNoticeTests(unittest.TestCase):
     """FR-023: the public notice posted when /edit_vote cancels a round."""
@@ -730,6 +759,14 @@ class BuildVoteCancellationNoticeTests(unittest.TestCase):
         text = build_vote_cancellation_notice(vote_round)
 
         self.assertNotIn("Winner", text)
+
+    def test_guild_round_number_overrides_the_global_id_when_supplied(self) -> None:
+        vote_round = VoteRound(id=47, status=VoteRoundStatus.CANCELLED)
+
+        text = build_vote_cancellation_notice(vote_round, guild_round_number=3)
+
+        self.assertIn("Round: 3", text)
+        self.assertNotIn("Round: 47", text)
 
     def test_includes_the_link_when_available(self) -> None:
         vote_round = VoteRound(

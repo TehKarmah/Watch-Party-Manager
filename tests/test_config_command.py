@@ -534,7 +534,7 @@ class SectionRenderingTests(ConfigCommandTestCase):
 
         select = interaction.response.sent_view.children[0]
         descriptions_by_value = {option.value: option.description for option in select.options}
-        self.assertEqual(descriptions_by_value[str(movies.database_id)], "Nominee Selection: Favor New Additions")
+        self.assertEqual(descriptions_by_value[str(movies.database_id)], "Nominee Selection: Favor Older Additions")
         self.assertEqual(descriptions_by_value[str(tv_shows.database_id)], "Nominee Selection: Pure Random")
 
     async def test_manage_databases_section_with_no_databases_shows_back_only(self) -> None:
@@ -574,7 +574,7 @@ class SectionRenderingTests(ConfigCommandTestCase):
         await send_config_database_settings_menu(interaction, self.bot, GUILD_ID, database_id, on_back)
 
         self.assertIn(f"<#{DESTINATION_CHANNEL_ID}>", interaction.response.edited_content)
-        self.assertIn("Favor New Additions", interaction.response.edited_content)
+        self.assertIn("Favor Older Additions", interaction.response.edited_content)
         self.assertIn("I Won't Watch: Enabled (threshold 2)", interaction.response.edited_content)
 
     async def test_choosing_suggestion_destination_shows_the_channel_picker(self) -> None:
@@ -641,7 +641,7 @@ class SectionRenderingTests(ConfigCommandTestCase):
         self.assertIsInstance(setting_interaction.response.edited_view, ConfigDatabaseCandidateSelectionView)
         self.assertEqual(
             setting_interaction.response.edited_view.candidate_selection_select.selected,
-            CandidateSelectionMode.FAVOR_NEW_ADDITIONS,
+            CandidateSelectionMode.FAVOR_OLDER_ADDITIONS,
         )
 
     async def test_database_settings_menu_shows_rejection_status_read_only(self) -> None:
@@ -1368,6 +1368,17 @@ class ModalDefaultsSectionTests(ConfigCommandTestCase):
         configure_interaction = FakeInteraction()
         await enable_button.callback(interaction=configure_interaction)
         return configure_interaction.response.sent_modal
+
+    async def test_backup_defaults_section_explains_what_is_and_is_not_backed_up(self) -> None:
+        interaction = FakeInteraction()
+
+        async def on_back(back_interaction) -> None:
+            pass
+
+        await send_config_backup_defaults_modal(interaction, self.bot, GUILD_ID, on_back)
+
+        self.assertIn("WASH's own data only", interaction.response.edited_content)
+        self.assertIn("never includes Discord itself", interaction.response.edited_content)
 
     async def test_backup_defaults_modal_is_prefilled_with_current_values(self) -> None:
         self._seed_completed_setup()

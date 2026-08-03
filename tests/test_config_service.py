@@ -125,12 +125,12 @@ class MainSummaryTests(ConfigServiceTestCase):
     def test_configured_values_are_shown(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn(f"WASH Crew Role: Configured (<@&{WASH_CREW_ROLE_ID}>)", lines)
+        self.assertIn(f"🛠️ WASH Crew Role: Configured (<@&{WASH_CREW_ROLE_ID}>)", lines)
 
     def test_missing_wash_crew_role_reports_not_configured(self) -> None:
         self._seed_completed_setup()
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn("WASH Crew Role: Not configured", lines)
+        self.assertIn("🛠️ WASH Crew Role: Not configured", lines)
 
     def test_manage_collections_reports_not_configured_when_none_exist(self) -> None:
         self._seed_completed_setup()
@@ -160,7 +160,7 @@ class MainSummaryTests(ConfigServiceTestCase):
         self._seed_completed_setup(wash_crew_role_id=999999)
         guild = FakeGuild(role_ids=set())
         lines = self.service.build_summary_lines(GUILD_ID, guild)
-        self.assertTrue(any(line.startswith("WASH Crew Role: Invalid") for line in lines))
+        self.assertTrue(any(line.startswith("🛠️ WASH Crew Role: Invalid") for line in lines))
 
     def test_voting_defaults_summary_no_longer_mentions_candidate_selection(self) -> None:
         # Candidate selection is per-database now (Manage Databases); the
@@ -371,7 +371,7 @@ class ManageDatabasesSectionTests(ConfigServiceTestCase):
         database = self._create_database()
         configuration = self.service.get_database_configuration(GUILD_ID, database.database_id)
         self.assertIsNone(configuration.channels.suggestion_channel_id)
-        self.assertEqual(configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+        self.assertEqual(configuration.suggestion_rules.candidate_selection, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
     def test_multiple_simultaneously_active_databases_are_both_directly_editable(self) -> None:
         # Unlike the old model, having more than one active database is

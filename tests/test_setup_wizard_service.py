@@ -358,7 +358,7 @@ class WashCrewRoleStepTests(SetupWizardServiceTestCase):
     def test_missing_role_id_is_incomplete_on_review(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
         lines = self.service.build_review_lines(state)
-        self.assertIn("WASH Crew Role: Incomplete", lines)
+        self.assertIn("🛠️ WASH Crew Role: Incomplete", lines)
 
     def test_invalid_role_fails_validation(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
@@ -381,7 +381,7 @@ class WatchPartyRoleStepTests(SetupWizardServiceTestCase):
         updated = self.service.set_watch_party_role(state, None, JoinMode.SELF_SERVICE)
         self.assertIsNone(updated.draft.watch_party_role_id)
         lines = self.service.build_review_lines(updated)
-        self.assertIn("Watch Party Role: Incomplete", lines)
+        self.assertIn("🍿 Watch Party Role: Incomplete", lines)
 
     def test_invalid_role_fails_validation(self):
         state, _ = self.service.start_or_resume(GUILD_ID)

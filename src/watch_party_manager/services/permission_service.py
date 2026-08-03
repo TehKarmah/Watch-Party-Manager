@@ -18,7 +18,12 @@ class PermissionService:
     """Centralize WASH Crew and Watch Party member role checks.
 
     WASH Crew inherits Watch Party member permissions. All checks fail closed
-    when the relevant role is not configured.
+    when the relevant role is not configured -- except the Discord server
+    owner, who always has Watch Party member-level access (First-Time UX
+    Polish: the owner should never need to assign themselves the configured
+    role just to add suggestions, browse, vote, or participate). This is
+    member-level only -- the owner still needs the configured WASH Crew
+    role for administrative commands, exactly like everyone else.
     """
 
     def __init__(
@@ -37,12 +42,26 @@ class PermissionService:
         roles = getattr(user, "roles", [])
         return any(getattr(role, "id", None) == role_id for role in roles)
 
+    @staticmethod
+    def _is_guild_owner(user: object) -> bool:
+        """True when `user` is the owner of its own guild.
+
+        Reads guild.owner_id off the member object itself (discord.Member
+        already exposes .guild), so no extra parameter is needed at any
+        existing call site.
+        """
+        guild = getattr(user, "guild", None)
+        owner_id = getattr(guild, "owner_id", None)
+        return owner_id is not None and owner_id == getattr(user, "id", None)
+
     def is_wash_crew(self, user: object) -> bool:
         return self._has_role(user, self.wash_crew_role_id)
 
     def is_watch_party_member(self, user: object) -> bool:
-        return self.is_wash_crew(user) or self._has_role(
-            user, self.watch_party_member_role_id
+        return (
+            self._is_guild_owner(user)
+            or self.is_wash_crew(user)
+            or self._has_role(user, self.watch_party_member_role_id)
         )
 
     def require_wash_crew(self, user: object) -> PermissionCheck:
@@ -59,6 +78,8 @@ class PermissionService:
         return PermissionCheck(True)
 
     def require_watch_party_member(self, user: object) -> PermissionCheck:
+        if self._is_guild_owner(user):
+            return PermissionCheck(True)
         if self.watch_party_member_role_id is None and self.wash_crew_role_id is None:
             return PermissionCheck(
                 False,

@@ -167,12 +167,13 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 2.2 Role configuration
 
-- **Objective:** Confirm the WASH Crew role and Watch Party role/join-mode steps save correctly.
+- **Objective:** Confirm the 🛠️ WASH Crew role and 🍿 Watch Party role/join-mode steps save correctly, and that selecting the WASH Crew role no longer auto-advances the wizard.
 - **Preconditions:** Test 2.1 passed.
 - **Steps:**
-  1. Select a WASH Crew role.
-  2. Select a Watch Party role and a join mode (Self-Service, Manual, Approval-Required, or Discord-Managed).
-- **Expected Result:** Both selections advance the wizard; the chosen role names and join mode later appear correctly on the Review step (Test 2.10).
+  1. On the 🛠️ WASH Crew Role step, select a role and confirm the wizard stays on the same step (no auto-advance) -- review the selection, then press **Save & Continue**.
+  2. Press **Save & Continue** again without selecting a role first (on a fresh run) and confirm a clear validation message appears ("Select a WASH Crew role before continuing.") rather than silently failing or crashing.
+  3. On the 🍿 Watch Party Role step, select a role and a join mode (Self-Service, Manual, Approval-Required, or Discord-Managed).
+- **Expected Result:** WASH Crew role selection alone never advances the wizard; Save & Continue advances only once a role is actually selected; the chosen role names and join mode later appear correctly on the Review step (Test 2.10).
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -332,10 +333,10 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 2.8 Nominee selection mode and its help text
 
-- **Objective:** Confirm all three nominee-selection modes are selectable from the dropdown, each with a plain-language description, and that **Favor New Additions** is the pre-filled default.
+- **Objective:** Confirm all three nominee-selection modes are selectable from the dropdown, each with a plain-language description, and that **Favor Older Additions** is the pre-filled default.
 - **Preconditions:** Reached the Voting Defaults step (before pressing **Set Voting Defaults**).
 - **Steps:**
-  1. Open the nominee-selection dropdown; confirm it lists exactly **Favor New Additions (Recommended)**, **Favor Older Additions**, and **Pure Random**, with **Favor New Additions (Recommended)** preselected.
+  1. Open the nominee-selection dropdown; confirm it lists exactly **Favor Older Additions (Recommended)**, **Favor New Additions**, and **Pure Random**, with **Favor Older Additions (Recommended)** preselected.
   2. Confirm each option shows a short description beneath its label: Favor New Additions -- "Leans toward suggestions added recently; older ones stay eligible, just at a lower chance."; Favor Older Additions -- "Leans toward suggestions that have waited the longest; newer ones stay eligible, just at a lower chance."; Pure Random -- "Chooses completely at random from eligible suggestions, with no preference or exclusion."
   3. Select each mode in turn, press **Set Voting Defaults**, and confirm the modal opens (candidate count/duration/visibility only -- nominee selection is not one of its fields).
 - **Expected Result:** All three modes are selectable from the dropdown with the exact descriptions above; the chosen mode is saved correctly regardless of which one was picked -- see [Administration](05-Administration.md)'s "Nominee selection" section.
@@ -1116,6 +1117,33 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
+### 5.5c Customize This Vote's Start Vote shortcut
+
+- **Objective:** Confirm a WASH Crew member happy with the current Nominee Selection/Visibility overrides (and filters, or no filters at all) can create a round immediately without being forced to open Vote Settings' modal.
+- **Preconditions:** A collection with enough eligible suggestions for the guild's default candidate count.
+- **Steps:**
+  1. Run `/vote start` -> **Customize This Vote**.
+  2. Without opening Edit Filters or changing either dropdown, press **Start Vote** directly on this first screen.
+  3. Confirm the Review This Vote summary appears (never the candidate count/duration/reminder modal), showing the guild's configured defaults.
+  4. Confirm Start Vote there creates the round.
+- **Expected Result:** The round is created using the current overrides and the guild's configured defaults for everything else, without the modal ever being shown; **Continue to Vote Settings** remains available on the same screen for a Crew member who does want to override count/duration/reminder.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 5.5d Empty Custom Vote filter results offers recovery, not a dead end
+
+- **Objective:** Confirm that when Custom Vote's active filters leave too few eligible suggestions for the requested candidate count, WASH offers a way forward instead of a dead-end error.
+- **Preconditions:** A collection where an active filter (e.g. Genre or Suggestion Source) narrows the eligible pool below the requested candidate count.
+- **Steps:**
+  1. Run `/vote start` -> **Customize This Vote** -> **Edit Filters**, set a filter that leaves too few eligible suggestions, then continue to Vote Settings and submit.
+  2. Confirm WASH shows **Change Filters**, **Change Collection**, **Back**, and **Cancel** instead of a plain dead-end message, and that no round was created.
+  3. Click **Change Filters**; confirm the filter menu reopens with the same filter(s) still active.
+  4. Click **Back**; confirm it returns to the overrides screen with the Nominee Selection/Visibility choices still as selected.
+  5. Click **Cancel**; confirm it cleanly ends the flow ("Vote creation cancelled.") without creating a round.
+- **Expected Result:** Every current setting and filter survives Change Filters/Back; Cancel ends cleanly; no round is ever created from this screen.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
 ### 5.6 Vote buttons and vote changes
 
 - **Objective:** Confirm the interactive voting buttons work, including changing a vote.
@@ -1162,6 +1190,17 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Produce a tie and let the round complete.
 - **Expected Result:** Both winners are announced ("It's a tie! Winners: ..."), each gets its own "About the Winner" embed, and neither embed shows a poster thumbnail (thumbnails are suppressed for any tie).
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 5.10 Round numbers are guild-local, not global
+
+- **Objective:** Confirm the round number shown to users (voting post, `/vote status`, deadline-change/cancellation notices, completion announcement) reflects only this server's own rounds -- never inflated by another server's rounds on the same WASH process.
+- **Preconditions:** WASH configured on (or its test data seeded with rounds from) at least two different Discord servers.
+- **Steps:**
+  1. On Server A, create and close two voting rounds; confirm they display as "Round 1" and "Round 2".
+  2. On Server B (a server that has never run a vote before), create a round.
+- **Expected Result:** Server B's first-ever round displays as "Round 1", regardless of how many total rounds have been created across every server WASH hosts. Internal round IDs (visible only in logs/persistence, never to users) may continue incrementing globally -- that's expected and not a bug.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -1339,6 +1378,17 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 ---
 
 ## 9. Backup & Restore
+
+### 9.0 Backup scope is clearly explained
+
+- **Objective:** Confirm both the Setup Wizard's Backup Defaults step and `/config`'s Backup Defaults section explain that a WASH backup covers WASH's own data only, never Discord itself.
+- **Preconditions:** None.
+- **Steps:**
+  1. Reach the Setup Wizard's Backup Defaults step during `/setup`.
+  2. Reach `/config` -> Backup Defaults.
+- **Expected Result:** Both screens state plainly that backups include only WASH's own data (suggestions, votes, collections, server configuration) and never Discord itself (messages, channels, roles, permissions).
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
 
 ### 9.1 `/maintenance backup`
 
@@ -1539,6 +1589,17 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. As a server administrator with no explicitly configured role, run `/add`.
 - **Expected Result:** Rejected with a clear "not configured" message -- administrator status alone does not bypass the check.
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 10.4a Server owner automatically has member-level access
+
+- **Objective:** Confirm the Discord server owner can use every Watch Party member command without holding the configured Watch Party role themselves -- even when neither role is configured at all (Test 10.4's fail-closed behavior is for everyone else, not the owner).
+- **Preconditions:** Logged in as the Discord server's actual owner, with neither the WASH Crew nor Watch Party role assigned to that account.
+- **Steps:**
+  1. Run `/add`, `/browse`, `/random watch`, and cast a vote on an open round.
+  2. Confirm the owner is NOT automatically treated as WASH Crew -- run a WASH Crew-only command (e.g. `/config`) and confirm it's still rejected unless the owner also holds the configured WASH Crew role.
+- **Expected Result:** Every member-level command succeeds for the owner regardless of role; WASH Crew-only commands still require the configured WASH Crew role, same as any other member.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 

@@ -60,6 +60,13 @@ DURATION_FORMAT_HELP_TEXT = (
     f"Examples: {DURATION_FORMAT_EXAMPLES}."
 )
 
+# First-Time UX Polish: "vote duration" was observed to read ambiguously
+# during a live setup walkthrough -- shown wherever WASH specifically asks
+# for *vote* duration (not reminder-before-close or Shorten/Extend Vote,
+# which are already unambiguous in their own context) to head off any
+# confusion with a movie's own runtime.
+VOTE_DURATION_CLARIFICATION = "Vote duration is how long voting stays open -- not the movie's runtime."
+
 
 def parse_duration_to_minutes(text: str) -> int:
     """Parse a relative duration into whole minutes.

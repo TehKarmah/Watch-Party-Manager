@@ -51,6 +51,7 @@ from watch_party_manager.start_vote_view import (
     START_VOTE_CHOICE_TIMEOUT_SECONDS,
     CustomizeVoteModal,
     CustomizeVoteOverridesView,
+    InsufficientFilteredPoolView,
     StartVoteChoiceView,
 )
 
@@ -760,15 +761,15 @@ class ResolveCustomizeVoteDefaultCandidateSelectionTests(StartVoteFlowTestCase):
 
         self.assertEqual(result, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
-    def test_falls_back_to_favor_new_additions_when_the_channel_matches_no_collection(self) -> None:
+    def test_falls_back_to_favor_older_additions_when_the_channel_matches_no_collection(self) -> None:
         result = resolve_customize_vote_default_candidate_selection(self.bot, guild_id=100, channel_id=999999)
 
-        self.assertEqual(result, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+        self.assertEqual(result, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
-    def test_falls_back_to_favor_new_additions_with_no_guild_id(self) -> None:
+    def test_falls_back_to_favor_older_additions_with_no_guild_id(self) -> None:
         result = resolve_customize_vote_default_candidate_selection(self.bot, guild_id=None, channel_id=200)
 
-        self.assertEqual(result, CandidateSelectionMode.FAVOR_NEW_ADDITIONS)
+        self.assertEqual(result, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS)
 
 
 class CustomizeVoteOverridesViewTests(unittest.IsolatedAsyncioTestCase):
@@ -1448,6 +1449,34 @@ class CustomizeVoteFlowUiConsistencyTests(StartVoteFlowTestCase):
         self.assertIsInstance(overrides_view.candidate_selection_select, CandidateSelectionSelectComponent)
         self.assertIsInstance(overrides_view.visibility_select, VisibilitySelectComponent)
 
+    async def test_start_vote_button_is_present_on_the_overrides_screen(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        start_vote_button = next(
+            child for child in overrides_view.children
+            if getattr(child, "custom_id", None) == "wpm_start_vote_customize_start_now"
+        )
+        self.assertEqual(start_vote_button.label, "Start Vote")
+
+    async def test_start_vote_button_creates_a_round_immediately_without_a_modal(self) -> None:
+        # Custom Vote UX Polish: Start Vote must never require opening
+        # Vote Settings' modal -- every unfilled field uses its
+        # configured default, exactly like an untouched modal submission.
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        start_vote_button = next(
+            child for child in overrides_view.children
+            if getattr(child, "custom_id", None) == "wpm_start_vote_customize_start_now"
+        )
+        start_interaction = self._interaction()
+        await start_vote_button.callback(interaction=start_interaction)
+
+        # Lands on the Review This Vote confirmation screen (never a
+        # modal) -- confirming there creates the round.
+        self.assertIsNone(start_interaction.response.sent_modal)
+        await self._confirm_customize_vote(start_interaction)
+        self.assertIsNotNone(self.vote_service.get_open_round())
+
 
 class FakeMembershipServiceForFilters:
     """Minimal stand-in for MembershipService -- only get_role_config() is
@@ -1742,21 +1771,34 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         self.assertEqual(vote_round.filter_genre, "Comedy")
 
     async def test_member_filter_insufficient_pool_blocks_round_creation(self) -> None:
+        # Custom Vote UX Polish: the insufficient-pool check now runs
+        # eagerly at modal-submit time (before Review This Vote is ever
+        # shown), so the round is rejected immediately with a recovery
+        # screen rather than reaching a "Start Vote" confirm button.
         interaction = await self._open_customize_screen()
         overrides_view = interaction.response.sent_view
         menu_view = await self._open_filter_menu(overrides_view)
         menu_view = await self._set_member_and_return_to_menu(menu_view, self._kc_member())
         await self._back_to_overrides(menu_view)
 
-        confirm_interaction = await self._complete_customize_vote(
-            overrides_view, self._interaction(), nominee_count_text="3"
+        continue_button = next(
+            child for child in overrides_view.children if getattr(child, "label", None) == "Continue to Vote Settings"
         )
+        continue_interaction = self._interaction()
+        await continue_button.callback(interaction=continue_interaction)
+        modal = continue_interaction.response.sent_modal
+        modal.nominee_count_input._value = "3"
+        modal.duration_input._value = None
+
+        submit_interaction = self._interaction()
+        await modal.on_submit(interaction=submit_interaction)
 
         self.assertIsNone(self.vote_service.get_open_round())
-        self.assertTrue(confirm_interaction.response.sent_ephemeral)
-        self.assertIn("KC has 2 eligible suggestions", confirm_interaction.response.sent_message)
-        self.assertIn("requires 3 nominees", confirm_interaction.response.sent_message)
-        self.assertIn("Reduce the candidate count or choose another member", confirm_interaction.response.sent_message)
+        self.assertTrue(submit_interaction.response.sent_ephemeral)
+        self.assertIn("KC has 2 eligible suggestions", submit_interaction.response.sent_message)
+        self.assertIn("requires 3 nominees", submit_interaction.response.sent_message)
+        self.assertIn("Reduce the candidate count or choose another member", submit_interaction.response.sent_message)
+        self.assertIsInstance(submit_interaction.response.sent_view, InsufficientFilteredPoolView)
 
     async def test_genre_filter_insufficient_pool_blocks_round_creation(self) -> None:
         interaction = await self._open_customize_screen()
@@ -1765,15 +1807,111 @@ class CustomVoteFilterUiFlowTests(CustomizeVoteFlowUiConsistencyTests):
         menu_view = await self._select_genre(menu_view, "Horror")
         await self._back_to_overrides(menu_view)
 
-        confirm_interaction = await self._complete_customize_vote(
-            overrides_view, self._interaction(), nominee_count_text="3"
+        continue_button = next(
+            child for child in overrides_view.children if getattr(child, "label", None) == "Continue to Vote Settings"
         )
+        continue_interaction = self._interaction()
+        await continue_button.callback(interaction=continue_interaction)
+        modal = continue_interaction.response.sent_modal
+        modal.nominee_count_input._value = "3"
+        modal.duration_input._value = None
+
+        submit_interaction = self._interaction()
+        await modal.on_submit(interaction=submit_interaction)
 
         self.assertIsNone(self.vote_service.get_open_round())
-        self.assertTrue(confirm_interaction.response.sent_ephemeral)
-        self.assertIn("The Horror filter leaves 1 eligible suggestion", confirm_interaction.response.sent_message)
-        self.assertIn("requires 3 nominees", confirm_interaction.response.sent_message)
-        self.assertIn("Reduce the candidate count or choose another genre", confirm_interaction.response.sent_message)
+        self.assertTrue(submit_interaction.response.sent_ephemeral)
+        self.assertIn("The Horror filter leaves 1 eligible suggestion", submit_interaction.response.sent_message)
+        self.assertIn("requires 3 nominees", submit_interaction.response.sent_message)
+        self.assertIn("Reduce the candidate count or choose another genre", submit_interaction.response.sent_message)
+        self.assertIsInstance(submit_interaction.response.sent_view, InsufficientFilteredPoolView)
+
+    async def test_insufficient_pool_recovery_back_button_returns_to_overrides_with_filter_preserved(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._select_genre(menu_view, "Horror")
+        await self._back_to_overrides(menu_view)
+
+        continue_button = next(
+            child for child in overrides_view.children if getattr(child, "label", None) == "Continue to Vote Settings"
+        )
+        continue_interaction = self._interaction()
+        await continue_button.callback(interaction=continue_interaction)
+        modal = continue_interaction.response.sent_modal
+        modal.nominee_count_input._value = "3"
+        modal.duration_input._value = None
+        submit_interaction = self._interaction()
+        await modal.on_submit(interaction=submit_interaction)
+        recovery_view = submit_interaction.response.sent_view
+
+        back_button = next(
+            child for child in recovery_view.children
+            if getattr(child, "custom_id", None) == "wpm_start_vote_insufficient_back"
+        )
+        back_interaction = self._interaction()
+        await back_button.callback(interaction=back_interaction)
+
+        self.assertIs(back_interaction.response.edited_view, overrides_view)
+        self.assertIn("Horror", back_interaction.response.edited_content)
+
+    async def test_insufficient_pool_recovery_change_filters_reopens_the_filter_menu(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._select_genre(menu_view, "Horror")
+        await self._back_to_overrides(menu_view)
+
+        continue_button = next(
+            child for child in overrides_view.children if getattr(child, "label", None) == "Continue to Vote Settings"
+        )
+        continue_interaction = self._interaction()
+        await continue_button.callback(interaction=continue_interaction)
+        modal = continue_interaction.response.sent_modal
+        modal.nominee_count_input._value = "3"
+        modal.duration_input._value = None
+        submit_interaction = self._interaction()
+        await modal.on_submit(interaction=submit_interaction)
+        recovery_view = submit_interaction.response.sent_view
+
+        change_filters_button = next(
+            child for child in recovery_view.children
+            if getattr(child, "custom_id", None) == "wpm_start_vote_insufficient_change_filters"
+        )
+        change_filters_interaction = self._interaction()
+        await change_filters_button.callback(interaction=change_filters_interaction)
+
+        self.assertIn("Horror", change_filters_interaction.response.edited_content)
+
+    async def test_insufficient_pool_recovery_cancel_clears_the_view(self) -> None:
+        interaction = await self._open_customize_screen()
+        overrides_view = interaction.response.sent_view
+        menu_view = await self._open_filter_menu(overrides_view)
+        menu_view = await self._select_genre(menu_view, "Horror")
+        await self._back_to_overrides(menu_view)
+
+        continue_button = next(
+            child for child in overrides_view.children if getattr(child, "label", None) == "Continue to Vote Settings"
+        )
+        continue_interaction = self._interaction()
+        await continue_button.callback(interaction=continue_interaction)
+        modal = continue_interaction.response.sent_modal
+        modal.nominee_count_input._value = "3"
+        modal.duration_input._value = None
+        submit_interaction = self._interaction()
+        await modal.on_submit(interaction=submit_interaction)
+        recovery_view = submit_interaction.response.sent_view
+
+        cancel_button = next(
+            child for child in recovery_view.children
+            if getattr(child, "custom_id", None) == "wpm_start_vote_insufficient_cancel"
+        )
+        cancel_interaction = self._interaction()
+        await cancel_button.callback(interaction=cancel_interaction)
+
+        self.assertIn("cancelled", cancel_interaction.response.edited_content)
+        self.assertIsNone(cancel_interaction.response.edited_view)
+        self.assertIsNone(self.vote_service.get_open_round())
 
     async def test_filters_never_persist_to_the_collections_own_configuration(self) -> None:
         interaction = await self._open_customize_screen()

@@ -23,6 +23,19 @@ DEFAULT_BACKUP_DIRECTORY = DEFAULT_DATA_DIRECTORY / "backups"
 DEFAULT_BACKUP_INTERVAL_DAYS = 1
 DEFAULT_RETENTION_LIMIT = 30
 
+# First-Time UX Polish: shown wherever WASH asks about backups (Setup
+# Wizard, /config) so it's immediately clear this is WASH's own data, not
+# a Discord server backup -- a live setup walkthrough found this genuinely
+# unclear on first encounter. Kept here, next to create_backup() (every
+# *.json file under data_directory: suggestions, votes, collections, guild
+# configuration, and similar WASH-owned records), as the single source of
+# truth for what's actually included.
+BACKUP_SCOPE_EXPLANATION = (
+    "This backs up WASH's own data only -- suggestions, votes, collections, and server "
+    "configuration. It never includes Discord itself: messages, channels, roles, and permissions "
+    "are Discord's own responsibility and are never part of a WASH backup."
+)
+
 
 class BackupKind(str, Enum):
     """Why/when a backup was created -- drives its retention directory

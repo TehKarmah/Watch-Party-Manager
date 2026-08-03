@@ -34,6 +34,8 @@ See [Current Project State](docs/project_state.md) for the authoritative, detail
 
 New to WASH? Follow the complete [Installation Guide](docs/09-Installation-Guide.md) for step-by-step instructions, including Discord bot creation, permissions, and `.env` configuration.
 
+**Before you begin:** create WASH's two Discord roles -- 🛠️ **WASH Crew** and 🍿 **Watch Party** -- in Server Settings → Roles before running `/setup`, so they're ready to select when the wizard asks. See Discord's own [Roles and Permissions guide](https://support.discord.com/hc/articles/214836687-Discord-Roles-and-Permissions) if you've never created one. The server owner never needs either role themselves -- WASH always grants the owner every member-level ability automatically.
+
 Already familiar with Discord bot hosting? PowerShell:
 
 ```powershell

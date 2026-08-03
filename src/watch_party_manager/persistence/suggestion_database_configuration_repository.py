@@ -559,6 +559,12 @@ class SuggestionDatabaseConfigurationRepository:
                 rejection_enabled=rules.get("rejection_enabled", True),
                 rejection_threshold=rules.get("rejection_threshold", 2),
                 allow_resuggestion=rules.get("allow_resuggestion", True),
+                # Intentionally NOT DEFAULT_CANDIDATE_SELECTION_MODE: a record
+                # with no saved candidate_selection key predates the field
+                # entirely, and FAVOR_NEW_ADDITIONS was its effective behavior
+                # all along -- changing this fallback would silently alter an
+                # existing collection's behavior, which the current default
+                # (used only for brand-new collections) must never do.
                 candidate_selection=CandidateSelectionMode(
                     rules.get("candidate_selection", CandidateSelectionMode.FAVOR_NEW_ADDITIONS.value)
                 ),

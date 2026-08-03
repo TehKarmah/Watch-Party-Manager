@@ -304,15 +304,15 @@ Each database's `suggestion_rules.candidate_selection` setting chooses how `/vot
 
 Three modes are offered, under friendlier names; the underlying value in parentheses is what's actually persisted:
 
-- **Favor New Additions** (`favor_new_additions`, the recommended and default choice) -- weights eligible suggestions using each one's permanent suggestion date, favoring recently-added ones. Older suggestions stay eligible, just at a lower chance. *Leans toward suggestions added recently; older ones stay eligible, just at a lower chance.*
-- **Favor Older Additions** (`favor_older_additions`) -- the mirror image of Favor New Additions: weights toward suggestions that have waited the longest, while newer ones stay eligible at a lower chance. *Leans toward suggestions that have waited the longest; newer ones stay eligible, just at a lower chance.*
+- **Favor Older Additions** (`favor_older_additions`, the recommended and default choice) -- weights eligible suggestions toward ones that have waited the longest, while newer ones stay eligible at a lower chance. *Leans toward suggestions that have waited the longest; newer ones stay eligible, just at a lower chance.*
+- **Favor New Additions** (`favor_new_additions`) -- the mirror image of Favor Older Additions: weights eligible suggestions using each one's permanent suggestion date, favoring recently-added ones. Older suggestions stay eligible, just at a lower chance. *Leans toward suggestions added recently; older ones stay eligible, just at a lower chance.*
 - **Pure Random** (`infinite_pool`) -- every eligible suggestion is always available with equal weight. *Chooses completely at random from eligible suggestions, with no preference or exclusion.*
 
 No mode ever permanently excludes a suggestion from selection.
 
 The italicized sentence after each mode is the exact wording shown as that option's description everywhere it's chosen -- the Setup Wizard, `/config`'s Nominee Selection screen, and `/vote start`'s Customize This Vote -- so an administrator never has to already understand the underlying algorithm to pick one.
 
-A server that never explicitly sets this defaults to Favor New Additions/`favor_new_additions` -- `SuggestionRulesConfig`'s own documented default.
+A server that never explicitly sets this defaults to Favor Older Additions/`favor_older_additions` -- `SuggestionRulesConfig`'s own documented default. (A collection that already had an explicit value saved before this default changed keeps it unchanged -- this only affects brand-new collections and never-yet-configured guilds.)
 
 Within whichever pool a mode produces, WASH still applies its existing genre/media-type diversity pass and its existing deprioritization of recently nominated or recently won suggestions -- nominee-selection mode and diversity are independent, layered concerns.
 

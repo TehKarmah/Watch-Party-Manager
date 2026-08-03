@@ -1091,3 +1091,89 @@ class VoteServiceCollectionScopingTests(unittest.TestCase):
 
         self.assertEqual(self.service.get_round(movies.vote_round.id).status, VoteRoundStatus.CANCELLED)
         self.assertEqual(self.service.get_round(tv_shows.vote_round.id).status, VoteRoundStatus.OPEN)
+
+
+class GuildLocalRoundNumberTests(unittest.TestCase):
+    """First-Time UX Polish: visible round numbers must only count votes
+    belonging to the current Discord server -- a WASH process hosting
+    more than one guild must never let one server's rounds inflate
+    another's. VoteRound.id itself stays a single global counter (used
+    for persistence/custom IDs/lookups); get_guild_round_number() is the
+    separate, guild-scoped number actually shown to users.
+    """
+
+    GUILD_A = 100
+    GUILD_B = 200
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.service = VoteService(
+            FakeSuggestionLookup(existing_ids=list(range(1, 21))),
+            repository=JsonVoteRepository(Path(self._temp_dir.name) / "voting.json"),
+        )
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _create_and_attach(self, guild_id: int, database_id: int, candidate_ids) -> int:
+        """Create a round for `database_id` and immediately attach
+        `guild_id` to it (as bot.py's handle_start_vote_completion does
+        right after posting), returning the round's global id.
+        """
+        result = self.service.create_round(candidate_suggestion_ids=candidate_ids, database_id=database_id)
+        round_id = result.vote_round.id
+        self.service.attach_message_reference(round_id, guild_id, channel_id=1, message_id=round_id * 10)
+        self.service.close_round(round_id)
+        return round_id
+
+    def test_a_guilds_first_ever_round_is_guild_round_1_regardless_of_its_global_id(self) -> None:
+        # Guild A creates and closes two rounds first, so Guild B's first
+        # round gets a global id of 3 -- it must still display as "Round 1".
+        self._create_and_attach(self.GUILD_A, database_id=10, candidate_ids=[1, 2])
+        self._create_and_attach(self.GUILD_A, database_id=10, candidate_ids=[3, 4])
+        guild_b_round_id = self._create_and_attach(self.GUILD_B, database_id=20, candidate_ids=[5, 6])
+
+        self.assertEqual(guild_b_round_id, 3)
+        self.assertEqual(self.service.get_guild_round_number(guild_b_round_id, self.GUILD_B), 1)
+
+    def test_interleaved_voting_across_two_guilds_numbers_each_guild_independently(self) -> None:
+        # Interleaved: A, B, A, B -- global ids 1/2/3/4, but each guild's
+        # own displayed sequence must still read 1, 2 independently.
+        a1 = self._create_and_attach(self.GUILD_A, database_id=10, candidate_ids=[1, 2])
+        b1 = self._create_and_attach(self.GUILD_B, database_id=20, candidate_ids=[3, 4])
+        a2 = self._create_and_attach(self.GUILD_A, database_id=10, candidate_ids=[5, 6])
+        b2 = self._create_and_attach(self.GUILD_B, database_id=20, candidate_ids=[7, 8])
+
+        self.assertEqual(self.service.get_guild_round_number(a1, self.GUILD_A), 1)
+        self.assertEqual(self.service.get_guild_round_number(a2, self.GUILD_A), 2)
+        self.assertEqual(self.service.get_guild_round_number(b1, self.GUILD_B), 1)
+        self.assertEqual(self.service.get_guild_round_number(b2, self.GUILD_B), 2)
+
+    def test_a_third_guilds_rounds_never_affect_the_first_two(self) -> None:
+        guild_c = 300
+        self._create_and_attach(self.GUILD_A, database_id=10, candidate_ids=[1, 2])
+        self._create_and_attach(self.GUILD_B, database_id=20, candidate_ids=[3, 4])
+        c1 = self._create_and_attach(guild_c, database_id=30, candidate_ids=[5, 6])
+        a2 = self._create_and_attach(self.GUILD_A, database_id=10, candidate_ids=[7, 8])
+
+        self.assertEqual(self.service.get_guild_round_number(c1, guild_c), 1)
+        self.assertEqual(self.service.get_guild_round_number(a2, self.GUILD_A), 2)
+
+    def test_guild_round_number_is_computable_before_attach_message_reference_runs(self) -> None:
+        # The very first post's embed is built before attach_message_
+        # reference() records guild_id on the round itself -- the caller
+        # passes its own known guild_id explicitly instead.
+        self._create_and_attach(self.GUILD_A, database_id=10, candidate_ids=[1, 2])
+        result = self.service.create_round(candidate_suggestion_ids=[3, 4], database_id=20)
+        new_round_id = result.vote_round.id
+
+        self.assertIsNone(self.service.get_round(new_round_id).guild_id)
+        self.assertEqual(self.service.get_guild_round_number(new_round_id, self.GUILD_B), 1)
+
+    def test_global_round_id_stays_a_single_counter_across_every_guild(self) -> None:
+        # Section 11: "Global persistence IDs may remain globally unique."
+        a1 = self._create_and_attach(self.GUILD_A, database_id=10, candidate_ids=[1, 2])
+        b1 = self._create_and_attach(self.GUILD_B, database_id=20, candidate_ids=[3, 4])
+        a2 = self._create_and_attach(self.GUILD_A, database_id=10, candidate_ids=[5, 6])
+
+        self.assertEqual([a1, b1, a2], [1, 2, 3])

@@ -39,7 +39,7 @@ The current command list and short descriptions remain available through `/help`
 
 Casting a vote itself happens through the interactive buttons on the voting post, not a slash command.
 
-Wherever WASH asks for a duration (vote duration, reminder lead time, `/vote edit`'s Shorten/Extend Vote), it accepts a whole number immediately followed by a unit -- minutes, hours, or days -- for example `10m`, `1h`, or `7d`.
+Wherever WASH asks for a duration (vote duration, reminder lead time, `/vote edit`'s Shorten/Extend Vote), it accepts a whole number immediately followed by a unit -- minutes, hours, or days -- for example `10m`, `1h`, or `7d`. Vote duration specifically means how long voting stays open, not the movie's own runtime.
 
 ### WASH Crew
 
@@ -49,7 +49,7 @@ Wherever WASH asks for a duration (vote duration, reminder lead time, `/vote edi
 - `/database manage` -- Guided workflow: pick a collection, then move, edit, back up, restore, refresh its IMDb metadata, recover missing IMDb links, reset, or remove it. This is the only way to move, back up, refresh, recover, reset, or remove a collection -- those actions have no separate top-level command (`/database restore` is the one exception; see the [Command Reference](10-Command-Reference.md)). Refresh IMDb Metadata re-fetches already-linked suggestions' IMDb details (title, plot, poster, runtime, genres, IMDb rating, MPAA/content rating, director, cast) -- useful for older suggestions that predate a field WASH now captures. Recover Missing IMDb Links instead finds suggestions with *no* IMDb link at all, searches OMDb by their stored title/year, and -- only once you approve a specific match -- saves it and immediately refreshes that suggestion's metadata; a suggestion already linked is never offered here. Both share the same scope model (This Collection or All Collections, active collections in the current server only) and always require confirmation first; neither ever changes a suggestion's status, history, or Discord references. See [Administration](05-Administration.md#imdb-metadata-refresh) and [IMDb Metadata Recovery](05-Administration.md#imdb-metadata-recovery).
 - `/database restore` -- Restore one collection from a backup (Merge or Replace); stays a direct command since Discord can't collect a file upload through a button or menu.
 - `/maintenance repair`
-- `/maintenance backup`
+- `/maintenance backup` -- backs up WASH's own data only (suggestions, votes, collections, server configuration), never Discord itself.
 - `/maintenance restore`
 - `/maintenance reset`
 - `/maintenance import`

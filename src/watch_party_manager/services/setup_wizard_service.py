@@ -428,18 +428,18 @@ class SetupWizardService:
         lines: List[str] = []
 
         if draft.wash_crew_role_id is not None:
-            lines.append(f"WASH Crew Role: Configured (<@&{draft.wash_crew_role_id}>)")
+            lines.append(f"🛠️ WASH Crew Role: Configured (<@&{draft.wash_crew_role_id}>)")
         else:
-            lines.append("WASH Crew Role: Incomplete")
+            lines.append("🛠️ WASH Crew Role: Incomplete")
 
         if draft.watch_party_role_id is not None:
             join_mode = draft.watch_party_join_mode if draft.watch_party_join_mode else JoinMode.SELF_SERVICE
             join_mode_label = JOIN_MODE_DISPLAY_LABELS[join_mode]
             lines.append(
-                f"Watch Party Role: Configured (<@&{draft.watch_party_role_id}>, join mode: {join_mode_label})"
+                f"🍿 Watch Party Role: Configured (<@&{draft.watch_party_role_id}>, join mode: {join_mode_label})"
             )
         else:
-            lines.append("Watch Party Role: Incomplete")
+            lines.append("🍿 Watch Party Role: Incomplete")
 
         if draft.admin_channel_skipped:
             lines.append("Admin Channel: Skipped")

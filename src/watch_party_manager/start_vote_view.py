@@ -119,6 +119,32 @@ class ContinueToVoteSettingsButton(discord.ui.Button):
         await self._callback(interaction, self._candidate_selection_select.selected, self._visibility_select.selected)
 
 
+class StartVoteWithCurrentSettingsButton(discord.ui.Button):
+    """Creates the round immediately using the currently-selected Nominee
+    Selection/Visibility overrides, current filters (or none, if never
+    touched), and every other setting's configured default -- skipping
+    Vote Settings' modal entirely for a Crew member who's already happy
+    with the defaults (Custom Vote UX Polish: "every major step should
+    offer a Start Vote action").
+    """
+
+    def __init__(
+        self,
+        on_click: OnCustomizeOverridesContinue,
+        candidate_selection_select: CandidateSelectionSelectComponent,
+        visibility_select: VisibilitySelectComponent,
+    ) -> None:
+        super().__init__(
+            label="Start Vote", style=discord.ButtonStyle.success, custom_id="wpm_start_vote_customize_start_now"
+        )
+        self._callback = on_click
+        self._candidate_selection_select = candidate_selection_select
+        self._visibility_select = visibility_select
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._callback(interaction, self._candidate_selection_select.selected, self._visibility_select.selected)
+
+
 class EditFiltersButton(discord.ui.Button):
     """Opens the shared filter_menu_view.FilterMenuView session (Genre,
     IMDb Rating, MPAA Rating, Actor, Member) -- see bot.py's
@@ -165,6 +191,7 @@ class CustomizeVoteOverridesView(discord.ui.View):
         default_candidate_selection: CandidateSelectionMode,
         default_visibility: GuildVoteVisibility,
         on_edit_filters: Optional[OnEditFilters] = None,
+        on_start_vote: Optional[OnCustomizeOverridesContinue] = None,
     ) -> None:
         super().__init__(timeout=START_VOTE_CHOICE_TIMEOUT_SECONDS)
         self.candidate_selection_select = CandidateSelectionSelectComponent(default=default_candidate_selection)
@@ -176,7 +203,84 @@ class CustomizeVoteOverridesView(discord.ui.View):
         )
         if on_edit_filters is not None:
             self.add_item(EditFiltersButton(on_edit_filters))
+        if on_start_vote is not None:
+            self.start_vote_button = StartVoteWithCurrentSettingsButton(
+                on_start_vote, self.candidate_selection_select, self.visibility_select
+            )
+            self.add_item(self.start_vote_button)
         self.add_item(self.continue_button)
+
+
+class InsufficientFilteredPoolChangeFiltersButton(discord.ui.Button):
+    def __init__(self, on_click: OnEditFilters) -> None:
+        super().__init__(
+            label="Change Filters", style=discord.ButtonStyle.secondary, custom_id="wpm_start_vote_insufficient_change_filters"
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class InsufficientFilteredPoolChangeCollectionButton(discord.ui.Button):
+    def __init__(self, on_click: OnEditFilters) -> None:
+        super().__init__(
+            label="Change Collection",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wpm_start_vote_insufficient_change_collection",
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class InsufficientFilteredPoolBackButton(discord.ui.Button):
+    def __init__(self, on_click: OnEditFilters) -> None:
+        super().__init__(
+            label="Back", style=discord.ButtonStyle.secondary, custom_id="wpm_start_vote_insufficient_back"
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class InsufficientFilteredPoolCancelButton(discord.ui.Button):
+    def __init__(self, on_click: OnEditFilters) -> None:
+        super().__init__(
+            label="Cancel", style=discord.ButtonStyle.danger, custom_id="wpm_start_vote_insufficient_cancel"
+        )
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
+class InsufficientFilteredPoolView(discord.ui.View):
+    """Shown instead of Review This Vote when Custom Vote's active
+    filters leave too few eligible suggestions for the requested
+    candidate count (Custom Vote UX Polish) -- mirrors /browse's own
+    empty-results recovery screen (Change Filters/Change Collection/
+    Back), plus a fourth Cancel option since this screen is reached
+    from a Crew-only, round-creating flow rather than a passive browse.
+    Every current setting and filter is preserved -- see bot.py's
+    show_customize_vote_overrides, whose filter_state/overrides_view
+    these callbacks close over unchanged.
+    """
+
+    def __init__(
+        self,
+        on_change_filters: OnEditFilters,
+        on_change_collection: OnEditFilters,
+        on_back: OnEditFilters,
+        on_cancel: OnEditFilters,
+    ) -> None:
+        super().__init__(timeout=START_VOTE_CHOICE_TIMEOUT_SECONDS)
+        self.add_item(InsufficientFilteredPoolChangeFiltersButton(on_change_filters))
+        self.add_item(InsufficientFilteredPoolChangeCollectionButton(on_change_collection))
+        self.add_item(InsufficientFilteredPoolBackButton(on_back))
+        self.add_item(InsufficientFilteredPoolCancelButton(on_cancel))
 
 
 class CustomizeVoteModal(discord.ui.Modal):
@@ -234,7 +338,7 @@ class CustomizeVoteModal(discord.ui.Modal):
             placeholder=_blank_default_placeholder(default_nominee_count_display),
         )
         self.duration_input = discord.ui.TextInput(
-            label="Duration (1m-30d)",
+            label="Vote Duration (1m-30d)",
             required=False,
             placeholder=(
                 f"Examples: {DURATION_FORMAT_EXAMPLES} -- blank uses the default"
