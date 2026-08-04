@@ -162,11 +162,11 @@ A WASH backup includes only WASH's own data (suggestions, votes, collections, se
 
 ### Backup
 
-Run `/maintenance backup` (full server) or `/database backup` (one collection) before any release, dependency upgrade, manual data edit, or experiment with a collection's rules -- see [Administration: Recommended backup strategy](05-Administration.md#recommended-backup-strategy). `/database backup` is reachable directly or through `/database manage`'s Backup Collection action; both run the exact same logic.
+Run `/maintenance backup` (full server) or `/database manage` -> Backup Collection (one collection) before any release, dependency upgrade, manual data edit, or experiment with a collection's rules -- see [Administration: Recommended backup strategy](05-Administration.md#recommended-backup-strategy). Backup Collection is reached through `/database manage`'s own action menu, not as a separate top-level command.
 
 ### Restore
 
-**A bot restart is required after `/maintenance restore`, `/database restore`, `/database reset`, `/maintenance reset`, or `/maintenance import`** for the change to actually take effect -- several repositories cache their data in memory at startup, so "nothing happened" after a successful restore almost always just means WASH hasn't been restarted yet. See [Administration: Restart requirement](05-Administration.md#restart-requirement). `/database restore` remains its own top-level command (rather than living inside `/database manage`) because it requires uploading a file, and Discord has no way to attach a file in response to a button or menu selection -- `/database manage`'s Restore Collection action explains this and points you at `/database restore` directly.
+**A bot restart is required after `/maintenance restore`, `/database restore`, `/database manage` -> Reset Collection, `/maintenance reset`, or `/maintenance import`** for the change to actually take effect -- several repositories cache their data in memory at startup, so "nothing happened" after a successful restore almost always just means WASH hasn't been restarted yet. See [Administration: Restart requirement](05-Administration.md#restart-requirement). `/database restore` remains its own top-level command (rather than living inside `/database manage`) because it requires uploading a file, and Discord has no way to attach a file in response to a button or menu selection -- `/database manage`'s Restore Collection action explains this and points you at `/database restore` directly.
 
 ---
 
