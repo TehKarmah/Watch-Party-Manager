@@ -358,7 +358,7 @@ class WashCrewRoleStepTests(SetupWizardServiceTestCase):
     def test_missing_role_id_is_incomplete_on_review(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
         lines = self.service.build_review_lines(state)
-        self.assertIn("🛠️ WASH Crew Role: Incomplete", lines)
+        self.assertIn("⚠️ WASH Crew Role: Incomplete (Required)", lines)
 
     def test_invalid_role_fails_validation(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
@@ -381,7 +381,7 @@ class WatchPartyRoleStepTests(SetupWizardServiceTestCase):
         updated = self.service.set_watch_party_role(state, None, JoinMode.SELF_SERVICE)
         self.assertIsNone(updated.draft.watch_party_role_id)
         lines = self.service.build_review_lines(updated)
-        self.assertIn("🍿 Watch Party Role: Incomplete", lines)
+        self.assertIn("⚠️ Watch Party Role: Incomplete (Optional)", lines)
 
     def test_invalid_role_fails_validation(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
@@ -465,7 +465,7 @@ class AdminChannelStepTests(SetupWizardServiceTestCase):
 
     def test_review_line_reflects_configured_skipped_and_incomplete_states(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
-        self.assertIn("Admin Channel: Incomplete", self.service.build_review_lines(state))
+        self.assertIn("⚠️ Admin Channel: Incomplete (Optional)", self.service.build_review_lines(state))
 
         skipped = self.service.skip_admin_channel(state)
         self.assertIn("Admin Channel: Skipped", self.service.build_review_lines(skipped))
@@ -527,7 +527,7 @@ class HomeChannelStepTests(SetupWizardServiceTestCase):
 
     def test_review_line_reflects_configured_and_incomplete_states(self):
         state, _ = self.service.start_or_resume(GUILD_ID)
-        self.assertIn("Home Channel: Incomplete", self.service.build_review_lines(state))
+        self.assertIn("⚠️ Home Channel: Incomplete (Required)", self.service.build_review_lines(state))
 
         configured = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
         self.assertIn(

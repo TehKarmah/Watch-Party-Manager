@@ -325,6 +325,18 @@ class MainMenuTests(ConfigCommandTestCase):
         self.assertTrue(interaction.response.sent_ephemeral)
         self.assertIsInstance(interaction.response.sent_view, ConfigMainMenuView)
 
+    async def test_summary_shows_a_top_banner_when_configuration_is_incomplete(self) -> None:
+        # wash_crew_role_id is set but nothing else is, so this guild is
+        # still missing several required/optional settings.
+        self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
+        interaction = FakeInteraction()
+
+        await send_config_main_menu(interaction, self.bot, GUILD_ID, edit=False)
+
+        self.assertIn("⚠️ Some WASH settings are not yet configured", interaction.response.sent_message)
+        self.assertIn("⚠️ Watch Party Home Channel: Not configured (Required)", interaction.response.sent_message)
+        self.assertIn("⚠️ Admin Channel: Not configured (Optional)", interaction.response.sent_message)
+
     async def test_selecting_a_section_edits_into_that_sections_screen(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
         interaction = FakeInteraction()
@@ -338,6 +350,20 @@ class MainMenuTests(ConfigCommandTestCase):
 
         self.assertIn("WASH Crew Role", select_interaction.response.edited_content)
         self.assertIsInstance(select_interaction.response.edited_view, ConfigRoleSectionView)
+
+    async def test_done_button_closes_the_session_without_implying_a_save(self) -> None:
+        self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
+        interaction = FakeInteraction()
+        await send_config_main_menu(interaction, self.bot, GUILD_ID, edit=False)
+        view: ConfigMainMenuView = interaction.response.sent_view
+        done_button = next(c for c in view.children if getattr(c, "label", None) == "Done")
+
+        done_interaction = FakeInteraction()
+        await done_button.callback(interaction=done_interaction)
+
+        self.assertNotIn("save", done_interaction.response.edited_content.lower())
+        self.assertIn("/config", done_interaction.response.edited_content)
+        self.assertIsNone(done_interaction.response.edited_view)
 
     async def test_main_menu_options_carry_no_descriptions(self) -> None:
         # /config Main Menu Cleanup: the main dropdown is a clean numbered
@@ -364,20 +390,34 @@ class ConfigSectionNumberingTests(ConfigCommandTestCase):
     shows it: the main-menu summary and the section dropdown.
     """
 
+    @staticmethod
+    def _bare_title(section: ConfigSection) -> str:
+        # Strip a section's own flavor icon (WASH Crew Role/Watch Party
+        # Role only): a Not configured/Invalid line replaces it with a
+        # leading ⚠️ instead (Section 7's warning indicators), so the
+        # bare title text is what stays stable across both states.
+        title = CONFIG_SECTION_TITLES[section]
+        for icon in ("🛠️ ", "🍿 "):
+            if title.startswith(icon):
+                return title[len(icon):]
+        return title
+
     def test_summary_lines_are_numbered_in_order(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
 
         body = build_config_summary_body(self.bot.config_service, GUILD_ID, FakeInteraction().guild)
+        numbered_lines = body.split("\n\n")[-1].splitlines()
 
         for index, section in enumerate(CONFIG_SECTION_ORDER, start=1):
-            self.assertIn(f"{index}. {CONFIG_SECTION_TITLES[section]}:", body)
+            line = numbered_lines[index - 1]
+            self.assertTrue(line.startswith(f"{index}. "), f"line {index} was: {line!r}")
+            self.assertIn(f"{self._bare_title(section)}:", line)
 
     def test_summary_numbers_are_sequential_starting_at_one(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
 
         body = build_config_summary_body(self.bot.config_service, GUILD_ID, FakeInteraction().guild)
-        summary_section = body.split("\n\n", 1)[1]
-        numbered_lines = summary_section.splitlines()
+        numbered_lines = body.split("\n\n")[-1].splitlines()
 
         self.assertEqual(len(numbered_lines), len(CONFIG_SECTION_ORDER))
         for index, line in enumerate(numbered_lines, start=1):
@@ -414,8 +454,11 @@ class ConfigSectionNumberingTests(ConfigCommandTestCase):
 
         await send_config_main_menu(interaction, self.bot, GUILD_ID, edit=False)
 
+        numbered_lines = interaction.response.sent_message.split("\n\n")[-1].splitlines()
         for index, section in enumerate(CONFIG_SECTION_ORDER, start=1):
-            self.assertIn(f"{index}. {CONFIG_SECTION_TITLES[section]}:", interaction.response.sent_message)
+            line = numbered_lines[index - 1]
+            self.assertTrue(line.startswith(f"{index}. "), f"line {index} was: {line!r}")
+            self.assertIn(f"{self._bare_title(section)}:", line)
 
     def test_shared_sections_preserve_the_setup_wizards_relative_order(self) -> None:
         """Ordering matches the Setup Wizard: every /config section that
@@ -1704,6 +1747,18 @@ class ConfigRejectionSettingsSectionTests(ConfigCommandTestCase):
 
         self.assertIsInstance(interaction.response.sent_view, ConfigRejectionSettingsView)
         self.assertIn("Enabled (threshold 2)", interaction.response.sent_message)
+
+    async def test_body_explains_the_threshold_with_a_concrete_example(self) -> None:
+        self._seed_completed_setup()
+        self._create_database("Sunday Watch Party")
+        interaction = FakeInteraction()
+
+        await send_config_section(interaction, self.bot, GUILD_ID, ConfigSection.REJECTION_SETTINGS, edit=False)
+
+        message = interaction.response.sent_message
+        self.assertIn("distinct members must do that before the suggestion needs WASH Crew review", message)
+        self.assertIn("threshold 2 means", message)
+        self.assertIn("does not remove the suggestion from the collection", message)
 
     async def test_multiple_collections_require_an_explicit_choice_first(self) -> None:
         self._seed_completed_setup()

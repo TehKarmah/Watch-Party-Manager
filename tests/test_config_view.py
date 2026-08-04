@@ -16,6 +16,7 @@ from watch_party_manager.config_view import (
     CONFIG_VIEW_TIMEOUT_SECONDS,
     ConfigAdminChannelSectionView,
     ConfigDatabaseSectionView,
+    ConfigDoneButton,
     ConfigHomeChannelSectionView,
     ConfigJoinModeSectionView,
     ConfigMainMenuView,
@@ -56,10 +57,13 @@ class BackToMenuOnlyViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigMainMenuViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_a_single_section_select(self) -> None:
-        view = ConfigMainMenuView([("wash_crew_role", "WASH Crew Role")], _noop)
-        self.assertEqual(len(view.children), 1)
+    async def test_has_a_section_select_and_a_done_button(self) -> None:
+        view = ConfigMainMenuView([("wash_crew_role", "WASH Crew Role")], _noop, _noop)
+        self.assertEqual(len(view.children), 2)
         self.assertEqual(view.children[0].custom_id, "wpm_config_section_select")
+        self.assertIsInstance(view.children[1], ConfigDoneButton)
+        self.assertEqual(view.children[1].label, "Done")
+        self.assertEqual(view.children[1].custom_id, "wpm_config_done")
 
     async def test_selection_forwards_the_chosen_section_value(self) -> None:
         calls = []
@@ -68,16 +72,28 @@ class ConfigMainMenuViewTests(unittest.IsolatedAsyncioTestCase):
             calls.append(section_value)
 
         view = ConfigMainMenuView(
-            [("wash_crew_role", "WASH Crew Role"), ("backup_defaults", "Backup Defaults")], on_select
+            [("wash_crew_role", "WASH Crew Role"), ("backup_defaults", "Backup Defaults")], on_select, _noop
         )
         select = view.children[0]
         select._values = ["backup_defaults"]
         await select.callback(interaction=object())
         self.assertEqual(calls, ["backup_defaults"])
 
+    async def test_done_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_done(interaction) -> None:
+            calls.append("done")
+
+        view = ConfigMainMenuView([("wash_crew_role", "WASH Crew Role")], _noop, on_done)
+        done_button = next(c for c in view.children if isinstance(c, ConfigDoneButton))
+        await done_button.callback(interaction=object())
+        self.assertEqual(calls, ["done"])
+
     async def test_descriptions_apply_only_to_the_matching_option(self) -> None:
         view = ConfigMainMenuView(
             [("wash_crew_role", "WASH Crew Role"), ("voting_defaults", "Voting Defaults")],
+            _noop,
             _noop,
             descriptions={"voting_defaults": "Visible/Blind explained here"},
         )
@@ -87,7 +103,7 @@ class ConfigMainMenuViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(options_by_value["voting_defaults"].description, "Visible/Blind explained here")
 
     async def test_no_descriptions_leaves_every_option_undescribed(self) -> None:
-        view = ConfigMainMenuView([("wash_crew_role", "WASH Crew Role")], _noop)
+        view = ConfigMainMenuView([("wash_crew_role", "WASH Crew Role")], _noop, _noop)
         self.assertIsNone(view.children[0].options[0].description)
 
 

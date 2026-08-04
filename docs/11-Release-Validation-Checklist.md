@@ -207,7 +207,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm the Admin Channel step explains why a private channel might not appear in the picker, before the administrator gets confused wondering where it went.
 - **Preconditions:** A private channel exists that WASH has not yet been granted access to.
 - **Steps:**
-  1. Reach the Admin Channel step; confirm the body text includes a note (e.g. "🔒 Private channels only appear...") explaining that WASH must be granted **View Channel** and **Send Messages** on a private channel before it appears in the picker, and that reopening the step (or running `/setup` again) refreshes the list.
+  1. Reach the Admin Channel step; confirm the body text includes a note (e.g. "🔒 Private channels will appear in the channel selector once WASH has permission to view them...") explaining that WASH must be granted **View Channel** and **Send Messages** on a private channel before it appears in the picker, and that reopening the step (or running `/setup` again) refreshes the list. The wording never implies the picker's on-screen position relative to this note (no "above"/"below").
   2. Confirm the note also mentions that if WASH assigns server roles, its own role must sit above those roles in the role hierarchy.
   3. Grant WASH those permissions on the private channel from Discord's own channel settings, then reopen this step; confirm the channel now appears in the destination picker.
 - **Expected Result:** The guidance is visible without requiring any interaction, names the exact two permissions needed, mentions role hierarchy, and never suggests granting Administrator. The channel appears in the picker once access is actually granted, without needing to restart the wizard.
@@ -216,14 +216,15 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 2.4 Save & Finish Later, then resume
 
-- **Objective:** Confirm partial progress can be saved and resumed without loss.
+- **Objective:** Confirm partial progress can be saved and resumed without loss, including directly from the save confirmation screen itself.
 - **Preconditions:** At least two steps completed.
 - **Steps:**
   1. On any step, click **Save & Finish Later**.
-  2. Confirm the confirmation message explains how to resume.
-  3. Run `/setup` again.
-  4. Choose **Continue Setup**.
-- **Expected Result:** The save confirmation is clear and non-destructive (setup is not marked complete). Running `/setup` again shows a resume prompt naming how many of 11 steps are complete and the current step; **Continue Setup** returns to exactly where you left off with all prior answers intact.
+  2. Confirm the confirmation message explains how to resume, and shows a **Continue Setup** button directly on that same screen.
+  3. Click **Continue Setup**; confirm it resumes immediately, on the same step, with every prior answer intact.
+  4. Separately (starting over from step 1), instead close out and run `/setup` again.
+  5. Choose **Continue Setup** from the resume prompt.
+- **Expected Result:** The save confirmation is clear and non-destructive (setup is not marked complete), and offers its own **Continue Setup** button for resuming immediately without needing to run `/setup` again -- while still mentioning that `/setup` can also be run later. Running `/setup` again shows a resume prompt naming how many of 11 steps are complete and the current step; **Continue Setup** returns to exactly where you left off with all prior answers intact, whichever path was used to get there.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -232,10 +233,11 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm WASH's home channel can be created fresh or pointed at an existing channel, and that every collection's suggestion thread (and, by default, the Watched Item Archive thread) is created inside it.
 - **Preconditions:** Test 2.4 passed.
 - **Steps:**
-  1. Reach the Home Channel step; confirm it offers **Create New Channel (Recommended)** and **Use Existing Channel**.
+  1. Reach the Home Channel step; confirm it offers a channel selector alongside **Create New Channel (Recommended)** on the same screen (matching the Admin Channel and Watched Item Archive steps' own layout) -- not a separate "choose an action first" screen.
   2. Choose **Create New Channel**; confirm the name prompt defaults to "Watch Party" and can be changed; confirm the channel is actually created in the server.
-  3. Separately, repeat choosing **Use Existing Channel**; confirm it shows a channel picker and saves the selected channel.
-- **Expected Result:** Either path advances the wizard with a home channel saved; this channel becomes the parent for every thread created in later steps.
+  3. Separately, select an existing channel from the picker; confirm the wizard does **not** advance yet, then click **Save & Continue**; confirm it saves the selected channel and advances.
+  4. Confirm selecting a different channel and clicking **Back** then returning to this step does not force Cancel Setup -- the member can freely change their mind before confirming.
+- **Expected Result:** Either path advances the wizard with a home channel saved; this channel becomes the parent for every thread created in later steps. Selecting a channel only records the choice -- **Save & Continue** is what actually advances.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -381,14 +383,15 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 
 ### 2.11 Review and completion summary
 
-- **Objective:** Confirm the final Review step accurately reflects every prior answer, and that Back still works from it.
+- **Objective:** Confirm the final Review step accurately reflects every prior answer, that Back still works from it, and that it no longer offers Save & Finish Later now that every section has already been answered.
 - **Preconditions:** All prior steps completed.
 - **Steps:**
   1. Reach the Review step.
   2. Compare every listed value against what was actually selected in Tests 2.2-2.10.
-  3. Click **Back** once, confirm it returns to the immediately preceding step.
-  4. Return to Review and click **Save**.
-- **Expected Result:** Every section (roles, join mode, admin channel, home channel, suggestion database, Watched Item Archive, voting defaults including nominee selection, reminders, backup) is shown accurately, using natural-language duration (e.g. "4 hours" or "3 days", never "72 hours"). The Automatic Backups line reads "Automatic Backups: Disabled" if you chose Disable in Test 2.10b, or "Automatic Backups: Every N day(s), keep M" (matching the configured interval/retention) if you chose Enable. Save marks setup complete and shows a final completion summary matching the same values, including the same Automatic Backups line.
+  3. Confirm the buttons present are exactly **Save**, the edit-section dropdown, **Back**, and **Cancel Setup** -- no **Save & Finish Later**.
+  4. Click **Back** once, confirm it returns to the immediately preceding step.
+  5. Return to Review and click **Save**.
+- **Expected Result:** Every section (roles, join mode, admin channel, home channel, suggestion database, Watched Item Archive, voting defaults including nominee selection, reminders, backup) is shown accurately, using natural-language duration (e.g. "4 hours" or "3 days", never "72 hours"). The Automatic Backups line reads "Automatic Backups: Disabled" if you chose Disable in Test 2.10b, or "Automatic Backups: Every N day(s), keep M" (matching the configured interval/retention) if you chose Enable. Save & Finish Later does not appear on this step -- every section has already been answered by the time Review is reached, so there's nothing left to save and come back to. Save marks setup complete and shows a final completion summary matching the same values, including the same Automatic Backups line.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -438,7 +441,20 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Preconditions:** Section 2 completed.
 - **Steps:**
   1. Run `/config` as WASH Crew.
-- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Home Channel, Collections, Watched Item Archive, Voting Defaults, "I Won't Watch" Settings, Reminder Defaults, Backup Defaults, Eligible Pool Warning) appears, each showing its current status, with no description text under any option.
+- **Expected Result:** A menu listing every section (WASH Crew Role, Watch Party Role, Watch Party Join Mode, Admin Channel, Home Channel, Collections, Watched Item Archive, Voting Defaults, "I Won't Watch" Settings, Reminder Defaults, Backup Defaults, Eligible Pool Warning) appears, each showing its current status, with no description text under any option, and a **Done** button (not a save-implying label, since every change already persists immediately).
+- **Result:** [ ] Pass [ ] Fail
+- **Notes:** ___________________________
+
+### 3.1a `/config` main menu warning indicators
+
+- **Objective:** Confirm every unconfigured or invalid section is clearly flagged, and required settings read differently from optional ones.
+- **Preconditions:** A server that has completed setup but left at least one optional setting (e.g. Admin Channel or Watched Item Archive) and one required setting unconfigured, or has one configured resource (a role or channel) since deleted from Discord.
+- **Steps:**
+  1. Run `/config` and read the summary at the top.
+  2. Locate an unconfigured required setting's line (e.g. WASH Crew Role, Home Channel, or Collections) and an unconfigured optional setting's line (e.g. Admin Channel or Watched Item Archive).
+  3. Delete a configured role or channel directly in Discord, then re-run `/config`.
+  4. Click **Done**.
+- **Expected Result:** A banner near the top (e.g. "⚠️ Some WASH settings are not yet configured. Review the items marked below.") appears whenever any section is Not configured or Invalid, and is absent when everything is configured. Every Not configured/Invalid line leads with ⚠️. A required setting's Not configured line is marked "(Required)"; an optional, skippable one is marked "(Optional)". The deleted role/channel's line now reads "Invalid" with ⚠️, not silently "Configured". **Done** closes the session with a message that does not imply anything was just saved, and mentions `/config` can be run again.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -920,7 +936,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Objective:** Confirm "I Won't Watch" has its own dedicated Setup Wizard step (immediately after Voting Defaults) and its own numbered `/config` section, separate from Voting Defaults; confirm Enable/Disable plus threshold (1-10, default 2) are configurable in both, persist correctly, are scoped per collection, and existing collections default to enabled with threshold 2.
 - **Preconditions:** WASH Crew role; a server with more than one collection for the multi-collection steps.
 - **Steps:**
-  1. Run `/setup`; confirm the Voting Defaults step's modal only has candidate count and vote duration fields (no threshold field), and confirm the very next step is titled "I Won't Watch" Settings with **Enable "I Won't Watch" (Recommended)** and **Disable "I Won't Watch"** buttons -- not a free-text field.
+  1. Run `/setup`; confirm the Voting Defaults step's modal only has candidate count and vote duration fields (no threshold field), and confirm the very next step is titled "I Won't Watch" Settings with **Enable "I Won't Watch" (Recommended)** and **Disable "I Won't Watch"** buttons -- not a free-text field. Confirm the step's body explains that the threshold is how many distinct members must press "I Won't Watch" before the suggestion needs WASH Crew review, includes a concrete numeric example (e.g. "threshold 2 means..."), and clarifies that reaching it does not remove the suggestion from the collection -- only from eligibility for future votes. Confirm `/config`'s "I Won't Watch" Settings section explains the threshold using this exact same wording.
   2. Click Enable; confirm a modal opens with only a "Threshold (1-10)" field, prefilled with 2.
   3. Enter a value outside 1-10 (e.g. 0 or 11); confirm a clear validation error and the same Enable/Disable choice is shown again.
   4. Enter a valid value (e.g. 5) and complete setup; confirm the Review screen and completion summary both show "I Won't Watch: Enabled, threshold: 5" as its own line, separate from the Voting Defaults line.

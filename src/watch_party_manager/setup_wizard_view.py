@@ -39,6 +39,7 @@ OnExistingDatabaseSelected = Callable[[discord.Interaction, int], Awaitable[None
 OnDatabaseNameSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnThreadNameSubmit = Callable[[discord.Interaction, str], Awaitable[None]]
 OnChannelSelected = Callable[[discord.Interaction, int], Awaitable[None]]
+OnChannelConfirmed = Callable[[discord.Interaction, Optional[int]], Awaitable[None]]
 OnSkip = Callable[[discord.Interaction], Awaitable[None]]
 OnCreateThreadClicked = Callable[[discord.Interaction], Awaitable[None]]
 OnVotingDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
@@ -225,6 +226,20 @@ class SetupWizardResumeView(SetupWizardStepView):
         self.add_item(ContinueSetupButton(on_continue))
         self.add_item(ReviewProgressButton(on_review))
         self.add_item(RestartSetupButton(on_restart))
+
+
+class SetupProgressSavedView(SetupWizardStepView):
+    """Shown after Save & Finish Later confirms a draft was saved.
+
+    Offers Continue Setup so a member who saved by mistake (or simply
+    changes their mind) isn't forced to re-run `/setup` from scratch to
+    get back into the same step -- the message still names `/setup` as
+    the way back in later, for whenever this ephemeral message is gone.
+    """
+
+    def __init__(self, on_continue: OnResumeChoice, *, requester_id: Optional[int] = None) -> None:
+        super().__init__(requester_id=requester_id)
+        self.add_item(ContinueSetupButton(on_continue))
 
 
 # --- WASH Crew Role ---------------------------------------------------------------------
@@ -627,12 +642,23 @@ class ChannelDestinationSelect(discord.ui.Select):
     previously saved value -- this can, since every option (including
     which one is `default`) is decided fresh by the caller on every
     render.
+
+    Channel Selection Consistency: in the Setup Wizard (every caller that
+    omits on_select), selecting an option here only records the choice
+    (defers) -- it never advances the step on its own. A sibling "Save &
+    Continue" button (see ChannelSelectionConfirmButton) reads the
+    selection once the user is ready, so opening this selector and then
+    changing your mind never forces you further than you meant to go.
+    /config's own channel sections (which have no multi-step flow or
+    Back/Save & Finish Later to stay consistent with, and already save
+    every change immediately) still pass on_select to save as soon as a
+    channel is chosen, unchanged from before.
     """
 
     def __init__(
         self,
         options: List[discord.SelectOption],
-        on_select: OnChannelSelected,
+        on_select: Optional[OnChannelSelected] = None,
         *,
         custom_id: str,
         placeholder: str,
@@ -648,7 +674,41 @@ class ChannelDestinationSelect(discord.ui.Select):
         self._on_select = on_select
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await self._on_select(interaction, int(self.values[0]))
+        if self._on_select is not None:
+            await self._on_select(interaction, int(self.values[0]))
+            return
+        await interaction.response.defer()
+
+
+class ChannelSelectionConfirmButton(discord.ui.Button):
+    """Reads whichever channel is currently selected in a sibling
+    ChannelDestinationSelect and confirms it -- shown alongside that
+    select on every Setup Wizard channel-selection screen (Channel
+    Selection Consistency). Falls back to `fallback_channel_id` (the
+    step's already-saved value, if any) when the select was never
+    re-touched on this render -- re-visiting a step that already has a
+    saved destination and pressing Save & Continue immediately must
+    re-confirm that value, not demand a redundant re-selection.
+    """
+
+    def __init__(
+        self,
+        on_click: OnChannelConfirmed,
+        channel_select: ChannelDestinationSelect,
+        *,
+        fallback_channel_id: Optional[int],
+        custom_id: str,
+    ) -> None:
+        super().__init__(label="Save & Continue", style=discord.ButtonStyle.primary, custom_id=custom_id)
+        self._on_click = on_click
+        self._channel_select = channel_select
+        self._fallback_channel_id = fallback_channel_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        channel_id = (
+            int(self._channel_select.values[0]) if self._channel_select.values else self._fallback_channel_id
+        )
+        await self._on_click(interaction, channel_id)
 
 
 # --- Home Channel Creation ------------------------------------------------------------------
@@ -687,13 +747,15 @@ class UseExistingChannelButton(discord.ui.Button):
 
 
 class ExistingChannelSelectView(SetupWizardStepView):
-    """Use Existing Channel: text channels only. Reused by both the Home
-    Channel step and (via HomeChannelChoiceView's shared buttons) any
-    other "pick an existing channel" screen, as well as /config's Home
+    """Use Existing Channel: text channels only. Used by /config's Home
     Channel section (which has its own single "Back to Menu" button
     rather than the wizard's separate Back/Save & Finish Later/Cancel
     trio -- on_back and on_save_for_later are therefore optional here,
-    added only when the caller is the setup wizard itself).
+    added only when a caller supplies them). The Setup Wizard's own Home
+    Channel step no longer uses this -- see HomeChannelStepView, which
+    shows the channel select and Create New Channel together on one
+    screen (Channel Selection Consistency) instead of this view's
+    separate "pick an existing channel" sub-screen.
     """
 
     def __init__(
@@ -764,35 +826,44 @@ class AdminChannelStepView(SetupWizardStepView):
     requests are posted for WASH Crew, create a new private channel for
     it, or skip for now.
 
-    Reuses ChannelDestinationSelect (generic, already used for the Watch
-    Destination step) rather than a duplicate channel-select component,
-    and mirrors WatchDestinationStepView's "select existing, create new,
-    or skip" shape. `options` is built fresh by the caller on every
-    render (see bot.py's build_channel_destination_options) rather than
-    delegating to Discord's own auto-populated channel select, so
-    threads created earlier in the same session are never missing and
-    the previously saved destination is always shown pre-selected.
+    Reuses ChannelDestinationSelect (generic, shared with the Home
+    Channel and Watch Destination steps -- Channel Selection
+    Consistency) rather than a duplicate channel-select component.
+    `options` is built fresh by the caller on every render (see bot.py's
+    build_channel_destination_options) rather than delegating to
+    Discord's own auto-populated channel select, so threads created
+    earlier in the same session are never missing and the previously
+    saved destination is always shown pre-selected. Selecting an option
+    never advances on its own -- press Save & Continue once you're happy
+    with the choice (or Create New Channel / Skip for Now instead).
     """
 
     def __init__(
         self,
         options: List[discord.SelectOption],
-        on_select: OnChannelSelected,
+        on_confirm: OnChannelConfirmed,
         on_create_new: OnCreateThreadClicked,
         on_skip: OnSkip,
         on_back: OnBack,
         on_save_for_later: OnSaveForLater,
         on_cancel: OnWizardCancel,
         *,
+        fallback_channel_id: Optional[int] = None,
         requester_id: Optional[int] = None,
     ) -> None:
         super().__init__(requester_id=requester_id)
+        self.channel_select = ChannelDestinationSelect(
+            options,
+            custom_id="wpm_setup_admin_channel_select",
+            placeholder="Choose an existing channel or thread",
+        )
+        self.add_item(self.channel_select)
         self.add_item(
-            ChannelDestinationSelect(
-                options,
-                on_select,
-                custom_id="wpm_setup_admin_channel_select",
-                placeholder="Choose an existing channel or thread",
+            ChannelSelectionConfirmButton(
+                on_confirm,
+                self.channel_select,
+                fallback_channel_id=fallback_channel_id,
+                custom_id="wpm_setup_admin_channel_confirm",
             )
         )
         self.add_item(CreateNewAdminChannelButton(on_create_new))
@@ -812,26 +883,48 @@ class AdminChannelStepView(SetupWizardStepView):
 # thread, so a home channel is always required.
 
 
-class HomeChannelChoiceView(SetupWizardStepView):
-    """Home Channel step: create a new channel (recommended), or use an
-    existing one. Reuses CreateNewChannelButton/UseExistingChannelButton
-    -- the same "create vs. use existing" choice the old suggestion-
-    destination sub-flow offered, now surfaced once, up front.
+class HomeChannelStepView(SetupWizardStepView):
+    """Home Channel step: choose an existing text channel, or create a
+    new one (recommended). No skip option -- every collection needs
+    somewhere to create its thread, so a home channel is always
+    required.
+
+    Channel Selection Consistency: mirrors AdminChannelStepView/
+    WatchDestinationStepView's identical select-then-Save & Continue
+    shape -- selecting an option in the channel select never advances on
+    its own, unlike this step's own former two-screen "Create New vs.
+    Use Existing" choice, which forced picking one before the other was
+    even reachable.
     """
 
     def __init__(
         self,
+        options: List[discord.SelectOption],
+        on_confirm: OnChannelConfirmed,
         on_create_new: OnDatabaseChoiceButton,
-        on_use_existing: OnDatabaseChoiceButton,
         on_back: OnBack,
         on_save_for_later: OnSaveForLater,
         on_cancel: OnWizardCancel,
         *,
+        fallback_channel_id: Optional[int] = None,
         requester_id: Optional[int] = None,
     ) -> None:
         super().__init__(requester_id=requester_id)
+        self.channel_select = ChannelDestinationSelect(
+            options,
+            custom_id="wpm_setup_home_channel_select",
+            placeholder="Choose an existing text channel",
+        )
+        self.add_item(self.channel_select)
+        self.add_item(
+            ChannelSelectionConfirmButton(
+                on_confirm,
+                self.channel_select,
+                fallback_channel_id=fallback_channel_id,
+                custom_id="wpm_setup_home_channel_confirm",
+            )
+        )
         self.add_item(CreateNewChannelButton(on_create_new))
-        self.add_item(UseExistingChannelButton(on_use_existing))
         self.add_item(SetupBackButton(on_back))
         self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))
@@ -907,27 +1000,38 @@ class WatchDestinationStepView(SetupWizardStepView):
     can't filter archived/locked threads, show parent-channel context,
     or pre-select the already-saved destination, so this uses an
     explicit, freshly built option list instead.
+
+    Channel Selection Consistency: selecting an option never advances on
+    its own -- press Save & Continue once you're happy with the choice
+    (mirrors AdminChannelStepView/HomeChannelStepView's identical shape).
     """
 
     def __init__(
         self,
         options: List[discord.SelectOption],
-        on_select: OnChannelSelected,
+        on_confirm: OnChannelConfirmed,
         on_create_thread: OnCreateThreadClicked,
         on_skip: OnSkip,
         on_back: OnBack,
         on_save_for_later: OnSaveForLater,
         on_cancel: OnWizardCancel,
         *,
+        fallback_channel_id: Optional[int] = None,
         requester_id: Optional[int] = None,
     ) -> None:
         super().__init__(requester_id=requester_id)
+        self.channel_select = ChannelDestinationSelect(
+            options,
+            custom_id="wpm_setup_watch_destination_channel_select",
+            placeholder="Choose an existing channel or thread",
+        )
+        self.add_item(self.channel_select)
         self.add_item(
-            ChannelDestinationSelect(
-                options,
-                on_select,
-                custom_id="wpm_setup_watch_destination_channel_select",
-                placeholder="Choose an existing channel or thread",
+            ChannelSelectionConfirmButton(
+                on_confirm,
+                self.channel_select,
+                fallback_channel_id=fallback_channel_id,
+                custom_id="wpm_setup_watch_destination_confirm",
             )
         )
         self.add_item(CreateNewThreadButton(on_create_thread))
@@ -1332,7 +1436,7 @@ class BackupDefaultsChoiceView(SetupWizardStepView):
     """Step 10: choose whether automatic backups are enabled at all
     (Release Polish: Optional Automatic Backups) before -- only if
     enabled -- configuring their interval and retention. Enable is the
-    recommended, default action, matching HomeChannelChoiceView's and
+    recommended, default action, matching CreateNewChannelButton's and
     SuggestionDatabaseChoiceView's own "recommended action first, primary
     style" convention.
     """
@@ -1395,7 +1499,11 @@ class EditSectionSelect(discord.ui.Select):
 
 class ReviewStepView(SetupWizardStepView):
     """Step 9 (final): summarize every section, then Save, edit one via the
-    dropdown, step Back to Backup Defaults, Save & Finish Later, or Cancel.
+    dropdown, step Back to Backup Defaults, or Cancel.
+
+    No Save & Finish Later here -- every section has already been
+    answered by the time a member reaches Review, so there's nothing
+    left to come back and finish; Save is always one press away.
     """
 
     def __init__(
@@ -1404,7 +1512,6 @@ class ReviewStepView(SetupWizardStepView):
         on_save: OnSave,
         on_edit_section: OnEditSection,
         on_back: OnBack,
-        on_save_for_later: OnSaveForLater,
         on_cancel: OnWizardCancel,
         *,
         requester_id: Optional[int] = None,
@@ -1413,5 +1520,4 @@ class ReviewStepView(SetupWizardStepView):
         self.add_item(SaveSetupButton(on_save))
         self.add_item(EditSectionSelect(section_options, on_edit_section))
         self.add_item(SetupBackButton(on_back))
-        self.add_item(SetupSaveForLaterButton(on_save_for_later))
         self.add_item(SetupCancelButton(on_cancel))

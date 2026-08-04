@@ -420,9 +420,18 @@ class SetupWizardService:
         Incomplete -- so WASH Crew can see at a glance what still needs
         attention before saving. "Invalid" is never produced here: that
         status only exists once validate() has actually checked a
-        configured resource against live Discord state (see
-        build_review_lines_with_issues() in setup_wizard_view.py's
-        caller, which merges these lines with validate()'s findings).
+        configured resource against live Discord state -- which only
+        happens when Save is pressed, surfacing any problem found as an
+        error_message on whichever step it belongs to, not as a line
+        here.
+
+        Consistent Warning Iconography: an Incomplete line leads with ⚠️
+        in place of the section's own flavor icon, matching how
+        ConfigService.build_summary_lines marks /config's own Not
+        configured/Invalid lines -- the same glyph means the same thing
+        in both places. Skipped is left unmarked: it's a resolved,
+        deliberate choice (Admin Channel/Watched Item Archive's own Skip
+        button), not something still needing attention.
         """
         draft = state.draft
         lines: List[str] = []
@@ -430,7 +439,7 @@ class SetupWizardService:
         if draft.wash_crew_role_id is not None:
             lines.append(f"🛠️ WASH Crew Role: Configured (<@&{draft.wash_crew_role_id}>)")
         else:
-            lines.append("🛠️ WASH Crew Role: Incomplete")
+            lines.append("⚠️ WASH Crew Role: Incomplete (Required)")
 
         if draft.watch_party_role_id is not None:
             join_mode = draft.watch_party_join_mode if draft.watch_party_join_mode else JoinMode.SELF_SERVICE
@@ -439,19 +448,19 @@ class SetupWizardService:
                 f"🍿 Watch Party Role: Configured (<@&{draft.watch_party_role_id}>, join mode: {join_mode_label})"
             )
         else:
-            lines.append("🍿 Watch Party Role: Incomplete")
+            lines.append("⚠️ Watch Party Role: Incomplete (Optional)")
 
         if draft.admin_channel_skipped:
             lines.append("Admin Channel: Skipped")
         elif draft.admin_channel_id is not None:
             lines.append(f"Admin Channel: Configured (<#{draft.admin_channel_id}>)")
         else:
-            lines.append("Admin Channel: Incomplete")
+            lines.append("⚠️ Admin Channel: Incomplete (Optional)")
 
         if draft.home_channel_id is not None:
             lines.append(f"Home Channel: Configured (<#{draft.home_channel_id}>)")
         else:
-            lines.append("Home Channel: Incomplete")
+            lines.append("⚠️ Home Channel: Incomplete (Required)")
 
         if draft.suggestion_database_id is not None:
             action = "created" if draft.suggestion_database_is_new else "selected"
@@ -460,14 +469,14 @@ class SetupWizardService:
                 f"#{draft.suggestion_database_id})"
             )
         else:
-            lines.append("Collections: Incomplete")
+            lines.append("⚠️ Collections: Incomplete (Required)")
 
         if draft.watch_destination_skipped:
             lines.append("Watched Item Archive: Skipped")
         elif draft.watch_destination_channel_id is not None:
             lines.append(f"Watched Item Archive: Configured (<#{draft.watch_destination_channel_id}>)")
         else:
-            lines.append("Watched Item Archive: Incomplete")
+            lines.append("⚠️ Watched Item Archive: Incomplete (Optional)")
 
         if draft.voting_candidate_count is not None:
             candidate_selection_label = CANDIDATE_SELECTION_DISPLAY_LABELS[draft.voting_candidate_selection]
@@ -477,7 +486,7 @@ class SetupWizardService:
                 f"{draft.voting_visibility.value.capitalize()}, {candidate_selection_label})"
             )
         else:
-            lines.append("Voting Defaults: Incomplete")
+            lines.append("⚠️ Voting Defaults: Incomplete (Required)")
 
         if draft.rejection_enabled is not None:
             if draft.rejection_enabled:
@@ -490,7 +499,7 @@ class SetupWizardService:
             else:
                 lines.append("I Won't Watch: Configured (Disabled)")
         else:
-            lines.append("I Won't Watch: Incomplete")
+            lines.append("⚠️ I Won't Watch: Incomplete (Required)")
 
         if draft.reminder_enabled is not None:
             if draft.reminder_enabled:
@@ -501,7 +510,7 @@ class SetupWizardService:
             else:
                 lines.append("Reminder Defaults: Configured (disabled)")
         else:
-            lines.append("Reminder Defaults: Incomplete")
+            lines.append("⚠️ Reminder Defaults: Incomplete (Required)")
 
         if draft.backup_enabled is False:
             lines.append("Backup Defaults: Configured (Automatic Backups: Disabled)")
@@ -512,7 +521,7 @@ class SetupWizardService:
                 f"keep {draft.backup_retention_count})"
             )
         else:
-            lines.append("Backup Defaults: Incomplete")
+            lines.append("⚠️ Backup Defaults: Incomplete (Required)")
 
         return lines
 

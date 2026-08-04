@@ -26,8 +26,8 @@ from watch_party_manager.setup_wizard_view import (
     CreateThreadNameModal,
     ExistingChannelSelectView,
     ExistingDatabaseSelectView,
-    HomeChannelChoiceView,
     HomeChannelNameModal,
+    HomeChannelStepView,
     ModalStepIntroView,
     RejectionSettingsChoiceView,
     RejectionThresholdModal,
@@ -37,6 +37,7 @@ from watch_party_manager.setup_wizard_view import (
     SetupBackButton,
     SetupCancelButton,
     SetupPreparationView,
+    SetupProgressSavedView,
     SetupSaveForLaterButton,
     SetupWizardResumeView,
     SuggestionDatabaseChoiceView,
@@ -109,6 +110,48 @@ class SetupWizardResumeViewTests(unittest.IsolatedAsyncioTestCase):
         view = self._view(on_restart=on_restart)
         await view.children[2].callback(interaction=object())
         self.assertEqual(calls, ["restart"])
+
+
+class SetupProgressSavedViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_one_continue_setup_button_with_the_expected_timeout(self) -> None:
+        view = SetupProgressSavedView(_noop)
+        self.assertEqual(len(view.children), 1)
+        self.assertEqual(view.children[0].label, "Continue Setup")
+        self.assertEqual(view.children[0].custom_id, "wpm_setup_resume_continue")
+        self.assertEqual(view.timeout, SETUP_WIZARD_STEP_TIMEOUT_SECONDS)
+
+    async def test_continue_button_triggers_its_callback(self) -> None:
+        calls = []
+
+        async def on_continue(interaction) -> None:
+            calls.append("continue")
+
+        view = SetupProgressSavedView(on_continue)
+        await view.children[0].callback(interaction=object())
+        self.assertEqual(calls, ["continue"])
+
+    async def test_enforces_requester_id(self) -> None:
+        view = SetupProgressSavedView(_noop, requester_id=42)
+
+        class FakeUser:
+            id = 99
+
+        class FakeResponse:
+            def __init__(self) -> None:
+                self.sent = False
+
+            async def send_message(self, *args, **kwargs) -> None:
+                self.sent = True
+
+        class FakeInteraction:
+            def __init__(self) -> None:
+                self.user = FakeUser()
+                self.response = FakeResponse()
+
+        interaction = FakeInteraction()
+        allowed = await view.interaction_check(interaction)
+        self.assertFalse(allowed)
+        self.assertTrue(interaction.response.sent)
 
 
 class WashCrewRoleStepViewTests(unittest.IsolatedAsyncioTestCase):
@@ -320,12 +363,13 @@ _SAMPLE_DESTINATION_OPTIONS = [discord.SelectOption(label="general", value="1")]
 
 
 class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_channel_select_create_new_skip_back_save_and_cancel(self) -> None:
+    async def test_has_channel_select_confirm_create_new_skip_back_save_and_cancel(self) -> None:
         view = AdminChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop, _noop)
         self.assertEqual(
             [getattr(child, "label", None) or getattr(child, "custom_id", None) for child in view.children],
             [
                 "wpm_setup_admin_channel_select",
+                "Save & Continue",
                 "Create New Channel",
                 "Skip for Now",
                 "Back",
@@ -334,6 +378,63 @@ class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_selecting_a_channel_defers_without_advancing(self) -> None:
+        # Channel Selection Consistency: opening the selector and picking
+        # an option must never advance the step on its own.
+        view = AdminChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop, _noop)
+
+        class FakeResponse:
+            def __init__(self) -> None:
+                self.deferred = False
+
+            async def defer(self) -> None:
+                self.deferred = True
+
+        class FakeInteraction:
+            def __init__(self) -> None:
+                self.response = FakeResponse()
+
+        interaction = FakeInteraction()
+        view.channel_select._values = ["42"]
+        await view.channel_select.callback(interaction=interaction)
+        self.assertTrue(interaction.response.deferred)
+
+    async def test_confirm_reads_the_selected_channel(self) -> None:
+        calls = []
+
+        async def on_confirm(interaction, channel_id) -> None:
+            calls.append(channel_id)
+
+        view = AdminChannelStepView(_SAMPLE_DESTINATION_OPTIONS, on_confirm, _noop, _noop, _noop, _noop, _noop)
+        view.channel_select._values = ["42"]
+        confirm_button = next(c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_admin_channel_confirm")
+        await confirm_button.callback(interaction=object())
+        self.assertEqual(calls, [42])
+
+    async def test_confirm_falls_back_to_the_previously_saved_channel_when_untouched(self) -> None:
+        calls = []
+
+        async def on_confirm(interaction, channel_id) -> None:
+            calls.append(channel_id)
+
+        view = AdminChannelStepView(
+            _SAMPLE_DESTINATION_OPTIONS, on_confirm, _noop, _noop, _noop, _noop, _noop, fallback_channel_id=7
+        )
+        confirm_button = next(c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_admin_channel_confirm")
+        await confirm_button.callback(interaction=object())
+        self.assertEqual(calls, [7])
+
+    async def test_confirm_reports_none_when_nothing_was_ever_selected_or_saved(self) -> None:
+        calls = []
+
+        async def on_confirm(interaction, channel_id) -> None:
+            calls.append(channel_id)
+
+        view = AdminChannelStepView(_SAMPLE_DESTINATION_OPTIONS, on_confirm, _noop, _noop, _noop, _noop, _noop)
+        confirm_button = next(c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_admin_channel_confirm")
+        await confirm_button.callback(interaction=object())
+        self.assertEqual(calls, [None])
+
     async def test_create_new_button_triggers_its_callback(self) -> None:
         calls = []
 
@@ -341,7 +442,8 @@ class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
             calls.append("create_new")
 
         view = AdminChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, on_create_new, _noop, _noop, _noop, _noop)
-        await view.children[1].callback(interaction=object())
+        create_new_button = next(c for c in view.children if getattr(c, "label", None) == "Create New Channel")
+        await create_new_button.callback(interaction=object())
         self.assertEqual(calls, ["create_new"])
 
     async def test_skip_button_triggers_its_callback(self) -> None:
@@ -351,7 +453,8 @@ class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
             calls.append("skip")
 
         view = AdminChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, on_skip, _noop, _noop, _noop)
-        await view.children[2].callback(interaction=object())
+        skip_button = next(c for c in view.children if getattr(c, "label", None) == "Skip for Now")
+        await skip_button.callback(interaction=object())
         self.assertEqual(calls, ["skip"])
 
     async def test_back_button_triggers_its_callback(self) -> None:
@@ -377,12 +480,13 @@ class AdminChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class WatchDestinationStepViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_channel_select_create_thread_skip_back_save_and_cancel(self) -> None:
+    async def test_has_channel_select_confirm_create_thread_skip_back_save_and_cancel(self) -> None:
         view = WatchDestinationStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop, _noop)
         self.assertEqual(
             [getattr(child, "label", None) or getattr(child, "custom_id", None) for child in view.children],
             [
                 "wpm_setup_watch_destination_channel_select",
+                "Save & Continue",
                 "Create New Thread (Recommended)",
                 "Skip for Now",
                 "Back",
@@ -390,6 +494,35 @@ class WatchDestinationStepViewTests(unittest.IsolatedAsyncioTestCase):
                 "Cancel Setup",
             ],
         )
+
+    async def test_confirm_reads_the_selected_channel(self) -> None:
+        calls = []
+
+        async def on_confirm(interaction, channel_id) -> None:
+            calls.append(channel_id)
+
+        view = WatchDestinationStepView(_SAMPLE_DESTINATION_OPTIONS, on_confirm, _noop, _noop, _noop, _noop, _noop)
+        view.channel_select._values = ["42"]
+        confirm_button = next(
+            c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_watch_destination_confirm"
+        )
+        await confirm_button.callback(interaction=object())
+        self.assertEqual(calls, [42])
+
+    async def test_confirm_falls_back_to_the_previously_saved_channel_when_untouched(self) -> None:
+        calls = []
+
+        async def on_confirm(interaction, channel_id) -> None:
+            calls.append(channel_id)
+
+        view = WatchDestinationStepView(
+            _SAMPLE_DESTINATION_OPTIONS, on_confirm, _noop, _noop, _noop, _noop, _noop, fallback_channel_id=99
+        )
+        confirm_button = next(
+            c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_watch_destination_confirm"
+        )
+        await confirm_button.callback(interaction=object())
+        self.assertEqual(calls, [99])
 
     async def test_create_thread_button_triggers_its_callback(self) -> None:
         calls = []
@@ -400,7 +533,10 @@ class WatchDestinationStepViewTests(unittest.IsolatedAsyncioTestCase):
         view = WatchDestinationStepView(
             _SAMPLE_DESTINATION_OPTIONS, _noop, on_create_thread, _noop, _noop, _noop, _noop
         )
-        await view.children[1].callback(interaction=object())
+        create_thread_button = next(
+            c for c in view.children if getattr(c, "label", None) == "Create New Thread (Recommended)"
+        )
+        await create_thread_button.callback(interaction=object())
         self.assertEqual(calls, ["create_thread"])
 
     async def test_skip_button_triggers_its_callback(self) -> None:
@@ -410,7 +546,8 @@ class WatchDestinationStepViewTests(unittest.IsolatedAsyncioTestCase):
             calls.append("skip")
 
         view = WatchDestinationStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, on_skip, _noop, _noop, _noop)
-        await view.children[2].callback(interaction=object())
+        skip_button = next(c for c in view.children if getattr(c, "label", None) == "Skip for Now")
+        await skip_button.callback(interaction=object())
         self.assertEqual(calls, ["skip"])
 
     async def test_select_options_reflect_the_supplied_options_with_parent_context(self) -> None:
@@ -437,19 +574,83 @@ class CreateThreadNameModalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(modal.name_input.default, "Watched Item Archive")
 
 
-class HomeChannelChoiceViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_create_new_use_existing_back_save_and_cancel(self) -> None:
-        view = HomeChannelChoiceView(_noop, _noop, _noop, _noop, _noop)
+class HomeChannelStepViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_has_channel_select_confirm_create_new_back_save_and_cancel(self) -> None:
+        # No Skip option -- every collection needs somewhere to create
+        # its thread, so a home channel is always required.
+        view = HomeChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop)
         self.assertEqual(
-            [child.label for child in view.children],
+            [getattr(child, "label", None) or getattr(child, "custom_id", None) for child in view.children],
             [
+                "wpm_setup_home_channel_select",
+                "Save & Continue",
                 "Create New Channel (Recommended)",
-                "Use Existing Channel",
                 "Back",
                 "Save & Finish Later",
                 "Cancel Setup",
             ],
         )
+
+    async def test_selecting_a_channel_defers_without_advancing(self) -> None:
+        view = HomeChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop)
+
+        class FakeResponse:
+            def __init__(self) -> None:
+                self.deferred = False
+
+            async def defer(self) -> None:
+                self.deferred = True
+
+        class FakeInteraction:
+            def __init__(self) -> None:
+                self.response = FakeResponse()
+
+        interaction = FakeInteraction()
+        view.channel_select._values = ["42"]
+        await view.channel_select.callback(interaction=interaction)
+        self.assertTrue(interaction.response.deferred)
+
+    async def test_confirm_reads_the_selected_channel(self) -> None:
+        calls = []
+
+        async def on_confirm(interaction, channel_id) -> None:
+            calls.append(channel_id)
+
+        view = HomeChannelStepView(_SAMPLE_DESTINATION_OPTIONS, on_confirm, _noop, _noop, _noop, _noop)
+        view.channel_select._values = ["42"]
+        confirm_button = next(
+            c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_home_channel_confirm"
+        )
+        await confirm_button.callback(interaction=object())
+        self.assertEqual(calls, [42])
+
+    async def test_confirm_falls_back_to_the_previously_saved_channel_when_untouched(self) -> None:
+        calls = []
+
+        async def on_confirm(interaction, channel_id) -> None:
+            calls.append(channel_id)
+
+        view = HomeChannelStepView(
+            _SAMPLE_DESTINATION_OPTIONS, on_confirm, _noop, _noop, _noop, _noop, fallback_channel_id=123
+        )
+        confirm_button = next(
+            c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_home_channel_confirm"
+        )
+        await confirm_button.callback(interaction=object())
+        self.assertEqual(calls, [123])
+
+    async def test_confirm_reports_none_when_nothing_was_ever_selected_or_saved(self) -> None:
+        calls = []
+
+        async def on_confirm(interaction, channel_id) -> None:
+            calls.append(channel_id)
+
+        view = HomeChannelStepView(_SAMPLE_DESTINATION_OPTIONS, on_confirm, _noop, _noop, _noop, _noop)
+        confirm_button = next(
+            c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_home_channel_confirm"
+        )
+        await confirm_button.callback(interaction=object())
+        self.assertEqual(calls, [None])
 
     async def test_create_new_button_triggers_its_callback(self) -> None:
         calls = []
@@ -457,19 +658,29 @@ class HomeChannelChoiceViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_create_new(interaction) -> None:
             calls.append("create_new")
 
-        view = HomeChannelChoiceView(on_create_new, _noop, _noop, _noop, _noop)
-        await view.children[0].callback(interaction=object())
+        view = HomeChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, on_create_new, _noop, _noop, _noop)
+        create_new_button = next(
+            c for c in view.children if getattr(c, "label", None) == "Create New Channel (Recommended)"
+        )
+        await create_new_button.callback(interaction=object())
         self.assertEqual(calls, ["create_new"])
 
-    async def test_use_existing_button_triggers_its_callback(self) -> None:
+    async def test_back_button_triggers_its_callback(self) -> None:
         calls = []
 
-        async def on_use_existing(interaction) -> None:
-            calls.append("use_existing")
+        async def on_back(interaction) -> None:
+            calls.append("back")
 
-        view = HomeChannelChoiceView(_noop, on_use_existing, _noop, _noop, _noop)
-        await view.children[1].callback(interaction=object())
-        self.assertEqual(calls, ["use_existing"])
+        view = HomeChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, on_back, _noop, _noop)
+        back_button = next(c for c in view.children if isinstance(c, SetupBackButton))
+        await back_button.callback(interaction=object())
+        self.assertEqual(calls, ["back"])
+
+    async def test_select_options_reflect_the_supplied_options(self) -> None:
+        options = [discord.SelectOption(label="Watch Party", value="42", default=True)]
+        view = HomeChannelStepView(options, _noop, _noop, _noop, _noop, _noop)
+        select = view.children[0]
+        self.assertEqual(select.options, options)
 
 
 class HomeChannelNameModalTests(unittest.IsolatedAsyncioTestCase):
@@ -897,14 +1108,16 @@ class BackupDefaultsModalTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ReviewStepViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_has_save_edit_section_back_save_for_later_and_cancel(self) -> None:
-        view = ReviewStepView([("wash_crew_role", "WASH Crew Role")], _noop, _noop, _noop, _noop, _noop)
-        self.assertEqual(len(view.children), 5)
+    async def test_has_save_edit_section_back_and_cancel_but_no_save_for_later(self) -> None:
+        # Review is the last step -- every section has already been
+        # answered, so there's nothing left to come back and finish.
+        view = ReviewStepView([("wash_crew_role", "WASH Crew Role")], _noop, _noop, _noop, _noop)
+        self.assertEqual(len(view.children), 4)
         self.assertEqual(view.children[0].label, "Save")
         self.assertEqual(view.children[0].custom_id, "wpm_setup_review_save")
         self.assertIsInstance(view.children[-1], SetupCancelButton)
         self.assertTrue(any(isinstance(child, SetupBackButton) for child in view.children))
-        self.assertTrue(any(isinstance(child, SetupSaveForLaterButton) for child in view.children))
+        self.assertFalse(any(isinstance(child, SetupSaveForLaterButton) for child in view.children))
 
     async def test_save_button_triggers_its_callback(self) -> None:
         calls = []
@@ -912,7 +1125,7 @@ class ReviewStepViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_save(interaction) -> None:
             calls.append("save")
 
-        view = ReviewStepView([("wash_crew_role", "WASH Crew Role")], on_save, _noop, _noop, _noop, _noop)
+        view = ReviewStepView([("wash_crew_role", "WASH Crew Role")], on_save, _noop, _noop, _noop)
         await view.children[0].callback(interaction=object())
         self.assertEqual(calls, ["save"])
 
@@ -923,7 +1136,7 @@ class ReviewStepViewTests(unittest.IsolatedAsyncioTestCase):
             calls.append(step_value)
 
         view = ReviewStepView(
-            [("wash_crew_role", "WASH Crew Role"), ("review", "Review")], _noop, on_edit_section, _noop, _noop, _noop
+            [("wash_crew_role", "WASH Crew Role"), ("review", "Review")], _noop, on_edit_section, _noop, _noop
         )
         select = view.children[1]
         select._values = ["review"]
@@ -936,7 +1149,7 @@ class ReviewStepViewTests(unittest.IsolatedAsyncioTestCase):
         async def on_back(interaction) -> None:
             calls.append("back")
 
-        view = ReviewStepView([("wash_crew_role", "WASH Crew Role")], _noop, _noop, on_back, _noop, _noop)
+        view = ReviewStepView([("wash_crew_role", "WASH Crew Role")], _noop, _noop, on_back, _noop)
         back_button = next(c for c in view.children if isinstance(c, SetupBackButton))
         await back_button.callback(interaction=object())
         self.assertEqual(calls, ["back"])
@@ -1036,7 +1249,7 @@ class RequesterScopedInteractionCheckTests(unittest.IsolatedAsyncioTestCase):
             AdminChannelStepView(
                 _SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop, _noop, requester_id=42
             ),
-            HomeChannelChoiceView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
+            HomeChannelStepView(_SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop, requester_id=42),
             SuggestionDatabaseChoiceView(_noop, _noop, _noop, _noop, _noop, requester_id=42),
             WatchDestinationStepView(
                 _SAMPLE_DESTINATION_OPTIONS, _noop, _noop, _noop, _noop, _noop, _noop, requester_id=42
@@ -1052,7 +1265,7 @@ class RequesterScopedInteractionCheckTests(unittest.IsolatedAsyncioTestCase):
                 default_visibility=GuildVoteVisibility.VISIBLE,
                 requester_id=42,
             ),
-            ReviewStepView([("wash_crew_role", "WASH Crew Role")], _noop, _noop, _noop, _noop, _noop, requester_id=42),
+            ReviewStepView([("wash_crew_role", "WASH Crew Role")], _noop, _noop, _noop, _noop, requester_id=42),
         ]
         for view in views:
             blocked = await view.interaction_check(self._FakeInteraction(99))

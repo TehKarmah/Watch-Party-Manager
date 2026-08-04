@@ -57,6 +57,7 @@ OnConfigVotingDefaultsIntroConfigure = Callable[
 ]
 OnConfigReminderDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
 OnConfigBackupDefaultsSubmit = Callable[[discord.Interaction, str, str], Awaitable[None]]
+OnConfigDone = Callable[[discord.Interaction], Awaitable[None]]
 
 
 class BackToMenuButton(discord.ui.Button):
@@ -97,6 +98,20 @@ class ConfigSectionSelect(discord.ui.Select):
         await self._on_select(interaction, self.values[0])
 
 
+class ConfigDoneButton(discord.ui.Button):
+    """Closes the /config session. Labeled "Done" rather than "Save" --
+    every section already persists its change immediately on selection,
+    so there is never anything left to save here.
+    """
+
+    def __init__(self, on_click: OnConfigDone) -> None:
+        super().__init__(label="Done", style=discord.ButtonStyle.primary, custom_id="wpm_config_done")
+        self._on_click = on_click
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_click(interaction)
+
+
 class ConfigMainMenuView(discord.ui.View):
     """The main /config screen: a configuration summary plus a section picker."""
 
@@ -104,11 +119,13 @@ class ConfigMainMenuView(discord.ui.View):
         self,
         section_options: List[Tuple[str, str]],
         on_select: OnConfigSectionChosen,
+        on_done: OnConfigDone,
         *,
         descriptions: Optional[dict[str, str]] = None,
     ) -> None:
         super().__init__(timeout=CONFIG_VIEW_TIMEOUT_SECONDS)
         self.add_item(ConfigSectionSelect(section_options, on_select, descriptions=descriptions))
+        self.add_item(ConfigDoneButton(on_done))
 
 
 # --- WASH Crew Role / Watch Party Role (generic role picker) ----------------------------
@@ -511,12 +528,14 @@ class ConfigWatchDestinationSectionView(discord.ui.View):
 # The channel every collection's suggestion thread (and, by default, the
 # Watched Item Archive thread) is created as a sibling under (see
 # GuildChannelsConfig.home_channel_id). Reuses setup_wizard_view.py's
-# CreateNewChannelButton/UseExistingChannelButton -- the exact same
-# "create vs. use existing" buttons /setup's own Home Channel step
-# offers -- so creating/selecting a channel here can never drift from
-# how /setup does it. Unlike /setup's HomeChannelChoiceView (which has
-# no Clear -- setup always requires one), /config additionally offers
-# Use Current Channel and Clear Home Channel, since this edits an
+# CreateNewChannelButton/UseExistingChannelButton -- the same "create
+# vs. use existing" two-step choice /setup's own Home Channel step used
+# before Channel Selection Consistency unified it onto one screen
+# (HomeChannelStepView); /config keeps this section's own separate
+# two-step shape since a single-setting edit has no Back/Save & Finish
+# Later flow to stay consistent with. Unlike /setup's HomeChannelStepView
+# (which has no Clear -- setup always requires one), /config additionally
+# offers Use Current Channel and Clear Home Channel, since this edits an
 # already-configured server rather than bootstrapping one.
 
 

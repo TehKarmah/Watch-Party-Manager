@@ -163,26 +163,34 @@ class ConfigService:
         this also validates every configured resource against live
         Discord state, so a role or channel that no longer exists is
         reported as Invalid rather than silently shown as Configured.
+
+        Every Not configured/Invalid line leads with ⚠️ (Consistent
+        Warning Iconography -- the same glyph SUGGESTION_DISPLAY_STATUS_EMOJI
+        uses for Pending Crew Review) in place of the section's own
+        flavor icon, so a member scanning the summary can spot every item
+        needing attention without reading each line. Not configured lines
+        for a section the Setup Wizard lets WASH Crew skip are further
+        marked (Optional) so they're not mistaken for something broken.
         """
         configuration = self.get_configuration(guild_id)
         if configuration is None:
-            return [f"{CONFIG_SECTION_TITLES[section]}: Not configured" for section in CONFIG_SECTION_ORDER]
+            return [f"⚠️ {CONFIG_SECTION_TITLES[section]}: Not configured" for section in CONFIG_SECTION_ORDER]
 
         lines: List[str] = []
 
         wash_crew_role_id = configuration.wash_crew_role_id
         if wash_crew_role_id is None:
-            lines.append("🛠️ WASH Crew Role: Not configured")
+            lines.append("⚠️ WASH Crew Role: Not configured (Required)")
         elif validate_role_exists(wash_crew_role_id, guild, resource_label="WASH Crew role"):
-            lines.append(f"🛠️ WASH Crew Role: Invalid (<@&{wash_crew_role_id}> no longer exists)")
+            lines.append(f"⚠️ WASH Crew Role: Invalid (<@&{wash_crew_role_id}> no longer exists)")
         else:
             lines.append(f"🛠️ WASH Crew Role: Configured (<@&{wash_crew_role_id}>)")
 
         watch_party_role_id = configuration.watch_party_role.role_id
         if watch_party_role_id is None:
-            lines.append("🍿 Watch Party Role: Not configured")
+            lines.append("⚠️ Watch Party Role: Not configured (Optional)")
         elif validate_role_exists(watch_party_role_id, guild, resource_label="Watch Party role"):
-            lines.append(f"🍿 Watch Party Role: Invalid (<@&{watch_party_role_id}> no longer exists)")
+            lines.append(f"⚠️ Watch Party Role: Invalid (<@&{watch_party_role_id}> no longer exists)")
         else:
             lines.append(f"🍿 Watch Party Role: Configured (<@&{watch_party_role_id}>)")
 
@@ -193,24 +201,24 @@ class ConfigService:
 
         admin_channel_id = configuration.channels.admin_channel_id
         if admin_channel_id is None:
-            lines.append("Admin Channel: Not configured")
+            lines.append("⚠️ Admin Channel: Not configured (Optional)")
         elif validate_channel_usable(admin_channel_id, guild, resource_label="Admin channel"):
-            lines.append(f"Admin Channel: Invalid (<#{admin_channel_id}> no longer usable)")
+            lines.append(f"⚠️ Admin Channel: Invalid (<#{admin_channel_id}> no longer usable)")
         else:
             lines.append(f"Admin Channel: Configured (<#{admin_channel_id}>)")
 
         home_channel_id = configuration.channels.home_channel_id
         if home_channel_id is None:
-            lines.append("Watch Party Home Channel: Not configured")
+            lines.append("⚠️ Watch Party Home Channel: Not configured (Required)")
         elif validate_channel_usable(home_channel_id, guild, resource_label="Home Channel"):
-            lines.append(f"Watch Party Home Channel: Invalid (<#{home_channel_id}> no longer usable)")
+            lines.append(f"⚠️ Watch Party Home Channel: Invalid (<#{home_channel_id}> no longer usable)")
         else:
             lines.append(f"Watch Party Home Channel: Configured (<#{home_channel_id}>)")
 
         databases = self._suggestion_service.list_databases(guild_id)
         active_databases = [database for database in databases if database.active]
         if not databases:
-            lines.append("Collections: Not configured")
+            lines.append("⚠️ Collections: Not configured (Required)")
         else:
             lines.append(
                 f"Collections: Configured ({len(active_databases)} active of {len(databases)} total -- "
@@ -219,10 +227,10 @@ class ConfigService:
 
         watch_destination_channel_id = configuration.channels.watch_history_channel_id
         if watch_destination_channel_id is None:
-            lines.append("Watched Item Archive: Not configured")
+            lines.append("⚠️ Watched Item Archive: Not configured (Optional)")
         elif validate_channel_usable(watch_destination_channel_id, guild):
             lines.append(
-                f"Watched Item Archive: Invalid (<#{watch_destination_channel_id}> no longer usable)"
+                f"⚠️ Watched Item Archive: Invalid (<#{watch_destination_channel_id}> no longer usable)"
             )
         else:
             lines.append(f"Watched Item Archive: Configured (<#{watch_destination_channel_id}>)")
@@ -235,7 +243,7 @@ class ConfigService:
         )
 
         if not databases:
-            lines.append("\"I Won't Watch\" Settings: Not configured")
+            lines.append("⚠️ \"I Won't Watch\" Settings: Not configured (requires a collection)")
         elif len(databases) == 1:
             rejection_rules = self.get_database_configuration(guild_id, databases[0].database_id).suggestion_rules
             if rejection_rules.rejection_enabled:
@@ -266,7 +274,7 @@ class ConfigService:
             interval = configuration.backup.extra_fields.get(BACKUP_INTERVAL_DAYS_EXTRA_FIELD)
             retention = configuration.backup.extra_fields.get(BACKUP_RETENTION_COUNT_EXTRA_FIELD)
             if interval is None or retention is None:
-                lines.append("Backup Defaults: Not configured")
+                lines.append("⚠️ Backup Defaults: Not configured")
             else:
                 day_word = "day" if interval == 1 else "days"
                 lines.append(

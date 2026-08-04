@@ -53,11 +53,11 @@ Slash commands respond, but WASH never appears as an actual member (breaks `/set
 
 ### Cannot create channels
 
-The Setup Wizard's **Create New Channel** option (Home Channel step) fails with a permission message. WASH needs the **Manage Channels** permission at the server or category level. Grant it and try again, or choose **Use Existing Channel** instead for that one step. If WASH also assigns server roles, its own role must be positioned above those roles in the server's role hierarchy (see [Role hierarchy](#role-hierarchy) below) -- this can produce a similar-looking permission failure even when Manage Channels is granted.
+The Setup Wizard's **Create New Channel** option (Home Channel step) fails with a permission message. WASH needs the **Manage Channels** permission at the server or category level. Grant it and try again, or select an existing channel from that step's own picker instead. If WASH also assigns server roles, its own role must be positioned above those roles in the server's role hierarchy (see [Role hierarchy](#role-hierarchy) below) -- this can produce a similar-looking permission failure even when Manage Channels is granted.
 
 ### Cannot create threads
 
-Every collection's suggestion thread (and, by default, the Watched Item Archive thread) is created as a sibling thread under WASH's configured Home Channel. If **Create New Thread** fails, WASH is missing **Create Public Threads** (or **Send Messages in Threads**) on that Home Channel specifically -- a channel-level permission, independent of Manage Channels. Grant it on the Home Channel, or choose **Use Existing Thread** instead. A newly created private channel (e.g. the Admin Channel) is visible only to WASH Crew until WASH itself is granted View Channel/Send Messages on it -- reopen the step (or run `/setup` again) once that's done to see it in the destination list.
+Every collection's suggestion thread (and, by default, the Watched Item Archive thread) is created as a sibling thread under WASH's configured Home Channel. If **Create New Thread** fails, WASH is missing **Create Public Threads** (or **Send Messages in Threads**) on that Home Channel specifically -- a channel-level permission, independent of Manage Channels. Grant it on the Home Channel, or select an existing thread from that step's own picker instead. A newly created private channel (e.g. the Admin Channel) is visible only to WASH Crew until WASH itself is granted View Channel/Send Messages on it -- reopen the step (or run `/setup` again) once that's done to see it in the destination list.
 
 ### Cannot access private channels
 

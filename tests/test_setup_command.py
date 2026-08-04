@@ -64,14 +64,14 @@ from watch_party_manager.scheduler.scheduler_service import SchedulerService
 from watch_party_manager.services.config_service import ConfigService
 from watch_party_manager.services.discord_ui_limits import find_oversized_view_component_fields
 from watch_party_manager.services.setup_wizard_service import SetupWizardService
-from watch_party_manager.services.suggestion_service import SuggestionService
+from watch_party_manager.services.suggestion_service import DEFAULT_REJECTION_THRESHOLD, SuggestionService
 from watch_party_manager.setup_wizard_view import (
     AdminChannelNameModal,
     AdminChannelStepView,
     BackupDefaultsChoiceView,
     ExistingChannelSelectView,
-    HomeChannelChoiceView,
     HomeChannelNameModal,
+    HomeChannelStepView,
     ModalStepIntroView,
     RejectionSettingsChoiceView,
     RejectionThresholdModal,
@@ -80,6 +80,7 @@ from watch_party_manager.setup_wizard_view import (
     ReviewStepView,
     SetupBackButton,
     SetupPreparationView,
+    SetupProgressSavedView,
     SetupSaveForLaterButton,
     VotingDefaultsIntroView,
     VotingDefaultsModal,
@@ -1146,8 +1147,25 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
         self.assertIn(f"WASH Crew Role: Configured (<@&{WASH_CREW_ROLE_ID}>)", interaction.response.sent_message)
-        self.assertIn("Collections: Incomplete", interaction.response.sent_message)
+        self.assertIn("⚠️ Collections: Incomplete (Required)", interaction.response.sent_message)
         self.assertIsInstance(interaction.response.sent_view, ReviewStepView)
+
+    async def test_review_step_has_no_save_for_later_button(self) -> None:
+        # UX Polish: every section has already been answered by the time
+        # a member reaches Review, so there's nothing left to save and
+        # come back to -- only Save, Back, and Cancel Setup remain.
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REVIEW)
+        interaction = FakeInteraction()
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        view: ReviewStepView = interaction.response.sent_view
+        labels = [getattr(child, "label", None) for child in view.children]
+        self.assertNotIn("Save & Finish Later", labels)
+        self.assertIn("Save", labels)
+        self.assertIn("Back", labels)
+        self.assertIn("Cancel Setup", labels)
 
     async def test_save_with_incomplete_draft_shows_issues_and_returns_to_the_failing_step(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
@@ -1233,8 +1251,11 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         channel_select = admin_channel_view.children[0]
         GOOD_ADMIN_CHANNEL_ID = 777
         channel_select._values = [str(GOOD_ADMIN_CHANNEL_ID)]
+        confirm_button = next(
+            c for c in admin_channel_view.children if getattr(c, "custom_id", None) == "wpm_setup_admin_channel_confirm"
+        )
         fix_interaction = FakeInteraction()
-        await channel_select.callback(interaction=fix_interaction)
+        await confirm_button.callback(interaction=fix_interaction)
 
         # Returns straight to Review -- not Home Channel or any other
         # step -- and every later value is still there, unchanged.
@@ -1716,7 +1737,26 @@ class SaveAndFinishLaterIntegrationTests(SetupCommandTestCase):
 
         self.assertIn("saved", save_interaction.response.edited_content.lower())
         self.assertIn("/setup", save_interaction.response.edited_content)
-        self.assertIsNone(save_interaction.response.edited_view)
+        saved_view = save_interaction.response.edited_view
+        self.assertIsInstance(saved_view, SetupProgressSavedView)
+        self.assertTrue(any(getattr(c, "label", None) == "Continue Setup" for c in saved_view.children))
+
+    async def test_continue_setup_button_resumes_from_the_saved_step(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        interaction = FakeInteraction()
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+        view = interaction.response.sent_view
+        save_for_later_button = next(c for c in view.children if isinstance(c, SetupSaveForLaterButton))
+        save_interaction = FakeInteraction()
+        await save_for_later_button.callback(interaction=save_interaction)
+        saved_view = save_interaction.response.edited_view
+        continue_button = next(c for c in saved_view.children if getattr(c, "label", None) == "Continue Setup")
+
+        continue_interaction = FakeInteraction()
+        await continue_button.callback(interaction=continue_interaction)
+
+        self.assertEqual(continue_interaction.response.edited_content, interaction.response.sent_message)
 
     async def test_save_for_later_does_not_delete_the_draft(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
@@ -2266,6 +2306,18 @@ class RejectionSettingsSetupIntegrationTests(SetupCommandTestCase):
         self.assertIn("Disable \"I Won't Watch\"", labels)
         self.assertIn("Step 8 of 11", interaction.response.sent_message)
 
+    async def test_step_body_explains_the_threshold_with_a_concrete_example(self) -> None:
+        state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
+        state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REJECTION_SETTINGS)
+        interaction = FakeInteraction()
+
+        await send_setup_wizard_step(interaction, self.bot, state, edit=False)
+
+        message = interaction.response.sent_message
+        self.assertIn("distinct members must do that before the suggestion needs WASH Crew review", message)
+        self.assertIn(f"threshold {DEFAULT_REJECTION_THRESHOLD} means", message)
+        self.assertIn("does not remove the suggestion from the collection", message)
+
     async def test_disable_saves_immediately_without_opening_a_modal(self) -> None:
         state, _ = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.REJECTION_SETTINGS)
@@ -2688,7 +2740,9 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         self.assertTrue(any(isinstance(child, SetupBackButton) for child in view.children))
         self.assertTrue(any(isinstance(child, SetupSaveForLaterButton) for child in view.children))
 
-    async def test_selecting_an_existing_channel_or_thread_advances_and_persists(self) -> None:
+    async def test_selecting_a_channel_does_not_advance_until_confirmed(self) -> None:
+        # Channel Selection Consistency: opening the selector and picking
+        # a channel must never advance the step on its own.
         interaction = await self._render_step()
         view = interaction.response.sent_view
         channel_select = view.children[0]
@@ -2697,14 +2751,33 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         select_interaction = FakeInteraction()
         await channel_select.callback(interaction=select_interaction)
 
-        self.assertIn("Step 7 of 11", select_interaction.response.edited_content)
+        self.assertTrue(select_interaction.response.deferred)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertIsNone(persisted.draft.watch_destination_channel_id)
+
+    async def test_selecting_an_existing_channel_or_thread_advances_and_persists(self) -> None:
+        interaction = await self._render_step()
+        view = interaction.response.sent_view
+        channel_select = view.children[0]
+        channel_select._values = [str(DESTINATION_CHANNEL_ID)]
+
+        confirm_button = next(
+            c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_watch_destination_confirm"
+        )
+        confirm_interaction = FakeInteraction()
+        await confirm_button.callback(interaction=confirm_interaction)
+
+        self.assertIn("Step 7 of 11", confirm_interaction.response.edited_content)
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertEqual(persisted.draft.watch_destination_channel_id, DESTINATION_CHANNEL_ID)
         self.assertFalse(persisted.draft.watch_destination_skipped)
 
     async def test_create_new_thread_end_to_end_persists_the_new_threads_id(self) -> None:
         interaction = await self._render_step()
-        create_thread_button = interaction.response.sent_view.children[1]
+        create_thread_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Thread (Recommended)"
+        )
 
         fake_home_channel = self.FakeHomeChannel(thread_id=777)
         create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
@@ -2725,7 +2798,10 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
 
     async def test_create_new_thread_failure_shows_an_error_and_stays_on_the_step(self) -> None:
         interaction = await self._render_step()
-        create_thread_button = interaction.response.sent_view.children[1]
+        create_thread_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Thread (Recommended)"
+        )
 
         failing_channel = self.FakeHomeChannel(fail=True)
         create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(failing_channel))
@@ -2743,7 +2819,9 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
 
     async def test_skip_still_works(self) -> None:
         interaction = await self._render_step()
-        skip_button = interaction.response.sent_view.children[2]
+        skip_button = next(
+            c for c in interaction.response.sent_view.children if getattr(c, "label", None) == "Skip for Now"
+        )
 
         skip_interaction = FakeInteraction()
         await skip_button.callback(interaction=skip_interaction)
@@ -2771,7 +2849,9 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         interaction = FakeInteraction(guild=guild)
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
 
-        skip_button = interaction.response.sent_view.children[2]
+        skip_button = next(
+            c for c in interaction.response.sent_view.children if getattr(c, "label", None) == "Skip for Now"
+        )
         skip_interaction = FakeInteraction(guild=guild)
         await skip_button.callback(interaction=skip_interaction)
 
@@ -2786,7 +2866,10 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         # never missing just because it didn't exist at the time of an
         # earlier render.
         interaction = await self._render_step()
-        create_thread_button = interaction.response.sent_view.children[1]
+        create_thread_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Thread (Recommended)"
+        )
 
         fake_home_channel = self.FakeHomeChannel(thread_id=777)
         create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
@@ -2822,7 +2905,10 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         # retrying with the identical name must reuse the existing
         # thread rather than creating a second, orphaned one.
         interaction = await self._render_step()
-        create_thread_button = interaction.response.sent_view.children[1]
+        create_thread_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Thread (Recommended)"
+        )
 
         fake_home_channel = self.FakeHomeChannel(thread_id=777)
         # Simulate the first attempt's thread already existing under the
@@ -2863,7 +2949,10 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         # Component -> CANDIDATE_SELECTION_HELP_TEXT, see
         # domain/suggestion_database_configuration.py).
         interaction = await self._render_step()
-        create_thread_button = interaction.response.sent_view.children[1]
+        create_thread_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Thread (Recommended)"
+        )
 
         fake_home_channel = self.FakeHomeChannel(thread_id=777)
         create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
@@ -2914,7 +3003,10 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         # 400 Bad Request (error 50035) on
         # data.components.0.components.0.options.1.description.
         interaction = await self._render_step()
-        create_thread_button = interaction.response.sent_view.children[1]
+        create_thread_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Thread (Recommended)"
+        )
 
         fake_home_channel = self.FakeHomeChannel(thread_id=777)
         create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
@@ -2956,7 +3048,10 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         # keep both failure shapes (astral-character undercounting and
         # ordinary long names) under regression coverage together.
         interaction = await self._render_step()
-        create_thread_button = interaction.response.sent_view.children[1]
+        create_thread_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Thread (Recommended)"
+        )
 
         fake_home_channel = self.FakeHomeChannel(thread_id=777)
         create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
@@ -2987,7 +3082,10 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         # earlier one) must never block Skip on a later visit -- Skip
         # must succeed independent of destination-option rendering.
         interaction = await self._render_step()
-        create_thread_button = interaction.response.sent_view.children[1]
+        create_thread_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Thread (Recommended)"
+        )
 
         fake_home_channel = self.FakeHomeChannel(thread_id=777)
         create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
@@ -3005,7 +3103,9 @@ class WatchDestinationStepIntegrationTests(SetupCommandTestCase):
         back_interaction = FakeInteraction(guild=guild)
         await send_setup_wizard_step(back_interaction, self.bot, rerendered_state, edit=False)
 
-        skip_button = back_interaction.response.sent_view.children[2]
+        skip_button = next(
+            c for c in back_interaction.response.sent_view.children if getattr(c, "label", None) == "Skip for Now"
+        )
         skip_interaction = FakeInteraction(guild=guild)
         await skip_button.callback(interaction=skip_interaction)
 
@@ -3065,8 +3165,11 @@ class HomeChannelStepIntegrationTests(SetupCommandTestCase):
 
     async def test_creating_a_new_channel_persists_it_and_advances(self) -> None:
         interaction = await self._render_step()
-        self.assertIsInstance(interaction.response.sent_view, HomeChannelChoiceView)
-        create_new_button = interaction.response.sent_view.children[0]
+        self.assertIsInstance(interaction.response.sent_view, HomeChannelStepView)
+        create_new_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Channel (Recommended)"
+        )
 
         create_interaction = FakeInteraction(guild=self.FakeGuildForHomeChannel(channel_id=901))
         await create_new_button.callback(interaction=create_interaction)
@@ -3086,7 +3189,10 @@ class HomeChannelStepIntegrationTests(SetupCommandTestCase):
 
     async def test_channel_creation_failure_shows_an_error_and_stays_on_the_step(self) -> None:
         interaction = await self._render_step()
-        create_new_button = interaction.response.sent_view.children[0]
+        create_new_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Channel (Recommended)"
+        )
 
         failing_guild = self.FakeGuildForHomeChannel(fail=True)
         create_interaction = FakeInteraction(guild=failing_guild)
@@ -3098,13 +3204,16 @@ class HomeChannelStepIntegrationTests(SetupCommandTestCase):
         await name_modal.on_submit(interaction=submit_interaction)
 
         self.assertIn("Could not create the channel", submit_interaction.response.edited_content)
-        self.assertIsInstance(submit_interaction.response.edited_view, HomeChannelChoiceView)
+        self.assertIsInstance(submit_interaction.response.edited_view, HomeChannelStepView)
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertIsNone(persisted.draft.home_channel_id)
 
     async def test_missing_permission_shows_a_friendly_message_not_the_raw_exception(self) -> None:
         interaction = await self._render_step()
-        create_new_button = interaction.response.sent_view.children[0]
+        create_new_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Channel (Recommended)"
+        )
 
         failing_guild = self.FakeGuildForHomeChannel(forbidden=True)
         create_interaction = FakeInteraction(guild=failing_guild)
@@ -3118,26 +3227,37 @@ class HomeChannelStepIntegrationTests(SetupCommandTestCase):
         message = submit_interaction.response.edited_content
         self.assertIn("does not have permission to create channels", message)
         self.assertIn("Manage Channels", message)
-        self.assertIn("Use Existing Channel", message)
+        self.assertIn("existing channel from the selector", message)
         self.assertNotIn("403", message)
         self.assertNotIn("Missing Permissions", message)
-        self.assertIsInstance(submit_interaction.response.edited_view, HomeChannelChoiceView)
+        self.assertIsInstance(submit_interaction.response.edited_view, HomeChannelStepView)
+        persisted = self.wizard_repository.get(GUILD_ID)
+        self.assertIsNone(persisted.draft.home_channel_id)
+
+    async def test_selecting_a_channel_does_not_advance_until_confirmed(self) -> None:
+        # Channel Selection Consistency: opening the selector and picking
+        # a channel must never advance the step on its own.
+        interaction = await self._render_step()
+        view: HomeChannelStepView = interaction.response.sent_view
+
+        view.channel_select._values = [str(DESTINATION_CHANNEL_ID)]
+        select_interaction = FakeInteraction()
+        await view.channel_select.callback(interaction=select_interaction)
+
+        self.assertTrue(select_interaction.response.deferred)
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertIsNone(persisted.draft.home_channel_id)
 
     async def test_using_an_existing_channel_persists_it_and_advances(self) -> None:
         interaction = await self._render_step()
-        use_existing_button = interaction.response.sent_view.children[1]
+        view: HomeChannelStepView = interaction.response.sent_view
+        view.channel_select._values = [str(DESTINATION_CHANNEL_ID)]
 
-        choice_interaction = FakeInteraction()
-        await use_existing_button.callback(interaction=choice_interaction)
-        self.assertIsInstance(choice_interaction.response.edited_view, ExistingChannelSelectView)
-
-        channel_select = choice_interaction.response.edited_view.children[0]
-        channel_select._values = [type("FakeChannelValue", (), {"id": DESTINATION_CHANNEL_ID})()]
-
-        select_interaction = FakeInteraction()
-        await channel_select.callback(interaction=select_interaction)
+        confirm_button = next(
+            c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_home_channel_confirm"
+        )
+        confirm_interaction = FakeInteraction()
+        await confirm_button.callback(interaction=confirm_interaction)
 
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertEqual(persisted.draft.home_channel_id, DESTINATION_CHANNEL_ID)
@@ -3149,12 +3269,12 @@ class HomeChannelStepIntegrationTests(SetupCommandTestCase):
         # SetupWizardService/repository round-trip, mirroring a bot
         # restart), must not lose that choice.
         interaction = await self._render_step()
-        use_existing_button = interaction.response.sent_view.children[1]
-        choice_interaction = FakeInteraction()
-        await use_existing_button.callback(interaction=choice_interaction)
-        channel_select = choice_interaction.response.edited_view.children[0]
-        channel_select._values = [type("FakeChannelValue", (), {"id": DESTINATION_CHANNEL_ID})()]
-        await channel_select.callback(interaction=FakeInteraction())
+        view: HomeChannelStepView = interaction.response.sent_view
+        view.channel_select._values = [str(DESTINATION_CHANNEL_ID)]
+        confirm_button = next(
+            c for c in view.children if getattr(c, "custom_id", None) == "wpm_setup_home_channel_confirm"
+        )
+        await confirm_button.callback(interaction=FakeInteraction())
 
         resumed_state, resumed = self.bot.setup_wizard_service.start_or_resume(GUILD_ID)
 
@@ -3224,7 +3344,7 @@ class AdminChannelCreationIntegrationTests(SetupCommandTestCase):
         # manages other roles, without ever suggesting Administrator.
         interaction = await self._render_step()
         message = interaction.response.sent_message
-        self.assertIn("Private channels only appear", message)
+        self.assertIn("Private channels will appear in the channel selector", message)
         self.assertIn("View Channel", message)
         self.assertIn("Send Messages", message)
         self.assertIn("role hierarchy", message)
@@ -3304,7 +3424,7 @@ class AdminChannelCreationIntegrationTests(SetupCommandTestCase):
         message = submit_interaction.response.edited_content
         self.assertIn("does not have permission to create channels", message)
         self.assertIn("Manage Channels", message)
-        self.assertIn("Use Existing Channel", message)
+        self.assertIn("existing channel from the selector", message)
         self.assertNotIn("403", message)
         self.assertNotIn("Missing Permissions", message)
         self.assertIsInstance(submit_interaction.response.edited_view, AdminChannelStepView)
@@ -3527,7 +3647,7 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         await save_button.callback(interaction=save_interaction)
 
         self.assertIn("saved", save_interaction.response.edited_content.lower())
-        self.assertIsNone(save_interaction.response.edited_view)
+        self.assertIsInstance(save_interaction.response.edited_view, SetupProgressSavedView)
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertIsNotNone(persisted)
         self.assertEqual(persisted.draft.home_channel_id, self.HOME_CHANNEL_ID)
@@ -3582,7 +3702,7 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         save_interaction = FakeInteraction()
         await save_button.callback(interaction=save_interaction)
 
-        self.assertIsNone(save_interaction.response.edited_view)
+        self.assertIsInstance(save_interaction.response.edited_view, SetupProgressSavedView)
         persisted = self.wizard_repository.get(GUILD_ID)
         self.assertIsNone(persisted.draft.suggestion_database_id)
 
@@ -3723,7 +3843,10 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
         state = self.bot.setup_wizard_service.go_to_step(state, SetupWizardStep.WATCH_DESTINATION)
         interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await send_setup_wizard_step(interaction, self.bot, state, edit=False)
-        create_thread_button = interaction.response.sent_view.children[1]
+        create_thread_button = next(
+            c for c in interaction.response.sent_view.children
+            if getattr(c, "label", None) == "Create New Thread (Recommended)"
+        )
 
         create_interaction = FakeInteraction(guild=self.FakeGuildWithChannel(fake_home_channel))
         await create_thread_button.callback(interaction=create_interaction)

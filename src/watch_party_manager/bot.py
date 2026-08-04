@@ -359,8 +359,8 @@ from watch_party_manager.setup_wizard_view import (
     CreateThreadNameModal,
     ExistingChannelSelectView,
     ExistingDatabaseSelectView,
-    HomeChannelChoiceView,
     HomeChannelNameModal,
+    HomeChannelStepView,
     ImportExistingDatabaseNoticeView,
     ModalStepIntroView,
     RejectionSettingsChoiceView,
@@ -369,6 +369,7 @@ from watch_party_manager.setup_wizard_view import (
     ReminderDefaultsModal,
     ReviewStepView,
     SetupPreparationView,
+    SetupProgressSavedView,
     SetupWizardResumeView,
     SuggestionDatabaseChoiceView,
     VotingDefaultsIntroView,
@@ -2362,6 +2363,27 @@ def parse_setup_rejection_threshold(value: str) -> int:
     return threshold
 
 
+def describe_rejection_threshold(threshold: int) -> str:
+    """Shared "I Won't Watch" threshold explanation for both the Setup
+    Wizard's REJECTION_SETTINGS step and /config's "I Won't Watch"
+    Settings section -- kept as one function so the two can never drift
+    out of sync with each other.
+
+    Worded around the caller's own current (or about-to-be-set)
+    threshold so the example always matches what's actually configured,
+    rather than a fixed illustrative number.
+    """
+    return (
+        "Members may press **I WON'T WATCH** on a suggestion's own post -- each member's rejection "
+        "counts only once. This threshold controls how many distinct members must do that before the "
+        f"suggestion needs WASH Crew review -- for example, threshold {threshold} means the suggestion "
+        f"is flagged for review once {threshold} different members choose \"I Won't Watch.\" Reaching it "
+        "does not remove the suggestion from the collection: it only removes it from eligibility for "
+        "future votes, becoming Pending Crew Review until WASH Crew decides to Retire it or Keep it "
+        "Active."
+    )
+
+
 def parse_setup_voting_duration_minutes(value: str) -> int:
     """Validate a Voting Defaults modal's duration field, reusing /start_vote's bounds.
 
@@ -2504,7 +2526,7 @@ def describe_channel_creation_failure(exc: Exception) -> str:
     if isinstance(exc, discord.Forbidden):
         return (
             "WASH does not have permission to create channels here. Grant WASH the "
-            "**Manage Channels** permission, or choose **Use Existing Channel** instead."
+            "**Manage Channels** permission, or choose an existing channel from the selector instead."
         )
     return f"Could not create the channel: {exc}"
 
@@ -2751,13 +2773,17 @@ async def send_setup_wizard_step(
 
     async def on_save_for_later(save_later_interaction: discord.Interaction) -> None:
         setup_wizard_service.save_for_later(state)
+
+        async def on_continue(resume_interaction: discord.Interaction) -> None:
+            await send_setup_wizard_step(resume_interaction, bot, state, edit=True, requester_id=requester_id)
+
         await save_later_interaction.response.edit_message(
             content=(
                 "**Setup progress saved.**\n\n"
-                "Nothing further was changed. Run `/setup` again at any time to resume "
-                "exactly where you left off."
+                "Nothing further was changed. Press **Continue Setup** below to resume right away, "
+                "or run `/setup` again at any time to resume exactly where you left off."
             ),
-            view=None,
+            view=SetupProgressSavedView(on_continue, requester_id=requester_id),
         )
 
     header = build_setup_step_header(state)
@@ -2822,9 +2848,19 @@ async def send_setup_wizard_step(
             interaction.guild, selected_channel_id=state.draft.admin_channel_id
         )
 
-        async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
+        async def on_confirm(confirm_interaction: discord.Interaction, channel_id: Optional[int]) -> None:
+            if channel_id is None:
+                await send_setup_wizard_step(
+                    confirm_interaction,
+                    bot,
+                    state,
+                    edit=True,
+                    error_message="Select a channel before continuing, or use Create New Channel or Skip for Now.",
+                    requester_id=requester_id,
+                )
+                return
             updated = setup_wizard_service.set_admin_channel(state, channel_id)
-            await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
+            await send_setup_wizard_step(confirm_interaction, bot, updated, edit=True, requester_id=requester_id)
 
         async def on_skip(skip_interaction: discord.Interaction) -> None:
             updated = setup_wizard_service.skip_admin_channel(state)
@@ -2836,8 +2872,8 @@ async def send_setup_wizard_step(
                     await modal_interaction.response.edit_message(
                         content=body + "\n\n⚠ That server is no longer available. Choose another option.",
                         view=AdminChannelStepView(
-                            admin_channel_options, on_select, on_create_new, on_skip, on_back, on_save_for_later,
-                            on_cancel, requester_id=requester_id,
+                            admin_channel_options, on_confirm, on_create_new, on_skip, on_back, on_save_for_later,
+                            on_cancel, fallback_channel_id=state.draft.admin_channel_id, requester_id=requester_id,
                         ),
                     )
                     return
@@ -2856,8 +2892,8 @@ async def send_setup_wizard_step(
                             build_channel_destination_options(
                                 modal_interaction.guild, selected_channel_id=state.draft.admin_channel_id
                             ),
-                            on_select, on_create_new, on_skip, on_back, on_save_for_later, on_cancel,
-                            requester_id=requester_id,
+                            on_confirm, on_create_new, on_skip, on_back, on_save_for_later, on_cancel,
+                            fallback_channel_id=state.draft.admin_channel_id, requester_id=requester_id,
                         ),
                     )
                     return
@@ -2867,40 +2903,48 @@ async def send_setup_wizard_step(
             await create_interaction.response.send_modal(AdminChannelNameModal(on_name_submit))
 
         view = AdminChannelStepView(
-            admin_channel_options, on_select, on_create_new, on_skip, on_back, on_save_for_later, on_cancel,
-            requester_id=requester_id,
+            admin_channel_options, on_confirm, on_create_new, on_skip, on_back, on_save_for_later, on_cancel,
+            fallback_channel_id=state.draft.admin_channel_id, requester_id=requester_id,
         )
         body += (
             "\n\nSelect the channel where Approval-Required membership requests should be posted for "
-            "WASH Crew, create a new private channel for it, or skip for now. A newly created channel "
-            "is visible only to WASH Crew -- it's meant for private administrative activity, not "
-            "general discussion.\n\n"
-            "🔒 Private channels only appear above after WASH has permission to view them. Grant WASH "
-            "**View Channel** and **Send Messages** on the channel you want, then reopen this step (or "
-            "run `/setup` again) to see it in the list. If WASH also assigns server roles, its own role "
-            "must be positioned above those roles in the server's role hierarchy."
+            "WASH Crew, then press **Save & Continue** -- or create a new private channel for it, or "
+            "skip for now. A newly created channel is visible only to WASH Crew -- it's meant for "
+            "private administrative activity, not general discussion.\n\n"
+            "🔒 Private channels will appear in the channel selector once WASH has permission to view "
+            "them. Grant WASH **View Channel** and **Send Messages** on the channel you want, then "
+            "reopen this step (or run `/setup` again) to see it listed. If WASH also assigns server "
+            "roles, its own role must be positioned above those roles in the server's role hierarchy."
         )
 
     elif step == SetupWizardStep.HOME_CHANNEL:
 
-        async def on_use_existing(existing_interaction: discord.Interaction) -> None:
-            async def on_channel_selected(select_interaction: discord.Interaction, channel_id: int) -> None:
-                updated = setup_wizard_service.set_home_channel(state, channel_id)
-                await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
+        home_channel_options = build_channel_destination_options(
+            interaction.guild, include_threads=False, selected_channel_id=state.draft.home_channel_id
+        )
 
-            await existing_interaction.response.edit_message(
-                content=body + "\n\nWhich channel should WASH use as its home?",
-                view=ExistingChannelSelectView(on_channel_selected, on_cancel, requester_id=requester_id),
-            )
+        async def on_confirm(confirm_interaction: discord.Interaction, channel_id: Optional[int]) -> None:
+            if channel_id is None:
+                await send_setup_wizard_step(
+                    confirm_interaction,
+                    bot,
+                    state,
+                    edit=True,
+                    error_message="Select a channel before continuing, or use Create New Channel.",
+                    requester_id=requester_id,
+                )
+                return
+            updated = setup_wizard_service.set_home_channel(state, channel_id)
+            await send_setup_wizard_step(confirm_interaction, bot, updated, edit=True, requester_id=requester_id)
 
         async def on_create_new(create_interaction: discord.Interaction) -> None:
             async def on_name_submit(modal_interaction: discord.Interaction, channel_name: str) -> None:
                 if modal_interaction.guild is None:
                     await modal_interaction.response.edit_message(
                         content=body + "\n\n⚠ That server is no longer available. Choose another option.",
-                        view=HomeChannelChoiceView(
-                            on_create_new, on_use_existing, on_back, on_save_for_later, on_cancel,
-                            requester_id=requester_id,
+                        view=HomeChannelStepView(
+                            home_channel_options, on_confirm, on_create_new, on_back, on_save_for_later, on_cancel,
+                            fallback_channel_id=state.draft.home_channel_id, requester_id=requester_id,
                         ),
                     )
                     return
@@ -2910,9 +2954,13 @@ async def send_setup_wizard_step(
                     logger.warning("Could not create Home Channel %r", channel_name, exc_info=True)
                     await modal_interaction.response.edit_message(
                         content=body + f"\n\n⚠ {describe_channel_creation_failure(exc)}",
-                        view=HomeChannelChoiceView(
-                            on_create_new, on_use_existing, on_back, on_save_for_later, on_cancel,
-                            requester_id=requester_id,
+                        view=HomeChannelStepView(
+                            build_channel_destination_options(
+                                modal_interaction.guild, include_threads=False,
+                                selected_channel_id=state.draft.home_channel_id,
+                            ),
+                            on_confirm, on_create_new, on_back, on_save_for_later, on_cancel,
+                            fallback_channel_id=state.draft.home_channel_id, requester_id=requester_id,
                         ),
                     )
                     return
@@ -2921,13 +2969,15 @@ async def send_setup_wizard_step(
 
             await create_interaction.response.send_modal(HomeChannelNameModal(on_name_submit))
 
-        view = HomeChannelChoiceView(
-            on_create_new, on_use_existing, on_back, on_save_for_later, on_cancel, requester_id=requester_id
+        view = HomeChannelStepView(
+            home_channel_options, on_confirm, on_create_new, on_back, on_save_for_later, on_cancel,
+            fallback_channel_id=state.draft.home_channel_id, requester_id=requester_id,
         )
         body += (
             "\n\nWhere should WASH create its home? Every collection's suggestion thread (and, by "
             "default, the Watched Item Archive thread) is created as a sibling thread under this "
-            "one channel."
+            "one channel. Select an existing text channel and press **Save & Continue**, or create "
+            "a new one."
         )
 
     elif step == SetupWizardStep.SUGGESTION_DATABASE:
@@ -3097,9 +3147,19 @@ async def send_setup_wizard_step(
             interaction.guild, selected_channel_id=state.draft.watch_destination_channel_id
         )
 
-        async def on_select(select_interaction: discord.Interaction, channel_id: int) -> None:
+        async def on_confirm(confirm_interaction: discord.Interaction, channel_id: Optional[int]) -> None:
+            if channel_id is None:
+                await send_setup_wizard_step(
+                    confirm_interaction,
+                    bot,
+                    state,
+                    edit=True,
+                    error_message="Select a channel before continuing, or use Create New Thread or Skip for Now.",
+                    requester_id=requester_id,
+                )
+                return
             updated = setup_wizard_service.set_watch_destination(state, channel_id)
-            await send_setup_wizard_step(select_interaction, bot, updated, edit=True, requester_id=requester_id)
+            await send_setup_wizard_step(confirm_interaction, bot, updated, edit=True, requester_id=requester_id)
 
         async def on_skip(skip_interaction: discord.Interaction) -> None:
             updated = setup_wizard_service.skip_watch_destination(state)
@@ -3120,8 +3180,9 @@ async def send_setup_wizard_step(
                     await modal_interaction.response.edit_message(
                         content=body + "\n\n⚠ WASH's home channel is no longer available. Choose another destination.",
                         view=WatchDestinationStepView(
-                            watch_destination_options, on_select, on_create_thread, on_skip, on_back,
-                            on_save_for_later, on_cancel, requester_id=requester_id,
+                            watch_destination_options, on_confirm, on_create_thread, on_skip, on_back,
+                            on_save_for_later, on_cancel,
+                            fallback_channel_id=state.draft.watch_destination_channel_id, requester_id=requester_id,
                         ),
                     )
                     return
@@ -3154,7 +3215,8 @@ async def send_setup_wizard_step(
                                 build_channel_destination_options(
                                     modal_interaction.guild, selected_channel_id=state.draft.watch_destination_channel_id
                                 ),
-                                on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
+                                on_confirm, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
+                                fallback_channel_id=state.draft.watch_destination_channel_id,
                                 requester_id=requester_id,
                             ),
                         )
@@ -3194,15 +3256,15 @@ async def send_setup_wizard_step(
             )
 
         view = WatchDestinationStepView(
-            watch_destination_options, on_select, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
-            requester_id=requester_id,
+            watch_destination_options, on_confirm, on_create_thread, on_skip, on_back, on_save_for_later, on_cancel,
+            fallback_channel_id=state.draft.watch_destination_channel_id, requester_id=requester_id,
         )
         body += (
             "\n\nChoose where WASH should archive completed watch items. This archive stores Vote "
             "Winners and Retired items together with links back to their suggestion and voting "
             "history. **Create New Thread** (a sibling under WASH's home channel) is recommended, "
             "matching every collection's own suggestion thread -- but you can pick an existing text "
-            "channel or thread instead, or skip for now."
+            "channel or thread and press **Save & Continue** instead, or skip for now."
         )
 
     elif step == SetupWizardStep.VOTING_DEFAULTS:
@@ -3314,10 +3376,8 @@ async def send_setup_wizard_step(
             on_enable, on_disable, on_back, on_save_for_later, on_cancel, requester_id=requester_id
         )
         body += (
-            "\n\nMembers may press **I WON'T WATCH** on a suggestion -- each member's rejection counts "
-            "only once. Once the configured threshold is reached, the suggestion becomes Pending Crew "
-            "Review: it's removed from nominee eligibility until WASH Crew decides to Retire it or Keep "
-            "it Active. This system can be disabled entirely for this collection."
+            f"\n\n{describe_rejection_threshold(int(rejection_threshold_prefill))} This system can be "
+            "disabled entirely for this collection."
         )
 
     elif step == SetupWizardStep.REMINDER_DEFAULTS:
@@ -3497,7 +3557,6 @@ async def send_setup_wizard_step(
             on_save=on_save,
             on_edit_section=on_edit_section,
             on_back=on_back,
-            on_save_for_later=on_save_for_later,
             on_cancel=on_cancel,
             requester_id=requester_id,
         )
@@ -3522,7 +3581,10 @@ def build_config_summary_body(config_service: ConfigService, guild_id: int, guil
     """
     lines = config_service.build_summary_lines(guild_id, guild)
     numbered_lines = [f"{index}. {line}" for index, line in enumerate(lines, start=1)]
-    return "**WASH Configuration**\n\n" + "\n".join(numbered_lines)
+    header = "**WASH Configuration**"
+    if any(line.startswith("⚠️") for line in lines):
+        header += "\n\n⚠️ Some WASH settings are not yet configured. Review the items marked below."
+    return header + "\n\n" + "\n".join(numbered_lines)
 
 
 def build_config_section_options(
@@ -3551,12 +3613,18 @@ async def send_config_main_menu(
     async def on_section_chosen(select_interaction: discord.Interaction, section_value: str) -> None:
         await send_config_section(select_interaction, bot, guild_id, ConfigSection(section_value), edit=True)
 
+    async def on_done(done_interaction: discord.Interaction) -> None:
+        await done_interaction.response.edit_message(
+            content="**Configuration closed.**\n\nRun `/config` again at any time to make further changes.",
+            view=None,
+        )
+
     # /config Main Menu Cleanup: no descriptions here -- the main menu is
     # a clean numbered list of section names only. Explanatory text
     # (e.g. Visibility's Blind/Visible explanation) belongs on the
     # selected section's own screen instead (see
     # send_config_voting_defaults_screen).
-    view = ConfigMainMenuView(build_config_section_options(), on_section_chosen)
+    view = ConfigMainMenuView(build_config_section_options(), on_section_chosen, on_done)
 
     if edit:
         await interaction.response.edit_message(content=body, view=view)
@@ -4440,10 +4508,8 @@ async def send_config_rejection_settings_screen(
     body = (
         f'**WASH Configuration -- "{collection_name}" I Won\'t Watch Settings**\n\n'
         f"Current value -- {status_line}\n\n"
-        "Members may press **I WON'T WATCH** on a suggestion -- each member's rejection counts only "
-        "once. Once the configured threshold is reached, the suggestion becomes Pending Crew Review: "
-        "it's removed from nominee eligibility until WASH Crew decides to Retire it or Keep it Active. "
-        "Choose below whether this is enabled for this collection."
+        f"{describe_rejection_threshold(rules.rejection_threshold)} Choose below whether this is "
+        "enabled for this collection."
     )
     if error_message:
         body += f"\n\n⚠ {error_message}"
@@ -6313,7 +6379,7 @@ async def show_customize_vote_overrides(
         collection_display_name=collection_display_name,
         body_header=(
             f'**Customize This Vote -- "{collection_display_name}"**\n\n'
-            "Optionally narrow the eligible pool below, then continue to this vote's settings."
+            "Optionally narrow the eligible pool using the filter menu, then continue to this vote's settings."
         ),
         on_primary_action=on_filter_menu_continue,
         primary_action_label="Continue to Vote Settings",
@@ -9938,7 +10004,7 @@ def build_random_watch_filters_intro(collection_display_name: str) -> str:
     """
     return (
         f'**Random Watch -- "{collection_display_name}"**\n\n'
-        "Optionally narrow the random pool using the filters below, then press **Pick Random Item**. "
+        "Optionally narrow the random pool using the filter menu, then press **Pick Random Item**. "
         "These filters apply only to this session -- they never change the collection's or guild's own "
         "configuration, and never affect a future `/random watch` session."
     )

@@ -130,12 +130,12 @@ class MainSummaryTests(ConfigServiceTestCase):
     def test_missing_wash_crew_role_reports_not_configured(self) -> None:
         self._seed_completed_setup()
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn("🛠️ WASH Crew Role: Not configured", lines)
+        self.assertIn("⚠️ WASH Crew Role: Not configured (Required)", lines)
 
     def test_manage_collections_reports_not_configured_when_none_exist(self) -> None:
         self._seed_completed_setup()
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn("Collections: Not configured", lines)
+        self.assertIn("⚠️ Collections: Not configured (Required)", lines)
 
     def test_manage_collections_reports_active_and_total_counts(self) -> None:
         self._seed_completed_setup()
@@ -148,7 +148,7 @@ class MainSummaryTests(ConfigServiceTestCase):
     def test_watch_destination_default_reports_not_configured_when_unset(self) -> None:
         self._seed_completed_setup()
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn("Watched Item Archive: Not configured", lines)
+        self.assertIn("⚠️ Watched Item Archive: Not configured (Optional)", lines)
 
     def test_watch_destination_default_reports_configured_when_set(self) -> None:
         self._seed_completed_setup()
@@ -156,11 +156,21 @@ class MainSummaryTests(ConfigServiceTestCase):
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
         self.assertIn(f"Watched Item Archive: Configured (<#{DESTINATION_CHANNEL_ID}>)", lines)
 
+    def test_rejection_settings_reports_not_configured_when_no_collections_exist(self) -> None:
+        self._seed_completed_setup()
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertIn("⚠️ \"I Won't Watch\" Settings: Not configured (requires a collection)", lines)
+
+    def test_summary_banner_appears_when_configuration_is_incomplete(self) -> None:
+        self._seed_completed_setup()
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertTrue(any(line.startswith("⚠️") for line in lines))
+
     def test_invalid_role_no_longer_existing_is_reported_as_invalid(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=999999)
         guild = FakeGuild(role_ids=set())
         lines = self.service.build_summary_lines(GUILD_ID, guild)
-        self.assertTrue(any(line.startswith("🛠️ WASH Crew Role: Invalid") for line in lines))
+        self.assertTrue(any(line.startswith("⚠️ WASH Crew Role: Invalid") for line in lines))
 
     def test_voting_defaults_summary_no_longer_mentions_candidate_selection(self) -> None:
         # Candidate selection is per-database now (Manage Databases); the
@@ -248,6 +258,27 @@ class WatchPartyRoleAndJoinModeSectionTests(ConfigServiceTestCase):
         self.assertEqual(configuration.watch_party_role.role_id, WATCH_PARTY_ROLE_ID)
         self.assertEqual(configuration.watch_party_role.join_mode, JoinMode.APPROVAL)
 
+    def test_summary_reports_not_configured_as_optional(self) -> None:
+        # Unlike WASH Crew Role, the Watch Party role can be skipped in
+        # the Setup Wizard -- its warning line is marked (Optional).
+        self._seed_completed_setup()
+        lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
+        self.assertIn("⚠️ Watch Party Role: Not configured (Optional)", lines)
+
+    def test_summary_reports_invalid_when_role_no_longer_exists(self) -> None:
+        self._seed_completed_setup()
+        guild = FakeGuild(role_ids={WATCH_PARTY_ROLE_ID})
+        self.service.set_watch_party_role(GUILD_ID, WATCH_PARTY_ROLE_ID, guild)
+        lines = self.service.build_summary_lines(GUILD_ID, FakeGuild(role_ids=set()))
+        self.assertTrue(any(line.startswith("⚠️ Watch Party Role: Invalid") for line in lines))
+
+    def test_summary_reports_configured_when_set(self) -> None:
+        self._seed_completed_setup()
+        guild = FakeGuild(role_ids={WATCH_PARTY_ROLE_ID})
+        self.service.set_watch_party_role(GUILD_ID, WATCH_PARTY_ROLE_ID, guild)
+        lines = self.service.build_summary_lines(GUILD_ID, guild)
+        self.assertIn(f"🍿 Watch Party Role: Configured (<@&{WATCH_PARTY_ROLE_ID}>)", lines)
+
 
 class AdminChannelSectionTests(ConfigServiceTestCase):
     def test_channel_is_selected(self) -> None:
@@ -284,7 +315,7 @@ class AdminChannelSectionTests(ConfigServiceTestCase):
     def test_summary_reports_not_configured_when_unset(self):
         self._seed_completed_setup()
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn("Admin Channel: Not configured", lines)
+        self.assertIn("⚠️ Admin Channel: Not configured (Optional)", lines)
 
     def test_summary_reports_configured_when_set(self):
         self._seed_completed_setup()
@@ -297,7 +328,7 @@ class AdminChannelSectionTests(ConfigServiceTestCase):
         self.service.set_admin_channel(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
         guild = FakeGuild(channel_ids=set())
         lines = self.service.build_summary_lines(GUILD_ID, guild)
-        self.assertTrue(any(line.startswith("Admin Channel: Invalid") for line in lines))
+        self.assertTrue(any(line.startswith("⚠️ Admin Channel: Invalid") for line in lines))
 
 
 class HomeChannelSectionTests(ConfigServiceTestCase):
@@ -341,7 +372,7 @@ class HomeChannelSectionTests(ConfigServiceTestCase):
     def test_summary_reports_not_configured_when_unset(self):
         self._seed_completed_setup()
         lines = self.service.build_summary_lines(GUILD_ID, self._full_guild())
-        self.assertIn("Watch Party Home Channel: Not configured", lines)
+        self.assertIn("⚠️ Watch Party Home Channel: Not configured (Required)", lines)
 
     def test_summary_reports_configured_when_set(self):
         self._seed_completed_setup()
@@ -354,7 +385,7 @@ class HomeChannelSectionTests(ConfigServiceTestCase):
         self.service.set_home_channel(GUILD_ID, DESTINATION_CHANNEL_ID, self._full_guild())
         guild = FakeGuild(channel_ids=set())
         lines = self.service.build_summary_lines(GUILD_ID, guild)
-        self.assertTrue(any(line.startswith("Watch Party Home Channel: Invalid") for line in lines))
+        self.assertTrue(any(line.startswith("⚠️ Watch Party Home Channel: Invalid") for line in lines))
 
 
 class ManageDatabasesSectionTests(ConfigServiceTestCase):
