@@ -9452,6 +9452,7 @@ async def show_repair_confirmation(interaction: discord.Interaction, bot: "Watch
             repair_service=bot.suggestion_repair_service,
             user=confirm_interaction.user,
             wash_crew_role_id=bot.wash_crew_role_id,
+            guild_id=confirm_interaction.guild_id,
             bot=bot,
         )
         await confirm_interaction.edit_original_response(content=message)
@@ -9481,10 +9482,17 @@ async def perform_repair_suggestions(
     repair_service: SuggestionRepairService,
     user: object,
     wash_crew_role_id: Optional[int],
+    guild_id: Optional[int],
     bot: Optional["WatchPartyBot"] = None,
 ) -> tuple[str, bool]:
     """Run the WASH Crew-only suggestion repair workflow.
 
+    guild_id: The Discord guild the command was run in. Required by
+        repair_all() (not optional there) so a repair triggered in one
+        guild can never scan or modify a different guild's suggestions,
+        regardless of how many other guilds this WASH process also
+        serves. /maintenance repair is only ever reachable from inside a
+        guild, so this is always a real ID by the time it reaches here.
     bot: when supplied (the real `/maintenance repair` command always
     passes it), each successfully repaired suggestion's existing public
     post is located and resynced via sync_suggestion_status_embed, so a
@@ -9511,7 +9519,7 @@ async def perform_repair_suggestions(
                 return None
             return result is SuggestionPostSyncResult.SYNCED
 
-    report = await repair_service.repair_all(post_sync=post_sync)
+    report = await repair_service.repair_all(guild_id, post_sync=post_sync)
     return report.format_message(), True
 
 

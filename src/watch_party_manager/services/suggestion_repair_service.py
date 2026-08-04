@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, List, Optional, Sequence
 
 from watch_party_manager.domain.watch_item import MetadataProvider, WatchItem
 from watch_party_manager.services.imdb_metadata_service import ImdbMetadataService
@@ -19,6 +19,16 @@ _BAD_TITLES = {"javascript is disabled"}
 # True/False once actually attempted, or None when the suggestion has no
 # existing post to sync at all.
 OnPostSync = Callable[[WatchItem], Awaitable[Optional[bool]]]
+
+
+def resolve_repairable_suggestions(suggestions: Sequence[WatchItem], *, guild_id: int) -> List[WatchItem]:
+    """Filter to suggestions belonging to exactly one guild -- mirrors
+    imdb_metadata_refresh_service.resolve_refreshable_databases(): repair
+    must never scan or modify a suggestion belonging to a different
+    guild, regardless of how many other guilds this WASH process also
+    serves.
+    """
+    return [item for item in suggestions if item.guild_id == guild_id]
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,23 +65,33 @@ class SuggestionRepairService:
         self._suggestion_service = suggestion_service
         self._input_service = input_service
 
-    async def repair_all(self, *, post_sync: Optional[OnPostSync] = None) -> SuggestionRepairReport:
-        """Repair every malformed/legacy suggestion across every collection.
+    async def repair_all(
+        self, guild_id: int, *, post_sync: Optional[OnPostSync] = None
+    ) -> SuggestionRepairReport:
+        """Repair every malformed/legacy suggestion in one guild's collections.
 
-        post_sync: First-Time UX Polish (`/maintenance repair` confirmation):
-            when supplied, called once per successfully repaired suggestion
-            (its title/IMDb link already updated in place) so its existing
-            public post -- if it has one -- can be resynced to show the
-            corrected data, the same optional-callback pattern
-            ImdbMetadataRefreshService already uses. None (every existing
-            caller/test) skips post-sync entirely, unchanged from before.
-            Never called for a removed suggestion -- there's no post left
-            to sync.
+        Args:
+            guild_id: The guild whose suggestions to repair -- required,
+                not optional, so a caller can never accidentally repair
+                across every guild this WASH process serves (see
+                resolve_repairable_suggestions, applied before any
+                repair work begins).
+            post_sync: First-Time UX Polish (`/maintenance repair`
+                confirmation): when supplied, called once per
+                successfully repaired suggestion (its title/IMDb link
+                already updated in place) so its existing public post --
+                if it has one -- can be resynced to show the corrected
+                data, the same optional-callback pattern
+                ImdbMetadataRefreshService already uses. None (every
+                existing caller/test) skips post-sync entirely,
+                unchanged from before. Never called for a removed
+                suggestion -- there's no post left to sync.
         """
         scanned = repaired = removed = failed = unchanged = 0
         posts_updated = post_sync_failures = 0
 
-        for item in list(self._suggestion_service.get_suggestions()):
+        candidates = resolve_repairable_suggestions(self._suggestion_service.get_suggestions(), guild_id=guild_id)
+        for item in candidates:
             scanned += 1
             source_url = self._repair_source_url(item)
             if source_url is None:
