@@ -641,6 +641,7 @@ class WatchPartyBot(commands.Bot):
                 permission_service=self.permission_service,
                 user=interaction.user,
                 suggestion_id=suggestion_id,
+                guild_id=interaction.guild_id,
             )
             await interaction.response.send_message(message, ephemeral=ephemeral)
 
@@ -10806,7 +10807,7 @@ def perform_reject_suggestion(
         suggestion_database_configuration_repository, guild_id, watch_item.database_id
     )
     result = suggestion_service.reject_suggestion(
-        suggestion_id, user.id, rejection_threshold=threshold
+        suggestion_id, user.id, rejection_threshold=threshold, guild_id=guild_id
     )
     return result.message, True, result.watch_item
 
@@ -10869,6 +10870,7 @@ def perform_remove_rejection(
     permission_service: PermissionService,
     user: object,
     suggestion_id: int,
+    guild_id: Optional[int] = None,
 ) -> tuple[str, bool]:
     """Core logic for /unreject, kept free of Discord objects except `user`.
 
@@ -10877,6 +10879,14 @@ def perform_remove_rejection(
         permission_service: Used to require Watch Party member permission.
         user: The member invoking the command.
         suggestion_id: The suggestion to remove the member's rejection from.
+        guild_id: The Discord guild the command was run in. Threaded
+            through to remove_rejection() so a bare, globally-unique
+            suggestion_id typed into /unreject can never reach (or
+            reveal the existence of) a suggestion belonging to a
+            different guild. Defaults to None so callers with no guild
+            context, such as the "Undo Rejection" button (already
+            guild-bound by which message it's attached to), keep
+            working unchanged.
 
     Returns:
         A (message, ephemeral) tuple. Always ephemeral, matching /reject.
@@ -10885,7 +10895,7 @@ def perform_remove_rejection(
     if not permission.allowed:
         return permission.message, True
 
-    result = suggestion_service.remove_rejection(suggestion_id, user.id)
+    result = suggestion_service.remove_rejection(suggestion_id, user.id, guild_id=guild_id)
     return result.message, True
 
 

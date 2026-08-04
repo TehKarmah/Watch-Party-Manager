@@ -338,6 +338,7 @@ class SuggestionService:
         suggestion_id: int,
         discord_user_id: int,
         rejection_threshold: int = DEFAULT_REJECTION_THRESHOLD,
+        guild_id: Optional[int] = None,
     ) -> SuggestionResult:
         """Record a Watch Party member's "I Won't Watch" rejection.
 
@@ -360,6 +361,16 @@ class SuggestionService:
                 configured value when available (see
                 SuggestionRulesConfig.rejection_threshold) and pass it
                 here; defaults to this project's documented default of 2.
+            guild_id: When supplied and the resolved suggestion belongs
+                to a different guild, reports the same "doesn't exist"
+                failure a truly-missing ID gets -- never a distinct
+                message that would confirm the suggestion exists
+                elsewhere (/reject takes a bare, globally-unique
+                reference number with no other guild-scoping of its
+                own). Defaults to None so internal callers with no guild
+                context, such as the "I Won't Watch" button -- which can
+                only ever be clicked on a message already in the
+                clicking member's own guild -- keep working unchanged.
 
         Returns:
             SuggestionResult indicating success or failure. Fails if the
@@ -368,7 +379,7 @@ class SuggestionService:
             rejected it.
         """
         watch_item = self.get_suggestion(suggestion_id)
-        if watch_item is None:
+        if watch_item is None or (guild_id is not None and watch_item.guild_id != guild_id):
             return SuggestionResult(success=False, message="That suggestion doesn't exist.")
 
         if watch_item.status == WatchItemStatus.ARCHIVED:
@@ -410,12 +421,24 @@ class SuggestionService:
             watch_item=watch_item,
         )
 
-    def remove_rejection(self, suggestion_id: int, discord_user_id: int) -> SuggestionResult:
+    def remove_rejection(
+        self, suggestion_id: int, discord_user_id: int, guild_id: Optional[int] = None
+    ) -> SuggestionResult:
         """Remove a Watch Party member's earlier "I Won't Watch" rejection.
 
         Args:
             suggestion_id: The suggestion to remove the rejection from.
             discord_user_id: The member whose rejection should be removed.
+            guild_id: When supplied and the resolved suggestion belongs
+                to a different guild, reports the same "doesn't exist"
+                failure a truly-missing ID gets -- never a distinct
+                message that would confirm the suggestion exists
+                elsewhere (/unreject takes a bare, globally-unique
+                reference number with no other guild-scoping of its
+                own). Defaults to None so internal callers with no guild
+                context, such as the "Undo Rejection" button -- which
+                can only ever be clicked on a message already in the
+                clicking member's own guild -- keep working unchanged.
 
         Returns:
             SuggestionResult indicating success or failure. Fails if the
@@ -425,7 +448,7 @@ class SuggestionService:
             rejected it.
         """
         watch_item = self.get_suggestion(suggestion_id)
-        if watch_item is None:
+        if watch_item is None or (guild_id is not None and watch_item.guild_id != guild_id):
             return SuggestionResult(success=False, message="That suggestion doesn't exist.")
 
         if watch_item.status == WatchItemStatus.ARCHIVED:

@@ -1425,6 +1425,29 @@ class RejectSuggestionTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("doesn't exist", result.message)
 
+    def test_reject_succeeds_when_guild_id_matches(self) -> None:
+        item = self.suggestion_service.suggest("Alien", guild_id=100).watch_item
+
+        result = self.suggestion_service.reject_suggestion(item.id, discord_user_id=1, guild_id=100)
+
+        self.assertTrue(result.success)
+
+    def test_reject_rejects_an_item_from_another_guild(self) -> None:
+        item = self.suggestion_service.suggest("Alien", guild_id=100).watch_item
+
+        result = self.suggestion_service.reject_suggestion(item.id, discord_user_id=1, guild_id=200)
+
+        self.assertFalse(result.success)
+        self.assertEqual("That suggestion doesn't exist.", result.message)
+        self.assertEqual((), self.suggestion_service.get_suggestion(item.id).journey.rejected_by_discord_user_ids)
+
+    def test_reject_still_works_with_no_guild_id_supplied(self) -> None:
+        item = self.suggestion_service.suggest("Alien", guild_id=100).watch_item
+
+        result = self.suggestion_service.reject_suggestion(item.id, discord_user_id=1)
+
+        self.assertTrue(result.success)
+
     def test_reject_persists_the_rejection(self) -> None:
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1)
 
@@ -1477,6 +1500,32 @@ class RejectSuggestionTests(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("haven't rejected", result.message)
+
+    def test_remove_rejection_succeeds_when_guild_id_matches(self) -> None:
+        item = self.suggestion_service.suggest("Alien", guild_id=100).watch_item
+        self.suggestion_service.reject_suggestion(item.id, discord_user_id=1)
+
+        result = self.suggestion_service.remove_rejection(item.id, discord_user_id=1, guild_id=100)
+
+        self.assertTrue(result.success)
+
+    def test_remove_rejection_rejects_an_item_from_another_guild(self) -> None:
+        item = self.suggestion_service.suggest("Alien", guild_id=100).watch_item
+        self.suggestion_service.reject_suggestion(item.id, discord_user_id=1)
+
+        result = self.suggestion_service.remove_rejection(item.id, discord_user_id=1, guild_id=200)
+
+        self.assertFalse(result.success)
+        self.assertEqual("That suggestion doesn't exist.", result.message)
+        self.assertEqual((1,), self.suggestion_service.get_suggestion(item.id).journey.rejected_by_discord_user_ids)
+
+    def test_remove_rejection_still_works_with_no_guild_id_supplied(self) -> None:
+        item = self.suggestion_service.suggest("Alien", guild_id=100).watch_item
+        self.suggestion_service.reject_suggestion(item.id, discord_user_id=1)
+
+        result = self.suggestion_service.remove_rejection(item.id, discord_user_id=1)
+
+        self.assertTrue(result.success)
 
     def test_remove_rejection_persists_the_change(self) -> None:
         self.suggestion_service.reject_suggestion(self.matrix.id, discord_user_id=1)

@@ -307,7 +307,7 @@ class RejectionCommandTests(unittest.TestCase):
             watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID,
             wash_crew_role_id=WASH_CREW_ROLE_ID,
         )
-        self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
+        self.matrix = self.suggestion_service.suggest("The Matrix", guild_id=GUILD_ID).watch_item
 
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
@@ -392,7 +392,7 @@ class RejectionCommandTests(unittest.TestCase):
             "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
         )
         inception = self.suggestion_service.suggest(
-            "Inception", database_id=created.database.database_id
+            "Inception", database_id=created.database.database_id, guild_id=GUILD_ID
         ).watch_item
         self.assertIsNotNone(inception)
 
@@ -427,7 +427,7 @@ class RejectionCommandTests(unittest.TestCase):
             "Sunday Watch Party", guild_id=GUILD_ID, channel_id=CONFIGURED_CHANNEL_ID
         )
         inception = self.suggestion_service.suggest(
-            "Inception", database_id=created.database.database_id
+            "Inception", database_id=created.database.database_id, guild_id=GUILD_ID
         ).watch_item
 
         class FakeConfig:
@@ -523,6 +523,101 @@ class RejectionCommandTests(unittest.TestCase):
 
         self.assertTrue(ephemeral)
         self.assertIn("doesn't exist", message)
+
+    # --- Guild isolation ----------------------------------------------------------
+
+    def test_reject_cannot_reach_another_guilds_suggestion(self) -> None:
+        foreign_item = self.suggestion_service.suggest("Predator", guild_id=200).watch_item
+
+        message, ephemeral, watch_item = perform_reject_suggestion(
+            self.suggestion_service,
+            None,
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            foreign_item.id,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertEqual("That suggestion doesn't exist.", message)
+        self.assertIsNone(watch_item)
+        self.assertEqual((), self.suggestion_service.get_suggestion(foreign_item.id).journey.rejected_by_discord_user_ids)
+
+    def test_reject_still_allows_the_invoking_guilds_own_suggestion(self) -> None:
+        message, ephemeral, watch_item = perform_reject_suggestion(
+            self.suggestion_service,
+            None,
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            self.matrix.id,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("recorded", message)
+        self.assertIsNotNone(watch_item)
+
+    def test_unreject_cannot_remove_a_rejection_from_another_guilds_suggestion(self) -> None:
+        foreign_item = self.suggestion_service.suggest("Predator", guild_id=200).watch_item
+        # Recorded directly through the service (bypassing guild scoping) so
+        # the foreign suggestion genuinely has a rejection to attempt to undo.
+        self.suggestion_service.reject_suggestion(foreign_item.id, discord_user_id=1)
+
+        message, ephemeral = perform_remove_rejection(
+            self.suggestion_service,
+            self.permission_service,
+            self._watch_party_member(1),
+            foreign_item.id,
+            guild_id=GUILD_ID,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertEqual("That suggestion doesn't exist.", message)
+        self.assertEqual(
+            (1,), self.suggestion_service.get_suggestion(foreign_item.id).journey.rejected_by_discord_user_ids
+        )
+
+    def test_unreject_still_allows_the_invoking_guilds_own_rejection(self) -> None:
+        perform_reject_suggestion(
+            self.suggestion_service,
+            None,
+            self.permission_service,
+            self._watch_party_member(1),
+            GUILD_ID,
+            self.matrix.id,
+        )
+
+        message, ephemeral = perform_remove_rejection(
+            self.suggestion_service,
+            self.permission_service,
+            self._watch_party_member(1),
+            self.matrix.id,
+            guild_id=GUILD_ID,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("removed", message)
+
+    def test_cross_guild_rejection_attempt_matches_the_permission_gate_for_a_non_member(self) -> None:
+        # Cross-guild attempts must fail closed exactly like a missing
+        # suggestion for a properly-permissioned member -- verified here
+        # that the guild check doesn't accidentally weaken (or duplicate)
+        # the existing Watch Party member permission gate for an
+        # unprivileged user hitting the same foreign suggestion.
+        foreign_item = self.suggestion_service.suggest("Predator", guild_id=200).watch_item
+
+        message, ephemeral, watch_item = perform_reject_suggestion(
+            self.suggestion_service,
+            None,
+            self.permission_service,
+            self._non_member(1),
+            GUILD_ID,
+            foreign_item.id,
+        )
+
+        self.assertTrue(ephemeral)
+        self.assertIn("Watch Party member", message)
+        self.assertIsNone(watch_item)
 
 
 class FakeResponse:
@@ -1029,7 +1124,7 @@ class RejectSuggestionReturnsWatchItemTests(unittest.TestCase):
             watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID,
             wash_crew_role_id=WASH_CREW_ROLE_ID,
         )
-        self.matrix = self.suggestion_service.suggest("The Matrix").watch_item
+        self.matrix = self.suggestion_service.suggest("The Matrix", guild_id=GUILD_ID).watch_item
 
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
