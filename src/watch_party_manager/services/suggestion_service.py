@@ -544,7 +544,7 @@ class SuggestionService:
 
     # --- FR-033A: WASH Crew-initiated archive/reactivate -------------------------------
 
-    def archive_suggestion(self, suggestion_id: int) -> SuggestionResult:
+    def archive_suggestion(self, suggestion_id: int, guild_id: Optional[int] = None) -> SuggestionResult:
         """Archive a suggestion directly (e.g. via /remove), preserving its
         identity and history.
 
@@ -554,9 +554,15 @@ class SuggestionService:
         duplicate_detection_service.categorize_watch_item() can tell the
         two apart afterward (ARCHIVED_OTHER here, vs. ARCHIVED_REJECTED
         for a threshold-triggered archive).
+
+        guild_id: when supplied and the resolved suggestion belongs to a
+        different guild, reports the same "doesn't exist" failure a
+        truly-missing ID gets -- never a distinct message that would
+        confirm the suggestion exists elsewhere. Defaults to None so
+        internal callers with no guild context keep working unchanged.
         """
         watch_item = self.get_suggestion(suggestion_id)
-        if watch_item is None:
+        if watch_item is None or (guild_id is not None and watch_item.guild_id != guild_id):
             return SuggestionResult(success=False, message="That suggestion doesn't exist.")
 
         if watch_item.status is WatchItemStatus.ARCHIVED:
@@ -620,6 +626,7 @@ class SuggestionService:
         suggestion_id: int,
         status: WatchItemStatus,
         vote_service: Optional[VoteRoundLookup] = None,
+        guild_id: Optional[int] = None,
     ) -> SuggestionResult:
         """Directly set a suggestion's status (/edit_suggestion's Change
         Status action).
@@ -639,9 +646,15 @@ class SuggestionService:
         open round must report In an Active Vote, not Available) --
         optional, defaulting to None so existing callers/tests keep
         working unchanged.
+
+        guild_id: when supplied and the resolved suggestion belongs to a
+        different guild, reports the same "doesn't exist" failure a
+        truly-missing ID gets -- never a distinct message that would
+        confirm the suggestion exists elsewhere. Defaults to None so
+        internal callers with no guild context keep working unchanged.
         """
         watch_item = self.get_suggestion(suggestion_id)
-        if watch_item is None:
+        if watch_item is None or (guild_id is not None and watch_item.guild_id != guild_id):
             return SuggestionResult(success=False, message="That suggestion doesn't exist.")
 
         watch_item.status = status
@@ -836,7 +849,9 @@ class SuggestionService:
 
     # --- FR-033A: /remove matching and Crew-only editing --------------------------------
 
-    def find_matches_for_removal(self, query: str, database_id: Optional[int] = None) -> list[WatchItem]:
+    def find_matches_for_removal(
+        self, query: str, database_id: Optional[int] = None, guild_id: Optional[int] = None
+    ) -> list[WatchItem]:
         """Find items matching a /remove query.
 
         A query matches by reference number (``#0007`` or bare ``7``),
@@ -848,6 +863,17 @@ class SuggestionService:
             query: The raw /remove input.
             database_id: If given, only items in this database are
                 considered.
+            guild_id: If given, only items belonging to this guild are
+                considered -- /suggestion remove, /suggestion edit, and
+                /stats suggestion all match by a globally unique
+                reference number or an exact title, neither of which is
+                itself guild-scoped, so without this filter a WASH Crew
+                member in one guild could resolve (and, via
+                archive_suggestion/set_suggestion_status, act on) a
+                suggestion belonging to a different guild WASH also
+                serves. Every real command caller supplies this; it
+                defaults to None so internal/legacy callers with no
+                guild context keep working unchanged.
         """
         trimmed = query.strip()
         if not trimmed:
@@ -856,7 +882,8 @@ class SuggestionService:
         candidates = [
             item
             for item in self._suggestions.values()
-            if database_id is None or item.database_id == database_id
+            if (database_id is None or item.database_id == database_id)
+            and (guild_id is None or item.guild_id == guild_id)
         ]
 
         reference_id = self._parse_reference(trimmed)

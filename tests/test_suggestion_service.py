@@ -1786,6 +1786,38 @@ class ArchiveAndReactivateSuggestionTests(unittest.TestCase):
 
         self.assertFalse(result.success)
 
+    def test_archive_suggestion_succeeds_when_guild_id_matches(self) -> None:
+        item = self.service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=100
+        ).watch_item
+
+        result = self.service.archive_suggestion(item.id, guild_id=100)
+
+        self.assertTrue(result.success)
+        self.assertEqual(WatchItemStatus.ARCHIVED, self.service.get_suggestion(item.id).status)
+
+    def test_archive_suggestion_rejects_an_item_from_another_guild(self) -> None:
+        item = self.service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=100
+        ).watch_item
+
+        result = self.service.archive_suggestion(item.id, guild_id=200)
+
+        self.assertFalse(result.success)
+        self.assertEqual("That suggestion doesn't exist.", result.message)
+        self.assertEqual(WatchItemStatus.SUGGESTED, self.service.get_suggestion(item.id).status)
+
+    def test_archive_suggestion_still_works_with_no_guild_id_supplied(self) -> None:
+        # Internal/legacy callers with no guild context must keep working
+        # unchanged -- guild_id defaults to None, meaning "don't filter".
+        item = self.service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=100
+        ).watch_item
+
+        result = self.service.archive_suggestion(item.id)
+
+        self.assertTrue(result.success)
+
     def test_reactivate_suggestion_returns_an_archived_item_to_suggested(self) -> None:
         self.service.archive_suggestion(self.matrix.id)
 
@@ -1957,6 +1989,36 @@ class SetSuggestionStatusTests(unittest.TestCase):
         result = self.service.set_suggestion_status(999999, WatchItemStatus.ARCHIVED)
         self.assertFalse(result.success)
 
+    def test_succeeds_when_guild_id_matches(self) -> None:
+        item = self.service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=100
+        ).watch_item
+
+        result = self.service.set_suggestion_status(item.id, WatchItemStatus.ARCHIVED, guild_id=100)
+
+        self.assertTrue(result.success)
+        self.assertEqual(WatchItemStatus.ARCHIVED, self.service.get_suggestion(item.id).status)
+
+    def test_rejects_an_item_from_another_guild(self) -> None:
+        item = self.service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=100
+        ).watch_item
+
+        result = self.service.set_suggestion_status(item.id, WatchItemStatus.ARCHIVED, guild_id=200)
+
+        self.assertFalse(result.success)
+        self.assertEqual("That suggestion doesn't exist.", result.message)
+        self.assertEqual(WatchItemStatus.SUGGESTED, self.service.get_suggestion(item.id).status)
+
+    def test_still_works_with_no_guild_id_supplied(self) -> None:
+        item = self.service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=100
+        ).watch_item
+
+        result = self.service.set_suggestion_status(item.id, WatchItemStatus.ARCHIVED)
+
+        self.assertTrue(result.success)
+
     def test_preserves_id_and_journey(self) -> None:
         self.service.reject_suggestion(self.matrix.id, discord_user_id=1, rejection_threshold=5)
 
@@ -2026,6 +2088,53 @@ class FindMatchesForRemovalTests(unittest.TestCase):
         )
 
         self.assertEqual([self.matrix], matches)
+
+    def test_guild_scoping_narrows_matches_by_title(self) -> None:
+        own_item = self.service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=100
+        ).watch_item
+        other_database = self.service.create_database("Other Guild DB", guild_id=200, channel_id=300).database
+        self.service.suggest("Alien", database_id=other_database.database_id, guild_id=200)
+
+        matches = self.service.find_matches_for_removal("Alien", guild_id=100)
+
+        self.assertEqual([own_item], matches)
+
+    def test_guild_scoping_narrows_matches_by_reference(self) -> None:
+        other_database = self.service.create_database("Other Guild DB", guild_id=200, channel_id=300).database
+        foreign_item = self.service.suggest(
+            "Inception", database_id=other_database.database_id, guild_id=200
+        ).watch_item
+
+        matches = self.service.find_matches_for_removal(f"#{foreign_item.id}", guild_id=100)
+
+        self.assertEqual([], matches)
+
+    def test_identical_titles_in_two_guilds_resolve_only_to_the_requesting_guild(self) -> None:
+        own_item = self.service.suggest(
+            "Dune (2021)", database_id=self.database.database_id, guild_id=100
+        ).watch_item
+        other_database = self.service.create_database("Other Guild DB", guild_id=200, channel_id=300).database
+        foreign_item = self.service.suggest(
+            "Dune (2021)", database_id=other_database.database_id, guild_id=200
+        ).watch_item
+        self.assertNotEqual(own_item.id, foreign_item.id)
+
+        matches = self.service.find_matches_for_removal("Dune (2021)", guild_id=100)
+
+        self.assertEqual([own_item], matches)
+
+    def test_no_guild_id_supplied_returns_matches_across_every_guild(self) -> None:
+        # Internal/legacy callers with no guild context keep working
+        # unchanged -- guild_id defaults to None, meaning "don't filter".
+        other_database = self.service.create_database("Other Guild DB", guild_id=200, channel_id=300).database
+        foreign_item = self.service.suggest(
+            "Inception", database_id=other_database.database_id, guild_id=200
+        ).watch_item
+
+        matches = self.service.find_matches_for_removal("Inception")
+
+        self.assertEqual([foreign_item], matches)
 
 
 class EditSuggestionTests(unittest.TestCase):

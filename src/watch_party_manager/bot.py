@@ -11577,7 +11577,7 @@ async def send_removal_confirmation(interaction: discord.Interaction, bot: "Watc
     summary = build_removal_option_label(item, bot.suggestion_service, getattr(bot, "vote_service", None))
 
     async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-        result = bot.suggestion_service.archive_suggestion(item.id)
+        result = bot.suggestion_service.archive_suggestion(item.id, guild_id=item.guild_id)
         await confirm_interaction.response.send_message(result.message, ephemeral=True)
         if result.success:
             await sync_suggestion_status_embed(bot, result.watch_item)
@@ -11600,7 +11600,7 @@ async def handle_remove_suggestion(interaction: discord.Interaction, bot: "Watch
         await interaction.response.send_message("You need the WASH Crew role to remove a watch item.", ephemeral=True)
         return
 
-    matches = bot.suggestion_service.find_matches_for_removal(query)
+    matches = bot.suggestion_service.find_matches_for_removal(query, guild_id=interaction.guild_id)
     if not matches:
         await interaction.response.send_message(f'No suggestion matches "{query}".', ephemeral=True)
         return
@@ -11684,7 +11684,7 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
         await interaction.response.send_message("You need the WASH Crew role to edit a suggestion.", ephemeral=True)
         return
 
-    matches = bot.suggestion_service.find_matches_for_removal(reference)
+    matches = bot.suggestion_service.find_matches_for_removal(reference, guild_id=interaction.guild_id)
     if not matches:
         await interaction.response.send_message(f'No suggestion matches "{reference}".', ephemeral=True)
         return
@@ -11704,7 +11704,7 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
 
         async def on_status_selected(select_interaction: discord.Interaction, new_status: WatchItemStatus) -> None:
             result = bot.suggestion_service.set_suggestion_status(
-                item.id, new_status, getattr(bot, "vote_service", None)
+                item.id, new_status, getattr(bot, "vote_service", None), guild_id=current_item.guild_id
             )
             await select_interaction.response.send_message(result.message, ephemeral=True)
             if result.success:
@@ -14192,7 +14192,7 @@ async def send_member_statistics(interaction: discord.Interaction, bot: "WatchPa
 async def send_suggestion_statistics(
     interaction: discord.Interaction, bot: "WatchPartyBot", query: str, public: bool
 ) -> None:
-    matches = bot.suggestion_service.find_matches_for_removal(query)
+    matches = bot.suggestion_service.find_matches_for_removal(query, guild_id=interaction.guild_id)
     if not matches:
         await interaction.response.send_message(f'No suggestion matches "{query}".', ephemeral=True)
         return

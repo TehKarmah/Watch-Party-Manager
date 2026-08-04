@@ -277,7 +277,9 @@ class SuggestionTypeTests(HandleStatsTestCase):
         self.assertIn('No suggestion matches "Nonexistent Movie"', interaction.response.sent_message)
 
     async def test_a_single_match_shows_statistics_directly(self) -> None:
-        result = self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
+        result = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID
+        )
         interaction = FakeInteraction()
 
         await handle_stats(interaction, self.bot, "suggestion", False, "Alien")
@@ -286,7 +288,9 @@ class SuggestionTypeTests(HandleStatsTestCase):
         self.assertIn(f"#{result.watch_item.id:04d}", interaction.response.sent_message)
 
     async def test_a_reference_number_query_matches(self) -> None:
-        result = self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
+        result = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID
+        )
         interaction = FakeInteraction()
 
         await handle_stats(interaction, self.bot, "suggestion", False, str(result.watch_item.id))
@@ -294,17 +298,41 @@ class SuggestionTypeTests(HandleStatsTestCase):
         self.assertIn("Suggestion Statistics -- Alien", interaction.response.sent_message)
 
     async def test_multiple_matches_show_a_selector(self) -> None:
-        self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
+        self.suggestion_service.suggest("Alien", database_id=self.database.database_id, guild_id=GUILD_ID)
         other_database = self.suggestion_service.create_database(
             "Other Night", guild_id=GUILD_ID, channel_id=CHANNEL_ID + 1
         ).database
-        self.suggestion_service.suggest("Alien", database_id=other_database.database_id)
+        self.suggestion_service.suggest("Alien", database_id=other_database.database_id, guild_id=GUILD_ID)
         interaction = FakeInteraction()
 
         await handle_stats(interaction, self.bot, "suggestion", False, "Alien")
 
         self.assertIsNotNone(interaction.response.sent_view)
         self.assertIn("Multiple suggestions match", interaction.response.sent_message)
+
+    async def test_does_not_reach_another_guilds_suggestion_by_title(self) -> None:
+        other_database = self.suggestion_service.create_database(
+            "Other Guild", guild_id=200, channel_id=CHANNEL_ID + 1
+        ).database
+        self.suggestion_service.suggest("Predator", database_id=other_database.database_id, guild_id=200)
+        interaction = FakeInteraction()
+
+        await handle_stats(interaction, self.bot, "suggestion", False, "Predator")
+
+        self.assertIn('No suggestion matches "Predator"', interaction.response.sent_message)
+
+    async def test_does_not_reach_another_guilds_suggestion_by_reference(self) -> None:
+        other_database = self.suggestion_service.create_database(
+            "Other Guild", guild_id=200, channel_id=CHANNEL_ID + 1
+        ).database
+        foreign_item = self.suggestion_service.suggest(
+            "Predator", database_id=other_database.database_id, guild_id=200
+        ).watch_item
+        interaction = FakeInteraction()
+
+        await handle_stats(interaction, self.bot, "suggestion", False, str(foreign_item.id))
+
+        self.assertIn(f'No suggestion matches "{foreign_item.id}"', interaction.response.sent_message)
 
 
 class DatabaseTypeTests(HandleStatsTestCase):

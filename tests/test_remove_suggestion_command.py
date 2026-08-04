@@ -42,8 +42,9 @@ class FakeResponse:
 
 
 class FakeInteraction:
-    def __init__(self, user=None) -> None:
+    def __init__(self, user=None, guild_id=GUILD_ID) -> None:
         self.user = user if user is not None else FakeMember([WASH_CREW_ROLE_ID])
+        self.guild_id = guild_id
         self.response = FakeResponse()
 
 
@@ -89,7 +90,7 @@ class RemovePermissionTests(HandleRemoveSuggestionTestCase):
 
 class RemoveMatchingTests(HandleRemoveSuggestionTestCase):
     async def test_matches_by_reference_number(self) -> None:
-        item = self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id).watch_item
+        item = self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id, guild_id=GUILD_ID).watch_item
         interaction = FakeInteraction()
 
         await handle_remove_suggestion(interaction, self.bot, f"#{item.id}")
@@ -99,7 +100,7 @@ class RemoveMatchingTests(HandleRemoveSuggestionTestCase):
         self.assertIsNotNone(interaction.response.sent_view)
 
     async def test_matches_by_exact_title(self) -> None:
-        self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id)
+        self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id, guild_id=GUILD_ID)
         interaction = FakeInteraction()
 
         await handle_remove_suggestion(interaction, self.bot, "Alien (1979)")
@@ -107,7 +108,7 @@ class RemoveMatchingTests(HandleRemoveSuggestionTestCase):
         self.assertIsNotNone(interaction.response.sent_view)
 
     async def test_matches_by_title_without_year(self) -> None:
-        self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id)
+        self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id, guild_id=GUILD_ID)
         interaction = FakeInteraction()
 
         await handle_remove_suggestion(interaction, self.bot, "Alien")
@@ -126,8 +127,8 @@ class RemoveMatchingTests(HandleRemoveSuggestionTestCase):
         other_database = self.suggestion_service.create_database(
             "Other DB", guild_id=GUILD_ID, channel_id=555
         ).database
-        self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id)
-        self.suggestion_service.suggest("Alien (1979)", database_id=other_database.database_id)
+        self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id, guild_id=GUILD_ID)
+        self.suggestion_service.suggest("Alien (1979)", database_id=other_database.database_id, guild_id=GUILD_ID)
         interaction = FakeInteraction()
 
         await handle_remove_suggestion(interaction, self.bot, "Alien (1979)")
@@ -142,8 +143,8 @@ class RemoveMatchingTests(HandleRemoveSuggestionTestCase):
         other_database = self.suggestion_service.create_database(
             "Other DB", guild_id=GUILD_ID, channel_id=555
         ).database
-        self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id)
-        self.suggestion_service.suggest("Alien (1979)", database_id=other_database.database_id)
+        self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id, guild_id=GUILD_ID)
+        self.suggestion_service.suggest("Alien (1979)", database_id=other_database.database_id, guild_id=GUILD_ID)
         interaction = FakeInteraction()
 
         await handle_remove_suggestion(interaction, self.bot, "Alien (1979)")
@@ -156,8 +157,8 @@ class RemoveMatchingTests(HandleRemoveSuggestionTestCase):
         other_database = self.suggestion_service.create_database(
             "Other DB", guild_id=GUILD_ID, channel_id=555
         ).database
-        first = self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id).watch_item
-        self.suggestion_service.suggest("Alien (1979)", database_id=other_database.database_id)
+        first = self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id, guild_id=GUILD_ID).watch_item
+        self.suggestion_service.suggest("Alien (1979)", database_id=other_database.database_id, guild_id=GUILD_ID)
         interaction = FakeInteraction()
         await handle_remove_suggestion(interaction, self.bot, "Alien (1979)")
         select = interaction.response.sent_view.children[0]
@@ -168,10 +169,39 @@ class RemoveMatchingTests(HandleRemoveSuggestionTestCase):
 
         self.assertIn("Remove this suggestion?", select_interaction.response.sent_message)
 
+    async def test_does_not_reach_another_guilds_suggestion_by_title(self) -> None:
+        other_database = self.suggestion_service.create_database(
+            "Other Guild", guild_id=200, channel_id=555
+        ).database
+        self.suggestion_service.suggest(
+            "Alien (1979)", database_id=other_database.database_id, guild_id=200
+        )
+        interaction = FakeInteraction()
+
+        await handle_remove_suggestion(interaction, self.bot, "Alien (1979)")
+
+        self.assertIn('No suggestion matches "Alien (1979)"', interaction.response.sent_message)
+
+    async def test_does_not_reach_another_guilds_suggestion_by_reference(self) -> None:
+        other_database = self.suggestion_service.create_database(
+            "Other Guild", guild_id=200, channel_id=555
+        ).database
+        foreign_item = self.suggestion_service.suggest(
+            "Alien (1979)", database_id=other_database.database_id, guild_id=200
+        ).watch_item
+        interaction = FakeInteraction()
+
+        await handle_remove_suggestion(interaction, self.bot, f"#{foreign_item.id}")
+
+        self.assertIn(f'No suggestion matches "#{foreign_item.id}"', interaction.response.sent_message)
+        self.assertEqual(
+            WatchItemStatus.SUGGESTED, self.suggestion_service.get_suggestion(foreign_item.id).status
+        )
+
 
 class RemoveArchivalBehaviorTests(HandleRemoveSuggestionTestCase):
     async def test_confirming_archives_rather_than_deletes(self) -> None:
-        item = self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id).watch_item
+        item = self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id, guild_id=GUILD_ID).watch_item
         interaction = FakeInteraction()
         await handle_remove_suggestion(interaction, self.bot, "Alien (1979)")
         view = interaction.response.sent_view
@@ -184,7 +214,7 @@ class RemoveArchivalBehaviorTests(HandleRemoveSuggestionTestCase):
         self.assertEqual(WatchItemStatus.ARCHIVED, stored.status)
 
     async def test_cancel_leaves_the_item_active(self) -> None:
-        item = self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id).watch_item
+        item = self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id, guild_id=GUILD_ID).watch_item
         interaction = FakeInteraction()
         await handle_remove_suggestion(interaction, self.bot, "Alien (1979)")
         view = interaction.response.sent_view
@@ -196,7 +226,7 @@ class RemoveArchivalBehaviorTests(HandleRemoveSuggestionTestCase):
         self.assertEqual(WatchItemStatus.SUGGESTED, stored.status)
 
     async def test_preserves_journey_history(self) -> None:
-        item = self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id).watch_item
+        item = self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id, guild_id=GUILD_ID).watch_item
         self.suggestion_service.reject_suggestion(item.id, discord_user_id=1, rejection_threshold=99)
         interaction = FakeInteraction()
         await handle_remove_suggestion(interaction, self.bot, "Alien (1979)")
