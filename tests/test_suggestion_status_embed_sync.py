@@ -626,11 +626,29 @@ class SuggestionRejectionThresholdEmbedSyncTests(unittest.IsolatedAsyncioTestCas
     def _status_of(self, embed) -> str:
         return next(field.value for field in embed.fields if field.name == "Status")
 
+    def _guild_configuration_repository_for(self, permission_service: PermissionService):
+        from types import SimpleNamespace
+
+        class _Repository:
+            def get(self, guild_id):
+                return SimpleNamespace(
+                    wash_crew_role_id=permission_service.wash_crew_role_id,
+                    watch_party_role=SimpleNamespace(role_id=permission_service.watch_party_member_role_id),
+                    channels=SimpleNamespace(admin_channel_id=None),
+                )
+
+        return _Repository()
+
     async def test_reject_command_syncs_the_post_when_the_threshold_reaches_crew_review(self) -> None:
         message = FakeMessage(message_id=555)
         channel = FakeChannel(message)
         bot = FakeBot(self.suggestion_service, channel)
         bot.permission_service = self.permission_service
+        # Multi-Guild Isolation, Phase 3b: handle_reject_suggestion now
+        # resolves permissions via resolve_permission_service, which
+        # reads guild_configuration_repository -- not bot.permission_service
+        # above (kept for any test that still reaches for it directly).
+        bot.guild_configuration_repository = self._guild_configuration_repository_for(self.permission_service)
         bot.suggestion_database_configuration_repository = self.FakeConfigRepository()
 
         interaction = FakeRejectInteraction(FakeMember(1, [WATCH_PARTY_MEMBER_ROLE_ID]))
@@ -717,11 +735,29 @@ class HandleUnrejectSuggestionEmbedSyncTests(unittest.IsolatedAsyncioTestCase):
     def _rejection_button_label(self, view) -> str:
         return view.children[0].label
 
+    def _guild_configuration_repository_for(self, permission_service: PermissionService):
+        from types import SimpleNamespace
+
+        class _Repository:
+            def get(self, guild_id):
+                return SimpleNamespace(
+                    wash_crew_role_id=permission_service.wash_crew_role_id,
+                    watch_party_role=SimpleNamespace(role_id=permission_service.watch_party_member_role_id),
+                    channels=SimpleNamespace(admin_channel_id=None),
+                )
+
+        return _Repository()
+
     async def test_unreject_command_refreshes_the_suggestion_posts_rejection_count(self) -> None:
         message = FakeMessage(message_id=555)
         channel = FakeChannel(message)
         bot = FakeBot(self.suggestion_service, channel)
         bot.permission_service = self.permission_service
+        # Multi-Guild Isolation, Phase 3b: handle_unreject_suggestion now
+        # resolves permissions via resolve_permission_service, which
+        # reads guild_configuration_repository -- not bot.permission_service
+        # above (kept for any test that still reaches for it directly).
+        bot.guild_configuration_repository = self._guild_configuration_repository_for(self.permission_service)
 
         interaction = FakeRejectInteraction(FakeMember(1, [WATCH_PARTY_MEMBER_ROLE_ID]))
         await handle_unreject_suggestion(interaction, bot, self.item.id)
@@ -738,6 +774,7 @@ class HandleUnrejectSuggestionEmbedSyncTests(unittest.IsolatedAsyncioTestCase):
         channel = FakeChannel(message)
         bot = FakeBot(self.suggestion_service, channel)
         bot.permission_service = self.permission_service
+        bot.guild_configuration_repository = self._guild_configuration_repository_for(self.permission_service)
 
         interaction = FakeRejectInteraction(FakeMember(2, [WATCH_PARTY_MEMBER_ROLE_ID]))
         await handle_unreject_suggestion(interaction, bot, self.item.id)
@@ -750,6 +787,7 @@ class HandleUnrejectSuggestionEmbedSyncTests(unittest.IsolatedAsyncioTestCase):
         channel = FakeChannel(message)
         bot = FakeBot(self.suggestion_service, channel)
         bot.permission_service = self.permission_service
+        bot.guild_configuration_repository = self._guild_configuration_repository_for(self.permission_service)
 
         interaction = FakeRejectInteraction(FakeMember(1, [WATCH_PARTY_MEMBER_ROLE_ID]))
         await handle_unreject_suggestion(interaction, bot, 999999)

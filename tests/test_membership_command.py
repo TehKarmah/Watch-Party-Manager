@@ -194,18 +194,28 @@ class WatchPartyAdminCommandTestCase(unittest.IsolatedAsyncioTestCase):
             self.guild_configuration_repository, self.membership_request_repository
         )
         self.bot = FakeBot(self.membership_service, self.membership_request_repository)
+        # Multi-Guild Isolation, Phase 3b: resolve_permission_service reads
+        # this saved repository, not bot.permission_service above (kept
+        # for any test that still reaches for it directly).
+        self.bot.guild_configuration_repository = self.guild_configuration_repository
 
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
 
     def _seed(
-        self, join_mode: JoinMode = JoinMode.APPROVAL, *, role_id=ROLE_ID, denial_cooldown_days: int = 7
+        self,
+        join_mode: JoinMode = JoinMode.APPROVAL,
+        *,
+        role_id=ROLE_ID,
+        denial_cooldown_days: int = 7,
+        wash_crew_role_id=WASH_CREW_ROLE_ID,
     ) -> None:
         self.guild_configuration_repository.save(
             GuildConfiguration(
                 guild_id=GUILD_ID,
                 guild_name="Test Guild",
                 setup_completed=True,
+                wash_crew_role_id=wash_crew_role_id,
                 watch_party_role=WatchPartyRoleConfig(
                     role_id=role_id, join_mode=join_mode, denial_cooldown_days=denial_cooldown_days
                 ),
@@ -222,6 +232,7 @@ class WatchPartyAdminCommandTestCase(unittest.IsolatedAsyncioTestCase):
 
 class WatchPartyGroupPermissionTests(WatchPartyAdminCommandTestCase):
     async def test_wash_crew_passes_the_interaction_check(self) -> None:
+        self._seed()
         group = MembershipGroup(self.bot)
         interaction = FakeInteraction(user=self._wash_crew_member())
 
@@ -231,6 +242,7 @@ class WatchPartyGroupPermissionTests(WatchPartyAdminCommandTestCase):
         self.assertIsNone(interaction.response.sent_message)
 
     async def test_non_wash_crew_fails_the_interaction_check(self) -> None:
+        self._seed()
         group = MembershipGroup(self.bot)
         interaction = FakeInteraction(user=FakeMember(1, roles=[]))
 
@@ -241,7 +253,11 @@ class WatchPartyGroupPermissionTests(WatchPartyAdminCommandTestCase):
         self.assertTrue(interaction.response.sent_ephemeral)
 
     async def test_unconfigured_wash_crew_role_fails_closed(self) -> None:
+        # No GuildConfiguration saved for this guild -- resolves to an
+        # unconfigured PermissionService, the same fail-closed outcome an
+        # explicit wash_crew_role_id=None would produce.
         bot = FakeBot(self.membership_service, self.membership_request_repository, wash_crew_role_id=None)
+        bot.guild_configuration_repository = self.guild_configuration_repository
         group = MembershipGroup(bot)
         interaction = FakeInteraction(user=FakeMember(1, roles=[]))
 

@@ -16,7 +16,11 @@ from watch_party_manager.bot import (
     extract_year_from_title_suffix,
     handle_add_suggestion,
 )
-from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, GuildConfiguration
+from watch_party_manager.domain.guild_configuration import (
+    GuildChannelsConfig,
+    GuildConfiguration,
+    WatchPartyRoleConfig,
+)
 from watch_party_manager.domain.suggestion_database_configuration import (
     SuggestionDatabaseChannelsConfig,
     SuggestionDatabaseConfiguration,
@@ -322,7 +326,14 @@ class FakeBot:
         )
         self.wash_crew_role_id = wash_crew_role_id
         self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, None)
-        self.guild_configuration_repository = guild_configuration_repository or FakeGuildConfigurationRepository()
+        self.guild_configuration_repository = guild_configuration_repository or FakeGuildConfigurationRepository(
+            GuildConfiguration(
+                guild_id=GUILD_ID,
+                guild_name="Test Guild",
+                wash_crew_role_id=wash_crew_role_id,
+                watch_party_role=WatchPartyRoleConfig(role_id=WATCH_PARTY_MEMBER_ROLE_ID),
+            )
+        )
         self.eligible_pool_warning_service = EligiblePoolWarningService(
             self.collection_eligibility_service,
             JsonEligiblePoolWarningStateRepository(Path(tempfile.mkdtemp()) / "eligible_pool_warning_state.json"),
@@ -764,6 +775,8 @@ class LowPoolNotificationTests(HandleAddSuggestionTestCase):
             guild_id=GUILD_ID,
             guild_name="Test Guild",
             channels=GuildChannelsConfig(admin_channel_id=self.ADMIN_CHANNEL_ID),
+            wash_crew_role_id=WASH_CREW_ROLE_ID,
+            watch_party_role=WatchPartyRoleConfig(role_id=WATCH_PARTY_MEMBER_ROLE_ID),
         )
         self.bot = FakeBot(
             self.suggestion_service,

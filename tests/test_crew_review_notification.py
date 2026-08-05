@@ -23,7 +23,11 @@ from watch_party_manager.bot import (
     restore_persistent_crew_review_views,
 )
 from watch_party_manager.crew_review_view import CrewReviewView
-from watch_party_manager.domain.guild_configuration import GuildChannelsConfig, GuildConfiguration
+from watch_party_manager.domain.guild_configuration import (
+    GuildChannelsConfig,
+    GuildConfiguration,
+    WatchPartyRoleConfig,
+)
 from watch_party_manager.domain.watch_item import WatchItemStatus
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
@@ -129,7 +133,11 @@ class _CrewReviewTestSetupMixin:
         bot.suggestion_service = self.suggestion_service
         configuration = (
             GuildConfiguration(
-                guild_id=GUILD_ID, guild_name="Test", channels=GuildChannelsConfig(admin_channel_id=ADMIN_CHANNEL_ID)
+                guild_id=GUILD_ID,
+                guild_name="Test",
+                channels=GuildChannelsConfig(admin_channel_id=ADMIN_CHANNEL_ID),
+                wash_crew_role_id=WASH_CREW_ROLE_ID,
+                watch_party_role=WatchPartyRoleConfig(role_id=WATCH_PARTY_MEMBER_ROLE_ID),
             )
             if configured
             else None

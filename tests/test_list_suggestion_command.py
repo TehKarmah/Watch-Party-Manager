@@ -18,6 +18,7 @@ from watch_party_manager.bot import (
     handle_list_suggestions,
     resolve_suggestion_list_entries,
 )
+from watch_party_manager.domain.guild_configuration import GuildConfiguration, WatchPartyRoleConfig
 from watch_party_manager.domain.watch_item import MediaType, MetadataProvider, WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_item_journey import WatchItemJourney
 from watch_party_manager.pagination_view import PaginatedListView
@@ -260,11 +261,16 @@ class FakeInteraction:
 
 
 class FakeGuildConfigurationRepository:
-    """Always reports "no guild configuration saved" -- callers fall back
-    to their documented defaults (e.g. DEFAULT_VOTE_CANDIDATE_COUNT)."""
+    """Reports "no guild configuration saved" by default -- callers fall
+    back to their documented defaults (e.g. DEFAULT_VOTE_CANDIDATE_COUNT)
+    -- unless a configuration is supplied (used to carry the WASH Crew/
+    Watch Party role IDs for resolve_permission_service)."""
+
+    def __init__(self, configuration=None) -> None:
+        self._configuration = configuration
 
     def get(self, guild_id: int):
-        return None
+        return self._configuration
 
 
 class FakeBot:
@@ -280,7 +286,14 @@ class FakeBot:
         )
         self.wash_crew_role_id = wash_crew_role_id
         self.suggestion_database_configuration_repository = None
-        self.guild_configuration_repository = FakeGuildConfigurationRepository()
+        self.guild_configuration_repository = FakeGuildConfigurationRepository(
+            GuildConfiguration(
+                guild_id=GUILD_ID,
+                guild_name="Test Guild",
+                wash_crew_role_id=wash_crew_role_id,
+                watch_party_role=WatchPartyRoleConfig(role_id=WATCH_PARTY_MEMBER_ROLE_ID),
+            )
+        )
         self.vote_service = vote_service
         self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, vote_service)
 

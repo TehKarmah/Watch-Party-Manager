@@ -143,6 +143,13 @@ class ResetImportCommandTestCase(unittest.IsolatedAsyncioTestCase):
         self._temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self._temp_dir.name)
         self.bot = FakeBot(root=self.root)
+        # Multi-Guild Isolation, Phase 3c: resolve_permission_service reads
+        # this saved configuration, not the bot.wash_crew_role_id attribute
+        # alone -- tests that need an unconfigured/differently-configured
+        # guild re-save over this default.
+        self.bot.guild_configuration_repository.save(
+            GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild", wash_crew_role_id=WASH_CREW_ROLE_ID)
+        )
 
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
@@ -500,7 +507,9 @@ class HandleFactoryResetTests(ResetImportCommandTestCase):
         self.assertIn("WASH Crew", interaction.response.sent_message)
 
     async def test_shows_a_summary_and_confirmation_view(self) -> None:
-        self.bot.guild_configuration_repository.save(GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild"))
+        self.bot.guild_configuration_repository.save(
+            GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild", wash_crew_role_id=WASH_CREW_ROLE_ID)
+        )
         interaction = FakeInteraction(user=self._wash_crew_member())
 
         await handle_factory_reset(interaction, self.bot)
@@ -509,7 +518,9 @@ class HandleFactoryResetTests(ResetImportCommandTestCase):
         self.assertIsNotNone(interaction.response.sent_view)
 
     async def test_typing_reset_performs_the_factory_reset(self) -> None:
-        self.bot.guild_configuration_repository.save(GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild"))
+        self.bot.guild_configuration_repository.save(
+            GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild", wash_crew_role_id=WASH_CREW_ROLE_ID)
+        )
         self._seed_database()
         interaction = FakeInteraction(user=self._wash_crew_member())
         await handle_factory_reset(interaction, self.bot)
@@ -522,7 +533,9 @@ class HandleFactoryResetTests(ResetImportCommandTestCase):
         self.assertEqual([], self.bot.suggestion_database_repository.load().databases)
 
     async def test_cancel_leaves_data_unchanged(self) -> None:
-        self.bot.guild_configuration_repository.save(GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild"))
+        self.bot.guild_configuration_repository.save(
+            GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild", wash_crew_role_id=WASH_CREW_ROLE_ID)
+        )
         interaction = FakeInteraction(user=self._wash_crew_member())
         await handle_factory_reset(interaction, self.bot)
         view = interaction.response.sent_view
@@ -537,7 +550,9 @@ class HandleFactoryResetTests(ResetImportCommandTestCase):
         # Same live-state-staleness bug as /database_reset: factory reset
         # writes suggestions.json/suggestion_databases.json directly, so
         # bot.suggestion_service must be explicitly resynced afterward.
-        self.bot.guild_configuration_repository.save(GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild"))
+        self.bot.guild_configuration_repository.save(
+            GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild", wash_crew_role_id=WASH_CREW_ROLE_ID)
+        )
         self._seed_database(name="Movie Night")
         self.bot.suggestion_service.suggest("Dogma", database_id=1, guild_id=GUILD_ID)
         interaction = FakeInteraction(user=self._wash_crew_member())

@@ -31,6 +31,7 @@ import discord
 
 from watch_party_manager.bot import handle_browse, show_browse_collection_picker
 from watch_party_manager.browse_view import BrowsePublicResultsView
+from watch_party_manager.domain.guild_configuration import GuildConfiguration, WatchPartyRoleConfig
 from watch_party_manager.filter_menu_view import FILTER_CATEGORY_GENRE, FILTER_CATEGORY_IMDB_RATING, FilterMenuView
 from watch_party_manager.pagination_view import PaginatedListView
 from watch_party_manager.persistence.guild_configuration_repository import GuildConfigurationRepository
@@ -140,6 +141,18 @@ class FakeBot:
             root / "suggestion_database_configurations.json"
         )
         self.guild_configuration_repository = GuildConfigurationRepository(root / "guild_configurations.json")
+        # Multi-Guild Isolation, Phase 3b: resolve_permission_service reads
+        # this saved configuration -- the shared bot.permission_service
+        # singleton below is no longer consulted by production code, but
+        # is kept for any test that still reaches for it directly.
+        self.guild_configuration_repository.save(
+            GuildConfiguration(
+                guild_id=GUILD_ID,
+                guild_name="Test Guild",
+                wash_crew_role_id=wash_crew_role_id,
+                watch_party_role=WatchPartyRoleConfig(role_id=watch_party_role_id),
+            )
+        )
         self.collection_eligibility_service = CollectionEligibilityService(self.suggestion_service, self.vote_service)
         self.permission_service = PermissionService(
             watch_party_member_role_id=watch_party_role_id, wash_crew_role_id=wash_crew_role_id

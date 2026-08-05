@@ -229,6 +229,7 @@ class MembershipCommandTestCase(unittest.IsolatedAsyncioTestCase):
                 guild_id=GUILD_ID,
                 guild_name="Test Guild",
                 setup_completed=True,
+                wash_crew_role_id=WASH_CREW_ROLE_ID,
                 watch_party_role=WatchPartyRoleConfig(
                     role_id=role_id, join_mode=join_mode, allow_self_leave=allow_self_leave
                 ),

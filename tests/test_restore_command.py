@@ -89,6 +89,24 @@ class FakeInteraction:
         self.followup = FakeFollowup()
 
 
+class FakeGuildConfigurationRepository:
+    """Multi-Guild Isolation, Phase 3c: resolve_permission_service's own
+    minimal GuildConfigurationSource -- returns this fixed role
+    configuration for any guild_id, matching this file's existing
+    single-guild wash_crew_role_id fixture.
+    """
+
+    def __init__(self, wash_crew_role_id=None) -> None:
+        self._wash_crew_role_id = wash_crew_role_id
+
+    def get(self, guild_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            wash_crew_role_id=self._wash_crew_role_id, watch_party_role=SimpleNamespace(role_id=None)
+        )
+
+
 class FakeBot:
     def __init__(self, backup_service, database_repository, suggestion_repository, configuration_repository, wash_crew_role_id=WASH_CREW_ROLE_ID) -> None:
         self.backup_service = backup_service
@@ -99,6 +117,7 @@ class FakeBot:
             repository=suggestion_repository, database_repository=database_repository
         )
         self.wash_crew_role_id = wash_crew_role_id
+        self.guild_configuration_repository = FakeGuildConfigurationRepository(wash_crew_role_id)
 
 
 class RestoreCommandTestCase(unittest.IsolatedAsyncioTestCase):

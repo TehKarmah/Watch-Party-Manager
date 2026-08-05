@@ -475,6 +475,24 @@ class StartCommandPermissionTimingTests(StartVoteFlowTestCase):
         class FakeBot:
             pass
 
+        # Multi-Guild Isolation, Phase 3c: resolve_permission_service
+        # reads this, not bot.wash_crew_role_id directly -- reads
+        # bot.wash_crew_role_id dynamically (a closure over the bot, not
+        # a value snapshotted at construction time) so tests that mutate
+        # self.bot.wash_crew_role_id after setUp (e.g. to None) are still
+        # correctly reflected.
+        class FakeGuildConfigurationRepository:
+            def __init__(self, bot) -> None:
+                self._bot = bot
+
+            def get(self, guild_id):
+                from types import SimpleNamespace
+
+                return SimpleNamespace(
+                    wash_crew_role_id=self._bot.wash_crew_role_id,
+                    watch_party_role=SimpleNamespace(role_id=None),
+                )
+
         self.bot = FakeBot()
         self.bot.wash_crew_role_id = WASH_CREW_ROLE_ID
         self.bot.vote_service = self.vote_service
@@ -482,7 +500,7 @@ class StartCommandPermissionTimingTests(StartVoteFlowTestCase):
         self.bot.nominee_selection_service = self.nominee_selection_service
         self.bot.default_nominee_count = self.default_nominee_count
         self.bot.scheduler_host = None
-        self.bot.guild_configuration_repository = None
+        self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(self.bot)
         self.bot.suggestion_database_configuration_repository = None
 
     async def test_a_non_crew_member_is_rejected_before_the_choice_ui_is_shown(self) -> None:
@@ -1463,6 +1481,14 @@ class CustomizeVoteFlowUiConsistencyTests(StartVoteFlowTestCase):
         self.bot.scheduler_host = FakeSchedulerHostForCustomizeFlow()
         self.bot.guild_configuration_repository = GuildConfigurationRepository(
             Path(self._temp_dir.name) / "guild_configurations.json"
+        )
+        # Multi-Guild Isolation, Phase 3c: /vote start's upfront WASH Crew
+        # gate now resolves permissions via resolve_permission_service,
+        # which reads this saved configuration -- not the
+        # bot.wash_crew_role_id attribute above (kept for any test that
+        # still reaches for it directly).
+        self.bot.guild_configuration_repository.save(
+            GuildConfiguration(guild_id=100, guild_name="Test Guild", wash_crew_role_id=WASH_CREW_ROLE_ID)
         )
         self.bot.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository(
             Path(self._temp_dir.name) / "suggestion_database_configurations.json"

@@ -14,7 +14,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from watch_party_manager.bot import handle_database_health
-from watch_party_manager.domain.guild_configuration import GuildConfiguration, VotingDefaultsConfig
+from watch_party_manager.domain.guild_configuration import (
+    GuildConfiguration,
+    VotingDefaultsConfig,
+    WatchPartyRoleConfig,
+)
 from watch_party_manager.domain.suggestion_database_configuration import (
     CandidateSelectionMode,
     SuggestionDatabaseConfiguration,
@@ -90,6 +94,20 @@ class FakeBot:
         )
         self.wash_crew_role_id = WASH_CREW_ROLE_ID
         self.suggestion_database_configuration_repository = None
+        # Multi-Guild Isolation, Phase 3b: resolve_permission_service reads
+        # this saved configuration, not the bot.permission_service set
+        # above (kept for any test that still reaches for it directly).
+        # Defaults to a configuration carrying the same two role IDs so
+        # every existing test's WASH Crew/Watch Party access is preserved;
+        # a caller with a specific GuildConfiguration to test (e.g. an
+        # Admin Channel) passes one in without needing to repeat the role IDs.
+        if guild_configuration is None:
+            guild_configuration = GuildConfiguration(
+                guild_id=GUILD_ID,
+                guild_name="Test Guild",
+                wash_crew_role_id=WASH_CREW_ROLE_ID,
+                watch_party_role=WatchPartyRoleConfig(role_id=WATCH_PARTY_MEMBER_ROLE_ID),
+            )
         self.guild_configuration_repository = FakeGuildConfigurationRepository(guild_configuration)
         self.vote_service = vote_service
         self.collection_eligibility_service = CollectionEligibilityService(suggestion_service, vote_service)
@@ -142,6 +160,14 @@ class PermissionTests(DatabaseHealthCommandTestCase):
         self.bot.wash_crew_role_id = None
         self.bot.permission_service = PermissionService(
             watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=None
+        )
+        self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
+            GuildConfiguration(
+                guild_id=GUILD_ID,
+                guild_name="Test Guild",
+                wash_crew_role_id=None,
+                watch_party_role=WatchPartyRoleConfig(role_id=WATCH_PARTY_MEMBER_ROLE_ID),
+            )
         )
         interaction = FakeInteraction()
 
@@ -284,7 +310,13 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
     async def test_next_vote_is_ready_when_eligible_meets_the_configured_count(self) -> None:
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
-            GuildConfiguration(guild_id=GUILD_ID, guild_name="Test", voting_defaults=VotingDefaultsConfig(candidate_count=2))
+            GuildConfiguration(
+                guild_id=GUILD_ID,
+                guild_name="Test",
+                voting_defaults=VotingDefaultsConfig(candidate_count=2),
+                wash_crew_role_id=WASH_CREW_ROLE_ID,
+                watch_party_role=WatchPartyRoleConfig(role_id=WATCH_PARTY_MEMBER_ROLE_ID),
+            )
         )
         self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
         self.suggestion_service.suggest("The Matrix", database_id=self.database.database_id)
@@ -296,7 +328,13 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
     async def test_next_vote_is_insufficient_when_the_whole_collection_is_too_small(self) -> None:
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
-            GuildConfiguration(guild_id=GUILD_ID, guild_name="Test", voting_defaults=VotingDefaultsConfig(candidate_count=5))
+            GuildConfiguration(
+                guild_id=GUILD_ID,
+                guild_name="Test",
+                voting_defaults=VotingDefaultsConfig(candidate_count=5),
+                wash_crew_role_id=WASH_CREW_ROLE_ID,
+                watch_party_role=WatchPartyRoleConfig(role_id=WATCH_PARTY_MEMBER_ROLE_ID),
+            )
         )
         self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
         interaction = FakeInteraction()
@@ -309,7 +347,13 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
         # Default threshold = candidate_count * 5 = 10 -- comfortably
         # more suggestions than that keeps this Healthy.
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
-            GuildConfiguration(guild_id=GUILD_ID, guild_name="Test", voting_defaults=VotingDefaultsConfig(candidate_count=2))
+            GuildConfiguration(
+                guild_id=GUILD_ID,
+                guild_name="Test",
+                voting_defaults=VotingDefaultsConfig(candidate_count=2),
+                wash_crew_role_id=WASH_CREW_ROLE_ID,
+                watch_party_role=WatchPartyRoleConfig(role_id=WATCH_PARTY_MEMBER_ROLE_ID),
+            )
         )
         for index in range(11):
             self.suggestion_service.suggest(f"Movie {index}", database_id=self.database.database_id)
@@ -321,7 +365,13 @@ class ReportContentTests(DatabaseHealthCommandTestCase):
 
     async def test_low_pool_status_insufficient_below_candidate_count(self) -> None:
         self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
-            GuildConfiguration(guild_id=GUILD_ID, guild_name="Test", voting_defaults=VotingDefaultsConfig(candidate_count=5))
+            GuildConfiguration(
+                guild_id=GUILD_ID,
+                guild_name="Test",
+                voting_defaults=VotingDefaultsConfig(candidate_count=5),
+                wash_crew_role_id=WASH_CREW_ROLE_ID,
+                watch_party_role=WatchPartyRoleConfig(role_id=WATCH_PARTY_MEMBER_ROLE_ID),
+            )
         )
         self.suggestion_service.suggest("Alien", database_id=self.database.database_id)
         interaction = FakeInteraction()

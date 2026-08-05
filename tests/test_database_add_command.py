@@ -152,6 +152,7 @@ class DatabaseAddCommandTestCase(unittest.IsolatedAsyncioTestCase):
                 guild_id=GUILD_ID,
                 guild_name="Test Guild",
                 setup_completed=True,
+                wash_crew_role_id=WASH_CREW_ROLE_ID,
                 channels=GuildChannelsConfig(home_channel_id=HOME_CHANNEL_ID),
             )
         )
@@ -168,7 +169,9 @@ class PermissionTests(DatabaseAddCommandTestCase):
         self.assertIn("WASH Crew", interaction.response.sent_message)
 
     async def test_fails_closed_when_role_is_unconfigured(self) -> None:
-        self.bot.wash_crew_role_id = None
+        self.guild_configuration_repository.save(
+            GuildConfiguration(guild_id=GUILD_ID, guild_name="Test Guild", setup_completed=True)
+        )
         interaction = FakeInteraction()
 
         await handle_database_add(interaction, self.bot)
@@ -176,11 +179,16 @@ class PermissionTests(DatabaseAddCommandTestCase):
         self.assertIn("not been configured", interaction.response.sent_message)
 
     async def test_rejects_use_outside_a_guild(self) -> None:
+        # Multi-Guild Isolation, Phase 3c: permission resolution is now
+        # guild-scoped, so a guild_id-less interaction can never resolve
+        # any guild's configured roles -- it fails closed with the
+        # standard "not configured" message before the dedicated "must
+        # be used in a server" check further down is ever reached.
         interaction = FakeInteraction(guild_id=None)
 
         await handle_database_add(interaction, self.bot)
 
-        self.assertIn("This command can only be used in a server.", interaction.response.sent_message)
+        self.assertIn("before using this command", interaction.response.sent_message)
 
 
 class TypeSelectionTests(DatabaseAddCommandTestCase):
@@ -285,7 +293,9 @@ class DestinationFlowTests(DatabaseAddCommandTestCase):
 
     async def test_missing_home_channel_shows_an_error_and_offers_existing_options(self) -> None:
         self.guild_configuration_repository.save(
-            GuildConfiguration(guild_id=GUILD_ID, guild_name="Test Guild", setup_completed=True)
+            GuildConfiguration(
+                guild_id=GUILD_ID, guild_name="Test Guild", setup_completed=True, wash_crew_role_id=WASH_CREW_ROLE_ID
+            )
         )
         type_interaction = await self._reach_destination_choice()
         destination_view = type_interaction.response.edited_view
@@ -458,7 +468,9 @@ class CreateNewThreadFallbackTests(DatabaseAddCommandTestCase):
         super().setUp()
         # No home_channel_id configured at all -- the unconfigured case.
         self.guild_configuration_repository.save(
-            GuildConfiguration(guild_id=GUILD_ID, guild_name="Test Guild", setup_completed=True)
+            GuildConfiguration(
+                guild_id=GUILD_ID, guild_name="Test Guild", setup_completed=True, wash_crew_role_id=WASH_CREW_ROLE_ID
+            )
         )
 
     async def _reach_destination_choice(self, *, guild=None, channel=None):

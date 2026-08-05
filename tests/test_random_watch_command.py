@@ -153,6 +153,26 @@ class FakeMembershipService:
         return SimpleNamespace(role_id=self._role_id)
 
 
+class FakeGuildConfigurationRepository:
+    """Multi-Guild Isolation, Phase 3b: resolve_permission_service's own
+    minimal GuildConfigurationSource -- returns this fixed role
+    configuration for any guild_id, matching this file's existing
+    single-guild PermissionService fixture.
+    """
+
+    def __init__(self, wash_crew_role_id=None, watch_party_member_role_id=None) -> None:
+        self._wash_crew_role_id = wash_crew_role_id
+        self._watch_party_member_role_id = watch_party_member_role_id
+
+    def get(self, guild_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            wash_crew_role_id=self._wash_crew_role_id,
+            watch_party_role=SimpleNamespace(role_id=self._watch_party_member_role_id),
+        )
+
+
 class FakeBot:
     def __init__(self, root: Path, *, wash_crew_role_id=WASH_CREW_ROLE_ID, watch_party_role_id=WATCH_PARTY_ROLE_ID) -> None:
         self.suggestion_service = SuggestionService(
@@ -169,6 +189,12 @@ class FakeBot:
         )
         self.membership_service = FakeMembershipService(watch_party_role_id)
         self.wash_crew_role_id = wash_crew_role_id
+        # Multi-Guild Isolation, Phase 3b: resolve_permission_service reads
+        # this, not the permission_service attribute set above (kept for
+        # any test that still reaches for it directly).
+        self.guild_configuration_repository = FakeGuildConfigurationRepository(
+            wash_crew_role_id=wash_crew_role_id, watch_party_member_role_id=watch_party_role_id
+        )
 
 
 class RandomWatchCommandTestCase(unittest.IsolatedAsyncioTestCase):
@@ -378,14 +404,26 @@ class AccessTests(RandomWatchCommandTestCase):
         self.assertIsNotNone(interaction.response.sent_view)
 
     async def test_rejects_use_outside_a_guild(self) -> None:
+        # Multi-Guild Isolation, Phase 3b: permission resolution is now
+        # guild-scoped, so a guild_id-less interaction (e.g. a DM) can
+        # never resolve any guild's configured roles -- it fails closed
+        # with the standard "not configured" message before the
+        # dedicated "must be used in a server" check further down is
+        # ever reached. Previously the shared, env-var-derived singleton
+        # had no concept of "no guild" and could pass this check
+        # regardless of guild_id, reaching that dedicated message
+        # instead -- itself a symptom of the same cross-guild-blind
+        # architecture this phase removes.
         interaction = FakeInteraction(user=self._member(1), guild_id=None)
 
         await handle_random_watch(interaction, self.bot)
 
-        self.assertIn("server", interaction.response.sent_message)
+        self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertIn("before using this command", interaction.response.sent_message)
 
     async def test_fails_closed_when_no_roles_are_configured(self) -> None:
         self.bot.permission_service = PermissionService(watch_party_member_role_id=None, wash_crew_role_id=None)
+        self.bot.guild_configuration_repository = FakeGuildConfigurationRepository()
         interaction = FakeInteraction(user=self._member(1))
 
         await handle_random_watch(interaction, self.bot)

@@ -79,6 +79,21 @@ class FakeInteraction:
         self.response = FakeResponse()
 
 
+class FakeGuildConfigurationRepository:
+    """Multi-Guild Isolation, Phase 3c: resolve_permission_service's own
+    minimal GuildConfigurationSource -- returns this fixed role
+    configuration for any guild_id, matching this file's existing
+    single-guild WASH_CREW_ROLE_ID fixture.
+    """
+
+    def get(self, guild_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            wash_crew_role_id=WASH_CREW_ROLE_ID, watch_party_role=SimpleNamespace(role_id=None)
+        )
+
+
 class MinimalFakeBot:
     """Enough of WatchPartyBot for /database list/manage's thin delegation."""
 
@@ -93,6 +108,7 @@ class MinimalFakeBot:
             root / "suggestion_database_configurations.json"
         )
         self.wash_crew_role_id = WASH_CREW_ROLE_ID
+        self.guild_configuration_repository = FakeGuildConfigurationRepository()
 
 
 class DatabaseGroupRegistrationTests(unittest.IsolatedAsyncioTestCase):

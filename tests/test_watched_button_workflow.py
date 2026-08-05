@@ -101,6 +101,27 @@ class FakeConfigService:
         return self.destination_channel_id
 
 
+class FakeGuildConfigurationRepository:
+    """Multi-Guild Isolation, Phase 3b: resolve_permission_service's own
+    minimal GuildConfigurationSource -- returns this fixed role
+    configuration for any guild_id, matching this file's existing
+    single-guild PermissionService fixture.
+    """
+
+    def __init__(self, permission_service=None) -> None:
+        self._permission_service = permission_service
+
+    def get(self, guild_id):
+        from types import SimpleNamespace
+
+        if self._permission_service is None:
+            return None
+        return SimpleNamespace(
+            wash_crew_role_id=self._permission_service.wash_crew_role_id,
+            watch_party_role=SimpleNamespace(role_id=self._permission_service.watch_party_member_role_id),
+        )
+
+
 class FakeBot:
     def __init__(
         self,
@@ -112,6 +133,10 @@ class FakeBot:
         self.suggestion_service = suggestion_service
         self.suggestion_database_configuration_repository = None
         self.permission_service = permission_service
+        # Multi-Guild Isolation, Phase 3b: resolve_permission_service reads
+        # this, not the permission_service attribute above (kept for any
+        # test that still reaches for it directly).
+        self.guild_configuration_repository = FakeGuildConfigurationRepository(permission_service)
         self.config_service = config_service or FakeConfigService()
         self._channels: dict[int, FakeChannel] = {}
 

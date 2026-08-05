@@ -70,6 +70,26 @@ class FakeInteraction:
         self.response = FakeResponse()
 
 
+class FakeGuildConfigurationRepository:
+    """Multi-Guild Isolation, Phase 3b: resolve_permission_service's own
+    minimal GuildConfigurationSource -- returns this fixed role
+    configuration for any guild_id, matching this file's existing
+    single-guild PermissionService fixture.
+    """
+
+    def __init__(self, wash_crew_role_id=None, watch_party_member_role_id=None) -> None:
+        self._wash_crew_role_id = wash_crew_role_id
+        self._watch_party_member_role_id = watch_party_member_role_id
+
+    def get(self, guild_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            wash_crew_role_id=self._wash_crew_role_id,
+            watch_party_role=SimpleNamespace(role_id=self._watch_party_member_role_id),
+        )
+
+
 class FakeBot:
     def __init__(
         self,
@@ -86,6 +106,12 @@ class FakeBot:
         )
         self.wash_crew_role_id = wash_crew_role_id
         self.watch_party_member_role_id = WATCH_PARTY_MEMBER_ROLE_ID
+        # Multi-Guild Isolation, Phase 3b: resolve_permission_service reads
+        # this, not the permission_service attribute set above (kept for
+        # any test that still reaches for it directly).
+        self.guild_configuration_repository = FakeGuildConfigurationRepository(
+            wash_crew_role_id=wash_crew_role_id, watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID
+        )
 
 
 class HandleStatsTestCase(unittest.IsolatedAsyncioTestCase):
@@ -130,11 +156,16 @@ class DefaultBehaviorTests(HandleStatsTestCase):
         self.assertTrue(interaction.response.sent_ephemeral)
 
     async def test_requires_a_server(self) -> None:
+        # Multi-Guild Isolation, Phase 3b: permission resolution is now
+        # guild-scoped, so a guild_id-less interaction can never resolve
+        # any guild's configured roles -- it fails closed with the
+        # standard "not configured" message before the dedicated "must
+        # be used in a server" check further down is ever reached.
         interaction = FakeInteraction(guild_id=None)
 
         await handle_stats(interaction, self.bot, "server", False, None)
 
-        self.assertIn("only be used in a server", interaction.response.sent_message)
+        self.assertIn("before using this command", interaction.response.sent_message)
 
     async def test_requires_watch_party_membership(self) -> None:
         interaction = FakeInteraction(user=FakeMember([]))

@@ -234,7 +234,7 @@ from watch_party_manager.services.eligible_pool_warning_service import (
 from watch_party_manager.persistence.eligible_pool_warning_state_repository import (
     JsonEligiblePoolWarningStateRepository,
 )
-from watch_party_manager.services.permission_service import PermissionService
+from watch_party_manager.services.permission_service import PermissionService, resolve_permission_service
 from watch_party_manager.services.setup_wizard_service import (
     BACKUP_INTERVAL_DAYS_EXTRA_FIELD,
     BACKUP_RETENTION_COUNT_EXTRA_FIELD,
@@ -549,8 +549,14 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="help", description="Show WASH's command reference.")
         async def help_command(interaction: discord.Interaction) -> None:
-            show_wash_crew = self.permission_service.is_wash_crew(interaction.user)
-            show_watch_party_member = self.permission_service.is_watch_party_member(interaction.user)
+            # Multi-Guild Isolation, Phase 3b: guild-scoped resolution, not
+            # the shared singleton -- this guild's own configured roles,
+            # never another guild's.
+            permission_service = resolve_permission_service(
+                interaction.guild_id, self.guild_configuration_repository
+            )
+            show_wash_crew = permission_service.is_wash_crew(interaction.user)
+            show_watch_party_member = permission_service.is_watch_party_member(interaction.user)
             response = build_help_response(
                 show_wash_crew=show_wash_crew, show_watch_party_member=show_watch_party_member
             )
@@ -648,7 +654,6 @@ class WatchPartyBot(commands.Bot):
             is_guild_owner = interaction.guild is not None and interaction.user.id == interaction.guild.owner_id
             message, blocked = perform_setup_permission_check(
                 interaction.user,
-                self.wash_crew_role_id,
                 guild_configuration=guild_configuration,
                 is_guild_owner=is_guild_owner,
             )
@@ -697,7 +702,9 @@ class WatchPartyBot(commands.Bot):
 
         @self.tree.command(name="config", description="Change WASH's configuration (WASH Crew only).")
         async def config(interaction: discord.Interaction) -> None:
-            permission = self.permission_service.require_wash_crew(interaction.user)
+            permission = resolve_permission_service(
+                interaction.guild_id, self.guild_configuration_repository
+            ).require_wash_crew(interaction.user)
             if not permission.allowed:
                 await interaction.response.send_message(permission.message, ephemeral=True)
                 return
@@ -762,14 +769,14 @@ class WatchPartyBot(commands.Bot):
             bot=self,
             vote_service=self.vote_service,
             suggestion_service=self.suggestion_service,
-            permission_service=self.permission_service,
+            guild_configuration_repository=self.guild_configuration_repository,
         )
 
         self.suggestion_views_restored = await restore_persistent_suggestion_views(
             bot=self,
             suggestion_service=self.suggestion_service,
             suggestion_database_configuration_repository=self.suggestion_database_configuration_repository,
-            permission_service=self.permission_service,
+            guild_configuration_repository=self.guild_configuration_repository,
         )
 
         self.membership_views_restored = restore_persistent_membership_approval_views(
@@ -1793,7 +1800,9 @@ def create_filter_menu_session(
         result = validate_member_filter_selection(
             member,
             watch_party_role_id=watch_party_role_id,
-            wash_crew_role_id=bot.wash_crew_role_id,
+            wash_crew_role_id=resolve_permission_service(
+                member_interaction.guild_id, bot.guild_configuration_repository
+            ).wash_crew_role_id,
             guild_owner_id=guild_owner_id,
             eligible_pool=eligible_pool,
             collection_display_name=collection_display_name,
@@ -2243,25 +2252,30 @@ def parse_optional_bool_field(value: Optional[str]) -> Optional[bool]:
 
 def perform_setup_permission_check(
     user: object,
-    wash_crew_role_id: Optional[int],
     *,
     guild_configuration: Optional[GuildConfiguration] = None,
     is_guild_owner: bool = False,
 ) -> tuple[str, bool]:
     """Gate /setup.
 
-    Bootstrap Setup Permission Fix: wash_crew_role_id here is a bot-wide
-    fallback (see WatchPartyBot.__init__ / WASH_CREW_ROLE_ID) that can be
-    set to a role from a different guild, or one this guild's own setup
-    has simply never associated with WASH yet -- using it to gate a
-    brand-new guild's /setup could lock out everyone, including the
-    person who actually owns the server. So until *this* guild's own
-    configuration has associated a WASH Crew role, only the Discord
-    guild owner may run /setup. Once this guild's configuration has a
-    WASH Crew role, /setup falls back to the exact same fail-closed rule
-    as every other administrative command (guild ownership grants no
-    special access at that point), so a completed setup can't be
-    silently redone by an unauthorized member.
+    Bootstrap Setup Permission Fix: until *this* guild's own configuration
+    has associated a WASH Crew role, only the Discord guild owner may run
+    /setup -- so a brand-new guild is never locked out. Once this guild's
+    configuration has a WASH Crew role, /setup falls back to the exact
+    same fail-closed rule as every other administrative command (guild
+    ownership grants no special access at that point), so a completed
+    setup can't be silently redone by an unauthorized member.
+
+    Multi-Guild Isolation, Phase 3c: previously took a second
+    `wash_crew_role_id` parameter -- the shared, bot-wide
+    WASH_CREW_ROLE_ID fallback (see WatchPartyBot.__init__) -- and used
+    it for the "already configured" branch below, even though
+    guild_configuration.wash_crew_role_id (this guild's own, authoritative
+    value) was already available right here. That bot-wide parameter is
+    removed entirely: both branches now resolve purely from
+    guild_configuration, so a role that happens to be WASH Crew in a
+    different guild (or a stale, no-longer-relevant environment variable)
+    can never grant or deny access to *this* guild's /setup.
 
     Returns:
         (message, blocked) -- blocked is True if the command should stop
@@ -2275,7 +2289,7 @@ def perform_setup_permission_check(
             return "", False
         return "You need the WASH Crew role to run setup.", True
 
-    if wash_crew_role_id is not None and not is_wash_crew_member(user, wash_crew_role_id):
+    if not is_wash_crew_member(user, guild_configuration.wash_crew_role_id):
         return "You need the WASH Crew role to run setup.", True
     return "", False
 
@@ -4813,7 +4827,8 @@ async def handle_join_watch_party(interaction: discord.Interaction, bot: "WatchP
 
         on_approve, on_deny = _build_membership_decision_callbacks(bot)
         view = MembershipApprovalView(request.request_id, on_approve, on_deny)
-        wash_crew_mention = f"<@&{bot.wash_crew_role_id}>" if bot.wash_crew_role_id else "WASH Crew"
+        guild_wash_crew_role_id = guild_configuration.wash_crew_role_id if guild_configuration is not None else None
+        wash_crew_mention = f"<@&{guild_wash_crew_role_id}>" if guild_wash_crew_role_id else "WASH Crew"
         message = await channel.send(
             f"{wash_crew_mention} {interaction.user.mention} has requested to join the Watch Party.",
             view=view,
@@ -4840,7 +4855,9 @@ async def handle_membership_approval_decision(
     already-processed or nonexistent request fails gracefully (the
     service returns success=False with a clear message; nothing raises).
     """
-    permission = bot.permission_service.require_wash_crew(interaction.user)
+    permission = resolve_permission_service(
+        interaction.guild_id, bot.guild_configuration_repository
+    ).require_wash_crew(interaction.user)
     if not permission.allowed:
         await interaction.response.send_message(permission.message, ephemeral=True)
         return
@@ -4917,7 +4934,9 @@ class MembershipGroup(discord.app_commands.Group):
         Reuses PermissionService.require_wash_crew exactly like every
         other WASH-gated command -- fails closed when unconfigured.
         """
-        permission = self.bot.permission_service.require_wash_crew(interaction.user)
+        permission = resolve_permission_service(
+            interaction.guild_id, self.bot.guild_configuration_repository
+        ).require_wash_crew(interaction.user)
         if not permission.allowed:
             await interaction.response.send_message(permission.message, ephemeral=True)
             return False
@@ -5012,7 +5031,9 @@ class MaintenanceGroup(discord.app_commands.Group):
         message, ephemeral, archive_path, display_filename = perform_backup(
             backup_service=self.bot.backup_service,
             user=interaction.user,
-            wash_crew_role_id=self.bot.wash_crew_role_id,
+            wash_crew_role_id=resolve_permission_service(
+                interaction.guild_id, self.bot.guild_configuration_repository
+            ).wash_crew_role_id,
         )
         if archive_path is None or display_filename is None:
             await interaction.response.send_message(message, ephemeral=ephemeral)
@@ -5137,7 +5158,9 @@ class DatabaseGroup(discord.app_commands.Group):
         message, ephemeral = perform_database_list(
             suggestion_service=self.bot.suggestion_service,
             user=interaction.user,
-            wash_crew_role_id=self.bot.wash_crew_role_id,
+            wash_crew_role_id=resolve_permission_service(
+                interaction.guild_id, self.bot.guild_configuration_repository
+            ).wash_crew_role_id,
             guild_id=interaction.guild_id,
             suggestion_database_configuration_repository=self.bot.suggestion_database_configuration_repository,
         )
@@ -5239,13 +5262,20 @@ class VotingGroup(discord.app_commands.Group):
         # and still runs regardless, exactly as
         # perform_repair_suggestions' own check does after
         # show_repair_confirmation's.
-        if bot.wash_crew_role_id is None:
+        #
+        # Multi-Guild Isolation, Phase 3c: resolved once from this guild's
+        # own configuration and reused below for the "Use Defaults" path,
+        # rather than reading the shared bot.wash_crew_role_id singleton.
+        wash_crew_role_id = resolve_permission_service(
+            interaction.guild_id, bot.guild_configuration_repository
+        ).wash_crew_role_id
+        if wash_crew_role_id is None:
             await interaction.response.send_message(
                 "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
                 ephemeral=True,
             )
             return
-        if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+        if not is_wash_crew_member(interaction.user, wash_crew_role_id):
             await interaction.response.send_message(
                 "You need the WASH Crew role to start a voting round.", ephemeral=True
             )
@@ -5257,7 +5287,7 @@ class VotingGroup(discord.app_commands.Group):
                 vote_service=bot.vote_service,
                 suggestion_service=bot.suggestion_service,
                 nominee_selection_service=bot.nominee_selection_service,
-                wash_crew_role_id=bot.wash_crew_role_id,
+                wash_crew_role_id=wash_crew_role_id,
                 default_nominee_count=bot.default_nominee_count,
                 scheduler_service=bot.scheduler_host.scheduler_service,
                 guild_configuration_repository=bot.guild_configuration_repository,
@@ -5359,7 +5389,9 @@ class WatchPartyEventGroup(discord.app_commands.Group):
             interaction,
             watch_party_service=bot.watch_party_service,
             suggestion_service=bot.suggestion_service,
-            wash_crew_role_id=bot.wash_crew_role_id,
+            wash_crew_role_id=resolve_permission_service(
+                interaction.guild_id, bot.guild_configuration_repository
+            ).wash_crew_role_id,
             watch_item_id=watch_item_id,
             when=when,
             scheduler_service=bot.scheduler_host.scheduler_service,
@@ -5369,7 +5401,9 @@ class WatchPartyEventGroup(discord.app_commands.Group):
     @discord.app_commands.command(name="status", description="View the scheduled watch party.")
     async def status(self, interaction: discord.Interaction) -> None:
         bot = self.bot
-        permission = bot.permission_service.require_wash_crew(interaction.user)
+        permission = resolve_permission_service(
+            interaction.guild_id, bot.guild_configuration_repository
+        ).require_wash_crew(interaction.user)
         if not permission.allowed:
             await interaction.response.send_message(permission.message, ephemeral=True)
             return
@@ -5384,7 +5418,9 @@ class WatchPartyEventGroup(discord.app_commands.Group):
         await handle_reschedule_watch_party_completion(
             interaction,
             watch_party_service=bot.watch_party_service,
-            wash_crew_role_id=bot.wash_crew_role_id,
+            wash_crew_role_id=resolve_permission_service(
+                interaction.guild_id, bot.guild_configuration_repository
+            ).wash_crew_role_id,
             when=when,
             scheduler_service=bot.scheduler_host.scheduler_service,
             guild_configuration_repository=bot.guild_configuration_repository,
@@ -5397,7 +5433,9 @@ class WatchPartyEventGroup(discord.app_commands.Group):
         await handle_cancel_watch_party_completion(
             interaction,
             watch_party_service=bot.watch_party_service,
-            wash_crew_role_id=bot.wash_crew_role_id,
+            wash_crew_role_id=resolve_permission_service(
+                interaction.guild_id, bot.guild_configuration_repository
+            ).wash_crew_role_id,
             scheduler_service=bot.scheduler_host.scheduler_service,
             suggestion_service=bot.suggestion_service,
         )
@@ -5843,11 +5881,15 @@ async def handle_start_vote_completion(
         vote_service=vote_service,
         suggestion_service=suggestion_service,
         candidates=candidates,
-        permission_service=PermissionService(
-            watch_party_member_role_id=parse_watch_party_member_role_id(
-                os.getenv("WATCH_PARTY_MEMBER_ROLE_ID")
-            ),
-            wash_crew_role_id=wash_crew_role_id,
+        # Multi-Guild Isolation, Phase 3b: the known secondary
+        # PermissionService constructor -- previously built straight from
+        # WATCH_PARTY_MEMBER_ROLE_ID's own environment variable plus the
+        # wash_crew_role_id parameter (itself sourced from the same
+        # process-wide singleton), bypassing GuildConfiguration entirely.
+        # Guild-scoped resolution now matches every other vote/suggestion
+        # permission check.
+        permission_service=resolve_permission_service(
+            interaction.guild_id, guild_configuration_repository
         ),
     )
     collection_name = resolve_vote_collection_name(suggestion_service, vote_round.database_id)
@@ -6266,7 +6308,9 @@ async def show_customize_vote_overrides(
             vote_service=bot.vote_service,
             suggestion_service=bot.suggestion_service,
             nominee_selection_service=bot.nominee_selection_service,
-            wash_crew_role_id=bot.wash_crew_role_id,
+            wash_crew_role_id=resolve_permission_service(
+                submit_interaction.guild_id, bot.guild_configuration_repository
+            ).wash_crew_role_id,
             default_nominee_count=bot.default_nominee_count,
             nominee_count_text=nominee_count_text,
             duration_text=duration_text,
@@ -6488,7 +6532,9 @@ async def handle_vote_status(interaction: discord.Interaction, bot: "WatchPartyB
     a "Which collection?" picker when it doesn't, a clear error when no
     collection is configured at all (see resolve_database_then).
     """
-    permission = bot.permission_service.require_wash_crew(interaction.user)
+    permission = resolve_permission_service(
+        interaction.guild_id, bot.guild_configuration_repository
+    ).require_wash_crew(interaction.user)
     if not permission.allowed:
         await interaction.response.send_message(permission.message, ephemeral=True)
         return
@@ -6686,7 +6732,7 @@ def restore_persistent_voting_views(
     bot: object,
     vote_service: VoteService,
     suggestion_service: SuggestionService,
-    permission_service: Optional[PermissionService] = None,
+    guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
 ) -> int:
     """Restore button handling for every currently open voting post.
 
@@ -6701,6 +6747,14 @@ def restore_persistent_voting_views(
     message independently; one round failing to restore (e.g. a missing
     message ID or no resolvable nominees) never prevents the others from
     being restored.
+
+    Multi-Guild Isolation, Phase 3b: open rounds restored here may belong
+    to any number of different guilds, so each round's own vote_round.guild_id
+    -- not a single shared permission_service -- resolves that round's own
+    vote button permissions (see resolve_permission_service). A round with
+    no guild_id (legacy data predating guild scoping) resolves to an
+    unconfigured PermissionService, exactly as an unresolvable guild_id
+    already did before this phase.
 
     Returns:
         The number of rounds whose interactive voting controls were
@@ -6732,7 +6786,9 @@ def restore_persistent_voting_views(
             vote_service,
             suggestion_service,
             candidates,
-            permission_service=permission_service,
+            permission_service=resolve_permission_service(
+                vote_round.guild_id, guild_configuration_repository
+            ),
         )
         bot.add_view(view, message_id=vote_round.message_id)
         logger.info(
@@ -6845,7 +6901,7 @@ async def restore_persistent_suggestion_views(
     bot: object,
     suggestion_service: SuggestionService,
     suggestion_database_configuration_repository: Optional[SuggestionDatabaseConfigurationRepository] = None,
-    permission_service: Optional[PermissionService] = None,
+    guild_configuration_repository: Optional[GuildConfigurationRepository] = None,
 ) -> int:
     """Restore, and where needed migrate, the "I Won't Watch" button for every active suggestion post.
 
@@ -6887,6 +6943,15 @@ async def restore_persistent_suggestion_views(
     already-watched suggestion), so there's nothing to restore or
     migrate for them.
 
+    Multi-Guild Isolation, Phase 3b: suggestions restored here may belong
+    to any number of different guilds, so each suggestion's own
+    watch_item.guild_id -- not a single shared permission_service --
+    resolves that suggestion's own "I Won't Watch"/Watched button
+    permissions (see resolve_permission_service). A suggestion with no
+    guild_id (legacy data predating guild scoping) resolves to an
+    unconfigured PermissionService, exactly as an unresolvable guild_id
+    already did before this phase.
+
     Returns:
         The number of suggestion views restored or migrated.
     """
@@ -6902,7 +6967,9 @@ async def restore_persistent_suggestion_views(
             suggestion_database_configuration_repository,
             watch_item,
             watch_item.guild_id,
-            permission_service=permission_service,
+            permission_service=resolve_permission_service(
+                watch_item.guild_id, guild_configuration_repository
+            ),
             bot=bot,
         )
 
@@ -7377,7 +7444,9 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
             vote_service=bot.vote_service,
             suggestion_service=bot.suggestion_service,
             user=resolved_interaction.user,
-            wash_crew_role_id=bot.wash_crew_role_id,
+            wash_crew_role_id=resolve_permission_service(
+                resolved_interaction.guild_id, bot.guild_configuration_repository
+            ).wash_crew_role_id,
             database_id=database.database_id,
         )
         if vote_round is None:
@@ -7394,7 +7463,9 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
                         vote_completion_service=bot.vote_completion_service,
                         vote_service=bot.vote_service,
                         suggestion_service=bot.suggestion_service,
-                        wash_crew_role_id=bot.wash_crew_role_id,
+                        wash_crew_role_id=resolve_permission_service(
+                            confirm_interaction.guild_id, bot.guild_configuration_repository
+                        ).wash_crew_role_id,
                         round_id=round_id,
                         bot=bot,
                         scheduler_service=bot.scheduler_host.scheduler_service,
@@ -7437,7 +7508,9 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
                     delta_interaction,
                     vote_service=bot.vote_service,
                     suggestion_service=bot.suggestion_service,
-                    wash_crew_role_id=bot.wash_crew_role_id,
+                    wash_crew_role_id=resolve_permission_service(
+                        delta_interaction.guild_id, bot.guild_configuration_repository
+                    ).wash_crew_role_id,
                     round_id=round_id,
                     new_closes_at=new_closes_at,
                     bot=bot,
@@ -7516,7 +7589,9 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
                         modal_interaction,
                         vote_service=bot.vote_service,
                         suggestion_service=bot.suggestion_service,
-                        wash_crew_role_id=bot.wash_crew_role_id,
+                        wash_crew_role_id=resolve_permission_service(
+                            modal_interaction.guild_id, bot.guild_configuration_repository
+                        ).wash_crew_role_id,
                         round_id=round_id,
                         new_closes_at=new_closes_at,
                         bot=bot,
@@ -7541,7 +7616,9 @@ async def handle_edit_vote(interaction: discord.Interaction, bot: "WatchPartyBot
                 await handle_cancel_vote_now_completion(
                     confirm_interaction,
                     vote_service=bot.vote_service,
-                    wash_crew_role_id=bot.wash_crew_role_id,
+                    wash_crew_role_id=resolve_permission_service(
+                        confirm_interaction.guild_id, bot.guild_configuration_repository
+                    ).wash_crew_role_id,
                     round_id=round_id,
                     bot=bot,
                     scheduler_service=bot.scheduler_host.scheduler_service,
@@ -8116,7 +8193,9 @@ async def post_suggestion_confirmation(
         bot.suggestion_database_configuration_repository,
         watch_item,
         database.guild_id,
-        permission_service=bot.permission_service,
+        permission_service=resolve_permission_service(
+            database.guild_id, bot.guild_configuration_repository
+        ),
         bot=bot,
     )
 
@@ -8273,7 +8352,9 @@ async def sync_suggestion_status_embed(bot: "WatchPartyBot", watch_item: WatchIt
         bot.suggestion_database_configuration_repository,
         watch_item,
         database.guild_id,
-        permission_service=bot.permission_service,
+        permission_service=resolve_permission_service(
+            database.guild_id, bot.guild_configuration_repository
+        ),
         bot=bot,
     )
 
@@ -8425,7 +8506,9 @@ async def handle_add_suggestion(
     imdb_url: Optional[str],
     release_year: Optional[int],
 ) -> None:
-    permission = bot.permission_service.require_watch_party_member(interaction.user)
+    permission = resolve_permission_service(
+        interaction.guild_id, bot.guild_configuration_repository
+    ).require_watch_party_member(interaction.user)
     if not permission.allowed:
         await interaction.response.send_message(permission.message, ephemeral=True)
         return
@@ -8446,7 +8529,9 @@ async def handle_add_suggestion(
     async def on_resolved(target_interaction: discord.Interaction, database: SuggestionDatabase) -> None:
         final_title = resolved.title or title
         final_release_year = release_year if release_year is not None else extract_year_from_title_suffix(final_title)
-        is_crew = is_wash_crew_member(target_interaction.user, bot.wash_crew_role_id)
+        is_crew = resolve_permission_service(
+            target_interaction.guild_id, bot.guild_configuration_repository
+        ).is_wash_crew(target_interaction.user)
 
         existing_items = bot.suggestion_service.get_suggestions_for_database(
             database.database_id, include_archived=True
@@ -8793,13 +8878,16 @@ async def handle_restore(
     defers first and replies via followup from then on -- unlike every
     other command in this file, which responds directly.
     """
-    if bot.wash_crew_role_id is None:
+    wash_crew_role_id = resolve_permission_service(
+        interaction.guild_id, bot.guild_configuration_repository
+    ).wash_crew_role_id
+    if wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not is_wash_crew_member(interaction.user, wash_crew_role_id):
         await interaction.response.send_message("You need the WASH Crew role to restore a backup.", ephemeral=True)
         return
 
@@ -8836,7 +8924,7 @@ async def handle_restore(
         archive_path = found
 
     message, _, needs_confirmation = perform_restore_from_path(
-        bot.backup_service, interaction.user, bot.wash_crew_role_id, archive_path
+        bot.backup_service, interaction.user, wash_crew_role_id, archive_path
     )
     if not needs_confirmation:
         if temporary_directory is not None:
@@ -8847,7 +8935,12 @@ async def handle_restore(
     async def on_confirm(confirm_interaction: discord.Interaction) -> None:
         try:
             result_message, result_ephemeral = perform_confirmed_restore_from_path(
-                bot.backup_service, confirm_interaction.user, bot.wash_crew_role_id, archive_path
+                bot.backup_service,
+                confirm_interaction.user,
+                resolve_permission_service(
+                    confirm_interaction.guild_id, bot.guild_configuration_repository
+                ).wash_crew_role_id,
+                archive_path,
             )
         finally:
             if temporary_directory is not None:
@@ -8894,13 +8987,14 @@ async def handle_database_backup(interaction: discord.Interaction, bot: "WatchPa
     showing each database's name, Active/Inactive status, and watch-item
     count instead of typing an internal ID.
     """
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message(
             "You need the WASH Crew role to back up a collection.", ephemeral=True
         )
@@ -8933,13 +9027,14 @@ async def handle_database_restore(
     backup_filename: Optional[str],
     backup_file: Optional[discord.Attachment],
 ) -> None:
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message(
             "You need the WASH Crew role to restore a collection.", ephemeral=True
         )
@@ -9058,8 +9153,8 @@ async def start_database_reset(
         return
 
     async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-        if bot.wash_crew_role_id is None or not is_wash_crew_member(
-            confirm_interaction.user, bot.wash_crew_role_id
+        if not resolve_permission_service(guild_id, bot.guild_configuration_repository).is_wash_crew(
+            confirm_interaction.user
         ):
             await confirm_interaction.response.send_message(
                 "You need the WASH Crew role to reset a collection.", ephemeral=True
@@ -9100,13 +9195,14 @@ async def handle_database_reset(interaction: discord.Interaction, bot: "WatchPar
     showing each database's name, Active/Inactive status, and watch-item
     count instead of typing an internal ID.
     """
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message(
             "You need the WASH Crew role to reset a collection.", ephemeral=True
         )
@@ -9155,13 +9251,14 @@ def build_factory_reset_summary_text(summary) -> str:
 
 
 async def handle_factory_reset(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message("You need the WASH Crew role to factory reset WASH.", ephemeral=True)
         return
 
@@ -9182,8 +9279,8 @@ async def handle_factory_reset(interaction: discord.Interaction, bot: "WatchPart
     )
 
     async def on_confirm(confirm_interaction: discord.Interaction) -> None:
-        if bot.wash_crew_role_id is None or not is_wash_crew_member(
-            confirm_interaction.user, bot.wash_crew_role_id
+        if not resolve_permission_service(guild_id, bot.guild_configuration_repository).is_wash_crew(
+            confirm_interaction.user
         ):
             await confirm_interaction.response.send_message(
                 "You need the WASH Crew role to factory reset WASH.", ephemeral=True
@@ -9237,13 +9334,14 @@ def build_import_result_text(result) -> str:
 async def handle_import(
     interaction: discord.Interaction, bot: "WatchPartyBot", backup_file: discord.Attachment
 ) -> None:
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message("You need the WASH Crew role to import a backup.", ephemeral=True)
         return
 
@@ -9280,7 +9378,9 @@ async def handle_import(
     )
 
     async def _run_import(run_interaction: discord.Interaction, mode: ImportMode) -> None:
-        if bot.wash_crew_role_id is None or not is_wash_crew_member(run_interaction.user, bot.wash_crew_role_id):
+        if not resolve_permission_service(guild_id, bot.guild_configuration_repository).is_wash_crew(
+            run_interaction.user
+        ):
             await run_interaction.response.send_message(
                 "You need the WASH Crew role to import a backup.", ephemeral=True
             )
@@ -9450,13 +9550,14 @@ async def show_repair_confirmation(interaction: discord.Interaction, bot: "Watch
     unauthorized member is rejected before ever seeing the confirmation
     text, not after clicking Start Repair.
     """
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message("You need the WASH Crew role to repair suggestions.", ephemeral=True)
         return
 
@@ -9468,7 +9569,9 @@ async def show_repair_confirmation(interaction: discord.Interaction, bot: "Watch
         message, _ = await perform_repair_suggestions(
             repair_service=bot.suggestion_repair_service,
             user=confirm_interaction.user,
-            wash_crew_role_id=bot.wash_crew_role_id,
+            wash_crew_role_id=resolve_permission_service(
+                confirm_interaction.guild_id, bot.guild_configuration_repository
+            ).wash_crew_role_id,
             guild_id=confirm_interaction.guild_id,
             bot=bot,
         )
@@ -9990,7 +10093,9 @@ async def show_health_switch_collection_picker(interaction: discord.Interaction,
 
 async def handle_database_health(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
     """/database health: WASH Crew-only, matching the rest of /database."""
-    permission = bot.permission_service.require_wash_crew(interaction.user)
+    permission = resolve_permission_service(
+        interaction.guild_id, bot.guild_configuration_repository
+    ).require_wash_crew(interaction.user)
     if not permission.allowed:
         await interaction.response.send_message(permission.message, ephemeral=True)
         return
@@ -10152,7 +10257,9 @@ async def handle_random_watch(interaction: discord.Interaction, bot: "WatchParty
     /add already use -- not WASH Crew-only, since nothing here is an
     administrative action.
     """
-    permission = bot.permission_service.require_watch_party_member(interaction.user)
+    permission = resolve_permission_service(
+        interaction.guild_id, bot.guild_configuration_repository
+    ).require_watch_party_member(interaction.user)
     if not permission.allowed:
         await interaction.response.send_message(permission.message, ephemeral=True)
         return
@@ -10364,7 +10471,9 @@ async def handle_browse(interaction: discord.Interaction, bot: "WatchPartyBot") 
     Party member (Section 2); WASH Crew additionally see Random Pick,
     Start Vote, and Post Publicly on the results screen.
     """
-    permission = bot.permission_service.require_watch_party_member(interaction.user)
+    permission = resolve_permission_service(
+        interaction.guild_id, bot.guild_configuration_repository
+    ).require_watch_party_member(interaction.user)
     if not permission.allowed:
         await interaction.response.send_message(permission.message, ephemeral=True)
         return
@@ -10554,7 +10663,7 @@ async def send_browse_session(
     separately-defined "browsable" set.
     """
     guild_id = database.guild_id
-    is_crew = is_wash_crew_member(interaction.user, bot.wash_crew_role_id)
+    is_crew = resolve_permission_service(guild_id, bot.guild_configuration_repository).is_wash_crew(interaction.user)
     collection_display_name = format_collection_display(
         _resolve_collection_name(
             bot.suggestion_service, database, interaction.guild, bot.suggestion_database_configuration_repository
@@ -10685,7 +10794,9 @@ async def handle_list_suggestions(
     had it (public posting requires WASH Crew) while extending general
     access to every Watch Party member per FR-033A Section 9.
     """
-    permission = bot.permission_service.require_watch_party_member(interaction.user)
+    permission = resolve_permission_service(
+        interaction.guild_id, bot.guild_configuration_repository
+    ).require_watch_party_member(interaction.user)
     if not permission.allowed:
         await interaction.response.send_message(permission.message, ephemeral=True)
         return
@@ -10696,7 +10807,7 @@ async def handle_list_suggestions(
         await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
         return
 
-    is_crew = is_wash_crew_member(interaction.user, bot.wash_crew_role_id)
+    is_crew = resolve_permission_service(guild_id, bot.guild_configuration_repository).is_wash_crew(interaction.user)
     if public and not is_crew:
         await interaction.response.send_message(
             "You need the WASH Crew role to post the suggestion list publicly.", ephemeral=True
@@ -10857,7 +10968,9 @@ async def handle_reject_suggestion(
     message, ephemeral, watch_item = perform_reject_suggestion(
         suggestion_service=bot.suggestion_service,
         suggestion_database_configuration_repository=bot.suggestion_database_configuration_repository,
-        permission_service=bot.permission_service,
+        permission_service=resolve_permission_service(
+            interaction.guild_id, bot.guild_configuration_repository
+        ),
         user=interaction.user,
         guild_id=interaction.guild_id,
         suggestion_id=suggestion_id,
@@ -10877,11 +10990,17 @@ async def handle_reject_suggestion(
             await notify_crew_review(bot, watch_item)
 
         async def on_undo(undo_interaction: discord.Interaction, undo_suggestion_id: int) -> None:
+            # Resolved fresh from the Undo click's own guild context --
+            # the nearest available guild_id -- rather than reusing the
+            # original /reject interaction's resolution, which may be
+            # stale by the time this button is actually clicked.
             await handle_undo_rejection(
                 undo_interaction,
                 bot.suggestion_service,
                 bot.suggestion_database_configuration_repository,
-                bot.permission_service,
+                resolve_permission_service(
+                    undo_interaction.guild_id, bot.guild_configuration_repository
+                ),
                 bot,
                 undo_suggestion_id,
             )
@@ -10941,7 +11060,9 @@ async def handle_unreject_suggestion(
     """
     message, ephemeral = perform_remove_rejection(
         suggestion_service=bot.suggestion_service,
-        permission_service=bot.permission_service,
+        permission_service=resolve_permission_service(
+            interaction.guild_id, bot.guild_configuration_repository
+        ),
         user=interaction.user,
         suggestion_id=suggestion_id,
         guild_id=interaction.guild_id,
@@ -11054,7 +11175,8 @@ async def notify_crew_review(bot: "WatchPartyBot", watch_item: WatchItem) -> Non
         channel = bot.get_channel(channel_id)
         if channel is None:
             channel = await bot.fetch_channel(channel_id)
-        wash_crew_mention = f"<@&{bot.wash_crew_role_id}>" if bot.wash_crew_role_id else "WASH Crew"
+        guild_wash_crew_role_id = guild_configuration.wash_crew_role_id if guild_configuration is not None else None
+        wash_crew_mention = f"<@&{guild_wash_crew_role_id}>" if guild_wash_crew_role_id else "WASH Crew"
         message = await channel.send(
             f'{wash_crew_mention} "{watch_item.title}" needs review.',
             embed=build_crew_review_notification_embed(watch_item, database_name=database_name),
@@ -11140,7 +11262,9 @@ async def handle_crew_review_decision(
     already-resolved or nonexistent suggestion fails gracefully (the
     service returns success=False with a clear message; nothing raises).
     """
-    permission = bot.permission_service.require_wash_crew(interaction.user)
+    permission = resolve_permission_service(
+        interaction.guild_id, bot.guild_configuration_repository
+    ).require_wash_crew(interaction.user)
     if not permission.allowed:
         await interaction.response.send_message(permission.message, ephemeral=True)
         return
@@ -11654,13 +11778,14 @@ async def send_removal_confirmation(interaction: discord.Interaction, bot: "Watc
 
 
 async def handle_remove_suggestion(interaction: discord.Interaction, bot: "WatchPartyBot", query: str) -> None:
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message("You need the WASH Crew role to remove a watch item.", ephemeral=True)
         return
 
@@ -11738,13 +11863,14 @@ async def handle_edit_suggestion(interaction: discord.Interaction, bot: "WatchPa
     release year, director, etc.) is read-only here -- shown for
     reference in the summary, never manually editable.
     """
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message("You need the WASH Crew role to edit a suggestion.", ephemeral=True)
         return
 
@@ -12137,13 +12263,14 @@ async def handle_database_add(interaction: discord.Interaction, bot: "WatchParty
     enforced by SuggestionService.create_database() -- this only adds
     presentation and Discord-side thread creation around it.
     """
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message(
             "You need the WASH Crew role to create a collection.", ephemeral=True
         )
@@ -12344,7 +12471,9 @@ async def start_database_remove(
     message, ephemeral = perform_database_remove(
         suggestion_service=bot.suggestion_service,
         user=interaction.user,
-        wash_crew_role_id=bot.wash_crew_role_id,
+        wash_crew_role_id=resolve_permission_service(
+            guild_id, bot.guild_configuration_repository
+        ).wash_crew_role_id,
         guild_id=guild_id,
         database_id=database_id,
     )
@@ -12359,13 +12488,14 @@ async def handle_database_remove(interaction: discord.Interaction, bot: "WatchPa
     showing each database's name, Active/Inactive status, and watch-item
     count instead of typing an internal ID.
     """
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message(
             "You need the WASH Crew role to remove a collection.", ephemeral=True
         )
@@ -12449,13 +12579,14 @@ async def handle_database_move(interaction: discord.Interaction, bot: "WatchPart
     collection, then move its suggestion destination to a different
     thread. See start_database_move for the actual move.
     """
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message(
             "You need the WASH Crew role to move a collection.", ephemeral=True
         )
@@ -12567,13 +12698,14 @@ async def handle_database_manage(interaction: discord.Interaction, bot: "WatchPa
     commands (see DatabaseGroup's own docstring for why, and for
     /database restore's one necessary exception).
     """
-    if bot.wash_crew_role_id is None:
+    guild_permission_service = resolve_permission_service(interaction.guild_id, bot.guild_configuration_repository)
+    if guild_permission_service.wash_crew_role_id is None:
         await interaction.response.send_message(
             "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
             ephemeral=True,
         )
         return
-    if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+    if not guild_permission_service.is_wash_crew(interaction.user):
         await interaction.response.send_message(
             "You need the WASH Crew role to manage a collection.", ephemeral=True
         )
@@ -14340,7 +14472,9 @@ async def handle_stats(
     elevated permission (Section 4: "users may optionally post their own
     statistics publicly").
     """
-    permission = bot.permission_service.require_watch_party_member(interaction.user)
+    permission = resolve_permission_service(
+        interaction.guild_id, bot.guild_configuration_repository
+    ).require_watch_party_member(interaction.user)
     if not permission.allowed:
         await interaction.response.send_message(permission.message, ephemeral=True)
         return
@@ -14359,7 +14493,7 @@ async def handle_stats(
         )
         return
 
-    is_crew = is_wash_crew_member(interaction.user, bot.wash_crew_role_id)
+    is_crew = resolve_permission_service(guild_id, bot.guild_configuration_repository).is_wash_crew(interaction.user)
     if public and resolved_type is not StatsType.MEMBER and not is_crew:
         await interaction.response.send_message(
             "You need the WASH Crew role to post statistics publicly.", ephemeral=True
@@ -14406,8 +14540,10 @@ async def handle_about(interaction: discord.Interaction, bot: "WatchPartyBot") -
     Never fails or rejects -- non-crew members and DM/no-guild
     invocations simply see the reduced, everyone-visible view.
     """
-    is_crew = bot.permission_service.is_wash_crew(interaction.user)
     guild_id = interaction.guild_id
+    is_crew = resolve_permission_service(guild_id, bot.guild_configuration_repository).is_wash_crew(
+        interaction.user
+    )
     show_expanded = is_crew and guild_id is not None
 
     health: Optional[AboutHealth] = None

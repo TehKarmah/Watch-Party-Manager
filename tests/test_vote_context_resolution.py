@@ -88,6 +88,26 @@ class FakeSchedulerHost:
         self.scheduler_service = None
 
 
+class FakeGuildConfigurationRepository:
+    """Multi-Guild Isolation, Phase 3b: resolve_permission_service's own
+    minimal GuildConfigurationSource -- returns this fixed role
+    configuration for any guild_id, matching this file's existing
+    single-guild PermissionService fixture.
+    """
+
+    def __init__(self, wash_crew_role_id=None, watch_party_member_role_id=None) -> None:
+        self._wash_crew_role_id = wash_crew_role_id
+        self._watch_party_member_role_id = watch_party_member_role_id
+
+    def get(self, guild_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            wash_crew_role_id=self._wash_crew_role_id,
+            watch_party_role=SimpleNamespace(role_id=self._watch_party_member_role_id),
+        )
+
+
 class FakeBot:
     def __init__(self, *, root: Path, wash_crew_role_id=WASH_CREW_ROLE_ID) -> None:
         self.suggestion_database_repository = JsonSuggestionDatabaseRepository(
@@ -108,7 +128,12 @@ class FakeBot:
             watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=wash_crew_role_id
         )
         self.wash_crew_role_id = wash_crew_role_id
-        self.guild_configuration_repository = None
+        # Multi-Guild Isolation, Phase 3b: resolve_permission_service reads
+        # this, not the permission_service attribute set above (kept for
+        # any test that still reaches for it directly).
+        self.guild_configuration_repository = FakeGuildConfigurationRepository(
+            wash_crew_role_id=wash_crew_role_id, watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID
+        )
         self.scheduler_host = FakeSchedulerHost()
 
 
@@ -203,11 +228,16 @@ class HandleVoteStatusContextResolutionTests(VoteContextResolutionTestCase):
         self.assertIn("WASH Crew", interaction.response.sent_message)
 
     async def test_rejected_outside_a_server(self) -> None:
+        # Multi-Guild Isolation, Phase 3b: permission resolution is now
+        # guild-scoped, so a guild_id-less interaction can never resolve
+        # any guild's configured roles -- it fails closed with the
+        # standard "not configured" message before the dedicated "must
+        # be used in a server" check further down is ever reached.
         interaction = FakeInteraction(user=self._crew_member(), guild_id=None)
 
         await handle_vote_status(interaction, self.bot)
 
-        self.assertIn("server", interaction.response.sent_message.lower())
+        self.assertIn("before using this command", interaction.response.sent_message.lower())
 
     async def test_shows_the_round_id(self) -> None:
         database, vote_round = self._make_collection_with_open_round("Movies", channel_id=201)

@@ -119,6 +119,7 @@ class DatabaseManageCommandTestCase(unittest.IsolatedAsyncioTestCase):
                 guild_id=GUILD_ID,
                 guild_name="Test Guild",
                 setup_completed=True,
+                wash_crew_role_id=WASH_CREW_ROLE_ID,
                 channels=GuildChannelsConfig(home_channel_id=HOME_CHANNEL_ID),
             )
         )
@@ -154,7 +155,9 @@ class PermissionTests(DatabaseManageCommandTestCase):
         self.assertIn("WASH Crew", interaction.response.sent_message)
 
     async def test_fails_closed_when_role_is_unconfigured(self) -> None:
-        self.bot.wash_crew_role_id = None
+        self.guild_configuration_repository.save(
+            GuildConfiguration(guild_id=GUILD_ID, guild_name="Test Guild", setup_completed=True)
+        )
         interaction = FakeInteraction()
 
         await handle_database_manage(interaction, self.bot)
@@ -162,11 +165,16 @@ class PermissionTests(DatabaseManageCommandTestCase):
         self.assertIn("not been configured", interaction.response.sent_message)
 
     async def test_rejects_use_outside_a_guild(self) -> None:
+        # Multi-Guild Isolation, Phase 3c: permission resolution is now
+        # guild-scoped, so a guild_id-less interaction can never resolve
+        # any guild's configured roles -- it fails closed with the
+        # standard "not configured" message before the dedicated "must
+        # be used in a server" check further down is ever reached.
         interaction = FakeInteraction(guild_id=None)
 
         await handle_database_manage(interaction, self.bot)
 
-        self.assertIn("server", interaction.response.sent_message)
+        self.assertIn("before using this command", interaction.response.sent_message)
 
     async def test_reports_when_no_collections_exist(self) -> None:
         empty_bot = FakeBot(

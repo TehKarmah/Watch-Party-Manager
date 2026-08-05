@@ -48,10 +48,29 @@ class FakeInteraction:
         self.response = FakeResponse()
 
 
+class FakeGuildConfigurationRepository:
+    """Multi-Guild Isolation, Phase 3c: resolve_permission_service's own
+    minimal GuildConfigurationSource -- returns this fixed role
+    configuration for any guild_id, matching this file's existing
+    single-guild wash_crew_role_id fixture.
+    """
+
+    def __init__(self, wash_crew_role_id=None) -> None:
+        self._wash_crew_role_id = wash_crew_role_id
+
+    def get(self, guild_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            wash_crew_role_id=self._wash_crew_role_id, watch_party_role=SimpleNamespace(role_id=None)
+        )
+
+
 class FakeBot:
     def __init__(self, suggestion_service, wash_crew_role_id=WASH_CREW_ROLE_ID) -> None:
         self.suggestion_service = suggestion_service
         self.wash_crew_role_id = wash_crew_role_id
+        self.guild_configuration_repository = FakeGuildConfigurationRepository(wash_crew_role_id)
 
 
 class HandleRemoveSuggestionTestCase(unittest.IsolatedAsyncioTestCase):

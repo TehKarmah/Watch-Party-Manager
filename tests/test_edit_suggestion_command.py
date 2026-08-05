@@ -74,11 +74,30 @@ class FakeInteraction:
         self.guild = FakeGuild(guild_id) if guild_id is not None else None
 
 
+class FakeGuildConfigurationRepository:
+    """Multi-Guild Isolation, Phase 3c: resolve_permission_service's own
+    minimal GuildConfigurationSource -- returns this fixed role
+    configuration for any guild_id, matching this file's existing
+    single-guild wash_crew_role_id fixture.
+    """
+
+    def __init__(self, wash_crew_role_id=None) -> None:
+        self._wash_crew_role_id = wash_crew_role_id
+
+    def get(self, guild_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            wash_crew_role_id=self._wash_crew_role_id, watch_party_role=SimpleNamespace(role_id=None)
+        )
+
+
 class FakeBot:
     def __init__(self, suggestion_service, wash_crew_role_id=WASH_CREW_ROLE_ID) -> None:
         self.suggestion_service = suggestion_service
         self.suggestion_database_configuration_repository = None
         self.wash_crew_role_id = wash_crew_role_id
+        self.guild_configuration_repository = FakeGuildConfigurationRepository(wash_crew_role_id)
 
 
 class EditSuggestionTestCase(unittest.IsolatedAsyncioTestCase):
@@ -109,6 +128,7 @@ class EditPermissionTests(EditSuggestionTestCase):
 
     async def test_unconfigured_role_fails_closed(self) -> None:
         self.bot.wash_crew_role_id = None
+        self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(None)
         interaction = FakeInteraction()
 
         await handle_edit_suggestion(interaction, self.bot, f"#{self.item.id}")

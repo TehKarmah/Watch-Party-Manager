@@ -73,6 +73,26 @@ class FakeSchedulerHost:
         self.is_running = is_running
 
 
+class FakeGuildConfigurationRepository:
+    """Multi-Guild Isolation, Phase 3b: resolve_permission_service's own
+    minimal GuildConfigurationSource -- returns this fixed role
+    configuration for any guild_id, matching this file's existing
+    single-guild PermissionService fixture.
+    """
+
+    def __init__(self, wash_crew_role_id=None, watch_party_member_role_id=None) -> None:
+        self._wash_crew_role_id = wash_crew_role_id
+        self._watch_party_member_role_id = watch_party_member_role_id
+
+    def get(self, guild_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            wash_crew_role_id=self._wash_crew_role_id,
+            watch_party_role=SimpleNamespace(role_id=self._watch_party_member_role_id),
+        )
+
+
 class AboutCommandTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
@@ -100,6 +120,9 @@ class AboutCommandTestCase(unittest.IsolatedAsyncioTestCase):
         self.bot.suggestion_input_service = SuggestionInputService()
         self.bot.permission_service = PermissionService(
             watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=WASH_CREW_ROLE_ID
+        )
+        self.bot.guild_configuration_repository = FakeGuildConfigurationRepository(
+            wash_crew_role_id=WASH_CREW_ROLE_ID, watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID
         )
         self.bot.wash_crew_role_id = WASH_CREW_ROLE_ID
         self.bot.scheduler_host = FakeSchedulerHost(is_running=True)

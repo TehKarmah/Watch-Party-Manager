@@ -272,14 +272,19 @@ class WatchPartyBotWiringTests(unittest.TestCase):
 
 
 class PerformSetupPermissionCheckTests(unittest.TestCase):
-    """Bootstrap Setup Permission Fix: wash_crew_role_id is a bot-wide
-    fallback (see WatchPartyBot.__init__ / WASH_CREW_ROLE_ID) that can be
-    stale, unset, or configured for a different guild entirely. Until
-    *this* guild's own configuration has associated a WASH Crew role,
-    only the Discord guild owner may run /setup -- everyone else is
-    blocked regardless of the bot-wide fallback. Once this guild's own
-    configuration has a WASH Crew role, /setup enforces that role
+    """Bootstrap Setup Permission Fix: until *this* guild's own
+    configuration has associated a WASH Crew role, only the Discord guild
+    owner may run /setup -- everyone else is blocked. Once this guild's
+    own configuration has a WASH Crew role, /setup enforces that role
     exactly as before, with no special access for the owner.
+
+    Multi-Guild Isolation, Phase 3c: perform_setup_permission_check() no
+    longer takes a bot-wide wash_crew_role_id fallback parameter at all
+    -- it resolves purely from guild_configuration.wash_crew_role_id, so
+    there is no longer a "stale bot-wide role id" scenario to construct;
+    the tests that used to name that scenario are replaced with
+    cross-guild isolation tests below (a role configured for a
+    *different* guild must never grant access to this one).
     """
 
     def _configured_guild(self, role_id=WASH_CREW_ROLE_ID) -> GuildConfiguration:
@@ -289,13 +294,13 @@ class PerformSetupPermissionCheckTests(unittest.TestCase):
 
     def test_guild_owner_may_run_setup_before_any_configuration_exists(self):
         message, blocked = perform_setup_permission_check(
-            FakeMember(), None, guild_configuration=None, is_guild_owner=True
+            FakeMember(), guild_configuration=None, is_guild_owner=True
         )
         self.assertFalse(blocked)
 
     def test_non_owner_is_blocked_before_any_configuration_exists(self):
         message, blocked = perform_setup_permission_check(
-            FakeMember(), None, guild_configuration=None, is_guild_owner=False
+            FakeMember(), guild_configuration=None, is_guild_owner=False
         )
         self.assertTrue(blocked)
         self.assertIn("WASH Crew role", message)
@@ -305,29 +310,7 @@ class PerformSetupPermissionCheckTests(unittest.TestCase):
         # though no WASH Crew role has ever been associated with it.
         configuration = GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild")
         message, blocked = perform_setup_permission_check(
-            FakeMember(), None, guild_configuration=configuration, is_guild_owner=True
-        )
-        self.assertFalse(blocked)
-
-    def test_non_owner_is_blocked_even_when_a_stale_bot_wide_role_id_is_set(self):
-        # The exact reported bug: WASH_CREW_ROLE_ID is set bot-wide, but
-        # this guild's own setup has never associated a role -- a
-        # non-owner must not be let in just because some other guild's
-        # (or legacy) role id happens to be configured bot-wide.
-        member = FakeMember(roles=[FakeRole(999)])
-        message, blocked = perform_setup_permission_check(
-            member, WASH_CREW_ROLE_ID, guild_configuration=None, is_guild_owner=False
-        )
-        self.assertTrue(blocked)
-
-    def test_guild_owner_is_never_blocked_by_a_stale_bot_wide_role_id_before_setup(self):
-        # The exact reported bug, from the owner's side: the owner lacks
-        # whatever role the bot-wide fallback happens to point at, but
-        # must still be let through since this guild's own setup hasn't
-        # associated a role yet.
-        member = FakeMember(roles=[])
-        message, blocked = perform_setup_permission_check(
-            member, WASH_CREW_ROLE_ID, guild_configuration=None, is_guild_owner=True
+            FakeMember(), guild_configuration=configuration, is_guild_owner=True
         )
         self.assertFalse(blocked)
 
@@ -336,14 +319,14 @@ class PerformSetupPermissionCheckTests(unittest.TestCase):
     def test_wash_crew_members_may_run_setup_once_configured(self):
         member = FakeMember(roles=[FakeRole(WASH_CREW_ROLE_ID)])
         message, blocked = perform_setup_permission_check(
-            member, WASH_CREW_ROLE_ID, guild_configuration=self._configured_guild()
+            member, guild_configuration=self._configured_guild()
         )
         self.assertFalse(blocked)
 
     def test_non_wash_crew_members_are_blocked_once_configured(self):
         member = FakeMember(roles=[FakeRole(999)])
         message, blocked = perform_setup_permission_check(
-            member, WASH_CREW_ROLE_ID, guild_configuration=self._configured_guild()
+            member, guild_configuration=self._configured_guild()
         )
         self.assertTrue(blocked)
         self.assertIn("WASH Crew role", message)
@@ -354,7 +337,21 @@ class PerformSetupPermissionCheckTests(unittest.TestCase):
         # without the role is blocked exactly like anyone else.
         member = FakeMember(roles=[])
         message, blocked = perform_setup_permission_check(
-            member, WASH_CREW_ROLE_ID, guild_configuration=self._configured_guild(), is_guild_owner=True
+            member, guild_configuration=self._configured_guild(), is_guild_owner=True
+        )
+        self.assertTrue(blocked)
+        self.assertIn("WASH Crew role", message)
+
+    # --- Multi-Guild Isolation, Phase 3c: cross-guild role isolation -----
+
+    def test_a_role_configured_as_wash_crew_in_a_different_guild_does_not_grant_access_here(self):
+        # Guild A's own WASH Crew role must never grant access to Guild
+        # B's /setup, even though both are resolved through the same
+        # function in the same process.
+        other_guilds_wash_crew_role_id = 424242
+        member = FakeMember(roles=[FakeRole(other_guilds_wash_crew_role_id)])
+        message, blocked = perform_setup_permission_check(
+            member, guild_configuration=self._configured_guild(role_id=WASH_CREW_ROLE_ID)
         )
         self.assertTrue(blocked)
         self.assertIn("WASH Crew role", message)
@@ -3803,11 +3800,16 @@ class GuidedCollectionCreationIntegrationTests(SetupCommandTestCase):
 
         post_channel = FakePostChannel()
 
+        class FakeGuildConfigurationRepository:
+            def get(self, guild_id):
+                return None
+
         class FakePostBot:
             def __init__(self, suggestion_service, suggestion_database_configuration_repository, channel):
                 self.suggestion_service = suggestion_service
                 self.suggestion_database_configuration_repository = suggestion_database_configuration_repository
                 self.permission_service = None
+                self.guild_configuration_repository = FakeGuildConfigurationRepository()
                 self._channel = channel
 
             def get_channel(self, channel_id):

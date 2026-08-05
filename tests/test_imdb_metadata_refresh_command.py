@@ -153,8 +153,23 @@ class FakeChannel:
 
 
 class FakeGuildConfigurationRepository:
+    """Multi-Guild Isolation, Phase 3c: resolve_permission_service's own
+    minimal GuildConfigurationSource -- returns this fixed role
+    configuration for any guild_id, matching this file's existing
+    single-guild PermissionService fixture.
+    """
+
+    def __init__(self, wash_crew_role_id=None, watch_party_member_role_id=None) -> None:
+        self._wash_crew_role_id = wash_crew_role_id
+        self._watch_party_member_role_id = watch_party_member_role_id
+
     def get(self, guild_id):
-        return None
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            wash_crew_role_id=self._wash_crew_role_id,
+            watch_party_role=SimpleNamespace(role_id=self._watch_party_member_role_id),
+        )
 
 
 class FakeBot:
@@ -170,7 +185,12 @@ class FakeBot:
         self.suggestion_database_configuration_repository = SuggestionDatabaseConfigurationRepository(
             Path(tempfile.mkdtemp()) / "suggestion_database_configurations.json"
         )
-        self.guild_configuration_repository = FakeGuildConfigurationRepository()
+        # Multi-Guild Isolation, Phase 3c: resolve_permission_service reads
+        # this, not the permission_service attribute set below (kept for
+        # any test that still reaches for it directly).
+        self.guild_configuration_repository = FakeGuildConfigurationRepository(
+            wash_crew_role_id=wash_crew_role_id, watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID
+        )
         self.wash_crew_role_id = wash_crew_role_id
         self.suggestion_input_service = SuggestionInputService(
             ImdbMetadataService(api_key="test-key", fetch_json=fetch_json or (lambda u: {}))
