@@ -14327,7 +14327,7 @@ def resolve_active_database_display_name(suggestion_service: SuggestionService, 
         return active[0].name
     if not active:
         return "None configured"
-    return f"{len(active)} active (see /database_list)"
+    return f"{len(active)} active (see /database list)"
 
 
 async def handle_about(interaction: discord.Interaction, bot: "WatchPartyBot") -> None:
