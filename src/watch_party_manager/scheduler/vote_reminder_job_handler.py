@@ -73,6 +73,8 @@ def build_vote_reminder_text(
     candidates: List[WatchItem],
     standings: Optional[List[StandingsEntry]],
     collection_name: Optional[str] = None,
+    *,
+    round_number: int,
 ) -> str:
     """Build the reminder message posted to a voting round's channel.
 
@@ -85,6 +87,11 @@ def build_vote_reminder_text(
         collection_name: The round's collection, if known (Requirement 1)
             -- see resolve_vote_collection_name. None falls back to a
             generic, round-centric title.
+        round_number: The guild-local round number (VoteService.
+            get_guild_round_number) -- every other vote message (the
+            original post, standings, completion announcement) shows this
+            number, not vote_round.id's raw cross-guild counter, so the
+            reminder must match rather than show a different "Round" value.
 
     Returns:
         The reminder text: time remaining and closing timestamp (both via
@@ -95,7 +102,7 @@ def build_vote_reminder_text(
     """
     lines = [
         f"**{format_vote_title(collection_name, 'Voting — Reminder')}**",
-        f"Round: {vote_round.id}",
+        f"Round: {round_number}",
         f"Voting ends: {format_datetime_for_display(vote_round.closes_at)}",
     ]
     lines.extend(build_vote_reminder_standings_lines(vote_round, candidates, standings))
@@ -209,11 +216,16 @@ class VoteReminderJobHandler:
         standings = standings_result.standings if standings_result.success else None
 
         collection_name = resolve_vote_collection_name(self._suggestion_service, vote_round.database_id)
+        round_number = self._vote_service.get_guild_round_number(vote_round.id, vote_round.guild_id)
 
         channel = self._messenger.get_channel(vote_round.channel_id)
         if channel is None:
             channel = await self._messenger.fetch_channel(vote_round.channel_id)
-        await channel.send(build_vote_reminder_text(vote_round, candidates, standings, collection_name))
+        await channel.send(
+            build_vote_reminder_text(
+                vote_round, candidates, standings, collection_name, round_number=round_number
+            )
+        )
 
         self._vote_service.mark_reminder_sent(vote_id, datetime.now(timezone.utc))
 

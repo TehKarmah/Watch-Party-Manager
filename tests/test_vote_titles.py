@@ -99,14 +99,14 @@ class VoteOpenedTitleTests(unittest.TestCase):
 class VoteReminderTitleTests(unittest.TestCase):
     def test_reminder_title_includes_the_collection(self) -> None:
         vote_round = VoteRound(id=3)
-        text = build_vote_reminder_text(vote_round, [], None, collection_name="TV Suggestions")
+        text = build_vote_reminder_text(vote_round, [], None, collection_name="TV Suggestions", round_number=3)
 
         lines = text.splitlines()
         self.assertEqual(lines[0], "**📺 TV Suggestions Voting — Reminder**")
         self.assertEqual(lines[1], "Round: 3")
 
     def test_reminder_title_falls_back_without_a_collection(self) -> None:
-        text = build_vote_reminder_text(VoteRound(id=3), [], None)
+        text = build_vote_reminder_text(VoteRound(id=3), [], None, round_number=3)
 
         self.assertEqual(text.splitlines()[0], "**Voting — Reminder**")
 

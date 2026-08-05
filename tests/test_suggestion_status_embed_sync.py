@@ -18,6 +18,7 @@ from watch_party_manager.bot import (
     build_suggestion_confirmation_embed,
     handle_reject_suggestion,
     handle_suggestion_rejection_toggle,
+    handle_unreject_suggestion,
     sync_suggestion_status_embed,
     sync_vote_completion_status_embeds,
     sync_vote_start_status_embeds,
@@ -686,6 +687,75 @@ class SuggestionRejectionThresholdEmbedSyncTests(unittest.IsolatedAsyncioTestCas
         )
 
         self.assertNotEqual("not-edited", interaction.message.edited_view)
+
+
+class HandleUnrejectSuggestionEmbedSyncTests(unittest.IsolatedAsyncioTestCase):
+    """Pre-Phase 3 UX Polish: /unreject must resync a suggestion's own
+    public post the same way /reject, Undo Rejection, and the "I Won't
+    Watch" toggle already do -- previously it was the one rejection-
+    removal path that left the post's rejection count stale.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp_dir.cleanup)
+        root = Path(self._temp_dir.name)
+        self.suggestion_service = SuggestionService(
+            repository=JsonSuggestionRepository(root / "suggestions.json"),
+            database_repository=JsonSuggestionDatabaseRepository(root / "suggestion_databases.json"),
+        )
+        self.database = self.suggestion_service.create_database("Movies", GUILD_ID, CHANNEL_ID).database
+        self.permission_service = PermissionService(
+            watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=WASH_CREW_ROLE_ID
+        )
+        self.item = self.suggestion_service.suggest(
+            "Alien", database_id=self.database.database_id, guild_id=GUILD_ID, channel_id=CHANNEL_ID
+        ).watch_item
+        self.suggestion_service.set_confirmation_post_reference(self.item.id, GUILD_ID, CHANNEL_ID, 555)
+        self.suggestion_service.reject_suggestion(self.item.id, 1, rejection_threshold=2)
+
+    def _rejection_button_label(self, view) -> str:
+        return view.children[0].label
+
+    async def test_unreject_command_refreshes_the_suggestion_posts_rejection_count(self) -> None:
+        message = FakeMessage(message_id=555)
+        channel = FakeChannel(message)
+        bot = FakeBot(self.suggestion_service, channel)
+        bot.permission_service = self.permission_service
+
+        interaction = FakeRejectInteraction(FakeMember(1, [WATCH_PARTY_MEMBER_ROLE_ID]))
+        await handle_unreject_suggestion(interaction, bot, self.item.id)
+
+        self.assertEqual((), self.suggestion_service.get_suggestion(self.item.id).journey.rejected_by_discord_user_ids)
+        self.assertEqual(1, message.edit_calls)
+        self.assertEqual("I WON'T WATCH: 0 / 2", self._rejection_button_label(message.edited_view))
+
+    async def test_unreject_command_does_not_refresh_when_the_member_never_rejected_it(self) -> None:
+        # A no-op removal (nothing to undo) still resolves a real
+        # suggestion, so a refresh happens -- but with no content change,
+        # matching Undo Rejection's own idempotent-refresh behavior.
+        message = FakeMessage(message_id=555)
+        channel = FakeChannel(message)
+        bot = FakeBot(self.suggestion_service, channel)
+        bot.permission_service = self.permission_service
+
+        interaction = FakeRejectInteraction(FakeMember(2, [WATCH_PARTY_MEMBER_ROLE_ID]))
+        await handle_unreject_suggestion(interaction, bot, self.item.id)
+
+        self.assertIn("haven't rejected", interaction.response.sent_message)
+        self.assertEqual(1, message.edit_calls)
+
+    async def test_unreject_command_does_not_refresh_a_nonexistent_suggestion(self) -> None:
+        message = FakeMessage(message_id=555)
+        channel = FakeChannel(message)
+        bot = FakeBot(self.suggestion_service, channel)
+        bot.permission_service = self.permission_service
+
+        interaction = FakeRejectInteraction(FakeMember(1, [WATCH_PARTY_MEMBER_ROLE_ID]))
+        await handle_unreject_suggestion(interaction, bot, 999999)
+
+        self.assertIn("doesn't exist", interaction.response.sent_message)
+        self.assertEqual(0, message.edit_calls)
 
 
 if __name__ == "__main__":

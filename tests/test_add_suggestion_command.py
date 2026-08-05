@@ -94,9 +94,11 @@ class DecideAddSuggestionOutcomeTests(unittest.TestCase):
         decision = decide_add_suggestion_outcome(result, is_crew=True)
 
         self.assertEqual(AddSuggestionOutcomeKind.NEEDS_CREW_REACTIVATION_CONFIRM, decision.kind)
-        # UX Polish: grammar fix -- "This title has been archived...",
-        # not the previous "This title has archived..." (missing "been").
-        self.assertIn("This title has been archived after being rejected", decision.message)
+        # Pre-Phase 3 UX Polish: "retired", matching the "status: 🗄️
+        # Retired" line (display_status_label) shown right below it for
+        # this same WatchItemStatus.ARCHIVED match -- was "archived",
+        # inconsistent with that shared label.
+        self.assertIn("This title has been retired after being rejected", decision.message)
 
     def test_watched_match_offers_crew_reactivation(self) -> None:
         result = self._matches(status=WatchItemStatus.VOTE_WINNER)

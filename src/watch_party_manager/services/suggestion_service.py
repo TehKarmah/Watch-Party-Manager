@@ -589,12 +589,24 @@ class SuggestionService:
             return SuggestionResult(success=False, message="That suggestion doesn't exist.")
 
         if watch_item.status is WatchItemStatus.ARCHIVED:
-            return SuggestionResult(success=False, message="That suggestion is already archived.")
+            return SuggestionResult(success=False, message="That suggestion is already retired.")
 
         watch_item.status = WatchItemStatus.ARCHIVED
         self._save()
         return SuggestionResult(
-            success=True, message=f'"{watch_item.title}" has been archived.', watch_item=watch_item
+            success=True,
+            # Pre-Phase 3 UX Polish: "retired", matching retire_pending_review()'s
+            # own wording and the shared "🗄️ Retired" display label every
+            # other status surface shows for this same WatchItemStatus.ARCHIVED
+            # value -- was "archived", inconsistent with both. /suggestion
+            # remove is this method's only caller, and its own command name
+            # ("remove", confirm button "Remove") most needs the explicit
+            # reversibility note that follows.
+            message=(
+                f'"{watch_item.title}" has been retired. This is reversible -- '
+                "restore it anytime via /suggestion edit's Change Status option."
+            ),
+            watch_item=watch_item,
         )
 
     def reactivate_suggestion(self, suggestion_id: int) -> SuggestionResult:

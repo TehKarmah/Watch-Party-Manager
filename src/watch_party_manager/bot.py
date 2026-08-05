@@ -636,14 +636,7 @@ class WatchPartyBot(commands.Bot):
         @self.tree.command(name="unreject", description="Undo your rejection of a suggestion.")
         @discord.app_commands.describe(suggestion_id="The suggestion's numeric ID (shown on its public post).")
         async def unreject(interaction: discord.Interaction, suggestion_id: int) -> None:
-            message, ephemeral = perform_remove_rejection(
-                suggestion_service=self.suggestion_service,
-                permission_service=self.permission_service,
-                user=interaction.user,
-                suggestion_id=suggestion_id,
-                guild_id=interaction.guild_id,
-            )
-            await interaction.response.send_message(message, ephemeral=ephemeral)
+            await handle_unreject_suggestion(interaction, self, suggestion_id)
 
         @self.tree.command(name="setup", description="Run WASH's first-time setup wizard (WASH Crew only).")
         async def setup(interaction: discord.Interaction) -> None:
@@ -5088,7 +5081,7 @@ class SuggestionGroup(discord.app_commands.Group):
     async def edit(self, interaction: discord.Interaction, reference: str) -> None:
         await handle_edit_suggestion(interaction, self.bot, reference)
 
-    @discord.app_commands.command(name="remove", description="Archive a suggestion.")
+    @discord.app_commands.command(name="remove", description="Retire a suggestion (reversible, not a permanent deletion).")
     @discord.app_commands.describe(
         query="A reference number (e.g. #0007), exact title, or title without its year."
     )
@@ -5237,6 +5230,26 @@ class VotingGroup(discord.app_commands.Group):
     @discord.app_commands.command(name="start", description="Start a new voting round.")
     async def start(self, interaction: discord.Interaction) -> None:
         bot = self.bot
+
+        # Pre-Phase 3 UX Polish: permission-gated up front, matching
+        # show_repair_confirmation's convention -- an unauthorized member
+        # is rejected before ever seeing the "Use Defaults / Customize
+        # This Vote" choice UI, not after clicking through it.
+        # perform_start_vote's own check further downstream is unchanged
+        # and still runs regardless, exactly as
+        # perform_repair_suggestions' own check does after
+        # show_repair_confirmation's.
+        if bot.wash_crew_role_id is None:
+            await interaction.response.send_message(
+                "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command.",
+                ephemeral=True,
+            )
+            return
+        if not is_wash_crew_member(interaction.user, bot.wash_crew_role_id):
+            await interaction.response.send_message(
+                "You need the WASH Crew role to start a voting round.", ephemeral=True
+            )
+            return
 
         async def on_use_defaults(choice_interaction: discord.Interaction) -> None:
             await handle_start_vote_use_defaults(
@@ -7995,9 +8008,13 @@ def build_vote_winner_duplicate_match_block(item: WatchItem) -> str:
 
 
 _ARCHIVE_CATEGORY_LABELS = {
-    DuplicateMatchCategory.ARCHIVED_REJECTED: 'been archived after being rejected ("I Won\'t Watch")',
+    # Pre-Phase 3 UX Polish: "retired", not "archived" -- this detail line
+    # sits directly above build_duplicate_match_line's own "status: 🗄️
+    # Retired" rendering (display_status_label), so the two must use the
+    # same word for the same WatchItemStatus.ARCHIVED status.
+    DuplicateMatchCategory.ARCHIVED_REJECTED: 'been retired after being rejected ("I Won\'t Watch")',
     DuplicateMatchCategory.VOTE_WINNER: "already won a vote",
-    DuplicateMatchCategory.ARCHIVED_OTHER: "already been archived",
+    DuplicateMatchCategory.ARCHIVED_OTHER: "already been retired",
 }
 
 
@@ -10905,6 +10922,35 @@ def perform_remove_rejection(
 
     result = suggestion_service.remove_rejection(suggestion_id, user.id, guild_id=guild_id)
     return result.message, True
+
+
+async def handle_unreject_suggestion(
+    interaction: discord.Interaction, bot: "WatchPartyBot", suggestion_id: int
+) -> None:
+    """Handle /unreject: remove the rejection via perform_remove_rejection,
+    then keep the suggestion's own public post in sync.
+
+    Pre-Phase 3 UX Polish: previously the bare /unreject command was the
+    one rejection-removal path that never refreshed the suggestion's own
+    post afterward -- /reject (handle_reject_suggestion), the "I Won't
+    Watch" toggle (handle_suggestion_rejection_toggle), and the "Undo
+    Rejection" button (handle_undo_rejection) all already did. Reuses
+    sync_suggestion_status_embed, the same shared mechanism
+    handle_reject_suggestion calls, rather than Undo Rejection's older,
+    narrower bespoke view-only refresh.
+    """
+    message, ephemeral = perform_remove_rejection(
+        suggestion_service=bot.suggestion_service,
+        permission_service=bot.permission_service,
+        user=interaction.user,
+        suggestion_id=suggestion_id,
+        guild_id=interaction.guild_id,
+    )
+    await interaction.response.send_message(message, ephemeral=ephemeral)
+
+    watch_item = bot.suggestion_service.get_suggestion(suggestion_id)
+    if watch_item is not None:
+        await sync_suggestion_status_embed(bot, watch_item)
 
 
 def build_suggestion_message_link(watch_item: WatchItem) -> Optional[str]:
@@ -14057,8 +14103,20 @@ def build_member_statistics_text(stats: MemberStatistics, member_mention: str) -
 
 
 def build_suggestion_statistics_text(stats: SuggestionStatistics) -> str:
-    """Format FR-034 Section 6's suggestion statistics for Discord."""
-    status_text = stats.status.value.replace("_", " ").title()
+    """Format FR-034 Section 6's suggestion statistics for Discord.
+
+    Status is rendered through display_status_label(), the same shared
+    resolver a suggestion's own post, /list, and /suggestion edit all use
+    -- /stats must never show a different status vocabulary for the same
+    suggestion. "Currently archived" is dropped entirely: it was always
+    true exactly when the Status line above already reads "🗄️ Retired,"
+    so it added nothing once Status uses the correct label. "Retired" is
+    renamed to "Retired via Crew Review" since it tracks a narrower fact
+    (journey.retired_at, only ever set by the Retire decision) than the
+    Retired *status* above it, which also covers a suggestion archived
+    directly via /suggestion remove.
+    """
+    status_text = display_status_label(stats.display_status)
     lines = [
         f"**Suggestion Statistics -- {stats.title}**",
         "",
@@ -14076,22 +14134,32 @@ def build_suggestion_statistics_text(stats: SuggestionStatistics) -> str:
         "**Lifecycle**",
         f"Watched: {format_count(stats.watch_count, 'time')}",
         f"Days until watched: {format_optional_days(stats.days_until_watched)}",
-        f"Retired: {'Yes' if stats.is_retired else 'No'}"
+        f"Retired via Crew Review: {'Yes' if stats.is_retired else 'No'}"
         + (f" ({format_optional_timestamp(stats.retired_at)})" if stats.is_retired else ""),
-        f"Currently archived: {'Yes' if stats.is_archived else 'No'}",
     ]
     return "\n".join(lines)
 
 
 def build_database_statistics_text(stats: DatabaseStatistics) -> str:
-    """Format FR-034 Section 9's database statistics for Discord."""
+    """Format FR-034 Section 9's database statistics for Discord.
+
+    "Retired suggestions" (not "Archived") matches the shared display
+    label every ARCHIVED-status suggestion renders as everywhere else
+    (its own post, /list, /suggestion edit). "Retired via Crew Review"
+    is the narrower subset that went through Crew Review's own Retire
+    decision specifically, not every archived suggestion -- disambiguated
+    from the line above it rather than reusing the word "Retired" for
+    two different counts. Watched and Vote Winner are reported as two
+    separate, disjoint counts (previously conflated into one).
+    """
     lines = [
         f"**Collection Statistics -- {stats.database_name}**",
         "",
         f"Active suggestions: {format_count(stats.active_suggestions, 'suggestion')}",
-        f"Archived suggestions: {format_count(stats.archived_suggestions, 'suggestion')}",
         f"Watched suggestions: {format_count(stats.watched_suggestions, 'suggestion')}",
-        f"Retired suggestions: {format_count(stats.retired_suggestions, 'suggestion')}",
+        f"Vote Winner suggestions: {format_count(stats.vote_winner_suggestions, 'suggestion')}",
+        f"Retired suggestions: {format_count(stats.archived_suggestions, 'suggestion')}",
+        f"Retired via Crew Review: {format_count(stats.retired_suggestions, 'suggestion')}",
     ]
     return "\n".join(lines)
 

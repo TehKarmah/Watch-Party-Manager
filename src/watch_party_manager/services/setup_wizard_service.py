@@ -702,6 +702,24 @@ class SetupWizardService:
                 updated, channels=replace(updated.channels, home_channel_id=draft.home_channel_id)
             )
 
+        if draft.watch_destination_channel_id is not None or draft.watch_destination_skipped:
+            # UX Audit: Setup Wizard's Watch Destination step and /config's
+            # "Watched Item Archive" section were writing different fields
+            # (this step only ever saved a per-collection override -- see
+            # _build_database_configuration_override below -- while /config's
+            # top-level summary reads the guild-wide default), so an admin
+            # who configured this during setup would see it reported as
+            # unconfigured in /config. The wizard only ever walks through one
+            # collection, so that collection's destination IS the sensible
+            # guild-wide default at setup time; mirrors admin_channel_id's
+            # same skip-clears/set-writes pattern above.
+            updated = replace(
+                updated,
+                channels=replace(
+                    updated.channels, watch_history_channel_id=draft.watch_destination_channel_id
+                ),
+            )
+
         if draft.voting_candidate_count is not None:
             updated = replace(
                 updated,

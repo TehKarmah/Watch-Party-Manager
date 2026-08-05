@@ -225,6 +225,24 @@ class RemoveArchivalBehaviorTests(HandleRemoveSuggestionTestCase):
         stored = self.suggestion_service.get_suggestion(item.id)
         self.assertEqual(WatchItemStatus.SUGGESTED, stored.status)
 
+    async def test_confirmation_message_uses_the_shared_retired_wording_and_notes_reversibility(self) -> None:
+        # Pre-Phase 3 UX Polish: the confirmation previously said "has
+        # been archived", inconsistent with the "🗄️ Retired" label every
+        # other status surface shows for this same status, and gave no
+        # indication that /suggestion remove -- named "remove", confirmed
+        # via a "Remove" button -- doesn't actually delete anything.
+        self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id, guild_id=GUILD_ID)
+        interaction = FakeInteraction()
+        await handle_remove_suggestion(interaction, self.bot, "Alien (1979)")
+        view = interaction.response.sent_view
+
+        confirm_interaction = FakeInteraction()
+        await view.children[0].callback(confirm_interaction)
+
+        self.assertIn("has been retired", confirm_interaction.response.sent_message)
+        self.assertIn("reversible", confirm_interaction.response.sent_message)
+        self.assertNotIn("archived", confirm_interaction.response.sent_message)
+
     async def test_preserves_journey_history(self) -> None:
         item = self.suggestion_service.suggest("Alien (1979)", database_id=self.database.database_id, guild_id=GUILD_ID).watch_item
         self.suggestion_service.reject_suggestion(item.id, discord_user_id=1, rejection_threshold=99)

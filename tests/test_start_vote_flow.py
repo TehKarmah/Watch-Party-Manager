@@ -460,6 +460,62 @@ class CustomizeVoteTests(StartVoteFlowTestCase):
         self.assertEqual(len(second_round.candidate_suggestion_ids), 3)
 
 
+class StartCommandPermissionTimingTests(StartVoteFlowTestCase):
+    """Pre-Phase 3 UX Polish: /vote start's WASH Crew permission check
+    must happen before the "Use Defaults / Customize This Vote" choice UI
+    is ever shown, matching show_repair_confirmation's pattern.
+    Previously the only check lived deep inside perform_start_vote, so a
+    non-Crew member could see (and click through) the full choice UI
+    before ever being told they lack permission.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+
+        class FakeBot:
+            pass
+
+        self.bot = FakeBot()
+        self.bot.wash_crew_role_id = WASH_CREW_ROLE_ID
+        self.bot.vote_service = self.vote_service
+        self.bot.suggestion_service = self.suggestion_service
+        self.bot.nominee_selection_service = self.nominee_selection_service
+        self.bot.default_nominee_count = self.default_nominee_count
+        self.bot.scheduler_host = None
+        self.bot.guild_configuration_repository = None
+        self.bot.suggestion_database_configuration_repository = None
+
+    async def test_a_non_crew_member_is_rejected_before_the_choice_ui_is_shown(self) -> None:
+        group = VotingGroup(self.bot)
+        interaction = FakeInteraction(user_id=1)
+        interaction.user = FakeMember(user_id=1, roles=[FakeRole(1)])  # not WASH Crew
+
+        await group.start.callback(group, interaction)
+
+        self.assertIsNone(interaction.response.sent_view)
+        self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertIn("WASH Crew", interaction.response.sent_message)
+
+    async def test_an_unconfigured_role_is_rejected_before_the_choice_ui_is_shown(self) -> None:
+        self.bot.wash_crew_role_id = None
+        group = VotingGroup(self.bot)
+        interaction = FakeInteraction(user_id=1)
+
+        await group.start.callback(group, interaction)
+
+        self.assertIsNone(interaction.response.sent_view)
+        self.assertTrue(interaction.response.sent_ephemeral)
+        self.assertIn("WASH_CREW_ROLE_ID", interaction.response.sent_message)
+
+    async def test_a_crew_member_still_sees_the_choice_ui(self) -> None:
+        group = VotingGroup(self.bot)
+        interaction = self._interaction()
+
+        await group.start.callback(group, interaction)
+
+        self.assertIsInstance(interaction.response.sent_view, StartVoteChoiceView)
+
+
 class CandidateSelectionOverrideTests(StartVoteFlowTestCase):
     """UI Polish (Voting Configuration Improvements): Customize This Vote
     can override a collection's Candidate Selection Mode for one round

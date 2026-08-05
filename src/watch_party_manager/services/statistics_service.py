@@ -23,6 +23,10 @@ from watch_party_manager.domain.vote import VoteRound, VoteRoundStatus, VoteVisi
 from watch_party_manager.domain.watch_item import WatchItem, WatchItemStatus
 from watch_party_manager.domain.watch_party import WatchParty, WatchPartyStatus
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository, VoteLoadResult
+from watch_party_manager.services.suggestion_display_status import (
+    SuggestionDisplayStatus,
+    compute_display_status,
+)
 
 
 class SuggestionStatisticsSource(Protocol):
@@ -138,11 +142,20 @@ class SuggestionStatistics:
     fields are only ever updated for a round's eventual winner, not every
     candidate -- scanning vote rounds directly is the only fully accurate
     historical source for "was this suggestion ever nominated."
+
+    display_status is the same SuggestionDisplayStatus every other status
+    surface (a suggestion's own post, /list, /suggestion edit) resolves
+    through -- /stats must never invent its own status vocabulary. Derived
+    here via compute_display_status() rather than resolve_display_status()
+    (which needs a live VoteService) since this method already scans
+    every vote round for nomination history and can determine "in an open
+    round right now" from that same scan, with no extra dependency.
     """
 
     suggestion_id: int
     title: str
     status: WatchItemStatus
+    display_status: SuggestionDisplayStatus
     created_date: Optional[date]
     submitter: Optional[str]
     nomination_count: int
@@ -158,13 +171,26 @@ class SuggestionStatistics:
 
 @dataclass(frozen=True, slots=True)
 class DatabaseStatistics:
-    """FR-034 Section 9: one database's suggestion summary."""
+    """FR-034 Section 9: one database's suggestion summary.
+
+    Categorization mirrors CollectionEligibilityService's own
+    authoritative status breakdown (the same one /database health
+    reports from): active_suggestions/archived_suggestions/
+    watched_suggestions/vote_winner_suggestions are four disjoint
+    WatchItemStatus buckets (SUGGESTED/PENDING_CREW_REVIEW,
+    ARCHIVED, WATCHED, VOTE_WINNER respectively), never counting the
+    same suggestion twice. retired_suggestions is a narrower subset of
+    archived_suggestions specifically -- only those retired through
+    Crew Review's own Retire decision (journey.retired_at is set),
+    versus one archived directly via /suggestion remove.
+    """
 
     database_id: int
     database_name: str
     active_suggestions: int
     archived_suggestions: int
     watched_suggestions: int
+    vote_winner_suggestions: int
     retired_suggestions: int
 
 
@@ -364,6 +390,11 @@ class StatisticsService:
         )
         first_nomination_at = nominating_rounds[0].created_at if nominating_rounds else None
         last_nomination_at = nominating_rounds[-1].created_at if nominating_rounds else None
+        in_open_round = any(
+            round_.status == VoteRoundStatus.OPEN and suggestion_id in round_.candidate_suggestion_ids
+            for round_ in vote_rounds
+        )
+        display_status = compute_display_status(watch_item, in_active_vote=in_open_round)
 
         journey = watch_item.journey
         suggestion_date = journey.suggestion_date
@@ -384,6 +415,7 @@ class StatisticsService:
             suggestion_id=suggestion_id,
             title=watch_item.title,
             status=watch_item.status,
+            display_status=display_status,
             created_date=suggestion_date,
             submitter=journey.original_suggester,
             nomination_count=len(nominating_rounds),
@@ -448,10 +480,13 @@ class StatisticsService:
             database_id=database_id,
             database_name=database.name,
             active_suggestions=sum(
-                1 for item in items if item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.VOTE_WINNER)
+                1
+                for item in items
+                if item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.VOTE_WINNER, WatchItemStatus.WATCHED)
             ),
             archived_suggestions=len(archived),
-            watched_suggestions=sum(1 for item in items if item.status == WatchItemStatus.VOTE_WINNER),
+            watched_suggestions=sum(1 for item in items if item.status == WatchItemStatus.WATCHED),
+            vote_winner_suggestions=sum(1 for item in items if item.status == WatchItemStatus.VOTE_WINNER),
             retired_suggestions=sum(1 for item in archived if item.journey.retired_at is not None),
         )
 

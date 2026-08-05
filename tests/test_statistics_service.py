@@ -20,6 +20,7 @@ from watch_party_manager.services.statistics_service import (
     StatisticsService,
     StatisticsSnapshot,
 )
+from watch_party_manager.services.suggestion_display_status import SuggestionDisplayStatus
 
 
 def utc_now() -> datetime:
@@ -564,6 +565,57 @@ class SuggestionStatisticsTests(unittest.TestCase):
         self.assertEqual(result.suggestion_id, 1)
         self.assertEqual(result.title, "Alien")
         self.assertEqual(result.status, WatchItemStatus.SUGGESTED)
+        self.assertEqual(result.display_status, SuggestionDisplayStatus.AVAILABLE)
+
+    def test_display_status_matches_the_shared_resolver_for_a_plain_suggestion(self):
+        item = make_item(1, status=WatchItemStatus.SUGGESTED)
+        service = self.make_service(items=[item])
+
+        result = service.suggestion_statistics(1)
+
+        self.assertEqual(result.display_status, SuggestionDisplayStatus.AVAILABLE)
+
+    def test_display_status_is_in_active_vote_when_nominated_in_an_open_round(self):
+        item = make_item(1, status=WatchItemStatus.SUGGESTED)
+        rounds = [make_round(1, status=VoteRoundStatus.OPEN, candidate_suggestion_ids=(1,))]
+        service = self.make_service(items=[item], rounds=rounds)
+
+        result = service.suggestion_statistics(1)
+
+        self.assertEqual(result.display_status, SuggestionDisplayStatus.IN_ACTIVE_VOTE)
+
+    def test_display_status_is_available_when_only_nominated_in_a_closed_round(self):
+        item = make_item(1, status=WatchItemStatus.SUGGESTED)
+        rounds = [make_round(1, status=VoteRoundStatus.CLOSED, candidate_suggestion_ids=(1,))]
+        service = self.make_service(items=[item], rounds=rounds)
+
+        result = service.suggestion_statistics(1)
+
+        self.assertEqual(result.display_status, SuggestionDisplayStatus.AVAILABLE)
+
+    def test_display_status_is_retired_for_an_archived_suggestion_regardless_of_retirement_path(self):
+        item = make_item(1, status=WatchItemStatus.ARCHIVED, journey=WatchItemJourney())
+        service = self.make_service(items=[item])
+
+        result = service.suggestion_statistics(1)
+
+        self.assertEqual(result.display_status, SuggestionDisplayStatus.RETIRED)
+
+    def test_display_status_is_vote_winner(self):
+        item = make_item(1, status=WatchItemStatus.VOTE_WINNER)
+        service = self.make_service(items=[item])
+
+        result = service.suggestion_statistics(1)
+
+        self.assertEqual(result.display_status, SuggestionDisplayStatus.VOTE_WINNER)
+
+    def test_display_status_is_watched(self):
+        item = make_item(1, status=WatchItemStatus.WATCHED)
+        service = self.make_service(items=[item])
+
+        result = service.suggestion_statistics(1)
+
+        self.assertEqual(result.display_status, SuggestionDisplayStatus.WATCHED)
 
     def test_created_date_and_submitter_are_none_for_legacy_suggestions(self):
         item = make_item(1, journey=WatchItemJourney())
@@ -808,13 +860,14 @@ class DatabaseStatisticsTests(unittest.TestCase):
         items = [
             make_item(1, database_id=1, status=WatchItemStatus.SUGGESTED),
             make_item(2, database_id=1, status=WatchItemStatus.VOTE_WINNER),
+            make_item(3, database_id=1, status=WatchItemStatus.WATCHED),
             make_item(
-                3,
+                4,
                 database_id=1,
                 status=WatchItemStatus.ARCHIVED,
                 journey=WatchItemJourney(retired_at=utc_now()),
             ),
-            make_item(4, database_id=1, status=WatchItemStatus.ARCHIVED),
+            make_item(5, database_id=1, status=WatchItemStatus.ARCHIVED),
         ]
         service = self.make_full_service(items=items, databases=[make_database(1)])
 
@@ -823,8 +876,25 @@ class DatabaseStatisticsTests(unittest.TestCase):
         self.assertEqual(result.database_name, "Database 1")
         self.assertEqual(result.active_suggestions, 1)
         self.assertEqual(result.watched_suggestions, 1)
+        self.assertEqual(result.vote_winner_suggestions, 1)
         self.assertEqual(result.archived_suggestions, 2)
         self.assertEqual(result.retired_suggestions, 1)
+
+    def test_watched_and_vote_winner_are_counted_separately_not_conflated(self) -> None:
+        # Regression: a Vote Winner must never be counted as Watched, and
+        # a truly-Watched item must never be folded into Active.
+        items = [
+            make_item(1, database_id=1, status=WatchItemStatus.VOTE_WINNER),
+            make_item(2, database_id=1, status=WatchItemStatus.WATCHED),
+            make_item(3, database_id=1, status=WatchItemStatus.WATCHED),
+        ]
+        service = self.make_full_service(items=items, databases=[make_database(1)])
+
+        result = service.database_statistics(1)
+
+        self.assertEqual(result.watched_suggestions, 2)
+        self.assertEqual(result.vote_winner_suggestions, 1)
+        self.assertEqual(result.active_suggestions, 0)
 
     def test_an_empty_database_reports_gracefully(self):
         service = self.make_full_service(databases=[make_database(1)])
@@ -834,6 +904,7 @@ class DatabaseStatisticsTests(unittest.TestCase):
         self.assertEqual(result.active_suggestions, 0)
         self.assertEqual(result.archived_suggestions, 0)
         self.assertEqual(result.watched_suggestions, 0)
+        self.assertEqual(result.vote_winner_suggestions, 0)
         self.assertEqual(result.retired_suggestions, 0)
 
 

@@ -90,13 +90,24 @@ class VoteReminderJobHandlerTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
 
-    def _open_round(self, closes_at=None, guild_id=100, channel_id=200, visibility=VoteVisibility.VISIBLE):
+    def _open_round(
+        self,
+        closes_at=None,
+        guild_id=100,
+        channel_id=200,
+        visibility=VoteVisibility.VISIBLE,
+        candidate_suggestion_ids=None,
+        database_id=None,
+    ):
         if closes_at is None:
             closes_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        if candidate_suggestion_ids is None:
+            candidate_suggestion_ids = [self.matrix.id, self.inception.id]
         vote_round = self.vote_service.create_round(
             visibility=visibility,
             closes_at=closes_at,
-            candidate_suggestion_ids=[self.matrix.id, self.inception.id],
+            candidate_suggestion_ids=candidate_suggestion_ids,
+            database_id=database_id,
         ).vote_round
         self.vote_service.attach_message_reference(
             vote_round.id, guild_id=guild_id, channel_id=channel_id, message_id=999
@@ -113,12 +124,32 @@ class VoteReminderJobHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, JobExecutionResult(result=JobResult.EXECUTED))
         self.assertEqual(len(self.channel.sent_messages), 1)
 
-    async def test_reminder_mentions_the_round(self) -> None:
-        vote_round = self._open_round()
+    async def test_reminder_mentions_the_guild_local_round_number_not_the_raw_id(self) -> None:
+        # Pre-Phase 3 UX Polish: the reminder previously showed
+        # vote_round.id -- the raw, cross-guild-global counter -- instead
+        # of VoteService.get_guild_round_number()'s guild-local number that
+        # every other vote message uses. A single round in an otherwise
+        # empty guild can't distinguish the two (both would read "1"), so
+        # this creates an unrelated round in a different guild first to
+        # force the guild-local round's own vote_round.id (2) to diverge
+        # from its guild-local number (1).
+        other_guild_suggestions = [
+            self.suggestion_service.suggest("Interstellar").watch_item,
+            self.suggestion_service.suggest("Arrival").watch_item,
+        ]
+        self._open_round(
+            guild_id=999,
+            channel_id=888,
+            candidate_suggestion_ids=[item.id for item in other_guild_suggestions],
+            database_id=999,
+        )
+        vote_round = self._open_round(guild_id=100, channel_id=200, database_id=100)
+        self.assertNotEqual(vote_round.id, 1)
 
         await self.handler.execute(make_job(vote_round.id))
 
-        self.assertIn(f"Round: {vote_round.id}", self.channel.sent_messages[0])
+        self.assertIn("Round: 1", self.channel.sent_messages[0])
+        self.assertNotIn(f"Round: {vote_round.id}", self.channel.sent_messages[0])
 
     async def test_reminder_includes_the_discord_native_close_timestamp(self) -> None:
         closes_at = datetime.now(timezone.utc) + timedelta(hours=3)
@@ -325,33 +356,40 @@ class BuildVoteReminderTextTests(unittest.TestCase):
             closes_at = datetime(2026, 7, 20, 18, 0, tzinfo=timezone.utc)
         return VoteRound(id=round_id, closes_at=closes_at, visibility=visibility, **kwargs)
 
-    def test_mentions_round_id(self) -> None:
-        text = build_vote_reminder_text(self._round(round_id=42), [], [])
+    def test_mentions_the_guild_local_round_number_not_the_raw_round_id(self) -> None:
+        # Pre-Phase 3 UX Polish: every other vote message (the original
+        # post, standings, completion announcement) shows
+        # VoteService.get_guild_round_number()'s guild-local number, not
+        # vote_round.id's raw cross-guild counter -- the reminder must
+        # match. round_id and round_number are deliberately different
+        # values here so a regression back to vote_round.id is caught.
+        text = build_vote_reminder_text(self._round(round_id=999), [], [], round_number=3)
 
-        self.assertIn("42", text)
+        self.assertIn("Round: 3", text)
+        self.assertNotIn("999", text)
 
     def test_includes_the_discord_timestamp_helper_output(self) -> None:
         closes_at = datetime(2026, 7, 20, 18, 0, tzinfo=timezone.utc)
         unix_timestamp = int(closes_at.timestamp())
 
-        text = build_vote_reminder_text(self._round(closes_at=closes_at), [], [])
+        text = build_vote_reminder_text(self._round(closes_at=closes_at), [], [], round_number=1)
 
         self.assertIn(f"<t:{unix_timestamp}:F> (<t:{unix_timestamp}:R>)", text)
 
     def test_includes_a_call_to_action(self) -> None:
-        text = build_vote_reminder_text(self._round(), [], [])
+        text = build_vote_reminder_text(self._round(), [], [], round_number=1)
 
         self.assertIn("Cast your vote using the buttons on the voting post", text)
 
     def test_includes_the_original_vote_link_when_available(self) -> None:
         vote_round = self._round(guild_id=100, channel_id=200, message_id=300)
 
-        text = build_vote_reminder_text(vote_round, [], [])
+        text = build_vote_reminder_text(vote_round, [], [], round_number=1)
 
         self.assertIn("https://discord.com/channels/100/200/300", text)
 
     def test_omits_the_link_for_a_legacy_round_without_message_metadata(self) -> None:
-        text = build_vote_reminder_text(self._round(), [], [])
+        text = build_vote_reminder_text(self._round(), [], [], round_number=1)
 
         self.assertNotIn("discord.com", text)
 
@@ -361,7 +399,9 @@ class BuildVoteReminderTextTests(unittest.TestCase):
         candidates = [WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=1)]
         standings = [StandingsEntry(suggestion_id=1, vote_count=3)]
 
-        text = build_vote_reminder_text(self._round(visibility=VoteVisibility.VISIBLE), candidates, standings)
+        text = build_vote_reminder_text(
+            self._round(visibility=VoteVisibility.VISIBLE), candidates, standings, round_number=1
+        )
 
         self.assertIn("Current standings:", text)
         self.assertIn("The Matrix", text)
@@ -373,7 +413,9 @@ class BuildVoteReminderTextTests(unittest.TestCase):
         candidates = [WatchItem(title="The Matrix", media_type=MediaType.MOVIE, id=1)]
         standings = [StandingsEntry(suggestion_id=1, vote_count=3)]
 
-        text = build_vote_reminder_text(self._round(visibility=VoteVisibility.BLIND), candidates, standings)
+        text = build_vote_reminder_text(
+            self._round(visibility=VoteVisibility.BLIND), candidates, standings, round_number=1
+        )
 
         self.assertIn("Votes hidden until voting closes.", text)
         self.assertNotIn("3 votes", text)

@@ -1829,6 +1829,20 @@ class ArchiveAndReactivateSuggestionTests(unittest.TestCase):
         result = self.service.archive_suggestion(self.matrix.id)
 
         self.assertFalse(result.success)
+        self.assertIn("already retired", result.message)
+
+    def test_archive_suggestion_message_uses_retired_wording_and_notes_reversibility(self) -> None:
+        # Pre-Phase 3 UX Polish: matches retire_pending_review()'s own
+        # "has been retired" wording and the shared "🗄️ Retired" display
+        # label every other status surface shows for this same
+        # WatchItemStatus.ARCHIVED value -- was "has been archived",
+        # inconsistent with both, and gave no indication this is
+        # reversible (this method's only caller is /suggestion remove).
+        result = self.service.archive_suggestion(self.matrix.id)
+
+        self.assertTrue(result.success)
+        self.assertIn("has been retired", result.message)
+        self.assertIn("reversible", result.message)
 
     def test_archive_suggestion_rejects_an_unknown_id(self) -> None:
         result = self.service.archive_suggestion(999999)

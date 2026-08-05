@@ -513,6 +513,55 @@ class AdminChannelStepTests(SetupWizardServiceTestCase):
         self.assertEqual(result.configuration.channels.admin_channel_id, DESTINATION_CHANNEL_ID)
 
 
+class WatchDestinationGuildDefaultPersistenceTests(SetupWizardServiceTestCase):
+    """Pre-Phase 3 UX Polish: the wizard's single Watch Destination answer
+    must also become /config's guild-wide default, not only the
+    per-collection override -- otherwise /config reports "Not configured"
+    immediately after a setup that showed "Configured".
+    """
+
+    def _state_through_watch_destination(self, database):
+        state, _ = self.service.start_or_resume(GUILD_ID)
+        state = self.service.set_wash_crew_role(state, WASH_CREW_ROLE_ID)
+        state = self.service.set_watch_party_role(state, WATCH_PARTY_ROLE_ID, JoinMode.SELF_SERVICE)
+        state = self.service.set_home_channel(state, DESTINATION_CHANNEL_ID)
+        state, _ = self.service.select_existing_database(state, database.database_id, guild_id=GUILD_ID)
+        return state
+
+    def _finish_and_finalize(self, state):
+        state = self.service.set_voting_defaults(
+            state, 3, 7, GuildVoteVisibility.BLIND, CandidateSelectionMode.FAVOR_OLDER_ADDITIONS
+        )
+        state = self.service.enable_rejection_settings(state, 2)
+        state = self.service.enable_vote_ending_reminder(state, 24)
+        state = self.service.enable_automatic_backups(state, 1, 30)
+        guild = self._full_guild()
+        return self.service.finalize(state, GUILD_ID, "Test Guild", guild)
+
+    def test_a_configured_watch_destination_becomes_the_guild_wide_default(self):
+        database = self._create_database()
+        state = self._state_through_watch_destination(database)
+        state = self.service.set_watch_destination(state, DESTINATION_CHANNEL_ID)
+        result = self._finish_and_finalize(state)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.configuration.channels.watch_history_channel_id, DESTINATION_CHANNEL_ID)
+
+        database_override = self.suggestion_database_configuration_repository.get(
+            GUILD_ID, database.database_id
+        )
+        self.assertEqual(database_override.channels.watch_history_channel_id, DESTINATION_CHANNEL_ID)
+
+    def test_skipping_the_watch_destination_leaves_the_guild_wide_default_unset(self):
+        database = self._create_database()
+        state = self._state_through_watch_destination(database)
+        state = self.service.skip_watch_destination(state)
+        result = self._finish_and_finalize(state)
+
+        self.assertTrue(result.success)
+        self.assertIsNone(result.configuration.channels.watch_history_channel_id)
+
+
 class HomeChannelStepTests(SetupWizardServiceTestCase):
     """Requirement 4: WASH's home channel -- the parent every collection's
     suggestion thread (and, by default, the Watched Item Archive
