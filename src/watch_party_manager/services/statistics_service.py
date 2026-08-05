@@ -177,12 +177,18 @@ class DatabaseStatistics:
     authoritative status breakdown (the same one /database health
     reports from): active_suggestions/archived_suggestions/
     watched_suggestions/vote_winner_suggestions are four disjoint
-    WatchItemStatus buckets (SUGGESTED/PENDING_CREW_REVIEW,
-    ARCHIVED, WATCHED, VOTE_WINNER respectively), never counting the
-    same suggestion twice. retired_suggestions is a narrower subset of
-    archived_suggestions specifically -- only those retired through
-    Crew Review's own Retire decision (journey.retired_at is set),
-    versus one archived directly via /suggestion remove.
+    WatchItemStatus buckets (SUGGESTED, ARCHIVED, WATCHED, VOTE_WINNER
+    respectively), never counting the same suggestion twice.
+    retired_suggestions is a narrower subset of archived_suggestions
+    specifically -- only those retired through Crew Review's own Retire
+    decision (journey.retired_at is set), versus one archived directly
+    via /suggestion remove.
+
+    PENDING_CREW_REVIEW items are excluded from active_suggestions --
+    same as CollectionEligibility.active (available + in_active_vote),
+    which never includes them either -- but, matching the smallest
+    change needed to correct that exclusion, have no dedicated count of
+    their own here yet.
     """
 
     database_id: int
@@ -454,7 +460,14 @@ class StatisticsService:
         return MemberStatistics(
             discord_user_id=discord_user_id,
             suggestions_submitted=len(submitted),
-            suggestions_watched=sum(1 for item in submitted if item.status == WatchItemStatus.VOTE_WINNER),
+            # Statistics Consistency Cleanup: WATCHED, not VOTE_WINNER --
+            # a Vote Winner hasn't been watched yet. VOTE_WINNER items are
+            # still represented separately via winning_suggestions below
+            # (journey.times_won, set whenever a suggestion wins a vote
+            # regardless of its later status), so this isn't a second,
+            # duplicated implementation of the same status count -- see
+            # DatabaseStatistics.vote_winner_suggestions for that one.
+            suggestions_watched=sum(1 for item in submitted if item.status == WatchItemStatus.WATCHED),
             suggestions_retired=sum(1 for item in submitted if item.journey.retired_at is not None),
             winning_suggestions=sum(1 for item in submitted if item.journey.times_won > 0),
             votes_cast=rounds_voted_in,
@@ -482,7 +495,13 @@ class StatisticsService:
             active_suggestions=sum(
                 1
                 for item in items
-                if item.status not in (WatchItemStatus.ARCHIVED, WatchItemStatus.VOTE_WINNER, WatchItemStatus.WATCHED)
+                if item.status
+                not in (
+                    WatchItemStatus.ARCHIVED,
+                    WatchItemStatus.VOTE_WINNER,
+                    WatchItemStatus.WATCHED,
+                    WatchItemStatus.PENDING_CREW_REVIEW,
+                )
             ),
             archived_suggestions=len(archived),
             watched_suggestions=sum(1 for item in items if item.status == WatchItemStatus.WATCHED),

@@ -780,7 +780,7 @@ class MemberStatisticsTests(unittest.TestCase):
 
     def test_counts_watched_and_retired_suggestions_among_submitted(self):
         watched = make_item(
-            1, status=WatchItemStatus.VOTE_WINNER, journey=WatchItemJourney(original_suggester="555")
+            1, status=WatchItemStatus.WATCHED, journey=WatchItemJourney(original_suggester="555")
         )
         retired = make_item(
             2,
@@ -796,6 +796,21 @@ class MemberStatisticsTests(unittest.TestCase):
         self.assertEqual(result.suggestions_watched, 1)
         self.assertEqual(result.suggestions_retired, 1)
 
+    def test_watched_and_vote_winner_are_counted_separately_not_conflated(self) -> None:
+        # Statistics Consistency Cleanup: a Vote Winner that hasn't been
+        # watched yet must never be counted as Watched.
+        vote_winner = make_item(
+            1, status=WatchItemStatus.VOTE_WINNER, journey=WatchItemJourney(original_suggester="555")
+        )
+        watched = make_item(
+            2, status=WatchItemStatus.WATCHED, journey=WatchItemJourney(original_suggester="555")
+        )
+        service = self.make_service(items=[vote_winner, watched])
+
+        result = service.member_statistics(guild_id=1, discord_user_id=555)
+
+        self.assertEqual(result.suggestions_watched, 1)
+
     def test_counts_winning_suggestions(self):
         journey = WatchItemJourney(original_suggester="555")
         journey.times_won = 1
@@ -805,6 +820,20 @@ class MemberStatisticsTests(unittest.TestCase):
 
         result = service.member_statistics(guild_id=1, discord_user_id=555)
 
+        self.assertEqual(result.winning_suggestions, 1)
+
+    def test_a_current_vote_winner_is_still_represented_via_winning_suggestions(self) -> None:
+        # VOTE_WINNER items are "counted separately" from Watched via this
+        # existing field (journey.times_won, set whenever a suggestion
+        # wins a vote) rather than a second, duplicated status count.
+        journey = WatchItemJourney(original_suggester="555")
+        journey.times_won = 1
+        current_winner = make_item(1, status=WatchItemStatus.VOTE_WINNER, journey=journey)
+        service = self.make_service(items=[current_winner])
+
+        result = service.member_statistics(guild_id=1, discord_user_id=555)
+
+        self.assertEqual(result.suggestions_watched, 0)
         self.assertEqual(result.winning_suggestions, 1)
 
     def test_counts_votes_cast_across_rounds(self):
@@ -879,6 +908,24 @@ class DatabaseStatisticsTests(unittest.TestCase):
         self.assertEqual(result.vote_winner_suggestions, 1)
         self.assertEqual(result.archived_suggestions, 2)
         self.assertEqual(result.retired_suggestions, 1)
+
+    def test_pending_crew_review_is_excluded_from_active(self) -> None:
+        # Statistics Consistency Cleanup: CollectionEligibilityService --
+        # the authoritative resolver /database health reports from --
+        # excludes Pending Crew Review from CollectionEligibility.active
+        # (available + in_active_vote) the moment the rejection threshold
+        # is reached, same as Vote Winner/Retired/Watched. /stats database
+        # must match, not silently fold it into Active by default.
+        items = [
+            make_item(1, database_id=1, status=WatchItemStatus.SUGGESTED),
+            make_item(2, database_id=1, status=WatchItemStatus.PENDING_CREW_REVIEW),
+            make_item(3, database_id=1, status=WatchItemStatus.PENDING_CREW_REVIEW),
+        ]
+        service = self.make_full_service(items=items, databases=[make_database(1)])
+
+        result = service.database_statistics(1)
+
+        self.assertEqual(result.active_suggestions, 1)
 
     def test_watched_and_vote_winner_are_counted_separately_not_conflated(self) -> None:
         # Regression: a Vote Winner must never be counted as Watched, and
