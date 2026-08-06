@@ -420,20 +420,12 @@ class WatchPartyBot(commands.Bot):
         *,
         token: Optional[str] = None,
         guild_id: Optional[int] = None,
-        wash_crew_role_id: Optional[int] = None,
-        watch_party_member_role_id: Optional[int] = None,
         default_nominee_count: int = DEFAULT_VOTE_CANDIDATE_COUNT,
     ) -> None:
         intents = discord.Intents.default()
         super().__init__(command_prefix="!", intents=intents)
         self.token = token
         self.guild_id = guild_id
-        self.wash_crew_role_id = wash_crew_role_id
-        self.watch_party_member_role_id = watch_party_member_role_id
-        self.permission_service = PermissionService(
-            watch_party_member_role_id=watch_party_member_role_id,
-            wash_crew_role_id=wash_crew_role_id,
-        )
         self.default_nominee_count = default_nominee_count
         self.started_at = datetime.now(timezone.utc)
         self.suggestion_service = SuggestionService()
@@ -524,23 +516,6 @@ class WatchPartyBot(commands.Bot):
             self.membership_request_repository,
         )
         self.membership_views_restored = 0
-
-    def apply_role_configuration(
-        self, wash_crew_role_id: Optional[int], watch_party_member_role_id: Optional[int]
-    ) -> None:
-        """Apply newly configured WASH Crew / Watch Party role IDs immediately.
-
-        Used both at startup (falling back to a persisted GuildConfiguration
-        when the environment variables are unset) and right after /setup
-        completes, so administrative commands become available without a
-        bot restart -- PermissionService stores these as plain instance
-        attributes, so updating it here takes effect on the very next
-        command invocation.
-        """
-        self.wash_crew_role_id = wash_crew_role_id
-        self.watch_party_member_role_id = watch_party_member_role_id
-        self.permission_service.wash_crew_role_id = wash_crew_role_id
-        self.permission_service.watch_party_member_role_id = watch_party_member_role_id
 
     async def setup_hook(self) -> None:
         @self.tree.command(name="about", description="Show information about WASH.")
@@ -738,18 +713,6 @@ class WatchPartyBot(commands.Bot):
         # definition below) so this can be re-enabled later by restoring
         # this one line; do not delete any of that in the meantime.
 
-        # Environment variables remain the primary way to configure the
-        # WASH Crew / Watch Party roles (unchanged, backward compatible),
-        # but whichever of the two is left unset there falls back to a
-        # persisted GuildConfiguration -- e.g. one saved by /setup -- so a
-        # server that has completed setup doesn't also need the env vars.
-        if self.guild_id and (self.wash_crew_role_id is None or self.watch_party_member_role_id is None):
-            guild_configuration = self.guild_configuration_repository.get(self.guild_id)
-            resolved_wash_crew_role_id, resolved_watch_party_member_role_id = resolve_startup_role_ids(
-                self.wash_crew_role_id, self.watch_party_member_role_id, guild_configuration
-            )
-            self.apply_role_configuration(resolved_wash_crew_role_id, resolved_watch_party_member_role_id)
-
         # Complete any round that expired while WASH was offline before
         # attempting to restore its interactive voting controls. This is
         # the same due-job check scheduler_host.start() below runs every
@@ -834,39 +797,6 @@ class WatchPartyBot(commands.Bot):
             raise
 
 
-def resolve_startup_role_ids(
-    env_wash_crew_role_id: Optional[int],
-    env_watch_party_member_role_id: Optional[int],
-    guild_configuration: Optional[GuildConfiguration],
-) -> tuple[Optional[int], Optional[int]]:
-    """Resolve the effective WASH Crew / Watch Party role IDs at startup.
-
-    Environment variables remain the primary configuration mechanism
-    (unchanged, backward compatible); a persisted GuildConfiguration --
-    e.g. one saved by /setup (FR-028) -- fills in whichever of the two
-    roles the environment left unconfigured. Neither role's fail-closed
-    behavior changes: if both sources leave a role unset, it stays None.
-
-    Args:
-        env_wash_crew_role_id: The WASH_CREW_ROLE_ID env var, already parsed.
-        env_watch_party_member_role_id: The WATCH_PARTY_MEMBER_ROLE_ID env var, already parsed.
-        guild_configuration: The persisted GuildConfiguration for the
-            startup guild, or None if none has been saved yet.
-
-    Returns:
-        (wash_crew_role_id, watch_party_member_role_id).
-    """
-    wash_crew_role_id = env_wash_crew_role_id
-    if wash_crew_role_id is None and guild_configuration is not None:
-        wash_crew_role_id = guild_configuration.wash_crew_role_id
-
-    watch_party_member_role_id = env_watch_party_member_role_id
-    if watch_party_member_role_id is None and guild_configuration is not None:
-        watch_party_member_role_id = guild_configuration.watch_party_role.role_id
-
-    return wash_crew_role_id, watch_party_member_role_id
-
-
 def parse_guild_id(guild_id_str: Optional[str]) -> Optional[int]:
     """Parse and validate a guild ID from an environment variable.
     
@@ -890,56 +820,6 @@ def parse_guild_id(guild_id_str: Optional[str]) -> Optional[int]:
     except ValueError as e:
         if "invalid literal" in str(e).lower():
             raise ValueError(f"DISCORD_GUILD_ID must be a valid integer, got '{guild_id_str}'")
-        raise
-
-
-def parse_wash_crew_role_id(role_id_str: Optional[str]) -> Optional[int]:
-    """Parse and validate the WASH Crew role ID from an environment variable.
-
-    The WASH Crew role gates commands like /start_vote. It's read from
-    configuration rather than hardcoded so it can be set per-server.
-
-    Args:
-        role_id_str: The role ID as a string from the environment.
-
-    Returns:
-        The role ID as an integer, or None if not configured. When not
-        configured, WASH Crew-only commands fail closed: nobody can use
-        them until a role is set.
-
-    Raises:
-        ValueError: If the role ID is provided but not a valid positive
-            integer.
-    """
-    if not role_id_str:
-        return None
-
-    try:
-        role_id = int(role_id_str)
-        if role_id <= 0:
-            raise ValueError(f"Role ID must be a positive integer, got {role_id}")
-        return role_id
-    except ValueError as e:
-        if "invalid literal" in str(e).lower():
-            raise ValueError(f"WASH_CREW_ROLE_ID must be a valid integer, got '{role_id_str}'")
-        raise
-
-
-def parse_watch_party_member_role_id(role_id_str: Optional[str]) -> Optional[int]:
-    """Parse and validate WATCH_PARTY_MEMBER_ROLE_ID."""
-    if not role_id_str:
-        return None
-    try:
-        role_id = int(role_id_str)
-        if role_id <= 0:
-            raise ValueError(f"Role ID must be a positive integer, got {role_id}")
-        return role_id
-    except ValueError as exc:
-        if "invalid literal" in str(exc).lower():
-            raise ValueError(
-                "WATCH_PARTY_MEMBER_ROLE_ID must be a valid integer, "
-                f"got '{role_id_str}'"
-            )
         raise
 
 
@@ -3530,14 +3410,6 @@ async def send_setup_wizard_step(
             await save_interaction.response.edit_message(content=summary, view=None)
 
             try:
-                bot.apply_role_configuration(
-                    result.configuration.wash_crew_role_id, result.configuration.watch_party_role.role_id
-                )
-            except Exception:
-                logger.exception(
-                    "Error applying role configuration for guild %s after setup", guild_id
-                )
-            try:
                 await reconcile_automatic_backup_schedule(
                     bot.scheduler_host.scheduler_service,
                     guild_id,
@@ -4130,15 +4002,11 @@ async def handle_config_wash_crew_role_selected(
 
     if member_has_new_role:
         result = config_service.set_wash_crew_role(guild_id, role_id, interaction.guild)
-        if result.success:
-            bot.apply_role_configuration(role_id, bot.watch_party_member_role_id)
         await send_config_result(interaction, bot, guild_id, result)
         return
 
     async def on_confirm(confirm_interaction: discord.Interaction) -> None:
         result = config_service.set_wash_crew_role(guild_id, role_id, confirm_interaction.guild)
-        if result.success:
-            bot.apply_role_configuration(role_id, bot.watch_party_member_role_id)
         await send_config_result(confirm_interaction, bot, guild_id, result)
 
     async def on_abort(abort_interaction: discord.Interaction) -> None:
@@ -14390,7 +14258,7 @@ async def send_server_statistics(
 ) -> None:
     total_watch_party_members = None
     guild = getattr(interaction, "guild", None)
-    role_id = bot.watch_party_member_role_id
+    role_id = resolve_permission_service(guild_id, bot.guild_configuration_repository).watch_party_member_role_id
     if guild is not None and role_id is not None:
         role = guild.get_role(role_id)
         if role is not None:
@@ -14652,22 +14520,6 @@ def main() -> None:
         logger.error(f"Configuration error: {e}")
         exit(1)
 
-    wash_crew_role_id_str = os.getenv("WASH_CREW_ROLE_ID")
-    try:
-        wash_crew_role_id = parse_wash_crew_role_id(wash_crew_role_id_str)
-    except ValueError as e:
-        logger.error(f"Configuration error: {e}")
-        exit(1)
-
-    watch_party_member_role_id_str = os.getenv("WATCH_PARTY_MEMBER_ROLE_ID")
-    try:
-        watch_party_member_role_id = parse_watch_party_member_role_id(
-            watch_party_member_role_id_str
-        )
-    except ValueError as e:
-        logger.error(f"Configuration error: {e}")
-        exit(1)
-
     default_nominee_count_str = os.getenv("DEFAULT_VOTE_NOMINEE_COUNT")
     try:
         default_nominee_count = parse_default_nominee_count(default_nominee_count_str)
@@ -14678,8 +14530,6 @@ def main() -> None:
     bot = WatchPartyBot(
         token=token,
         guild_id=guild_id,
-        wash_crew_role_id=wash_crew_role_id,
-        watch_party_member_role_id=watch_party_member_role_id,
         default_nominee_count=default_nominee_count,
     )
 

@@ -13,7 +13,6 @@ from watch_party_manager.persistence.suggestion_database_configuration_repositor
 from watch_party_manager.persistence.suggestion_database_repository import JsonSuggestionDatabaseRepository
 from watch_party_manager.persistence.suggestion_repository import JsonSuggestionRepository
 from watch_party_manager.persistence.vote_repository import JsonVoteRepository
-from watch_party_manager.services.permission_service import PermissionService
 from watch_party_manager.services.statistics_service import StatisticsService
 from watch_party_manager.services.suggestion_service import SuggestionService
 from watch_party_manager.services.vote_service import VoteService
@@ -101,14 +100,6 @@ class FakeBot:
         self.suggestion_service = suggestion_service
         self.statistics_service = statistics_service
         self.suggestion_database_configuration_repository = configuration_repository
-        self.permission_service = PermissionService(
-            watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID, wash_crew_role_id=wash_crew_role_id
-        )
-        self.wash_crew_role_id = wash_crew_role_id
-        self.watch_party_member_role_id = WATCH_PARTY_MEMBER_ROLE_ID
-        # Multi-Guild Isolation, Phase 3b: resolve_permission_service reads
-        # this, not the permission_service attribute set above (kept for
-        # any test that still reaches for it directly).
         self.guild_configuration_repository = FakeGuildConfigurationRepository(
             wash_crew_role_id=wash_crew_role_id, watch_party_member_role_id=WATCH_PARTY_MEMBER_ROLE_ID
         )

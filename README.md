@@ -78,7 +78,7 @@ WASH's in-Discord `/help` command always reflects the exact command set availabl
 - Suggestion databases: `/database add`, `/database list`, `/database health`, `/database manage` (guided: move, edit, back up, refresh IMDb metadata, recover missing IMDb links, reset, or remove a collection), `/database restore`
 - Maintenance: `/maintenance backup`, `/maintenance restore`, `/maintenance reset`, `/maintenance import`
 
-WASH Crew commands require the role configured through `WASH_CREW_ROLE_ID` (or the Setup Wizard's WASH Crew step). Watch Party member commands require `WATCH_PARTY_MEMBER_ROLE_ID` or the wizard's Watch Party role step. Both fail closed when unconfigured -- nobody can use them until a role is set.
+WASH Crew commands require the WASH Crew role configured through the Setup Wizard's WASH Crew step (`/setup`, or `/config` afterward). Watch Party member commands require the wizard's Watch Party role step. Both fail closed when unconfigured -- nobody can use them until a role is set per-server.
 
 ## Configuration
 
@@ -86,8 +86,6 @@ The current environment settings are documented in `env.example`:
 
 - `DISCORD_TOKEN` (required)
 - `DISCORD_GUILD_ID` for faster development-guild command synchronization (optional)
-- `WASH_CREW_ROLE_ID` (optional -- can also be set via `/setup`)
-- `WATCH_PARTY_MEMBER_ROLE_ID` (optional -- can also be set via `/setup`)
 - `DEFAULT_VOTE_NOMINEE_COUNT` (optional)
 - `OMDB_API_KEY` for resolving pasted IMDb links (optional)
 

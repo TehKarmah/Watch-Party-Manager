@@ -16,7 +16,7 @@
 
 ## 1. Current Administrative Model
 
-WASH uses two configured Discord roles: 🛠️ **WASH Crew** for restricted administrative operations, and 🍿 **Watch Party** member for participant commands (WASH Crew automatically inherit member permissions). Both can be set via `WASH_CREW_ROLE_ID`/`WATCH_PARTY_MEMBER_ROLE_ID` in `.env`, or interactively through the guided `/setup` wizard.
+WASH uses two configured Discord roles: 🛠️ **WASH Crew** for restricted administrative operations, and 🍿 **Watch Party** member for participant commands (WASH Crew automatically inherit member permissions). Both are set per-server through the guided `/setup` wizard (and changed afterward via `/config`) -- there is no environment variable fallback.
 
 Restricted commands fail closed. When a required role isn't configured, no user can run the commands that depend on it -- including server administrators, unless they also happen to hold the configured role. The one exception is the Discord server owner, who always has Watch Party member-level access (adding suggestions, browsing, voting, Random Watch, and every other participant command) without needing the configured role -- WASH Crew-only commands are unaffected by this and still require the configured WASH Crew role, even for the owner.
 
@@ -32,8 +32,6 @@ Copy `env.example` to `.env` and configure the values needed for the installatio
 | --- | --- | --- |
 | `DISCORD_TOKEN` | Yes | Authenticates the Discord bot. |
 | `DISCORD_GUILD_ID` | No | Synchronizes commands to one development guild for faster testing. |
-| `WASH_CREW_ROLE_ID` | No -- can also be set via `/setup` | Authorizes restricted administration commands. |
-| `WATCH_PARTY_MEMBER_ROLE_ID` | No -- can also be set via `/setup` | Authorizes participant commands (`/add`, `/list`, `/stats`, etc.). |
 | `DEFAULT_VOTE_NOMINEE_COUNT` | No | Sets the default nominee count from 2 through 10. The default is 3. |
 | `OMDB_API_KEY` | No | Enables resolving pasted IMDb links into title/runtime/genre/poster metadata for `/add`. Plain-title suggestions work without it. |
 

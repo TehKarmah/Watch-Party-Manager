@@ -15,8 +15,6 @@ from watch_party_manager.bot import (
     parse_vote_duration_minutes,
     parse_vote_nominee_count,
     parse_vote_visibility,
-    parse_wash_crew_role_id,
-    parse_watch_party_member_role_id,
 )
 from watch_party_manager.domain.vote import (
     DEFAULT_VOTE_CANDIDATE_COUNT,
@@ -154,30 +152,6 @@ class BotHelperTests(unittest.TestCase):
             parse_guild_id("-123")
         self.assertIn("must be a positive integer", str(ctx.exception))
 
-    # --- WASH Crew role configuration --------------------------------------
-
-    def test_parse_wash_crew_role_id_returns_none_when_not_provided(self) -> None:
-        self.assertIsNone(parse_wash_crew_role_id(None))
-        self.assertIsNone(parse_wash_crew_role_id(""))
-
-    def test_parse_wash_crew_role_id_converts_valid_string_to_integer(self) -> None:
-        self.assertEqual(parse_wash_crew_role_id("987654321"), 987654321)
-
-    def test_parse_wash_crew_role_id_rejects_non_numeric_strings(self) -> None:
-        with self.assertRaises(ValueError) as ctx:
-            parse_wash_crew_role_id("not_a_number")
-        self.assertIn("must be a valid integer", str(ctx.exception))
-
-    def test_parse_wash_crew_role_id_rejects_zero(self) -> None:
-        with self.assertRaises(ValueError) as ctx:
-            parse_wash_crew_role_id("0")
-        self.assertIn("must be a positive integer", str(ctx.exception))
-
-    def test_parse_wash_crew_role_id_rejects_negative_numbers(self) -> None:
-        with self.assertRaises(ValueError) as ctx:
-            parse_wash_crew_role_id("-5")
-        self.assertIn("must be a positive integer", str(ctx.exception))
-
     def test_is_wash_crew_member_fails_closed_when_unconfigured(self) -> None:
         member = FakeMember(roles=[])
         self.assertFalse(is_wash_crew_member(member, wash_crew_role_id=None))
@@ -199,24 +173,6 @@ class BotHelperTests(unittest.TestCase):
     def test_is_wash_crew_member_false_when_member_has_no_roles(self) -> None:
         member = FakeMember(roles=[])
         self.assertFalse(is_wash_crew_member(member, wash_crew_role_id=222))
-
-    # --- Watch Party member role parsing -----------------------------------
-
-    def test_parse_watch_party_member_role_id_returns_none_when_unset(self) -> None:
-        self.assertIsNone(parse_watch_party_member_role_id(None))
-        self.assertIsNone(parse_watch_party_member_role_id(""))
-
-    def test_parse_watch_party_member_role_id_accepts_positive_integer(self) -> None:
-        self.assertEqual(parse_watch_party_member_role_id("123"), 123)
-
-    def test_parse_watch_party_member_role_id_rejects_non_integer(self) -> None:
-        with self.assertRaises(ValueError) as ctx:
-            parse_watch_party_member_role_id("abc")
-        self.assertIn("WATCH_PARTY_MEMBER_ROLE_ID", str(ctx.exception))
-
-    def test_parse_watch_party_member_role_id_rejects_non_positive(self) -> None:
-        with self.assertRaises(ValueError):
-            parse_watch_party_member_role_id("0")
 
     # --- Vote visibility parsing --------------------------------------------
 

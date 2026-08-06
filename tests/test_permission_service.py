@@ -235,8 +235,9 @@ class ResolvePermissionServiceTests(unittest.TestCase):
     def test_resolver_introduces_no_shared_mutable_state(self) -> None:
         # Two resolutions for the same guild must never be (or silently
         # become) the same object -- mutating one must never leak into
-        # the other, unlike WatchPartyBot.apply_role_configuration's own
-        # in-place mutation of the single shared singleton.
+        # the other. This resolver is intentionally stateless: every call
+        # rebuilds a fresh PermissionService from GuildConfiguration, so
+        # there is no shared singleton left to mutate in place.
         first = resolve_permission_service(GUILD_A, self.repository)
         second = resolve_permission_service(GUILD_A, self.repository)
 

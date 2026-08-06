@@ -77,7 +77,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 - **Steps:**
   1. Copy `env.example` to `.env`.
   2. Review each documented variable against [Administration](05-Administration.md) Section 2 and the [Installation Guide](09-Installation-Guide.md).
-- **Expected Result:** `env.example` lists `DISCORD_TOKEN`, `DISCORD_GUILD_ID`, `WASH_CREW_ROLE_ID`, `WATCH_PARTY_MEMBER_ROLE_ID`, `DEFAULT_VOTE_NOMINEE_COUNT`, and `OMDB_API_KEY`, matching the documented purpose of each.
+- **Expected Result:** `env.example` lists `DISCORD_TOKEN`, `DISCORD_GUILD_ID`, `DEFAULT_VOTE_NOMINEE_COUNT`, and `OMDB_API_KEY`, matching the documented purpose of each.
 - **Result:** [ ] Pass [ ] Fail
 - **Notes:** ___________________________
 
@@ -1601,7 +1601,7 @@ This checklist is the official acceptance checklist for the Watch Party Manager 
 ### 10.4 Fail-closed when a role is unconfigured
 
 - **Objective:** Confirm restricted commands fail closed -- including for server administrators -- when the relevant role isn't configured.
-- **Preconditions:** A test server where `WATCH_PARTY_MEMBER_ROLE_ID`/the wizard's role step was never set (or temporarily unset).
+- **Preconditions:** A test server where the wizard's Watch Party role step was never set (or the role was subsequently unset via `/config`).
 - **Steps:**
   1. As a server administrator with no explicitly configured role, run `/add`.
 - **Expected Result:** Rejected with a clear "not configured" message -- administrator status alone does not bypass the check.

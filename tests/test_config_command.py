@@ -269,14 +269,6 @@ class ConfigCommandTestCase(unittest.IsolatedAsyncioTestCase):
         self.bot.config_service = ConfigService(
             self.guild_configuration_repository, self.suggestion_service, self.suggestion_database_configuration_repository
         )
-        self.bot.wash_crew_role_id = WASH_CREW_ROLE_ID
-        self.bot.watch_party_member_role_id = WATCH_PARTY_ROLE_ID
-        self.bot.permission_service = PermissionService(
-            watch_party_member_role_id=WATCH_PARTY_ROLE_ID, wash_crew_role_id=WASH_CREW_ROLE_ID
-        )
-        self.applied_roles = []
-        self.bot.apply_role_configuration = lambda wash, watch: self.applied_roles.append((wash, watch))
-
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
 
@@ -1144,7 +1136,6 @@ class WashCrewRoleConfirmationTests(ConfigCommandTestCase):
         self.assertEqual(
             self.guild_configuration_repository.get(GUILD_ID).wash_crew_role_id, new_role_id
         )
-        self.assertEqual(self.applied_roles, [(new_role_id, WATCH_PARTY_ROLE_ID)])
 
     async def test_warns_and_requires_confirmation_when_the_acting_member_lacks_the_new_role(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
@@ -1159,7 +1150,6 @@ class WashCrewRoleConfirmationTests(ConfigCommandTestCase):
         self.assertIn("Continue anyway", interaction.response.edited_content)
         # Nothing was saved yet -- the role must be preserved until confirmed.
         self.assertEqual(self.guild_configuration_repository.get(GUILD_ID).wash_crew_role_id, WASH_CREW_ROLE_ID)
-        self.assertEqual(self.applied_roles, [])
 
     async def test_confirming_the_warning_saves_the_change(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
@@ -1174,7 +1164,6 @@ class WashCrewRoleConfirmationTests(ConfigCommandTestCase):
         await confirm_button.callback(interaction=confirm_interaction)
 
         self.assertEqual(self.guild_configuration_repository.get(GUILD_ID).wash_crew_role_id, new_role_id)
-        self.assertEqual(self.applied_roles, [(new_role_id, WATCH_PARTY_ROLE_ID)])
 
     async def test_aborting_the_warning_preserves_the_existing_role(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)
@@ -1190,7 +1179,6 @@ class WashCrewRoleConfirmationTests(ConfigCommandTestCase):
 
         self.assertIn("not changed", abort_interaction.response.edited_content)
         self.assertEqual(self.guild_configuration_repository.get(GUILD_ID).wash_crew_role_id, WASH_CREW_ROLE_ID)
-        self.assertEqual(self.applied_roles, [])
 
     async def test_invalid_replacement_role_is_rejected(self) -> None:
         self._seed_completed_setup(wash_crew_role_id=WASH_CREW_ROLE_ID)

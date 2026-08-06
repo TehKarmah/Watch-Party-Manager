@@ -94,10 +94,10 @@ Most server-specific behavior is configured per-guild through `/setup` and `/con
 
 - `DISCORD_TOKEN` (required)
 - `DISCORD_GUILD_ID` (optional, faster command sync during development)
-- `WASH_CREW_ROLE_ID` (optional -- can also be set via `/setup`)
-- `WATCH_PARTY_MEMBER_ROLE_ID` (optional -- can also be set via `/setup`)
 - `DEFAULT_VOTE_NOMINEE_COUNT` (optional)
 - `OMDB_API_KEY` (optional, enables IMDb-link metadata resolution)
+
+WASH Crew and Watch Party member roles are configured per-server exclusively through `/setup`/`/config` -- there is no environment variable for either (removed in Phase 3d, since `resolve_permission_service` never read them and they provided no functional bootstrap benefit once `/setup`'s own owner-bypass gate existed).
 
 Restricted commands fail closed when the relevant role is not configured by either method. See the [Installation Guide](09-Installation-Guide.md) for the full setup walkthrough.
 

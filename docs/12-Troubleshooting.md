@@ -200,7 +200,7 @@ WASH logs to the console (standard output) it was started from -- there is curre
 
 | Message | Meaning |
 | --- | --- |
-| "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command." | No WASH Crew role has ever been configured (neither via `/setup` nor the `WASH_CREW_ROLE_ID` environment variable) -- every WASH Crew-only command fails closed until one is. |
+| "WASH Crew permissions have not been configured. Set WASH_CREW_ROLE_ID before using this command." | No WASH Crew role has been configured for this server via `/setup` yet -- every WASH Crew-only command fails closed until one is. (The message's mention of `WASH_CREW_ROLE_ID` is legacy wording; the role is configured through `/setup`, not an environment variable.) |
 | "You need the WASH Crew role to \[do X\]." | A WASH Crew role is configured, but the invoking member doesn't hold it. |
 | "You need the Watch Party member role to \[do X\]." | Similarly, for the Watch Party role -- see [Missing configuration](#missing-configuration) above. |
 | "This command can only be used in a server." | The command was run in a DM, where WASH has no guild context to resolve. |

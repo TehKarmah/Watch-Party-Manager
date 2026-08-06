@@ -2,8 +2,8 @@
 
 Covers the pure/testable pieces bot.py adds for the wizard: the
 permission gate, the field parsers each modal submission uses, the
-progress-header/completion-summary builders, the startup role fallback,
-and send_setup_wizard_step's per-step Discord rendering (exercised with
+progress-header/completion-summary builders, and send_setup_wizard_step's
+per-step Discord rendering (exercised with
 fake interactions instead of a live Discord connection, mirroring
 test_edit_vote_command.py's FakeInteraction/FakeResponse pattern).
 """
@@ -31,7 +31,6 @@ from watch_party_manager.bot import (
     perform_setup_permission_check,
     perform_setup_redirect_check,
     post_suggestion_confirmation,
-    resolve_startup_role_ids,
     send_setup_preparation_screen,
     send_setup_wizard_step,
 )
@@ -262,14 +261,6 @@ class WatchPartyBotWiringTests(unittest.TestCase):
         bot = WatchPartyBot(token="test-token")
         self.assertIsInstance(bot.setup_wizard_service, SetupWizardService)
 
-    def test_apply_role_configuration_updates_bot_and_permission_service(self) -> None:
-        bot = WatchPartyBot(token="test-token")
-        bot.apply_role_configuration(WASH_CREW_ROLE_ID, WATCH_PARTY_ROLE_ID)
-        self.assertEqual(bot.wash_crew_role_id, WASH_CREW_ROLE_ID)
-        self.assertEqual(bot.watch_party_member_role_id, WATCH_PARTY_ROLE_ID)
-        self.assertEqual(bot.permission_service.wash_crew_role_id, WASH_CREW_ROLE_ID)
-        self.assertEqual(bot.permission_service.watch_party_member_role_id, WATCH_PARTY_ROLE_ID)
-
 
 class PerformSetupPermissionCheckTests(unittest.TestCase):
     """Bootstrap Setup Permission Fix: until *this* guild's own
@@ -373,30 +364,6 @@ class PerformSetupRedirectCheckTests(unittest.TestCase):
         self.assertIsNotNone(message)
         self.assertIn("/config", message)
         self.assertIn("already been completed", message)
-
-
-class ResolveStartupRoleIdsTests(unittest.TestCase):
-    def _configuration(self) -> GuildConfiguration:
-        config = GuildConfiguration(guild_id=GUILD_ID, guild_name="Guild")
-        config.wash_crew_role_id = WASH_CREW_ROLE_ID
-        config.watch_party_role.role_id = WATCH_PARTY_ROLE_ID
-        return config
-
-    def test_env_vars_win_when_both_are_set(self):
-        wash_crew, watch_party = resolve_startup_role_ids(1, 2, self._configuration())
-        self.assertEqual((wash_crew, watch_party), (1, 2))
-
-    def test_falls_back_to_guild_configuration_when_env_vars_are_unset(self):
-        wash_crew, watch_party = resolve_startup_role_ids(None, None, self._configuration())
-        self.assertEqual((wash_crew, watch_party), (WASH_CREW_ROLE_ID, WATCH_PARTY_ROLE_ID))
-
-    def test_mixes_sources_when_only_one_env_var_is_set(self):
-        wash_crew, watch_party = resolve_startup_role_ids(1, None, self._configuration())
-        self.assertEqual((wash_crew, watch_party), (1, WATCH_PARTY_ROLE_ID))
-
-    def test_stays_none_when_no_configuration_exists(self):
-        wash_crew, watch_party = resolve_startup_role_ids(None, None, None)
-        self.assertEqual((wash_crew, watch_party), (None, None))
 
 
 class ParseSetupFieldsTests(unittest.TestCase):
@@ -981,9 +948,6 @@ class SetupCommandTestCase(unittest.IsolatedAsyncioTestCase):
             self.suggestion_service,
             self.suggestion_database_configuration_repository,
         )
-        self.bot.apply_role_configuration = lambda wash, watch: self.applied_roles.append((wash, watch))
-        self.applied_roles = []
-
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
 
@@ -1187,7 +1151,6 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         await save_button.callback(interaction=save_interaction)
 
         self.assertIn("could not be saved", save_interaction.response.edited_content)
-        self.assertEqual(self.applied_roles, [])
 
     async def test_validation_failure_preserves_state_and_returns_to_review_after_the_fix(self) -> None:
         # Live-testing fix: a validation failure at Save (e.g. WASH can no
@@ -1231,7 +1194,6 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         # actionable message -- not a generic failure.
         self.assertIn("Step 3 of 11", save_interaction.response.edited_content)
         self.assertIn("cannot send messages", save_interaction.response.edited_content)
-        self.assertEqual(self.applied_roles, [])
 
         # Every other already-entered value survived the redirect.
         preserved = self.wizard_repository.get(GUILD_ID)
@@ -1425,7 +1387,6 @@ class SetupCommandFlowTests(SetupCommandTestCase):
 
         self.assertIn("WASH Setup Complete", save_interaction.response.edited_content)
         self.assertIsNone(save_interaction.response.edited_view)
-        self.assertEqual(self.applied_roles, [(WASH_CREW_ROLE_ID, WATCH_PARTY_ROLE_ID)])
 
     async def test_unexpected_persistence_failure_never_shows_false_success_and_stays_resumable(self) -> None:
         # Release Candidate walkthrough fix: an unexpected error while
@@ -1477,7 +1438,6 @@ class SetupCommandFlowTests(SetupCommandTestCase):
         self.assertNotIn("WASH Setup Complete", save_interaction.response.edited_content)
         self.assertIn("⚠", save_interaction.response.edited_content)
         self.assertIsNotNone(save_interaction.response.edited_view)
-        self.assertEqual(self.applied_roles, [])
 
         # Retained state: every previously entered value survives, and a
         # retry (pressing Save again, now that the failure is resolved)
@@ -1780,7 +1740,6 @@ class SaveAndFinishLaterIntegrationTests(SetupCommandTestCase):
         await save_for_later_button.callback(interaction=FakeInteraction())
 
         self.assertIsNone(self.guild_configuration_repository.get(GUILD_ID))
-        self.assertEqual(self.applied_roles, [])
 
     async def test_save_for_later_does_not_roll_back_earlier_finalized_configuration(self) -> None:
         # If setup was already completed once (unusual but possible if a

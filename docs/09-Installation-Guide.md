@@ -199,15 +199,13 @@ Open `.env` in a text editor and fill in the values you need. **Never commit `.e
 | --- | --- | --- |
 | `DISCORD_TOKEN` | **Required** | The bot token from Section 6. Without this, WASH cannot start. |
 | `DISCORD_GUILD_ID` | Optional | Syncs slash commands to one server instantly instead of waiting up to an hour for global sync. Strongly recommended while you're setting up and testing. |
-| `WASH_CREW_ROLE_ID` | Optional, but see note | The Discord role ID authorized to run administrative commands. |
-| `WATCH_PARTY_MEMBER_ROLE_ID` | Optional, but see note | The Discord role ID authorized to use participant commands (`/add`, `/list`, `/stats`, etc.). WASH Crew members automatically have these permissions too. |
 | `DEFAULT_VOTE_NOMINEE_COUNT` | Optional | Default number of nominees `/vote start` selects (2-10). Defaults to 3. |
 | `OMDB_API_KEY` | Optional | Enables resolving pasted IMDb links into a title, runtime, genres, and poster. See Section 8. |
 
 > [!IMPORTANT]
-> `WASH_CREW_ROLE_ID` and `WATCH_PARTY_MEMBER_ROLE_ID` can both be set here directly, **or** configured later through the guided `/setup` wizard (Section 11) once WASH is already running in your server -- the wizard writes them into WASH's own persisted server configuration rather than `.env`. Either path works; most users find it easier to leave these blank in `.env` and let `/setup` walk them through role selection interactively. Until at least one of these two roles is configured (by either method), every restricted command fails closed -- nobody, including server administrators, can use them. This is deliberate, not a bug.
+> The WASH Crew and Watch Party member roles are **not** set in `.env` -- they're configured per-server through the guided `/setup` wizard (Section 11) once WASH is already running in your server, and can be changed afterward via `/config`. Until at least one of these two roles is configured, every restricted command fails closed -- nobody, including server administrators, can use them. This is deliberate, not a bug.
 
-You do not need a Discord role's numeric ID handy to use `/setup` -- the wizard lets you pick roles directly from your server. You only need the raw numeric ID if you're setting `WASH_CREW_ROLE_ID`/`WATCH_PARTY_MEMBER_ROLE_ID` in `.env` yourself; get it in Discord via **User Settings -> Advanced -> Developer Mode**, then right-click the role and choose **Copy Role ID**.
+You do not need a Discord role's numeric ID handy to use `/setup` -- the wizard lets you pick roles directly from your server.
 
 ## 8. OMDb API Configuration (Optional)
 
@@ -314,11 +312,11 @@ If a step fails, check Section 14 before assuming something is broken.
 | Symptom | Likely Cause | Fix |
 | --- | --- | --- |
 | WASH never comes online | `DISCORD_TOKEN` is missing, wrong, or was reset in the Developer Portal after you copied it. | Reset the token in the Developer Portal, update `.env`, restart WASH. |
-| WASH logs a configuration error and exits immediately | A malformed value in `.env` (e.g. `WASH_CREW_ROLE_ID` isn't a plain number). | Fix or remove the offending line; unset optional values are fine left blank or commented out. |
+| WASH logs a configuration error and exits immediately | A malformed value in `.env` (e.g. `DISCORD_GUILD_ID` isn't a plain number). | Fix or remove the offending line; unset optional values are fine left blank or commented out. |
 | Slash commands don't appear in Discord | Global sync can take up to an hour on first install; or the bot wasn't invited with the `applications.commands` scope. | Set `DISCORD_GUILD_ID` for instant sync during setup, or wait; re-invite with the correct scope if commands never appear. |
 | Slash commands appear and respond, but WASH does not appear in the server member list | The `bot` scope is probably missing from Guild Install -- the server only granted `applications.commands`, so Discord routes command interactions without WASH ever having joined as a member. This breaks anything that depends on WASH being an actual member, including `/setup`'s first-run owner check. | Re-invite WASH with both `bot` and `applications.commands` selected under Guild Install (Section 6/9), and confirm WASH now shows up in the member list before running `/setup` again. |
-| "You need the WASH Crew role to use this command" / commands fail closed for everyone | Neither `WASH_CREW_ROLE_ID` nor `/setup`'s WASH Crew step has been configured yet. | Run `/setup`, or set `WASH_CREW_ROLE_ID` in `.env` and restart. |
-| "You need the Watch Party member role..." | `WATCH_PARTY_MEMBER_ROLE_ID` isn't configured and you're not WASH Crew. | Run `/setup`'s Watch Party role step, or join via `/join watch party` if Self-Service mode is enabled. |
+| "You need the WASH Crew role to use this command" / commands fail closed for everyone | `/setup`'s WASH Crew step hasn't been configured yet for this server. | Run `/setup`, or set the WASH Crew role via `/config` if setup was already completed. |
+| "You need the Watch Party member role..." | This server's Watch Party role isn't configured and you're not WASH Crew. | Run `/setup`'s Watch Party role step, or join via `/join watch party` if Self-Service mode is enabled. |
 | Pasting an IMDb link into `/add` says lookup isn't configured | `OMDB_API_KEY` is unset. | Follow Section 8, or continue using plain titles -- this is optional. |
 | `/stats server`'s member count looks too low | The Server Members Intent isn't enabled (see Section 6's note). | Enable it in the Developer Portal if you want that one figure to be accurate; otherwise it's safe to ignore. |
 | WASH can't post in a channel | Missing View Channel/Send Messages/Embed Links permission in that specific channel (server-wide invite permissions don't override channel-level overwrites). | Check that channel's permission overwrites for WASH's role. |
